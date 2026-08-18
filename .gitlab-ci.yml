@@ -117,10 +117,58 @@ check:
   <<: *rust-env
   <<: *always
   stage: check
+  services:
+    - name: docker.io/library/postgres:17
+      alias: postgres
+      variables:
+        POSTGRES_USER: puna
+        POSTGRES_PASSWORD: puna
+        POSTGRES_DB: puna
+  variables:
+    CARGO_HOME: $CI_PROJECT_DIR/.cargo
+    DATABASE_URL: postgres://puna:puna@postgres:5432/puna
+    # The Postgres-backed tests SKIP (reporting ok) when DATABASE_URL is unset. This turns that
+    # skip into a failure, so losing the service definition cannot quietly drop the coverage
+    # while leaving the pipeline green.
+    PUNA_REQUIRE_DB_TESTS: "1"
   script:
     - cargo fmt --all -- --check
     - cargo clippy --workspace --all-targets -- -D warnings
     - cargo test --workspace
+
+# schema.rs is generated and checked in. This asserts the committed copy still matches what the
+# migrations produce, so a migration edited without regenerating cannot merge.
+#
+# diesel_cli links libpq (which Puna itself does not -- it reaches Postgres through
+# diesel-async -> tokio-postgres, pure Rust), hence libpq-dev in the shared before_script.
+schema-drift:
+  <<: *rust-env
+  <<: *always
+  stage: check
+  services:
+    - name: docker.io/library/postgres:17
+      alias: postgres
+      variables:
+        POSTGRES_USER: puna
+        POSTGRES_PASSWORD: puna
+        POSTGRES_DB: puna
+  variables:
+    CARGO_HOME: $CI_PROJECT_DIR/.cargo
+    DATABASE_URL: postgres://puna:puna@postgres:5432/puna
+  script:
+    - cargo install diesel_cli --no-default-features --features postgres --locked
+    - diesel migration run --migration-dir puna-core/migrations
+    - diesel print-schema > /tmp/schema.rs
+    # Compare the regenerated schema against the committed one. `diff` rather than
+    # `git diff --exit-code` so the failure prints exactly which lines drifted.
+    - |
+      if ! diff -u puna-core/src/schema.rs /tmp/schema.rs; then
+        echo
+        echo "puna-core/src/schema.rs is out of date with the migrations."
+        echo "Regenerate it -- see the instructions at the top of diesel.toml -- and commit."
+        exit 1
+      fi
+    - echo "schema.rs matches the migrations"
 
 # ---- rust-build stage ----
 
