@@ -1,0 +1,39 @@
+# Local Postgres for development and for the migration/allocator test suite.
+#
+# Pinned to 17 to match the CNPG cluster the plan provisions
+# (ghcr.io/cloudnative-pg/postgresql:17.6). The allocator leans on `FOR UPDATE SKIP LOCKED`
+# and on `'-infinity'` ordering, so testing against a different major would be testing
+# something other than what runs.
+#
+#   docker compose up -d
+#   export DATABASE_URL=postgres://puna:puna@127.0.0.1:5433/puna
+#
+# Port 5433, not 5432, so this cannot collide with a system Postgres or with the lobby's
+# own compose stack on the same machine.
+
+services:
+  postgres:
+    image: docker.io/library/postgres:17
+    environment:
+      POSTGRES_USER: puna
+      POSTGRES_PASSWORD: puna
+      POSTGRES_DB: puna
+      # The container's own initdb locale. Deterministic collation matters for any
+      # ORDER BY on text; the allocator orders on timestamps and integers, but room
+      # listings will not.
+      POSTGRES_INITDB_ARGS: "--locale=C.UTF-8 --encoding=UTF8"
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U puna -d puna"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    # Puna's own connections go through rustls, but this listener is loopback-only and
+    # unencrypted, which is why DATABASE_URL above has no sslmode. The vendored db.rs
+    # accepts any certificate anyway, so TLS here would prove nothing.
+
+volumes:
+  pgdata:

@@ -46,7 +46,16 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # Database. Mirrors the versions Archipelago-lobby's `common` crate uses, since
 # puna-core/src/db.rs is vendored from it.
 deadpool = "0.13"
-diesel = { version = "2.3.5", features = ["uuid", "chrono", "serde_json"] }
+# 64-column-tables is required, not optional: `rooms` has 46 columns and diesel's `table!`
+# macro supports 32 by default. That width is a direct consequence of the desired/observed
+# split -- one row carries what the web tier requests and what the orchestrator observed --
+# and splitting the table to dodge the limit would put a join on the hottest read path.
+# The cost is diesel's macro expansion getting slower; measured at well under a second here.
+#
+# Note there is no "postgres" feature: Puna reaches Postgres through diesel-async ->
+# tokio-postgres, pure Rust. diesel-async enables `postgres_backend` (the types) without the
+# libpq-linked connection, which is why the binaries link no libpq at all.
+diesel = { version = "2.3.5", features = ["uuid", "chrono", "serde_json", "64-column-tables"] }
 diesel-async = { version = "0.8", features = ["postgres", "deadpool", "async-connection-wrapper"] }
 diesel_migrations = { version = "2.2", features = ["postgres"] }
 futures-util = "0.3"

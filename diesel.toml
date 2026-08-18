@@ -1,0 +1,28 @@
+# diesel_cli configuration.
+#
+# schema.rs is GENERATED and CHECKED IN, and CI asserts the two agree (the schema-drift job).
+# Checking it in means a reviewer sees schema changes in the diff of the same commit that
+# changes the migration, rather than inferring them; asserting it in CI means the checked-in
+# copy cannot silently rot.
+#
+# Regenerate with a running database:
+#
+#   docker compose up -d
+#   docker compose exec -T postgres psql -U puna -d puna -q -f - \
+#       < puna-core/migrations/2026-08-17-000000_initial/up.sql
+#   docker run --rm --network host -v "$PWD:/w" -w /w \
+#       -e DATABASE_URL=postgres://puna:puna@127.0.0.1:5433/puna \
+#       <diesel-cli-image> diesel print-schema > puna-core/src/schema.rs
+#
+# diesel_cli links libpq, which Puna itself does not (it reaches Postgres through
+# diesel-async -> tokio-postgres, pure Rust). Running the CLI in a container keeps that build
+# dependency off developer machines and out of the runtime images.
+
+[print_schema]
+file = "puna-core/src/schema.rs"
+# The generated enum wrappers need QueryId to be usable in queries, and Clone to be stored in
+# the mapping types that puna-core/src/model/ will define over them.
+custom_type_derives = ["diesel::query_builder::QueryId", "Clone"]
+
+[migrations_directory]
+dir = "puna-core/migrations"
