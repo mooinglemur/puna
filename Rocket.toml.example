@@ -1,0 +1,33 @@
+# Copy to Rocket.toml for local development. Rocket.toml is gitignored: it holds a secret.
+#
+# IN THE CLUSTER THIS FILE IS A MOUNTED SECRET, not environment variables, and that is forced
+# rather than stylistic. `auth::discord_config` reads the RAW figment at `Profile::Default`, while
+# `ROCKET_*` environment variables merge into the GLOBAL profile -- so an env-supplied client_id
+# is simply not where the code looks. The Deployment sets ROCKET_CONFIG=/etc/puna/Rocket.toml and
+# mounts the ExternalSecret there.
+#
+# `admins` and `banned_users` are not rocket_oauth2 keys. They live in the same table because the
+# app reads them straight out of the figment, and rocket_oauth2 ignores what it does not know.
+
+[default]
+# "::" not "0.0.0.0": the cluster Services are v6-capable, and a v4-only listener answers a v6
+# connect with an instant RST rather than a timeout, which reads as a broken pod.
+address = "::"
+port = 8000
+
+[default.limits]
+# Generation zips are tens of megabytes; Rocket's default data limit is 2 MiB. Raised here so the
+# upload form in M4 does not fail with a truncated body.
+data-form = "64MiB"
+file = "64MiB"
+
+[default.oauth.discord]
+provider = "Discord"
+client_id = "<the Discord application's client id>"
+client_secret = "<the Discord application's client secret>"
+# Must be registered on the Discord application. The same application serves the lobby and
+# community-ap-tools, each with its own redirect URI.
+redirect_uri = "http://127.0.0.1:8000/auth/oauth"
+# Global Puna administrators, as Discord snowflakes. Re-derived on every login and never
+# inherited from another app's session. An empty or missing list grants nobody.
+admins = []

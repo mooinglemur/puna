@@ -1,6 +1,7 @@
 //! Domain operations over the schema.
 
 pub mod port;
+pub mod user;
 
 /// Proof that the caller is the orchestrator, required by every function that writes an
 /// observed-state column or mutates a port reservation.

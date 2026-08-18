@@ -1,0 +1,32 @@
+{# The shell every page extends.
+
+   askama.toml sets whitespace = "suppress", which strips whitespace adjacent to EVERY tag --
+   including a single significant space before an expression. `role: {{ role }}` renders as
+   `role:value`. Use `{{+ ... }}` to keep the space. #}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}puna{% endblock %}</title>
+<link rel="stylesheet" href="/static/css/puna.css?v={{ base.static_version }}">
+</head>
+<body>
+<header class="topbar">
+<a class="brand" href="/">puna</a>
+<nav>
+{% if base.is_logged_in %}
+{% if base.is_admin %}<a href="/admin">admin</a>{% endif %}
+<span class="who">{{ base.username }}</span>
+<a href="/auth/logout">log out</a>
+{% else %}
+<a href="/auth/login">log in with Discord</a>
+{% endif %}
+</nav>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+<footer><span class="version">puna{{+ base.version }}</span></footer>
+</body>
+</html>

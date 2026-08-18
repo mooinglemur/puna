@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>puna</h1>
+{% if base.is_logged_in %}
+<p>Signed in as{{+ base.username }}.</p>
+<p>Your rooms will appear here once room creation lands.</p>
+{% else %}
+<p>Archipelago multiworld rooms.</p>
+<p><a href="/auth/login">Log in with Discord</a> to see your rooms.</p>
+{% endif %}
+{% endblock %}
