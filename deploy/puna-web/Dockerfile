@@ -9,10 +9,13 @@
 FROM docker.io/library/debian:13-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
-# libpq5 for diesel's postgres backend; ca-certificates for Discord's API and for verifying
-# room certificates when the tracker proxies. No openssl: rustls is used throughout.
+# ca-certificates only, and that is not an oversight. Puna reaches Postgres through
+# diesel-async -> tokio-postgres, which is pure Rust: diesel is built with `postgres_backend`
+# (types) and never the libpq-backed `postgres` feature, so there is no libpq to install.
+# Confirmed with ldd: the binary links libc, libm and libgcc_s and nothing else. No openssl
+# either -- rustls with the ring provider is used throughout.
 RUN apt update && \
-    apt install -y --no-install-recommends libpq5 ca-certificates && \
+    apt install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/local/bin

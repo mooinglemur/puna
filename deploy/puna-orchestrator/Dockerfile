@@ -5,10 +5,12 @@
 FROM docker.io/library/debian:13-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
-# libpq5 for diesel; ca-certificates to verify the Kubernetes API server and room certificates.
-# `kube` is built with default-features = false + rustls-tls precisely so no openssl is needed.
+# ca-certificates only -- needed to verify the Kubernetes API server and room certificates.
+# No libpq: Postgres is reached via diesel-async -> tokio-postgres, pure Rust, with diesel built
+# as `postgres_backend` rather than the libpq-backed `postgres` feature. No openssl: `kube` is
+# built default-features = false with rustls-tls + ring. Confirmed with ldd.
 RUN apt update && \
-    apt install -y --no-install-recommends libpq5 ca-certificates && \
+    apt install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/local/bin

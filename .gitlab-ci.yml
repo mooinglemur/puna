@@ -53,6 +53,10 @@ stages:
     - linux
     - k8s
   before_script:
+    # libpq-dev is NOT needed to build the workspace -- Postgres is reached via
+    # diesel-async -> tokio-postgres, pure Rust. It is here for `diesel_cli`, which the
+    # schema-drift job (M1) links against libpq. Keep them together so removing one does not
+    # silently break the other.
     - apt-get update
     - apt-get install -y --no-install-recommends pkg-config libpq-dev git ca-certificates mold
     - rm -rf /var/lib/apt/lists/*
