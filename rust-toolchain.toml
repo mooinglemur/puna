@@ -1,0 +1,6 @@
+# Pinned to match pahoa's toolchain. Puna consumes pahoa-multidata as a git dependency
+# from M4 onward, and pahoa is edition 2024 / rust-version 1.95 -- a lower toolchain here
+# would fail to build it with an error that points at the dependency rather than at this file.
+[toolchain]
+channel = "1.95"
+components = ["rustfmt", "clippy"]

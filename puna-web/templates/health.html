@@ -1,0 +1,10 @@
+{# askama.toml sets whitespace = "suppress" (matching the lobby), which strips whitespace
+   adjacent to every tag -- including a single significant space before an expression.
+   `<p>role: {{ role }}</p>` renders as `role:tracker`. Use `{{+ ... }}` to keep the space.
+   Worth knowing before writing the real templates in M3 and M8. #}
+<!doctype html>
+<title>puna</title>
+<link rel="stylesheet" href="/static/css/puna.css?v={{ static_version }}">
+<h1>puna</h1>
+<p>role:{{+ role }}</p>
+<p>version:{{+ version }}</p>

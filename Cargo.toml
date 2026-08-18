@@ -1,0 +1,67 @@
+[workspace]
+resolver = "3"
+members = [
+    "puna-core",
+    "puna-web",
+    "puna-orchestrator",
+]
+
+# There is deliberately NO [patch.crates-io] block here.
+#
+# The sibling Archipelago-lobby workspace patches rocket, rocket_ws, rocket_prometheus,
+# rocket_oauth2, figment, sentry and sentry-tracing to forks. Puna takes none of them, and
+# each omission was checked rather than assumed:
+#
+#   rocket             the fork is 0.5.1 plus Sentry/OTLP hub-per-request plumbing. Puna
+#                      installs neither Sentry nor OTLP, so the delta is dead weight here.
+#   rocket_prometheus  forked, and replaced outright: Puna's request metrics are a ~20-line
+#                      fairing over the `prometheus` crate.
+#   figment            not really a fork -- the branch is upstream master ahead of the
+#                      0.10.19 release. The introspection API Puna uses to read the Discord
+#                      config out of Rocket.toml is long-standing core figment.
+#   sentry*            unused.
+#
+# rocket_oauth2 is the one that mattered: see puna-web/Cargo.toml.
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+
+[workspace.dependencies]
+puna-core = { path = "puna-core" }
+
+anyhow = "1.0"
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+prometheus = { version = "0.14", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Database. Mirrors the versions Archipelago-lobby's `common` crate uses, since
+# puna-core/src/db.rs is vendored from it.
+deadpool = "0.13"
+diesel = { version = "2.3.5", features = ["uuid", "chrono", "serde_json"] }
+diesel-async = { version = "0.8", features = ["postgres", "deadpool", "async-connection-wrapper"] }
+diesel_migrations = { version = "2.2", features = ["postgres"] }
+futures-util = "0.3"
+# default-features = false is load-bearing, not tidiness. rustls 0.23's default features
+# include the aws-lc-rs provider, so `features = ["ring"]` alone enables BOTH providers --
+# and with two providers compiled in, rustls cannot infer a process-level default, so
+# `ClientConfig::builder()` panics at runtime unless install_default() ran first. Exactly one
+# provider must be enabled. ring is the choice because the vendored db.rs installs it by name
+# and because it avoids aws-lc-sys, which needs a C toolchain and cmake at build time.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pki-types = "1.8"
+tokio-postgres = "0.7"
+tokio-postgres-rustls = "0.13"
+
+[profile.release]
+# Symbols kept deliberately: a backtrace out of a container is worth more than the
+# few MB, and these images are not distributed.
+debug = 1

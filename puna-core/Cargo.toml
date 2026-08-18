@@ -1,0 +1,33 @@
+[package]
+name = "puna-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# puna-core deliberately depends on NEITHER `kube` NOR `rocket`.
+#
+# That is the compile-time half of the tier split. The web tier cannot reach the Kubernetes
+# client because the crate that would hand it over is not in its dependency graph; the missing
+# ServiceAccount token on the pod is the deployment half of the same property. Adding `kube`
+# here would quietly dissolve it, so this comment is the guard.
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+deadpool.workspace = true
+diesel.workspace = true
+diesel-async.workspace = true
+diesel_migrations.workspace = true
+futures-util.workspace = true
+prometheus.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-postgres.workspace = true
+tokio-postgres-rustls.workspace = true
+tracing.workspace = true
+uuid.workspace = true

@@ -1,0 +1,59 @@
+[package]
+name = "puna-web"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+puna-core.workspace = true
+
+anyhow.workspace = true
+chrono.workspace = true
+prometheus.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+diesel.workspace = true
+diesel-async.workspace = true
+
+askama = { version = "0.15", features = ["serde_json"] }
+askama_web = { version = "0.15", features = ["rocket-0.5"] }
+# reqwest's default features route through `default-tls` -> `rustls` -> `__rustls-aws-lc-rs`,
+# which is the single largest source of the aws-lc-rs provider. `rustls-no-provider` gives the
+# same rustls stack (including rustls-platform-verifier for roots) while leaving the provider
+# choice to the workspace's rustls pin, i.e. ring. The three non-TLS defaults are re-stated
+# because default-features = false drops them too.
+reqwest = { version = "0.13", default-features = false, features = [
+    "charset",
+    "http2",
+    "system-proxy",
+    "rustls-no-provider",
+    "json",
+    "form",
+    "multipart",
+] }
+rocket = { version = "0.5.1", features = ["json", "secrets", "uuid"] }
+rust-embed = { version = "8", features = ["rocket"] }
+zip = "7"
+
+# 0.5.1-rc.1, and the pre-release MUST be written out in full.
+#
+# Cargo will not select a pre-release from a "0.5" or "0.5.1" requirement, so a shortened spec
+# silently resolves back to 0.5.0 -- whose `Debug for OAuthConfig` prints client_secret in the
+# clear. One `tracing::debug!("{:?}", ..)` or anyhow chain away from the Discord secret landing
+# in a container log, and nothing about the failure looks like a failure.
+#
+# 0.5.1-rc.1 redacts it (`.field("client_secret", &(..))`, verified in the published crate) and
+# additionally modernises base64 0.22 / hyper-rustls 0.27 / rand 0.10, keeping second copies of
+# those out of the tree. `Discord` remains a built-in provider, so Rocket.toml is unchanged.
+rocket_oauth2 = "0.5.1-rc.1"
+
+[build-dependencies]
+sha2 = "0.10"
+walkdir = "2"

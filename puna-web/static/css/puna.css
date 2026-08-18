@@ -1,0 +1,3 @@
+/* Placeholder. Real styles land with the room page (M8); this exists so rust-embed has a
+   non-empty folder and build.rs has something to hash. */
+:root { color-scheme: light dark; }

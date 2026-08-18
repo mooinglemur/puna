@@ -1,0 +1,12 @@
+/target
+/artifacts
+
+# Rocket.toml carries the Discord client secret. In the cluster it is templated into a
+# Secret and mounted with ROCKET_CONFIG pointing at it; locally it is yours and unshared.
+/Rocket.toml
+/Rocket.*.toml
+.env
+.env.*
+
+# Local Postgres state for the dev compose stack (M1).
+/pgdata

@@ -1,0 +1,167 @@
+# Image build pipeline for puna.
+#
+# Two binaries, two images:
+#   - puna-web          : the web tier AND the tracker tier (PUNA_ROLE selects which)
+#   - puna-orchestrator : the Kubernetes-facing singleton
+#
+# Pattern per binary, mirroring Archipelago-lobby's pipeline: a cargo job builds in a rust
+# image with a branch-keyed workspace cache, stages the binary as `build-result` next to its
+# Dockerfile, then a buildah job builds that context. The Dockerfiles expect `build-result`
+# and need no knowledge of CI.
+#
+# Images are built on every branch and always pushed as :sha-<short sha>. Moving tags are
+# branch-gated: main pushes :latest, ionium-dev pushes :dev, other branches get no moving tag.
+# Puna's manifests pin sha- tags exclusively, so git says what is running.
+#
+# DEPARTURE FROM THE LOBBY'S PIPELINE: this one runs `cargo test` and `cargo clippy -D warnings`
+# as a gating job. The lobby builds only. Puna's port allocator, room state machine and
+# authorization matrix are exactly the code where a silent regression is expensive and invisible
+# until it matters, so they are checked on every push rather than trusted to review.
+#
+# Every job's `changes:` filter includes .gitlab-ci.yml -- the build recipe itself. Otherwise a
+# fix to this file can only be deployed via a manual web-triggered run.
+
+# Only run on the canonical GitLab instance. On a fork, mirror or other instance, no pipeline.
+workflow:
+  rules:
+    - if: '$CI_SERVER_HOST == "git.mooinglemur.com"'
+
+default:
+  interruptible: true
+
+stages:
+  - check
+  - rust-build
+  - image
+
+# ---- shared anchors ----
+
+.rust-cache: &rust-cache
+  cache:
+    key: cargo-$CI_COMMIT_REF_SLUG
+    paths:
+      - target/
+      - .cargo/
+  variables:
+    CARGO_HOME: $CI_PROJECT_DIR/.cargo
+
+.rust-env: &rust-env
+  # Matches rust-toolchain.toml. The image tag and that file must move together: the toolchain
+  # file wins, so a stale image only wastes a rustup download rather than building the wrong thing.
+  image: rust:1.95-trixie
+  tags:
+    - linux
+    - k8s
+  before_script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends pkg-config libpq-dev git ca-certificates mold
+    - rm -rf /var/lib/apt/lists/*
+  <<: *rust-cache
+
+.buildah-build: &buildah-build
+  stage: image
+  image: quay.io/buildah/stable
+  tags:
+    - linux
+    - k8s
+  variables:
+    CONTAINERS_STORAGE_CONF: /tmp/storage.conf
+  before_script:
+    # Native kernel overlay. The image's storage.conf sets mount_program = fuse-overlayfs, but
+    # FUSE needs CAP_SYS_ADMIN, which this tier lacks. Dropping mount_program lets buildah mount
+    # overlay directly. Must be a config file via $CONTAINERS_STORAGE_CONF, not
+    # `--storage-driver overlay`: containers-storage persists driver options into the graphroot
+    # on first use, so the flag inherits mount_program anyway. Copied from the lobby's pipeline,
+    # where this was worked out the hard way.
+    - |
+      cat > "$CONTAINERS_STORAGE_CONF" <<'CONF'
+      [storage]
+      driver = "overlay"
+      runroot = "/var/run/containers/storage"
+      graphroot = "/var/lib/containers/storage"
+      [storage.options.overlay]
+      mountopt = "nodev"
+      CONF
+    # GraphOptions shows whether the config won: overlay.mountopt=nodev alone is right, a
+    # mount_program entry means it did not. Falling back to vfs is slow, not broken.
+    - buildah info
+    - echo "$CI_REGISTRY_PASSWORD" | buildah login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - |
+      case "$CI_COMMIT_BRANCH" in
+        main)        MOVING_TAG=latest ;;
+        ionium-dev)  MOVING_TAG=dev ;;
+        *)           MOVING_TAG= ;;
+      esac
+      echo "branch=$CI_COMMIT_BRANCH moving tag=${MOVING_TAG:-<none>}"
+      # Tagged after the build so both names are guaranteed to be the same image.
+      push_image() {
+        buildah push "$1:sha-$CI_COMMIT_SHORT_SHA"
+        if [ -n "$MOVING_TAG" ]; then
+          buildah tag "$1:sha-$CI_COMMIT_SHORT_SHA" "$1:$MOVING_TAG"
+          buildah push "$1:$MOVING_TAG"
+        fi
+      }
+
+.always: &always
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+
+# ---- check stage ----
+
+check:
+  <<: *rust-env
+  <<: *always
+  stage: check
+  script:
+    - cargo fmt --all -- --check
+    - cargo clippy --workspace --all-targets -- -D warnings
+    - cargo test --workspace
+
+# ---- rust-build stage ----
+
+build-puna-web:
+  <<: *rust-env
+  <<: *always
+  stage: rust-build
+  script:
+    - cargo build --release --bin puna-web
+    - mkdir -p artifacts/puna-web
+    - cp target/release/puna-web artifacts/puna-web/build-result
+  artifacts:
+    paths: [artifacts/puna-web/]
+    expire_in: 1 day
+
+build-puna-orchestrator:
+  <<: *rust-env
+  <<: *always
+  stage: rust-build
+  script:
+    - cargo build --release --bin puna-orchestrator
+    - mkdir -p artifacts/puna-orchestrator
+    - cp target/release/puna-orchestrator artifacts/puna-orchestrator/build-result
+  artifacts:
+    paths: [artifacts/puna-orchestrator/]
+    expire_in: 1 day
+
+# ---- image stage ----
+
+image-puna-web:
+  <<: *buildah-build
+  <<: *always
+  needs: [build-puna-web]
+  script:
+    - cp artifacts/puna-web/build-result deploy/puna-web/build-result
+    - buildah build -f deploy/puna-web/Dockerfile
+        -t "$CI_REGISTRY_IMAGE/puna-web:sha-$CI_COMMIT_SHORT_SHA" deploy/puna-web
+    - push_image "$CI_REGISTRY_IMAGE/puna-web"
+
+image-puna-orchestrator:
+  <<: *buildah-build
+  <<: *always
+  needs: [build-puna-orchestrator]
+  script:
+    - cp artifacts/puna-orchestrator/build-result deploy/puna-orchestrator/build-result
+    - buildah build -f deploy/puna-orchestrator/Dockerfile
+        -t "$CI_REGISTRY_IMAGE/puna-orchestrator:sha-$CI_COMMIT_SHORT_SHA" deploy/puna-orchestrator
+    - push_image "$CI_REGISTRY_IMAGE/puna-orchestrator"
