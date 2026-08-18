@@ -10,112 +10,11 @@
 //!   docker compose up -d
 //!   DATABASE_URL=postgres://puna:puna@127.0.0.1:5433/puna cargo test
 
+mod common;
+
+use common::with_db;
 use diesel_async::RunQueryDsl;
 use puna_core::db;
-use tokio_postgres::NoTls;
-
-/// A scratch database that drops itself.
-pub struct TestDb {
-    admin_url: String,
-    name: String,
-    pub pool: db::Pool,
-}
-
-impl TestDb {
-    /// Create a uniquely named database, run every migration into it, and hand back a pool.
-    async fn create() -> Option<Self> {
-        let admin_url = std::env::var("DATABASE_URL").ok()?;
-        let name = format!("puna_test_{}", uuid::Uuid::new_v4().simple());
-
-        exec_on(&admin_url, &format!(r#"CREATE DATABASE "{name}""#)).await;
-
-        let url = swap_database(&admin_url, &name);
-        let pool = db::get_database_pool(&url, Some(puna_core::MIGRATIONS))
-            .await
-            .expect("migrations should apply to a fresh database");
-
-        Some(Self {
-            admin_url,
-            name,
-            pool,
-        })
-    }
-
-    async fn drop_database(&self) {
-        // FORCE terminates any lingering backend; without it a pool connection that has not yet
-        // been reaped keeps the DROP waiting.
-        exec_on(
-            &self.admin_url,
-            &format!(r#"DROP DATABASE IF EXISTS "{}" WITH (FORCE)"#, self.name),
-        )
-        .await;
-    }
-}
-
-async fn exec_on(url: &str, sql: &str) {
-    let (client, connection) = tokio_postgres::connect(url, NoTls)
-        .await
-        .expect("failed to connect for administrative SQL");
-    let handle = tokio::spawn(async move {
-        let _ = connection.await;
-    });
-    client
-        .batch_execute(sql)
-        .await
-        .expect("administrative SQL failed");
-    drop(client);
-    let _ = handle.await;
-}
-
-/// Replace the database component of a Postgres URL, leaving credentials and host intact.
-fn swap_database(url: &str, database: &str) -> String {
-    match url.rsplit_once('/') {
-        Some((prefix, _)) => format!("{prefix}/{database}"),
-        None => format!("{url}/{database}"),
-    }
-}
-
-/// Run `body` against a fresh database, dropping it afterwards even if the body panics.
-async fn with_db<F, Fut>(body: F)
-where
-    F: FnOnce(db::Pool) -> Fut,
-    Fut: std::future::Future<Output = ()>,
-{
-    let Some(test_db) = TestDb::create().await else {
-        // Skipping reports `ok`, so a CI job that lost DATABASE_URL would stay green while
-        // covering nothing. PUNA_REQUIRE_DB_TESTS turns the skip into a failure; CI sets it, so
-        // the coverage cannot be dropped silently.
-        assert!(
-            std::env::var("PUNA_REQUIRE_DB_TESTS").is_err(),
-            "PUNA_REQUIRE_DB_TESTS is set but DATABASE_URL is not: the Postgres-backed tests \
-             would have been skipped"
-        );
-        eprintln!("DATABASE_URL unset; skipping Postgres-backed test");
-        return;
-    };
-
-    let pool = test_db.pool.clone();
-    let result = std::panic::AssertUnwindSafe(body(pool))
-        .catch_unwind_or_run()
-        .await;
-
-    test_db.drop_database().await;
-    if let Err(payload) = result {
-        std::panic::resume_unwind(payload);
-    }
-}
-
-/// Small helper so a panicking test body still drops its database.
-trait CatchUnwind: std::future::Future + Sized {
-    async fn catch_unwind_or_run(self) -> Result<Self::Output, Box<dyn std::any::Any + Send>>;
-}
-
-impl<F: std::future::Future> CatchUnwind for std::panic::AssertUnwindSafe<F> {
-    async fn catch_unwind_or_run(self) -> Result<F::Output, Box<dyn std::any::Any + Send>> {
-        use futures_util::FutureExt;
-        self.catch_unwind().await
-    }
-}
 
 #[tokio::test]
 async fn migrations_apply_and_report_current() {
