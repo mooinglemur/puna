@@ -10,7 +10,7 @@ use crate::auth::Session;
 /// Set by `build.rs` from a hash of `static/`, for cache-busting asset URLs.
 pub const STATIC_VERSION: &str = env!("STATIC_VERSION");
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TplContext {
     pub is_logged_in: bool,
     pub is_admin: bool,

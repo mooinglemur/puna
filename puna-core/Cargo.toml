@@ -40,4 +40,8 @@ zip = "7"
 # they link against puna-core's public API and cannot reach its private dependency graph. The
 # ingest test needs it to read slot types straight out of a real multidata.
 pahoa-multidata.workspace = true
+# Content-addressed promotion is filesystem behavior -- atomic rename, EEXIST as success, fsync
+# ordering -- so it is tested against a real filesystem rather than a trait. One temp dir per test
+# keeps them parallel-safe, the same shape as the database-per-test harness.
+tempfile = "3"
 zip = "7"

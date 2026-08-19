@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}{{ generation.seed_name }}{% endblock %}
+{% block content %}
+<h1>Generation{{+ generation.seed_name }}</h1>
+
+{% if deduplicated %}
+<p class="notice">These exact contents were already on file, so this upload reused the existing
+generation rather than storing a second copy.</p>
+{% endif %}
+
+<dl class="facts">
+<dt>Seed</dt><dd><code>{{ generation.seed_name }}</code></dd>
+<dt>Slots</dt><dd>{{ generation.slots }}</dd>
+<dt>Locations</dt><dd>{{ generation.locations }}</dd>
+<dt>Games</dt><dd>{{ generation.games.len() }}</dd>
+<dt>Race mode</dt><dd>{% if generation.race_mode %}yes{% else %}no{% endif %}</dd>
+<dt>Spoiler</dt><dd>{% if generation.has_spoiler %}included{% else %}none{% endif %}</dd>
+</dl>
+
+<h2>Slots</h2>
+<table class="slots">
+<thead><tr><th>#</th><th>Player</th><th>Game</th><th>Patch</th></tr></thead>
+<tbody>
+{% for slot in slots %}
+<tr>
+<td>{{ slot.slot_number }}</td>
+<td>{{ slot.player_name }}</td>
+<td>
+{{ slot.game }}
+{# A spectator connects and watches the whole multiworld but plays nothing, so it has no patch
+   and no checks. Labelled rather than hidden: it is a real slot somebody logs into. #}
+{% if slot.kind == puna_core::artifact::SlotKind::Spectator %}<span class="tag">spectator</span>{% endif %}
+</td>
+<td>{% if slot.patch_member.is_some() %}yes{% else %}&mdash;{% endif %}</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+
+<p class="hint">Creating a room from this generation arrives in the next milestone.</p>
+{% endblock %}

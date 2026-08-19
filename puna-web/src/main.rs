@@ -9,6 +9,8 @@
 
 mod auth;
 mod error;
+mod gate;
+mod routes;
 mod tpl;
 
 use std::str::FromStr;
@@ -26,9 +28,28 @@ use auth::{AdminSession, LoggedInSession, Session};
 use error::Result;
 use tpl::TplContext;
 
+/// Rocket's own default `limits.data-form` is 2 MiB, which every real generation zip exceeds.
+/// `Rocket.toml` raises it; this is the fallback when it does not, and it is deliberately large
+/// enough to be useful rather than small enough to be safe -- the deployment sets the real number.
+const DEFAULT_UPLOAD_LIMIT: u64 = 256 * 1024 * 1024;
+
 #[derive(rust_embed::RustEmbed)]
 #[folder = "./static/"]
 struct Assets;
+
+/// The root of the shared volume, in Rocket's state.
+///
+/// The web tier's mount is `generations/` and nothing else, by `subPath` -- it cannot reach a
+/// room's state directory even though this is spelled as the volume root.
+pub struct DataDir(pub std::path::PathBuf);
+
+/// The largest generation zip `inspect` will look at, in bytes.
+///
+/// Distinct from Rocket's own `limits.data-form`, which caps what is read off the wire. This one
+/// bounds what is decompressed, so the two want to move together: Rocket's cap must be the larger
+/// of the pair, or an oversized upload is refused with Rocket's generic 413 instead of this
+/// module's message naming the actual limit.
+pub struct UploadLimit(pub u64);
 
 #[derive(Template, WebTemplate)]
 #[template(path = "index.html")]
@@ -130,11 +151,23 @@ fn not_found() -> &'static str {
     "Not found"
 }
 
-fn build(role: Role, figment: Figment, pool: Pool) -> Rocket<Build> {
+fn build(role: Role, figment: Figment, pool: Pool, data_dir: std::path::PathBuf) -> Rocket<Build> {
+    // Rocket's `limits.data-form` caps what is read off the wire; this caps what is decompressed.
+    // Read the former so the two cannot silently disagree -- a decompression limit above the wire
+    // limit is unreachable, and below it turns a legitimate upload into Rocket's generic 413.
+    let wire_limit = figment
+        .extract::<rocket::Config>()
+        .ok()
+        .and_then(|config| config.limits.get("data-form"))
+        .map(|size| size.as_u64())
+        .unwrap_or(DEFAULT_UPLOAD_LIMIT);
+
     let rocket = rocket::custom(figment.clone())
         .manage(role)
         .manage(figment)
         .manage(pool)
+        .manage(DataDir(data_dir))
+        .manage(UploadLimit(wire_limit))
         .register("/", catchers![unauthorized, forbidden, not_found])
         // Served by both roles: liveness, readiness and the embedded assets.
         .mount("/", routes![health, readyz, static_file]);
@@ -142,6 +175,8 @@ fn build(role: Role, figment: Figment, pool: Pool) -> Rocket<Build> {
     match role {
         Role::Web => rocket
             .mount("/", routes![index, admin, whoami, metrics])
+            .mount("/", routes::generations::routes())
+            .mount("/", routes::gates::routes())
             .mount("/auth", auth::routes())
             .attach(rocket_oauth2::OAuth2::<auth::Discord>::fairing("discord")),
         // The tracker tier deliberately gets no OAuth fairing and no Discord credentials: it
@@ -201,6 +236,10 @@ async fn main() -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("Discord OAuth is not configured: {e}"))?;
     }
 
-    build(role, figment, pool).launch().await?;
+    let data_dir = std::path::PathBuf::from(
+        std::env::var("PUNA_DATA_DIR").unwrap_or_else(|_| "/var/lib/puna".to_string()),
+    );
+
+    build(role, figment, pool, data_dir).launch().await?;
     Ok(())
 }

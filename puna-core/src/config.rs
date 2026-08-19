@@ -6,6 +6,7 @@
 //! an address DNS never mentions. A defaulted environment would be a way to get that wrong
 //! quietly, so there is no default.
 
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -99,6 +100,12 @@ pub struct CommonConfig {
     /// invalidating every bookmarked room -- and it is also the name on the room certificate,
     /// which makes it load-bearing rather than cosmetic.
     pub advertise_host: String,
+    /// Root of the shared CephFS volume.
+    ///
+    /// The two tiers mount DIFFERENT things at this path, by `subPath`, and that is the point:
+    /// the web tier gets `generations/` read-write and nothing else, so it physically cannot
+    /// reach a room's state directory. The orchestrator gets the volume root.
+    pub data_dir: PathBuf,
 }
 
 impl CommonConfig {
@@ -107,6 +114,9 @@ impl CommonConfig {
             environment: parse_env("PUNA_ENVIRONMENT")?,
             database_url: require("DATABASE_URL")?,
             advertise_host: require("PUNA_ADVERTISE_HOST")?,
+            data_dir: PathBuf::from(
+                std::env::var("PUNA_DATA_DIR").unwrap_or_else(|_| "/var/lib/puna".to_string()),
+            ),
         })
     }
 }

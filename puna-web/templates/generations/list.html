@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}your generations{% endblock %}
+{% block content %}
+<h1>Your generations</h1>
+
+{% if generations.is_empty() %}
+<p>You have not uploaded a generation yet.</p>
+{% else %}
+<table class="generations">
+<thead><tr><th>Seed</th><th>Slots</th><th>Games</th><th>Uploaded</th></tr></thead>
+<tbody>
+{% for generation in generations %}
+<tr>
+<td><a href="/generations/{{ generation.id }}"><code>{{ generation.seed_name }}</code></a></td>
+<td>{{ generation.slots }}</td>
+<td>{{ generation.games.len() }}</td>
+<td>{{ generation.created_at.format("%Y-%m-%d %H:%M UTC") }}</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% endif %}
+
+<p><a href="/generations/new">Upload another</a></p>
+{% endblock %}

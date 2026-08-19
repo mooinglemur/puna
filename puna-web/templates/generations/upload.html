@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}upload a generation{% endblock %}
+{% block content %}
+<h1>Upload a generation</h1>
+
+{% if let Some(message) = error %}
+<div class="error">
+<p><strong>That upload was not accepted.</strong></p>
+<p>{{ message }}</p>
+</div>
+{% endif %}
+
+{% if !unmatched.is_empty() %}
+{# Reported rather than fatal: the seed is still usable, but a patch nobody can download is a
+   player who cannot join, and the uploader is the only person able to fix it. #}
+<div class="warning">
+<p><strong>Some files could not be matched to a slot.</strong> They will not be downloadable:</p>
+<ul>{% for member in unmatched %}<li><code>{{ member }}</code></li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<form method="post" action="/generations" enctype="multipart/form-data">
+<p>
+<label for="zip">The generation output zip</label><br>
+<input type="file" id="zip" name="zip" accept=".zip,application/zip" required>
+</p>
+<p>
+<button type="submit">Upload</button>
+</p>
+</form>
+
+<p class="hint">
+This is the zip Archipelago's generator produces &mdash; the one containing the
+<code>.archipelago</code> file and each player's patch. It is validated here, before anything is
+stored, so a seed that cannot be read is rejected now rather than by a room that fails to start.
+</p>
+<p class="hint">
+Uploading the same zip twice is harmless: generations are stored under a hash of their contents,
+so the second upload finds the first rather than making a copy.
+</p>
+{% endblock %}

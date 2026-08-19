@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}creation gates{% endblock %}
+{% block content %}
+<h1>Room creation gates</h1>
+
+<p class="hint">
+Two independent switches, so disabling direct uploads does not disable the lobby's pipeline.
+<strong>Administrators bypass every gate</strong>, which is what makes a fresh deployment
+admin-only with no configuration at all.
+</p>
+
+<table class="gates">
+<thead><tr><th>Gate</th><th>Mode</th><th>Changed</th><th>By</th></tr></thead>
+<tbody>
+{% for gate in gates %}
+<tr>
+<td><code>{{ gate.key }}</code></td>
+<td>
+<form method="post" action="/admin/gates" class="inline">
+<input type="hidden" name="key" value="{{ gate.key }}">
+<select name="mode">
+<option value="disabled"{% if gate.mode == puna_core::model::settings::GateMode::Disabled %} selected{% endif %}>disabled &mdash; admins only</option>
+<option value="allowlist"{% if gate.mode == puna_core::model::settings::GateMode::Allowlist %} selected{% endif %}>allowlist &mdash; approved accounts</option>
+<option value="open"{% if gate.mode == puna_core::model::settings::GateMode::Open %} selected{% endif %}>open &mdash; any logged-in user</option>
+</select>
+<button type="submit">Save</button>
+</form>
+</td>
+<td>{{ gate.updated_at.format("%Y-%m-%d %H:%M UTC") }}</td>
+<td>{% if let Some(by) = gate.updated_by %}<code>{{ by }}</code>{% else %}&mdash;{% endif %}</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+
+<h2>Creator allowlist</h2>
+<p class="hint">Only consulted while a gate is in <code>allowlist</code> mode. A Discord id can be
+added before its owner has ever logged in.</p>
+
+<form method="post" action="/admin/gates/allow">
+<p>
+<label for="user_id">Discord id</label>
+<input type="text" id="user_id" name="user_id" inputmode="numeric" pattern="[0-9]+" required>
+<label for="note">Note</label>
+<input type="text" id="note" name="note" placeholder="who this is, and why">
+<button type="submit">Add</button>
+</p>
+</form>
+
+{% if allowlist.is_empty() %}
+<p>Nobody is on the allowlist.</p>
+{% else %}
+<table class="allowlist">
+<thead><tr><th>Discord id</th><th>Note</th><th>Added</th><th>By</th><th></th></tr></thead>
+<tbody>
+{% for entry in allowlist %}
+<tr>
+<td><code>{{ entry.user_id }}</code></td>
+<td>{% if let Some(note) = entry.note %}{{ note }}{% else %}&mdash;{% endif %}</td>
+<td>{{ entry.added_at.format("%Y-%m-%d %H:%M UTC") }}</td>
+<td>{% if let Some(by) = entry.added_by %}<code>{{ by }}</code>{% else %}&mdash;{% endif %}</td>
+<td>
+<form method="post" action="/admin/gates/revoke" class="inline">
+<input type="hidden" name="user_id" value="{{ entry.user_id }}">
+<button type="submit">Remove</button>
+</form>
+</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% endif %}
+{% endblock %}

@@ -1,7 +1,42 @@
 //! Domain operations over the schema.
 
+pub mod generation;
 pub mod port;
+pub mod settings;
 pub mod user;
+
+/// Where a room came from.
+///
+/// Maps to the `room_source` enum, and names the `settings` key holding that source's creation
+/// gate -- so adding a third source cannot compile without deciding which switch admits it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoomSource {
+    /// A zip uploaded through Puna's own form.
+    Direct,
+    /// A generation pushed by Archipelago-lobby. Contract only until M14.
+    Lobby,
+}
+
+impl RoomSource {
+    /// The value as the `room_source` enum spells it.
+    pub fn as_sql(self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::Lobby => "lobby",
+        }
+    }
+
+    /// The `settings` row holding this source's creation gate.
+    ///
+    /// Two independent switches on purpose: disabling direct uploads should not disable the
+    /// lobby's pipeline, and vice versa.
+    pub fn settings_key(self) -> &'static str {
+        match self {
+            Self::Direct => "room_creation.direct",
+            Self::Lobby => "room_creation.lobby",
+        }
+    }
+}
 
 /// Proof that the caller is the orchestrator, required by every function that writes an
 /// observed-state column or mutates a port reservation.
