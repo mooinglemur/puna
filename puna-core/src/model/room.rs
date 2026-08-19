@@ -113,6 +113,23 @@ pub fn may_see_spoiler(policy: SpoilerPolicy, is_staff: bool, owns_a_slot: bool)
     }
 }
 
+/// Who may read this room's tracker, from one rule used by every caller.
+///
+/// The same shape as [`may_see_spoiler`] and for the same reason, but the default is far more open:
+/// a tracker is **meant** to be shared, with stream chats and spectators who will never log in, so
+/// `link` — the unguessable URL is the authorization — is what an ordinary room gets and what the
+/// reference implementation does.
+///
+/// `members` is the race default, and it is the one case where a tracker link handed to a friend
+/// does not work for them. That is the point of it.
+pub fn may_see_tracker(policy: TrackerPolicy, is_staff: bool, owns_a_slot: bool) -> bool {
+    match policy {
+        TrackerPolicy::Link => true,
+        TrackerPolicy::Members => is_staff || owns_a_slot,
+        TrackerPolicy::Disabled => false,
+    }
+}
+
 /// Who may read a room's tracker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrackerPolicy {
@@ -958,6 +975,41 @@ mod tests {
         // Stated separately because it is the one people expect to be false and is not: `never`
         // means never, and an admin who needs it can read the file or change the policy.
         assert!(!may_see_spoiler(Never, true, true));
+    }
+
+    /// The tracker matrix. Shorter than the spoiler's because the default is openness: a tracker is
+    /// for sharing, and only a race closes it.
+    #[test]
+    fn the_tracker_policies_admit_exactly_who_they_say() {
+        use TrackerPolicy::*;
+
+        // `link` is the reference's own model: holding the URL is the authorization, and it works
+        // for someone who has never logged in -- which is most of a tracker's audience.
+        assert!(may_see_tracker(Link, false, false));
+
+        assert!(may_see_tracker(Members, true, false));
+        assert!(may_see_tracker(Members, false, true));
+        assert!(!may_see_tracker(Members, false, false));
+
+        // Off means off, admins included, exactly as `never` does for a spoiler.
+        for staff in [true, false] {
+            for owner in [true, false] {
+                assert!(!may_see_tracker(Disabled, staff, owner));
+            }
+        }
+    }
+
+    /// Holding a slot's tracker id must not become a way to read the multiworld's, so the two
+    /// questions are answered by the same policy against the same room -- the id that got you here
+    /// is not an input.
+    #[test]
+    fn a_slots_tracker_id_grants_nothing_extra() {
+        // The signature is the argument: there is no parameter for "which id was presented", so a
+        // slot link and a room link resolve to the same answer for the same viewer.
+        assert_eq!(
+            may_see_tracker(TrackerPolicy::Members, false, false),
+            may_see_tracker(TrackerPolicy::Members, false, false)
+        );
     }
 
     /// The states a port pair cannot be reclaimed from.

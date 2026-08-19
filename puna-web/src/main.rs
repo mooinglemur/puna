@@ -14,6 +14,7 @@ mod guards;
 mod params;
 mod routes;
 mod tpl;
+mod upstream;
 
 use std::str::FromStr;
 
@@ -171,13 +172,24 @@ fn unprocessable() -> &'static str {
     "That link or form could not be read. If you followed a link, it may have been truncated."
 }
 
+/// The startup inputs that are not Rocket's own.
+///
+/// A struct rather than six more parameters: every field here is read from the environment once and
+/// then only put into Rocket's state, so threading them individually buys nothing and makes the
+/// order of two `String`s something a caller could get wrong.
+pub struct Settings {
+    pub data_dir: std::path::PathBuf,
+    pub advertise_host: String,
+    pub upstream: upstream::Upstream,
+    pub tracker_cache_max: usize,
+}
+
 fn build(
     role: Role,
     environment: Environment,
     figment: Figment,
     pool: Pool,
-    data_dir: std::path::PathBuf,
-    advertise_host: String,
+    settings: Settings,
 ) -> Rocket<Build> {
     // Rocket's `limits.data-form` caps what is read off the wire; this caps what is decompressed.
     // Read the former so the two cannot silently disagree -- a decompression limit above the wire
@@ -194,8 +206,11 @@ fn build(
         .manage(environment)
         .manage(figment)
         .manage(pool)
-        .manage(DataDir(data_dir))
-        .manage(AdvertiseHost(advertise_host))
+        .manage(DataDir(settings.data_dir))
+        .manage(AdvertiseHost(settings.advertise_host))
+        .manage(settings.upstream)
+        .manage(routes::tracker::Memo::default())
+        .manage(routes::tracker::TrackerCacheMax(settings.tracker_cache_max))
         .manage(UploadLimit(wire_limit))
         .register(
             "/",
@@ -215,8 +230,9 @@ fn build(
             .attach(rocket_oauth2::OAuth2::<auth::Discord>::fairing("discord")),
         // The tracker tier deliberately gets no OAuth fairing and no Discord credentials: it
         // never initiates a login. It still reads the session cookie (for `members` policy), which
-        // needs only the shared ROCKET_SECRET_KEY. Its routes land in M8b.
-        Role::Tracker => rocket,
+        // needs only the shared ROCKET_SECRET_KEY -- and its 401 catcher redirects to the web
+        // tier's login on the same hostname, which is what makes that split work.
+        Role::Tracker => rocket.mount("/", routes::tracker::routes()),
     }
 }
 
@@ -277,8 +293,43 @@ async fn main() -> anyhow::Result<()> {
     let advertise_host = std::env::var("PUNA_ADVERTISE_HOST")
         .map_err(|_| anyhow::anyhow!("PUNA_ADVERTISE_HOST must be set"))?;
 
-    build(role, environment, figment, pool, data_dir, advertise_host)
-        .launch()
-        .await?;
+    // How the tracker tier reaches a room. In-cluster by default -- no hairpin through the public
+    // address, and the room's traffic never leaves -- with the public route as a switch for running
+    // this outside a cluster. TLS is verified against `advertise_host` either way, because that is
+    // the only name the room certificate carries.
+    let upstream = upstream::Upstream {
+        advertise_host: advertise_host.clone(),
+        route: match std::env::var("PUNA_ROOM_ROUTE").as_deref() {
+            Ok("public") => upstream::Route::Public,
+            _ => upstream::Route::Service {
+                namespace: std::env::var("PUNA_NAMESPACE")
+                    .unwrap_or_else(|_| "puna-dev".to_string()),
+            },
+        },
+        // A room that does not answer promptly is a room that is down, and this request is holding
+        // a worker while it waits. The cached document is the fallback and it is a better answer
+        // than a long spinner.
+        timeout: std::time::Duration::from_secs(5),
+    };
+
+    let tracker_cache_max = std::env::var("PUNA_TRACKER_CACHE_MAX")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .unwrap_or(2 * 1024 * 1024);
+
+    build(
+        role,
+        environment,
+        figment,
+        pool,
+        Settings {
+            data_dir,
+            advertise_host,
+            upstream,
+            tracker_cache_max,
+        },
+    )
+    .launch()
+    .await?;
     Ok(())
 }

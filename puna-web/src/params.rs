@@ -9,7 +9,7 @@
 //! back to it -- so a route that accidentally took the wrong one would leak the room URL through a
 //! tracker link. Distinct parameter types make that a compile error rather than a review question.
 
-use puna_core::ids::RoomId;
+use puna_core::ids::{RoomId, TrackerId};
 use rocket::request::FromParam;
 
 macro_rules! id_param {
@@ -41,8 +41,11 @@ macro_rules! id_param {
 }
 
 id_param!(RoomParam, RoomId);
-// `TrackerParam` lands with the tracker tier at M8b, from the same macro. It is deliberately not
-// declared ahead of its route: a parameter type nothing accepts is a type nothing can get wrong.
+
+// One id space, two kinds of target: a room's tracker id and a slot's are both drawn from it, and
+// which one a given uuid is only becomes apparent when it resolves. That is deliberate -- a bare
+// `/tracker/<uuid>` should not disclose whether it names a multiworld or one player's slot.
+id_param!(TrackerParam, TrackerId);
 
 #[cfg(test)]
 mod tests {

@@ -7,6 +7,7 @@ pub mod port;
 pub mod room;
 pub mod settings;
 pub mod slot;
+pub mod tracker;
 pub mod user;
 
 /// Where a room came from.
