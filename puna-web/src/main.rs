@@ -262,7 +262,13 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|_| anyhow::anyhow!("PUNA_ENVIRONMENT must be set"))
         .and_then(|v| Environment::from_str(&v).map_err(|e| anyhow::anyhow!(e)))?;
 
-    puna_core::metrics::init();
+    // Scoped to the role, so this process exports only what it can actually compute. A web replica
+    // publishing `puna_orchestrator_leader 0` is not a harmless extra series -- it is a zero that
+    // alert expressions have to know to exclude.
+    puna_core::metrics::init(match role {
+        Role::Web => puna_core::metrics::Component::Web,
+        Role::Tracker => puna_core::metrics::Component::Tracker,
+    });
 
     // Started before the pool, and before Rocket, so a tier that is slow to reach Postgres is still
     // scrapeable while it tries. It registers nothing itself -- `init()` above owns the registry --

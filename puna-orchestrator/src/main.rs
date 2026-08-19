@@ -58,7 +58,9 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = OrchestratorConfig::from_env()?;
-    puna_core::metrics::init();
+    // This process owns nearly the whole registry: everything about rooms, ports, reconciliation
+    // and the cluster is computed here and nowhere else.
+    puna_core::metrics::init(puna_core::metrics::Component::Orchestrator);
 
     tracing::info!(
         version = puna_core::VERSION,

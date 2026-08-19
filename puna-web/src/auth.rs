@@ -80,6 +80,25 @@ impl Session {
         let cookie = Cookie::build((COOKIE_NAME, serialized))
             .expires(OffsetDateTime::now_utc() + 31.days())
             .same_site(SameSite::Lax)
+            // --- SET EXPLICITLY. Rocket will NOT set it for us here. ---------------------------
+            // Rocket only defaults `Secure` on when Rocket itself terminates TLS
+            // (`CookieJar::set_defaults`: `if cookie.secure().is_none() && config.tls_enabled()`).
+            // Every Puna deployment terminates TLS upstream -- Envoy for the UI -- so
+            // `tls_enabled()` is false and the attribute would never be added. The reasonable
+            // assumption that "Rocket handles this" is exactly what makes it invisible.
+            //
+            // It matters more than the usual amount because the UI and the rooms SHARE A HOSTNAME,
+            // differing only by port, and cookies have no port isolation: this cookie is sent to
+            // mw.ionium-dev.us:41234 -- a pahoa room -- exactly as it is to :443. pahoa neither
+            // parses nor logs cookies, and the value is AEAD-encrypted, so it cannot read it. But
+            // it is still a bearer credential: anyone who captures it can replay it here. Without
+            // `Secure`, a single plaintext request to a room port puts it on the wire in the
+            // clear, and there is no HSTS on the shared gateway to upgrade that request.
+            //
+            // Local development over `http://localhost` is unaffected: browsers treat localhost as
+            // a secure context and accept `Secure` cookies there. Developing against a bare LAN
+            // address instead would break login, and that is the intended trade.
+            .secure(true)
             .build();
         cookies.add_private(cookie);
         Ok(())

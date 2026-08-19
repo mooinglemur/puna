@@ -273,7 +273,20 @@ fn probe(failure_threshold: i32) -> Probe {
 fn resources(spec: &RoomSpec) -> ResourceRequirements {
     ResourceRequirements {
         requests: Some(BTreeMap::from([
-            ("cpu".to_string(), Quantity("250m".to_string())),
+            // 50m, lowered from 250m before the first real deployment. A room is idle almost all of
+            // the time: it holds sockets, applies the occasional check and writes a save every 30
+            // seconds. The bursts that matter -- a seed loading, a wave of clients reconnecting --
+            // are what `limits.cpu` covers, and a request is a RESERVATION rather than a ceiling.
+            //
+            // The request is what the scheduler subtracts from a node and what a ResourceQuota
+            // charges, so setting it to steady-state demand rather than to burst demand is what
+            // decides how many rooms fit on the fleet. At 250m a hundred rooms reserved 25 cores
+            // that were doing nothing; at 50m they reserve 5 and still burst to 2 each.
+            //
+            // Revise it from measurement, not from argument -- container_cpu_usage_seconds_total
+            // by pod over a week of real rooms. Too LOW shows up as rooms landing on a node that
+            // cannot actually feed them, which reads as lag rather than as a scheduling fault.
+            ("cpu".to_string(), Quantity("50m".to_string())),
             (
                 "memory".to_string(),
                 quantity_bytes(crate::spec::room::memory_request_bytes(spec.slot_count)),
@@ -542,7 +555,9 @@ mod tests {
         let limits = resources.limits.unwrap();
 
         assert_eq!(limits["cpu"], Quantity("2".to_string()));
-        assert_eq!(requests["cpu"], Quantity("250m".to_string()));
+        // Steady state, not burst -- see the note on `resources`. The gap between the two is the
+        // point: a room reserves little and is allowed to spike.
+        assert_eq!(requests["cpu"], Quantity("50m".to_string()));
 
         assert_eq!(
             requests["memory"],

@@ -4,6 +4,37 @@
 //! subtly different names for the same thing is a dashboard that quietly measures nothing. The
 //! families are declared before their producers exist so the names are settled in one review
 //! rather than accreted.
+//!
+//! ## Declared in one place, REGISTERED per component
+//!
+//! Declaring a family here does not mean every process exports it. [`init`] takes a [`Component`]
+//! and registers only the families that component actually produces, because a family is
+//! registered when its `LazyLock` is first forced and not before.
+//!
+//! That distinction is the whole reason this is not one `init()`. Registering everything
+//! everywhere made `puna-web` and `puna-tracker` export `puna_orchestrator_leader`,
+//! `puna_ports_bound` and the rest as permanent zeros -- values they have no way to compute and
+//! no business asserting. Nothing was visibly broken while the orchestrator was the only scraped
+//! tier, and adding scrapes to the other two turned it into seven series per family where one is
+//! meaningful.
+//!
+//! **The damage is to alerting, and it is the quiet kind.** `sum(puna_orchestrator_leader) != 1`
+//! survives extra zeros, so it looked fine. `puna_ports_bound / puna_ports_capacity > 0.8` only
+//! survived because the web tier reported `0/0`, which is NaN, which fails the comparison and is
+//! dropped -- correct by accident, one plausible refactor away from `+Inf` and a page at 3am.
+//! Alert expressions should not have to know which tiers happen to export a zero.
+//!
+//! ## Adding a family
+//!
+//! Declare it below, then add its name to exactly one of [`SHARED_FAMILIES`],
+//! [`WEB_FAMILIES`], [`TRACKER_FAMILIES`] or [`ORCHESTRATOR_FAMILIES`], and force it in that
+//! component's arm of [`init`]. `tests/metrics_scope_*.rs` fail if the table and the registry
+//! disagree.
+//!
+//! The residual risk this does not close: a tier that *touches* another component's family
+//! registers it on the spot, since that is what `LazyLock` does. The compile-time split is what
+//! actually prevents it -- `puna-core` has no `kube` and no reconcile loop, so there is no code in
+//! the web binary that could reach `K8S_REQUESTS` for a reason.
 
 use std::sync::LazyLock;
 
@@ -13,6 +44,22 @@ use prometheus::{
 
 /// The process registry. `/metrics` renders this and nothing else.
 pub static REGISTRY: LazyLock<Registry> = LazyLock::new(Registry::new);
+
+/// Which process this is, for the purpose of deciding what it exports.
+///
+/// `Web` and `Tracker` are the same binary under different `PUNA_ROLE` values, and today they
+/// register the same (empty) set beyond the shared families. They are still separate variants:
+/// they will diverge -- ingest and upload counters belong to one, proxy and cache counters to the
+/// other -- and modelling that now makes the divergence a table edit rather than a refactor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Component {
+    /// `puna-web` under `PUNA_ROLE=web`.
+    Web,
+    /// `puna-web` under `PUNA_ROLE=tracker`.
+    Tracker,
+    /// `puna-orchestrator`.
+    Orchestrator,
+}
 
 macro_rules! register {
     ($metric:expr) => {{
@@ -266,7 +313,102 @@ pub const START_RESULTS: &[&str] = &["ok", "failed", "port_exhausted", "ip_misma
 pub const PROBE_CAPABILITIES: &[&str] =
     &["activity", "client_count", "graceful_shutdown", "commands"];
 
-/// Register every family, and pre-instantiate the label sets that are finite and known.
+/// Families every component exports, because every component does the thing they measure.
+///
+/// Only database timing so far, and it belongs here for a concrete reason rather than by default:
+/// all three tiers hold a diesel pool, so a query-latency series scoped to one of them would
+/// answer "is Postgres slow" for a third of the traffic.
+pub const SHARED_FAMILIES: &[&str] = &["diesel_query_seconds"];
+
+/// Families only `puna-web` exports. Empty today.
+///
+/// The HTTP request fairing (§11) lands here when it is built, and this is the list it goes in.
+pub const WEB_FAMILIES: &[&str] = &[];
+
+/// Families only `puna-tracker` exports. Empty today.
+///
+/// Upstream fetch counts and cache hit rates belong here -- the numbers that say whether the
+/// three cache layers are doing their job -- when there is something to attach them to.
+pub const TRACKER_FAMILIES: &[&str] = &[];
+
+/// Families only `puna-orchestrator` exports.
+///
+/// Everything about rooms, ports, reconciliation and the cluster, which is nearly the whole
+/// registry: these are all computed by the reconcile loop or by the sweep, and no other process
+/// has the inputs to compute any of them. `puna_commands_total`, `puna_command_seconds` and
+/// `puna_probe_capability` have no producer yet (M11 and M12) and are listed here because that is
+/// where their producer will be -- the dispatcher and the probe are orchestrator-side.
+pub const ORCHESTRATOR_FAMILIES: &[&str] = &[
+    "puna_rooms",
+    "puna_room_starts_total",
+    "puna_room_start_seconds",
+    "puna_ports_capacity",
+    "puna_ports_bound",
+    "puna_ports_quarantined",
+    "puna_port_reclaims_total",
+    "puna_port_ip_mismatch_total",
+    "puna_generations",
+    "puna_generation_bytes",
+    "puna_slots_unclaimed",
+    "puna_orchestrator_leader",
+    "puna_integrity_faults",
+    "puna_orphan_directories",
+    "puna_reconcile_seconds",
+    "puna_reconcile_errors_total",
+    "puna_k8s_requests_total",
+    "puna_commands_total",
+    "puna_command_seconds",
+    "puna_probe_capability",
+];
+
+/// Families that are REGISTERED but do not appear until something writes a series.
+///
+/// An orthogonal axis to the per-component tables, and a real one: a labeled family renders no
+/// `# TYPE` line at all while it has no children, so "registered" and "visible in `/metrics`" are
+/// different sets. Every name here is a `*Vec` whose label space is combinatorial and mostly
+/// uninteresting -- pre-seeding them would trade one confusion for a wall of permanent zeros, so
+/// [`init`] deliberately leaves them empty.
+///
+/// `diesel_query_seconds` is the one that is not a choice: it is labeled by query, so it cannot be
+/// seeded without inventing a query name. It shows up as soon as the process talks to Postgres,
+/// which for the web tiers is the readiness probe.
+///
+/// The distinction is worth encoding because it decides what a dashboard sees on a cold process,
+/// and because moving a family across it is a decision rather than an accident -- the scope tests
+/// fail either way round.
+pub const DEFERRED_FAMILIES: &[&str] = &[
+    "diesel_query_seconds",
+    "puna_commands_total",
+    "puna_k8s_requests_total",
+    "puna_reconcile_errors_total",
+];
+
+/// The families `component` registers, shared ones included.
+///
+/// Used by the scope tests, and by anyone writing an alert who needs to know which job a series
+/// can legitimately come from.
+pub fn families(component: Component) -> Vec<&'static str> {
+    let own = match component {
+        Component::Web => WEB_FAMILIES,
+        Component::Tracker => TRACKER_FAMILIES,
+        Component::Orchestrator => ORCHESTRATOR_FAMILIES,
+    };
+    SHARED_FAMILIES.iter().chain(own).copied().collect()
+}
+
+/// The families `component` renders on a freshly started process, before anything has happened.
+///
+/// [`families`] minus [`DEFERRED_FAMILIES`]. This is what a scrape of a cold pod returns, and
+/// therefore what a panel shows before the first room starts.
+pub fn seeded_families(component: Component) -> Vec<&'static str> {
+    families(component)
+        .into_iter()
+        .filter(|name| !DEFERRED_FAMILIES.contains(name))
+        .collect()
+}
+
+/// Register the families `component` produces, and pre-instantiate the label sets that are finite
+/// and known.
 ///
 /// The pre-instantiation is the point. A labeled family emits NOTHING until some label
 /// combination is touched, so a freshly started process would export no `puna_integrity_faults`
@@ -278,7 +420,26 @@ pub const PROBE_CAPABILITIES: &[&str] =
 /// `puna_commands_total`) are deliberately left to appear on first use: their label spaces are
 /// large and mostly uninteresting, and pre-seeding them would trade one confusion for a wall of
 /// permanent zeros.
-pub fn init() {
+///
+/// **A zero published by the wrong process is worse than a missing series**, which is why this
+/// takes a component rather than seeding everything. An absent series is visibly absent; a zero
+/// from a tier that cannot compute the value looks like an answer. See the module docs.
+pub fn init(component: Component) {
+    // Every tier holds a diesel pool. Tolerates re-registration: `init` runs once per process in
+    // production but several times across a test binary sharing one registry.
+    let _ = REGISTRY.register(Box::new(crate::db::QUERY_HISTOGRAM.clone()));
+
+    match component {
+        // Nothing yet beyond the shared families. When the request fairing lands, force it here
+        // and add it to WEB_FAMILIES -- the scope test fails if only one of those happens.
+        Component::Web => {}
+        Component::Tracker => {}
+        Component::Orchestrator => init_orchestrator(),
+    }
+}
+
+/// Everything the reconcile loop and the sweep produce.
+fn init_orchestrator() {
     LazyLock::force(&ROOM_START_SECONDS);
     LazyLock::force(&PORTS_CAPACITY);
     LazyLock::force(&PORTS_BOUND);
@@ -306,10 +467,6 @@ pub fn init() {
     for capability in PROBE_CAPABILITIES {
         PROBE_CAPABILITY.with_label_values(&[capability]).set(0);
     }
-
-    // Tolerate re-registration: `init` is called once per process in production, but several
-    // times across a test binary sharing one registry.
-    let _ = REGISTRY.register(Box::new(crate::db::QUERY_HISTOGRAM.clone()));
 }
 
 /// Render the registry in Prometheus text exposition format.
@@ -338,7 +495,15 @@ mod tests {
     /// down. Two families were declared as gauges with counter names until this test existed.
     #[test]
     fn every_total_is_a_counter_and_no_counter_is_missing_the_suffix() {
-        super::init();
+        // Every component, so the invariant covers the whole registry rather than one tier's
+        // slice. The registry is cumulative within a test binary, so this is their union.
+        for component in [
+            super::Component::Web,
+            super::Component::Tracker,
+            super::Component::Orchestrator,
+        ] {
+            super::init(component);
+        }
         let text = super::gather();
 
         // `# TYPE <name> <type>` lines, which is the exposition format's own answer.
@@ -370,8 +535,8 @@ mod tests {
     fn init_is_idempotent_and_publishes_the_known_series() {
         // Called twice on purpose: the registry rejects duplicate names, so this catches both a
         // collision between two families and an init that cannot be run more than once.
-        super::init();
-        super::init();
+        super::init(super::Component::Orchestrator);
+        super::init(super::Component::Orchestrator);
         let text = super::gather();
 
         // Unlabeled families appear on registration alone.

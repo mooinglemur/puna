@@ -166,3 +166,19 @@ pub async fn shrink_range(conn: &mut AsyncPgConnection, environment: &str, pairs
     .await
     .expect("shrink range");
 }
+
+/// The `puna_*` and `diesel_*` family names present in the exposition output.
+///
+/// Read from `# TYPE` lines, which is the format's own answer to "what families exist" and is
+/// insensitive to whether a family has any series yet.
+pub fn rendered_families(text: &str) -> Vec<String> {
+    let mut names: Vec<String> = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("# TYPE "))
+        .filter_map(|rest| rest.split_once(' '))
+        .map(|(name, _)| name.to_string())
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
