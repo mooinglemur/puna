@@ -2412,6 +2412,7 @@ dependencies = [
  "futures-util",
  "pahoa-multidata",
  "prometheus",
+ "rand 0.8.7",
  "rustls",
  "rustls-pki-types",
  "serde",

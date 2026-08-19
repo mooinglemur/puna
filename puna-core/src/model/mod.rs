@@ -1,8 +1,11 @@
 //! Domain operations over the schema.
 
 pub mod generation;
+pub mod member;
 pub mod port;
+pub mod room;
 pub mod settings;
+pub mod slot;
 pub mod user;
 
 /// Where a room came from.
