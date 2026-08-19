@@ -34,6 +34,10 @@ pub mod sql_types {
     pub struct SlotAuthMode;
 
     #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
+    #[diesel(postgres_type(name = "slot_kind"))]
+    pub struct SlotKind;
+
+    #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "spoiler_policy"))]
     pub struct SpoilerPolicy;
 
@@ -52,11 +56,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    use diesel::sql_types::*;
+    use super::sql_types::SlotKind;
+
     generation_slots (generation_id, slot_number) {
         generation_id -> Uuid,
         slot_number -> Int4,
         player_name -> Text,
         game -> Text,
+        kind -> SlotKind,
         patch_member -> Nullable<Text>,
         patch_size_bytes -> Nullable<Int8>,
     }
@@ -152,11 +160,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    use diesel::sql_types::*;
+    use super::sql_types::SlotKind;
+
     room_slots (room_id, slot_number) {
         room_id -> Uuid,
         slot_number -> Int4,
         player_name -> Text,
         game -> Text,
+        kind -> SlotKind,
         password -> Nullable<Text>,
         owner_id -> Nullable<Int8>,
         claim_token -> Nullable<Text>,

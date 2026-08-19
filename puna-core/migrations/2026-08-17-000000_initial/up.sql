@@ -25,6 +25,10 @@ CREATE TYPE command_state    AS ENUM ('pending', 'running', 'ok', 'failed', 'rej
 -- Mutually exclusive, mirroring reference Archipelago plus pahoa's per-slot addition.
 CREATE TYPE slot_auth_mode   AS ENUM ('none', 'room', 'per_slot');
 
+-- What a slot IS. Group slots (item links) are absent deliberately: nothing connects as one, so
+-- ingest drops them rather than storing a kind nobody can hold. See generation_slots.
+CREATE TYPE slot_kind        AS ENUM ('player', 'spectator');
+
 CREATE TYPE room_state AS ENUM (
     'provisioning',     -- row exists, room directory may not
     'idle',             -- directory exists, no Deployment
@@ -94,14 +98,27 @@ CREATE TABLE generations (
 );
 
 
+-- One row per CONNECTABLE slot, which is player slots and spectator slots both.
+--
+-- Upstream's rule exactly, from both ends of it: WebHostLib/upload.py skips SlotType.group and
+-- nothing else, and MultiServer resolves a Connect through connect_names with no slot-type filter
+-- at all (MultiServer.py:1880). A spectator therefore logs in like anyone else, and needs an owner,
+-- a claim link, a tracker id and -- in a per_slot room -- a password like anyone else.
+--
+-- Group slots (item links) are dropped at ingest instead: they are not in anyone's yaml, nobody
+-- connects as one, and the server builds them from this same multidata.
 CREATE TABLE generation_slots (
     generation_id    UUID NOT NULL REFERENCES generations (id) ON DELETE CASCADE,
     slot_number      INTEGER NOT NULL,
     player_name      TEXT NOT NULL,
     game             TEXT NOT NULL,
+    kind             slot_kind NOT NULL,
     patch_member     TEXT,     -- path inside the zip; NULL for games with no patch
     patch_size_bytes BIGINT,
-    PRIMARY KEY (generation_id, slot_number)
+    PRIMARY KEY (generation_id, slot_number),
+    -- A spectator plays nothing, so it has no patch to hand out. Cheap to state, and it makes a
+    -- mis-attributed patch a write failure rather than a player downloading someone else's game.
+    CONSTRAINT spectators_have_no_patch CHECK (kind <> 'spectator' OR patch_member IS NULL)
 );
 
 
@@ -270,6 +287,14 @@ CREATE TABLE room_slots (
     slot_number INTEGER NOT NULL,
     player_name TEXT NOT NULL,
     game        TEXT NOT NULL,
+    -- Copied from generation_slots, spectators included; see the note there.
+    --
+    -- This table is also what fills PAHOA_SLOT_PASSWORDS, so the consequence of getting it wrong
+    -- is worth stating: pahoa treats a slot absent from that map as having no password, so a
+    -- spectator missing here would be the one unprivileged door into a room where everyone else
+    -- needs a credential. That is an argument for pahoa failing closed, not for Puna's rule --
+    -- which is upstream's regardless.
+    kind        slot_kind NOT NULL,
     password    TEXT,   -- NULL unless the room's slot_auth = 'per_slot'
     owner_id    BIGINT REFERENCES users (id),  -- NULL = unclaimed
     claim_token TEXT,                          -- NULL once claimed

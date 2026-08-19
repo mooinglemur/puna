@@ -2101,6 +2101,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "pahoa-multidata"
+version = "0.1.0"
+source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=735a34b343bee32a9bdccf72615ceb3904adc70e#735a34b343bee32a9bdccf72615ceb3904adc70e"
+dependencies = [
+ "flate2",
+ "pahoa-pickle",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "pahoa-pickle"
+version = "0.1.0"
+source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=735a34b343bee32a9bdccf72615ceb3904adc70e#735a34b343bee32a9bdccf72615ceb3904adc70e"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "parking"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2390,17 +2410,20 @@ dependencies = [
  "diesel-async",
  "diesel_migrations",
  "futures-util",
+ "pahoa-multidata",
  "prometheus",
  "rustls",
  "rustls-pki-types",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror",
  "tokio",
  "tokio-postgres",
  "tokio-postgres-rustls",
  "tracing",
  "uuid",
+ "zip",
 ]
 
 [[package]]

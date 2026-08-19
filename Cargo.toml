@@ -31,6 +31,17 @@ license = "MIT"
 [workspace.dependencies]
 puna-core = { path = "puna-core" }
 
+# The multidata parser, taken from pahoa rather than reimplemented: it is a Python pickle reader
+# with an allowlist and a bit-exact MT19937, and a second implementation would be a second set of
+# bugs. Puna parses a generation at UPLOAD time so a bad seed is a 400 on the form rather than a
+# crashlooping room pod.
+#
+# Pinned to a rev, and fetched over ANONYMOUS HTTPS from git.mooinglemur.com -- the GitLab mirror
+# is public while the GitHub origin stays private during early development, so CI needs no
+# credentials for this. Bump the rev deliberately; pahoa changing must never silently change how
+# Puna reads a seed.
+pahoa-multidata = { git = "https://git.mooinglemur.com/mooinglemur/pahoa.git", rev = "735a34b343bee32a9bdccf72615ceb3904adc70e" }
+
 anyhow = "1.0"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }

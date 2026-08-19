@@ -4,6 +4,7 @@
 //! room-probe contract live here. Filesystem and Kubernetes code deliberately do not: see the
 //! dependency note in `Cargo.toml`.
 
+pub mod artifact;
 pub mod config;
 pub mod db;
 pub mod ids;
