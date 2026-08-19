@@ -40,9 +40,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 
 use crate::cluster::{RoomSpec, object_name};
-use crate::spec::{
-    ROOM_SERVICE_ACCOUNT, SAVE_DIR, SHARED_DIR, SPEC_HASH_ANNOTATION, Site, TLS_DIR,
-};
+use crate::spec::{ROOM_SERVICE_ACCOUNT, SAVE_DIR, SPEC_HASH_ANNOTATION, Site, TLS_DIR};
 
 /// The full feed. Named, because the Service and both probes refer to it by name.
 pub const PORT_FULL: &str = "game-full";
@@ -203,13 +201,6 @@ fn container(spec: &RoomSpec) -> Container {
                 // One room's directory and nothing else on the volume: a room cannot read another
                 // room's save, or any generation.
                 sub_path: Some(format!("rooms/{}", spec.room_id)),
-                ..Default::default()
-            },
-            VolumeMount {
-                name: "data".to_string(),
-                mount_path: SHARED_DIR.to_string(),
-                sub_path: Some("shared".to_string()),
-                read_only: Some(true),
                 ..Default::default()
             },
             VolumeMount {
@@ -593,9 +584,12 @@ mod tests {
         );
         assert_ne!(state.read_only, Some(true), "the room writes its own save");
 
-        let shared = mounts.iter().find(|m| m.mount_path == SHARED_DIR).unwrap();
-        assert_eq!(shared.sub_path.as_deref(), Some("shared"));
-        assert_eq!(shared.read_only, Some(true));
+        // No `/shared`: pahoa compiles its hint blacklist in and removed `--snapshot`, so there is
+        // nothing for a room to read out of that subtree.
+        assert!(
+            !mounts.iter().any(|m| m.mount_path == "/shared"),
+            "a room mounts nothing at /shared"
+        );
 
         let tls = mounts.iter().find(|m| m.mount_path == TLS_DIR).unwrap();
         assert_eq!(tls.read_only, Some(true));

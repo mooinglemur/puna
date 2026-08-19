@@ -3,7 +3,6 @@
 //! ```text
 //! /var/lib/puna/
 //! ├── generations/<sha256>/     WEB-owned. Read here, never written.
-//! ├── shared/datapackage.json   mounted read-only into every room
 //! ├── rooms/<room-id>/          this module's; bind-mounted into that room's pod alone
 //! │   ├── seed.archipelago      COPIED from generations/ -- rooms are self-contained
 //! │   └── room.lock  room.save  PAHOA'S. Puna never writes these two names.

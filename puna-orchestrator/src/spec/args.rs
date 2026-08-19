@@ -27,7 +27,7 @@
 //! kebab-case only, so a table without the aliases turns a mixed-spelling argv into a test failure.
 
 use crate::cluster::RoomSpec;
-use crate::spec::{SAVE_DIR, SEED_PATH, SNAPSHOT_PATH, TLS_CERT_PATH, TLS_KEY_PATH};
+use crate::spec::{SAVE_DIR, SEED_PATH, TLS_CERT_PATH, TLS_KEY_PATH};
 
 /// One option pahoa's `serve` accepts.
 pub struct Opt {
@@ -60,7 +60,6 @@ pub const PAHOA_SERVE_OPTS: &[Opt] = &[
     flag("--help"),
     value("--bind"),
     value("--port"),
-    value("--snapshot"),
     value("--save-dir"),
     value("--save-interval"),
     value("--outbound-budget"),
@@ -242,7 +241,6 @@ pub fn serve(spec: &RoomSpec) -> Vec<String> {
 
     args.value("--save-dir", SAVE_DIR)
         .value("--save-interval", spec.save_interval_secs)
-        .value("--snapshot", SNAPSHOT_PATH)
         .value("--tls-cert", TLS_CERT_PATH)
         .value("--tls-key", TLS_KEY_PATH)
         .value("--log-format", LOG_FORMAT)
@@ -303,7 +301,6 @@ mod tests {
                 "--filtered-port=40001",
                 "--save-dir=/var/lib/pahoa",
                 "--save-interval=30",
-                "--snapshot=/shared/datapackage.json",
                 "--tls-cert=/etc/pahoa/tls/tls.crt",
                 "--tls-key=/etc/pahoa/tls/tls.key",
                 "--log-format=json",
@@ -394,6 +391,37 @@ mod tests {
         assert!(!serve(&spec).iter().any(|a| a.starts_with("--journal=")));
     }
 
+    /// **`--snapshot` no longer exists in pahoa, and sending it is `exit 1` on every room.**
+    ///
+    /// The history is worth keeping because both directions of it bit. Puna first passed
+    /// `--snapshot=/shared/datapackage.json` unconditionally while nothing had ever written that
+    /// file; pahoa opened the path, failed, and every room in the environment crashlooped behind a
+    /// startup banner that looked completely healthy. Puna made the flag conditional. Pahoa then
+    /// removed the option outright -- `hint_blacklist`, the only thing that file carried which was
+    /// not already in the seed, is compiled into the binary now -- so the flag went from
+    /// "resolved or fatal" to "unknown option, and therefore fatal" with no state in between where
+    /// sending it is safe.
+    ///
+    /// `ArgBuilder` already refuses it, because it is absent from `PAHOA_SERVE_OPTS`. This asserts
+    /// the outcome rather than the mechanism, so it keeps holding if the guard is ever reworked.
+    #[test]
+    fn no_snapshot_is_ever_named_on_the_command_line() {
+        let argv = serve(&spec());
+        assert!(
+            !argv.iter().any(|a| a.starts_with("--snapshot")),
+            "pahoa removed --snapshot; sending it is a hard exit 1 on every room: {argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|a| a.contains("datapackage")),
+            "nothing should reference a data package file: {argv:?}"
+        );
+
+        // The neighbours it sat between are untouched -- this was a removal, not a reshuffle.
+        assert!(argv.contains(&format!("--save-dir={SAVE_DIR}")));
+        assert!(argv.contains(&"--journal".to_string()));
+        assert!(argv.contains(&SEED_PATH.to_string()));
+    }
+
     /// One statement of a path, used by both the argv and the mounts.
     #[test]
     fn every_path_in_argv_is_under_a_mount() {
@@ -409,7 +437,6 @@ mod tests {
             SEED_PATH.starts_with(SAVE_DIR),
             "the seed lives in the room's own directory"
         );
-        assert_eq!(value_of("--snapshot"), SNAPSHOT_PATH);
         assert_eq!(value_of("--tls-cert"), TLS_CERT_PATH);
         assert_eq!(value_of("--tls-key"), TLS_KEY_PATH);
     }

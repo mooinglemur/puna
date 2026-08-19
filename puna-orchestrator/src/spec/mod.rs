@@ -122,12 +122,14 @@ pub const SAVE_DIR: &str = "/var/lib/pahoa";
 /// make an existing room unstartable.
 pub const SEED_PATH: &str = "/var/lib/pahoa/seed.archipelago";
 
-/// `shared/` on the volume, mounted read-only into every room.
-pub const SHARED_DIR: &str = "/shared";
-
-/// The data package snapshot. Without it, games resolve from the seed's embedded package alone,
-/// which covers names and ids but never hint blacklists.
-pub const SNAPSHOT_PATH: &str = "/shared/datapackage.json";
+// There is deliberately no `/shared` mount and no data package snapshot path.
+//
+// Rooms briefly took `--snapshot=/shared/datapackage.json`, which carried `hint_blacklist` -- the
+// one thing the reference server reads from installed apworlds and that is never serialized into a
+// multidata. Pahoa now compiles that table into the binary (`pahoa-multidata/src/hint_blacklist.rs`)
+// and has REMOVED the option, so there is nothing to mount and sending the flag is a hard `exit 1`.
+//
+// Everything else a room needs -- names, ids, name groups, checksums -- was always in the seed.
 
 /// Where the room certificate is mounted. One Certificate for the single name every room shares,
 /// which differs only by port — and pahoa reloads it in place, so a renewal needs no restart.
@@ -144,11 +146,9 @@ mod tests {
     #[test]
     fn every_path_is_under_its_mount() {
         assert!(SEED_PATH.starts_with(&format!("{SAVE_DIR}/")));
-        assert!(SNAPSHOT_PATH.starts_with(&format!("{SHARED_DIR}/")));
         assert!(TLS_CERT_PATH.starts_with(&format!("{TLS_DIR}/")));
         assert!(TLS_KEY_PATH.starts_with(&format!("{TLS_DIR}/")));
-        // Three distinct mounts, so none of them can be satisfied by another's volume.
-        assert!(!SHARED_DIR.starts_with(SAVE_DIR));
+        // Two distinct mounts, so neither can be satisfied by the other's volume.
         assert!(!TLS_DIR.starts_with(SAVE_DIR));
     }
 
