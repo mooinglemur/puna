@@ -40,7 +40,7 @@ puna-core = { path = "puna-core" }
 # is public while the GitHub origin stays private during early development, so CI needs no
 # credentials for this. Bump the rev deliberately; pahoa changing must never silently change how
 # Puna reads a seed.
-pahoa-multidata = { git = "https://git.mooinglemur.com/mooinglemur/pahoa.git", rev = "735a34b343bee32a9bdccf72615ceb3904adc70e" }
+pahoa-multidata = { git = "https://git.mooinglemur.com/mooinglemur/pahoa.git", rev = "5b83f91865f609023d293f354f015cd73699b237" }
 
 anyhow = "1.0"
 async-trait = "0.1"
