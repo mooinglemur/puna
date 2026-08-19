@@ -45,6 +45,34 @@ stages:
   variables:
     CARGO_HOME: $CI_PROJECT_DIR/.cargo
 
+# Resource overrides for the jobs that actually compile. Values taken from pahoa's pipeline, whose
+# workspace and toolchain are the same shape.
+#
+# --- CPU REQUEST == LIMIT, and that is the point rather than tidiness ------------------------------
+# cargo picks its default job count from `available_parallelism()`, which respects the cgroup CPU
+# QUOTA -- and the quota comes from the limit, not the request. So a pod with a small default quota
+# builds at that many jobs no matter how big the node is: **the limit IS the build's parallelism.**
+# Setting the request to match is what stops the scheduler overcommitting a node with jobs that will
+# each genuinely use eight.
+#
+# Memory is request 4Gi / limit 6Gi: the peak is linking test binaries, and the headroom is so the
+# tree can grow without OOM-killing mid-link rather than to be used routinely.
+#
+# --- THESE DO NOTHING UNLESS THE RUNNER ALLOWS IT ---------------------------------------------------
+# The runner's config.toml needs the matching `cpu_request_overwrite_max_allowed`,
+# `cpu_limit_overwrite_max_allowed` and the two memory equivalents under `[runners.kubernetes]`, set
+# at least this high. Without them the values are silently ignored and jobs run at the runner's
+# defaults -- which looks exactly like this block not existing.
+#
+# Merged INTO each job's `variables:` map rather than set on a job anchor, because a job that
+# declares its own `variables:` REPLACES an inherited one wholesale -- YAML's `<<` does not deep-merge.
+# That is also why CARGO_HOME is repeated everywhere it appears in this file.
+.k8s-resources: &k8s-resources
+  KUBERNETES_CPU_REQUEST: "8"
+  KUBERNETES_CPU_LIMIT: "8"
+  KUBERNETES_MEMORY_REQUEST: "4Gi"
+  KUBERNETES_MEMORY_LIMIT: "6Gi"
+
 .rust-env: &rust-env
   # Matches rust-toolchain.toml. The image tag and that file must move together: the toolchain
   # file wins, so a stale image only wastes a rustup download rather than building the wrong thing.
@@ -125,6 +153,7 @@ check:
         POSTGRES_PASSWORD: puna
         POSTGRES_DB: puna
   variables:
+    <<: *k8s-resources
     CARGO_HOME: $CI_PROJECT_DIR/.cargo
     DATABASE_URL: postgres://puna:puna@postgres:5432/puna
     # The Postgres-backed tests SKIP (reporting ok) when DATABASE_URL is unset. This turns that
@@ -153,6 +182,7 @@ schema-drift:
         POSTGRES_PASSWORD: puna
         POSTGRES_DB: puna
   variables:
+    <<: *k8s-resources
     CARGO_HOME: $CI_PROJECT_DIR/.cargo
     DATABASE_URL: postgres://puna:puna@postgres:5432/puna
   script:
@@ -188,6 +218,11 @@ build-puna-web:
   <<: *rust-env
   <<: *always
   stage: rust-build
+  variables:
+    <<: *k8s-resources
+    # Repeated because this block REPLACES the one inherited from `.rust-cache`; without it the
+    # registry cache would be written somewhere `cache:` does not collect.
+    CARGO_HOME: $CI_PROJECT_DIR/.cargo
   script:
     - cargo build --release --bin puna-web
     - mkdir -p artifacts/puna-web
@@ -200,6 +235,10 @@ build-puna-orchestrator:
   <<: *rust-env
   <<: *always
   stage: rust-build
+  variables:
+    <<: *k8s-resources
+    # See build-puna-web: this block replaces the inherited one, so CARGO_HOME is restated.
+    CARGO_HOME: $CI_PROJECT_DIR/.cargo
   script:
     - cargo build --release --bin puna-orchestrator
     - mkdir -p artifacts/puna-orchestrator
