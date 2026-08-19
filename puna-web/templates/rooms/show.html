@@ -29,8 +29,17 @@
 start an empty room in its place.</p>
 </div>
 {% else %}
-<p class="notice">This room is{{+ room.state }}&hellip;</p>
-<p class="hint">This page refreshes on its own.</p>
+{# A transient state. The elapsed time and the plain-language line are what separate "coming up"
+   from "stuck", which a spinner alone cannot say. #}
+<div class="notice" data-room="{{ room.id }}" data-state="{{ room.state }}">
+<p><span data-room-message>
+{% if let Some(message) = message %}{{ message }}{% else %}This room is{{+ room.state }}{% endif %}
+</span>
+&mdash; <span data-room-elapsed>{{ elapsed }}</span></p>
+<p class="hint">This page updates on its own.</p>
+</div>
+{# Without JavaScript the page still moves, just less smoothly. #}
+<noscript><meta http-equiv="refresh" content="5"></noscript>
 {% endif %}
 
 <h2>Slots</h2>
@@ -126,4 +135,8 @@ discards them and they cannot be recovered.</p>
 {% endfor %}
 </ul>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/room.js?v={{ base.static_version }}" defer></script>
 {% endblock %}

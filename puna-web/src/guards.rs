@@ -35,6 +35,40 @@ use rocket::request::{FromRequest, Outcome};
 use crate::auth::{LoggedInSession, Session};
 use crate::error::{Error, forbidden, not_found, unauthorized};
 
+/// Whether this request is a person navigating, as opposed to a machine fetching.
+///
+/// **This is D8**, and the hazard it exists for is specific: pasting a room link into Discord makes
+/// Discord fetch the page to build an unfurl. If `GET /room/<id>` starts an idle room, an unfurl
+/// spins up a pod — so does a search crawler, a link checker, and every preview pane the URL passes
+/// through on its way to the players.
+///
+/// Two headers, and both are needed. `Sec-Fetch-Mode: navigate` is sent by every current browser on
+/// a top-level navigation and by nothing doing a background fetch; it is a *hint* rather than a
+/// guarantee, since anything may send it. `Accept: text/html` filters the rest. Neither is a
+/// security control and neither needs to be: **the explicit Start button is always there**, so the
+/// worst a false negative costs is one click, and a false positive costs a pod that somebody was
+/// about to ask for anyway.
+pub struct Navigation(pub bool);
+
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for Navigation {
+    type Error = std::convert::Infallible;
+
+    async fn from_request(request: &'r Request<'_>) -> Outcome<Self, Self::Error> {
+        let headers = request.headers();
+        let navigating = headers.get_one("Sec-Fetch-Mode") == Some("navigate");
+        let wants_html = headers
+            .get_one("Accept")
+            .is_some_and(|accept| accept.contains("text/html"));
+
+        // An older browser sends no `Sec-Fetch-Mode` at all. Requiring both would make the implicit
+        // start silently stop working there, which is a worse failure than an occasional missed
+        // start -- so the absence of the header falls back to the Accept header alone.
+        let absent = headers.get_one("Sec-Fetch-Mode").is_none();
+        RocketOutcome::Success(Navigation(wants_html && (navigating || absent)))
+    }
+}
+
 /// A minimum role, lifted to the type level so it can index a guard.
 pub trait MinRole: Send + Sync + 'static {
     const ROLE: RoomRole;
@@ -270,5 +304,72 @@ impl<'r> FromRequest<'r> for SlotAccess {
         } else {
             Outcome::Error((Status::Unauthorized, unauthorized("not logged in")))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rocket::http::Header;
+    use rocket::local::blocking::Client;
+
+    #[rocket::get("/probe")]
+    fn probe(navigation: Navigation) -> String {
+        navigation.0.to_string()
+    }
+
+    fn client() -> Client {
+        Client::untracked(rocket::build().mount("/", rocket::routes![probe])).expect("a client")
+    }
+
+    /// D8, as a request. The hazard is a link preview starting a room, so the two cases that matter
+    /// are "a browser navigating" and "something fetching the URL to build an unfurl".
+    #[test]
+    fn a_navigation_is_told_apart_from_a_link_preview() {
+        let client = client();
+
+        let browser = client
+            .get("/probe")
+            .header(Header::new("Sec-Fetch-Mode", "navigate"))
+            .header(Header::new(
+                "Accept",
+                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            ))
+            .dispatch();
+        assert_eq!(browser.into_string().as_deref(), Some("true"));
+
+        // What a bot fetching a URL for an unfurl looks like: it asks for HTML, but it is not
+        // navigating. This is the request that must NOT start a room.
+        let unfurl = client
+            .get("/probe")
+            .header(Header::new("Sec-Fetch-Mode", "cors"))
+            .header(Header::new("Accept", "text/html"))
+            .dispatch();
+        assert_eq!(unfurl.into_string().as_deref(), Some("false"));
+
+        // The page's own poller: same origin, same session, and it must never start anything.
+        let poll = client
+            .get("/probe")
+            .header(Header::new("Sec-Fetch-Mode", "cors"))
+            .header(Header::new("Accept", "application/json"))
+            .dispatch();
+        assert_eq!(poll.into_string().as_deref(), Some("false"));
+
+        // A bare curl: no Accept for HTML, so no implicit start either.
+        let curl = client.get("/probe").dispatch();
+        assert_eq!(curl.into_string().as_deref(), Some("false"));
+    }
+
+    /// An older browser sends no `Sec-Fetch-Mode` at all. Requiring it would make the implicit start
+    /// silently stop working there, which is worse than the occasional missed one -- the explicit
+    /// button is always present either way.
+    #[test]
+    fn a_browser_without_the_header_still_counts_as_navigating() {
+        let client = client();
+        let response = client
+            .get("/probe")
+            .header(Header::new("Accept", "text/html,*/*;q=0.8"))
+            .dispatch();
+        assert_eq!(response.into_string().as_deref(), Some("true"));
     }
 }

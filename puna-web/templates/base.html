@@ -30,5 +30,7 @@
 {% block content %}{% endblock %}
 </main>
 <footer><span class="version">puna{{+ base.version }}</span></footer>
+{# Pages that need script say so; every other page ships none. #}
+{% block scripts %}{% endblock %}
 </body>
 </html>

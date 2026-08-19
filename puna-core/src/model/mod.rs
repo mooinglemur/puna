@@ -1,5 +1,6 @@
 //! Domain operations over the schema.
 
+pub mod event;
 pub mod generation;
 pub mod member;
 pub mod port;

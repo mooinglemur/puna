@@ -8,6 +8,7 @@
 //! unguessable id is the authorization, exactly as the reference implementation does it. What that
 //! page shows varies by who is looking -- credentials only ever through `SlotAccess`.
 
+use puna_core::model::event;
 use puna_core::model::generation;
 use puna_core::model::member::{self, MemberError, RoomRole};
 use puna_core::model::room::{self, DesiredState, MyRoom, Room, SlotAuth};
@@ -25,7 +26,7 @@ use askama_web::WebTemplate;
 use crate::auth::{LoggedInSession, Session};
 use crate::error::{Error, Result, not_found};
 use crate::gate::{CanCreateRoom, Direct};
-use crate::guards::{Helper, Organizer, RoomAccess, SlotAccess};
+use crate::guards::{Helper, Navigation, Organizer, RoomAccess, SlotAccess};
 use crate::params::RoomParam;
 use crate::tpl::TplContext;
 
@@ -55,6 +56,12 @@ pub struct RoomTemplate {
     /// A page that offers a link the route refuses is a bug report; one that hides a link the route
     /// would serve teaches people to guess URLs.
     can_see_spoiler: bool,
+    /// The latest event in words, for the transient states. `None` renders the state itself, which
+    /// is worse but never wrong.
+    message: Option<&'static str>,
+    /// Already formatted, because a template is not where a duration should be turned into English
+    /// -- and because the same string is what `room.js` overwrites on its first poll.
+    elapsed: String,
 }
 
 /// One row of the room page's slot table.
@@ -176,11 +183,40 @@ async fn my_rooms(session: LoggedInSession, pool: &State<Pool>) -> Result<MyRoom
 
 /// The public room page.
 #[get("/room/<id>")]
-async fn show(id: RoomParam, session: Session, pool: &State<Pool>) -> Result<RoomTemplate> {
+async fn show(
+    id: RoomParam,
+    session: Session,
+    navigation: Navigation,
+    pool: &State<Pool>,
+) -> Result<RoomTemplate> {
     let mut conn = pool.get().await?;
     let room = room::get(&mut conn, id.0)
         .await?
         .ok_or_else(|| not_found("no such room"))?;
+
+    // D8: a person arriving at an idle room's URL wants it back, and making them click a button
+    // first is friction for the common case. A link preview is not a person, which is what
+    // `Navigation` sorts out -- and the write is idempotent either way, so a room already coming up
+    // is untouched.
+    let room = if navigation.0 && room.state == "idle" && room.desired_state != "running" {
+        room::request_state(&mut conn, room.id, DesiredState::Running).await?;
+        event::record(
+            &mut conn,
+            room.id,
+            event::Actor::web(session.user_id),
+            "requested_start",
+            serde_json::json!({ "implicit": true }),
+        )
+        .await?;
+        tracing::info!(room = %room.id, user_id = ?session.user_id, "implicit start on navigation");
+        // Re-read rather than patching the copy in hand: the page renders from the row, and a row
+        // that disagrees with the database is how a spinner ends up showing the wrong thing.
+        room::get(&mut conn, id.0)
+            .await?
+            .ok_or_else(|| not_found("no such room"))?
+    } else {
+        room
+    };
 
     let role = if session.is_admin {
         Some(RoomRole::Organizer)
@@ -207,6 +243,10 @@ async fn show(id: RoomParam, session: Session, pool: &State<Pool>) -> Result<Roo
 
     let slots = slot_views(room_slots, session.user_id, role, &patched);
     let siblings = room::siblings(&mut conn, room.id, room.generation_id).await?;
+    let message = event::latest(&mut conn, room.id)
+        .await?
+        .and_then(|e| phrase(&e.kind));
+    let elapsed = human_duration(since_ms(room.state_changed_at));
 
     Ok(RoomTemplate {
         base: TplContext::new(&session),
@@ -216,19 +256,24 @@ async fn show(id: RoomParam, session: Session, pool: &State<Pool>) -> Result<Roo
         is_organizer: role.is_some_and(|r| r >= RoomRole::Organizer),
         siblings,
         can_see_spoiler,
+        message,
+        elapsed,
     })
 }
 
-/// The poll target behind the starting spinner. One row read, no template.
+/// The poll target behind the starting spinner. Two row reads, no template.
 ///
-/// `since_ms` is a server-computed duration rather than a timestamp, so a client whose clock is
-/// wrong still renders a sensible elapsed time.
+/// `since_ms` is a **server-computed duration** rather than a timestamp, deliberately: a client
+/// whose clock is wrong — and a cold start is exactly when someone is watching a counter — would
+/// otherwise render an elapsed time that is minutes out or negative.
 #[get("/room/<id>/status")]
 async fn status(id: RoomParam, pool: &State<Pool>) -> Result<Json<serde_json::Value>> {
     let mut conn = pool.get().await?;
     let room = room::get(&mut conn, id.0)
         .await?
         .ok_or_else(|| not_found("no such room"))?;
+
+    let latest = event::latest(&mut conn, room.id).await?;
 
     Ok(Json(serde_json::json!({
         "state": room.state,
@@ -237,7 +282,54 @@ async fn status(id: RoomParam, pool: &State<Pool>) -> Result<Json<serde_json::Va
         "port": room.advertised_port,
         "filtered_port": room.advertised_filtered_port,
         "last_error": room.last_error,
+        "since_ms": since_ms(room.state_changed_at),
+        // What the room is actually doing, in words. A spinner over "starting" for ninety seconds
+        // is indistinguishable from a stuck one; "waiting for the pod to be scheduled" is not.
+        "message": latest.as_ref().and_then(|e| phrase(&e.kind)),
     })))
+}
+
+/// Milliseconds since an instant, floored at zero.
+///
+/// Clamped because a row written by a machine whose clock is ahead would otherwise produce a
+/// negative elapsed time, and "started -3 seconds ago" reads as a bug in the page rather than in
+/// the clock.
+fn since_ms(at: chrono::DateTime<chrono::Utc>) -> i64 {
+    (chrono::Utc::now() - at).num_milliseconds().max(0)
+}
+
+/// The same shape `room.js` renders, so the first paint and the first poll do not disagree about
+/// how to spell forty seconds.
+fn human_duration(ms: i64) -> String {
+    let seconds = (ms as f64 / 1000.0).round() as i64;
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else {
+        format!("{}m {}s", seconds / 60, seconds % 60)
+    }
+}
+
+/// A room event, in words a player can act on.
+///
+/// Deliberately a small allowlist rather than a formatting of every kind: an event nobody has
+/// written a sentence for renders as nothing, and the page falls back to the state. The failure
+/// mode of the alternative -- showing raw kinds -- is a page that says `ip_mismatch` to a player.
+fn phrase(kind: &str) -> Option<&'static str> {
+    Some(match kind {
+        "provisioned" => "preparing this room's files",
+        "requested_start" => "starting the room",
+        "starting" => "waiting for the room's server to come up",
+        "running" => "the room is up",
+        "stopping" => "shutting the room down",
+        "stopped" => "the room has stopped",
+        "deployment_gone" => "the room's server went away; it can be started again",
+        "retrying" => "trying again after a failure",
+        "degraded" => "the room is not answering; it may be restarting",
+        "ip_mismatch" => "the address was wrong, so the room is moving to another port",
+        "failed" => "the last attempt to start this room failed",
+        "port_reclaimed" => "this room's port was reassigned while it was idle",
+        _ => return None,
+    })
 }
 
 /// Start an idle room.
@@ -249,6 +341,18 @@ async fn status(id: RoomParam, pool: &State<Pool>) -> Result<Json<serde_json::Va
 async fn start(id: RoomParam, session: Session, pool: &State<Pool>) -> Result<Redirect> {
     let mut conn = pool.get().await?;
     let changed = room::request_state(&mut conn, id.0, DesiredState::Running).await?;
+    // Only when something changed: a second click on a room that is already coming up is not an
+    // event, and recording it would fill a room's history with the sound of somebody being impatient.
+    if changed {
+        event::record(
+            &mut conn,
+            id.0,
+            event::Actor::web(session.user_id),
+            "requested_start",
+            serde_json::json!({ "implicit": false }),
+        )
+        .await?;
+    }
     tracing::info!(room = %id, user_id = ?session.user_id, changed, "start requested");
     Ok(Redirect::to(format!("/room/{id}")))
 }
@@ -260,7 +364,16 @@ async fn stop(
     pool: &State<Pool>,
 ) -> Result<Redirect> {
     let mut conn = pool.get().await?;
-    room::request_state(&mut conn, id.0, DesiredState::Stopped).await?;
+    if room::request_state(&mut conn, id.0, DesiredState::Stopped).await? {
+        event::record(
+            &mut conn,
+            id.0,
+            event::Actor::User(access.user_id()),
+            "requested_stop",
+            serde_json::json!({}),
+        )
+        .await?;
+    }
     tracing::info!(
         room = %id,
         user_id = access.user_id(),
@@ -587,4 +700,51 @@ pub fn routes() -> Vec<rocket::Route> {
         slot_password,
         set_slot_auth,
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The page and the poller must spell a duration the same way, or the first poll visibly
+    /// rewrites what the server just rendered.
+    #[test]
+    fn durations_read_the_way_room_js_writes_them() {
+        assert_eq!(human_duration(0), "0s");
+        assert_eq!(human_duration(999), "1s");
+        assert_eq!(human_duration(59_400), "59s");
+        assert_eq!(human_duration(60_000), "1m 0s");
+        assert_eq!(human_duration(95_000), "1m 35s");
+    }
+
+    /// A clock skewed forward must not produce "started -3 seconds ago", which reads as a bug in
+    /// the page rather than in the clock.
+    #[test]
+    fn an_elapsed_time_is_never_negative() {
+        let future = chrono::Utc::now() + chrono::TimeDelta::hours(1);
+        assert_eq!(since_ms(future), 0);
+    }
+
+    /// An event nobody has written a sentence for renders as nothing, and the page falls back to
+    /// the state. The alternative -- formatting the raw kind -- says `ip_mismatch` to a player.
+    #[test]
+    fn only_events_with_a_sentence_are_shown() {
+        assert!(phrase("starting").is_some());
+        assert!(phrase("ip_mismatch").is_some());
+        assert_eq!(
+            phrase("provisioned").map(str::to_lowercase),
+            Some("preparing this room's files".to_string())
+        );
+        assert_eq!(phrase("some_kind_added_later"), None);
+
+        // Nothing here leaks an internal noun a player would have to look up.
+        for kind in ["starting", "deployment_gone", "degraded", "ip_mismatch"] {
+            let text = phrase(kind).expect("a sentence");
+            assert!(!text.contains('_'), "{kind}: {text}");
+            assert!(
+                text.chars().next().is_some_and(char::is_lowercase),
+                "{kind}"
+            );
+        }
+    }
 }
