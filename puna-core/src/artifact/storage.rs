@@ -125,12 +125,12 @@ impl GenerationPaths {
     }
 }
 
+/// A generation's directory name.
+///
+/// Takes exactly 32 bytes rather than a slice, because a content address that is not a whole digest
+/// is not a content address. The formatting itself is [`crate::hash::hex`].
 pub fn hex(bytes: &[u8; 32]) -> String {
-    use std::fmt::Write as _;
-    bytes.iter().fold(String::with_capacity(64), |mut s, b| {
-        let _ = write!(s, "{b:02x}");
-        s
-    })
+    crate::hash::hex(bytes)
 }
 
 /// Write a validated generation into `<data_dir>/generations/<sha256>/`.

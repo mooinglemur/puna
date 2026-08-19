@@ -148,7 +148,7 @@ async fn provision_one(
 
     let id = room.id;
     let lock_key = room.lock_key;
-    let sha = hex(&room.sha256);
+    let sha = puna_core::hash::hex(&room.sha256);
     let layout = layout.clone();
 
     let done = conn
@@ -361,12 +361,4 @@ async fn detect_integrity_faults(
     }
 
     Ok(faults)
-}
-
-fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    bytes.iter().fold(String::with_capacity(64), |mut s, b| {
-        let _ = write!(s, "{b:02x}");
-        s
-    })
 }

@@ -7,6 +7,7 @@
 pub mod artifact;
 pub mod config;
 pub mod db;
+pub mod hash;
 pub mod ids;
 pub mod metrics;
 pub mod model;
