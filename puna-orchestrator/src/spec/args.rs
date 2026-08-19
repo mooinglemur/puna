@@ -26,16 +26,6 @@
 //! spellings (`--hint_cost`, `--log_format`) for people arriving from it. Puna uses canonical
 //! kebab-case only, so a table without the aliases turns a mixed-spelling argv into a test failure.
 
-// Nothing renders a room's argv yet: the applier and the Deployment builder are M7. `expect` rather
-// than `allow` so this warns the moment they start calling it.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the Deployment builder and the applier land at M7"
-    )
-)]
-
 use crate::cluster::RoomSpec;
 use crate::spec::{SAVE_DIR, SEED_PATH, SNAPSHOT_PATH, TLS_CERT_PATH, TLS_KEY_PATH};
 

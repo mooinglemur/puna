@@ -132,6 +132,17 @@ pub struct OrchestratorConfig {
     pub lb_ip: String,
     pub lb_sharing_key: String,
     pub pahoa_image: String,
+    /// The Secret holding the room certificate, mounted read-only into every room pod.
+    ///
+    /// One certificate for the single name every room shares — they differ only by port, so no
+    /// wildcard is needed — and pahoa reloads it in place, which is what makes a renewal invisible
+    /// to connected players.
+    pub room_tls_secret: String,
+    /// The CephFS claim holding `generations/`, `rooms/`, `shared/` and `trash/`.
+    ///
+    /// One PVC per environment, `subPath` per room. Never a PVC per room: the quota is per-claim, so
+    /// hundreds of claims would be hundreds of quotas to manage, and CephFS subvolumes are not free.
+    pub data_pvc: String,
     pub reconcile_interval: Duration,
     pub command_timeout: Duration,
     pub trash_retention: Duration,
@@ -145,6 +156,8 @@ impl OrchestratorConfig {
             lb_ip: require("PUNA_LB_IP")?,
             lb_sharing_key: optional("PUNA_LB_SHARING_KEY", "ap-lobby-public"),
             pahoa_image: require("PUNA_PAHOA_IMAGE")?,
+            room_tls_secret: optional("PUNA_ROOM_TLS_SECRET", "puna-room-tls"),
+            data_pvc: optional("PUNA_DATA_PVC", "puna-data"),
             reconcile_interval: parse_duration("PUNA_RECONCILE_INTERVAL", 30)?,
             command_timeout: parse_duration("PUNA_COMMAND_TIMEOUT", 15)?,
             trash_retention: parse_duration("PUNA_TRASH_RETENTION", 7 * 24 * 3600)?,

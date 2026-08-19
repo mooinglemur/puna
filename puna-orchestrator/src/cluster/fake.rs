@@ -92,6 +92,8 @@ struct Inner {
     calls: Vec<Call>,
     next_uid: u64,
     failures: Vec<(Op, ClusterError)>,
+    /// Names the next `get_deployment` will claim not to see, one shot each.
+    withheld: Vec<String>,
     ingress_ip: String,
     ingress_delay: u32,
     now: DateTime<Utc>,
@@ -168,6 +170,16 @@ impl FakeCluster {
     /// Withhold the ingress address for the next `reads` calls to `get_service`.
     pub fn delay_ingress(&self, reads: u32) {
         self.lock().ingress_delay = reads;
+    }
+
+    /// Make the next `get_deployment` for this room answer `None` though the object exists.
+    ///
+    /// The stale read, modelled: lists and gets go to the watch cache at `resourceVersion=0`, so a
+    /// Deployment created moments ago can be missing from one. It is the only way to reach the `409`
+    /// branch in the applier, and the reason that branch treats a conflict as success.
+    pub fn withhold_deployment(&self, room: RoomId) {
+        let name = super::object_name(room);
+        self.lock().withheld.push(name);
     }
 
     /// Delete a Deployment the way an operator with `kubectl` would: it cascades, and Puna is not
@@ -285,7 +297,12 @@ impl ClusterApi for FakeCluster {
 
     async fn get_deployment(&self, name: &str) -> Result<Option<RoomDeployment>> {
         self.record(Op::GetDeployment, name, false)?;
-        Ok(self.lock().deployments.get(name).map(read_deployment))
+        let mut inner = self.lock();
+        if let Some(index) = inner.withheld.iter().position(|held| held == name) {
+            inner.withheld.remove(index);
+            return Ok(None);
+        }
+        Ok(inner.deployments.get(name).map(read_deployment))
     }
 
     async fn create_deployment(&self, spec: &RoomSpec) -> Result<String> {

@@ -8,6 +8,7 @@
 //! [`plan::Step`], and the [`cluster::ClusterApi`] implementation that talks to a real API server.
 //! Both land at M7, which is why a room here gets as far as `idle` and stops there.
 
+mod apply;
 mod cluster;
 mod health;
 mod leader;
