@@ -51,6 +51,10 @@ pub struct RoomTemplate {
     is_staff: bool,
     is_organizer: bool,
     siblings: Vec<Room>,
+    /// From `room::may_see_spoiler`, so the link and the download route answer the same question.
+    /// A page that offers a link the route refuses is a bug report; one that hides a link the route
+    /// would serve teaches people to guess URLs.
+    can_see_spoiler: bool,
 }
 
 /// One row of the room page's slot table.
@@ -67,13 +71,29 @@ pub struct SlotView {
     pub is_mine: bool,
     /// Present only when the viewer may see it -- staff, or the unclaimed-slot case.
     pub claim_token: Option<String>,
+    /// Whether this slot has a patch file at all. **Most games do not** -- they are played with a
+    /// client rather than a patched ROM -- so offering the link unconditionally would promise a
+    /// download that answers 404 with an explanation nobody asked for.
+    pub has_patch: bool,
+    /// Whether this viewer would get past `SlotAccess`: its owner, the room's staff, or an admin.
+    pub can_download: bool,
 }
 
-fn slot_views(slots: Vec<Slot>, viewer: Option<i64>, role: Option<RoomRole>) -> Vec<SlotView> {
+fn slot_views(
+    slots: Vec<Slot>,
+    viewer: Option<i64>,
+    role: Option<RoomRole>,
+    patched: &std::collections::HashSet<i32>,
+) -> Vec<SlotView> {
     slots
         .into_iter()
         .map(|s| SlotView {
             is_mine: matches!((viewer, s.owner_id), (Some(v), Some(o)) if v == o),
+            has_patch: patched.contains(&s.slot_number),
+            // The same three-way rule `SlotAccess` applies, and it deliberately does NOT include
+            // "holds some other slot in this room".
+            can_download: role.is_some()
+                || matches!((viewer, s.owner_id), (Some(v), Some(o)) if v == o),
             // A claim link is offered to staff, who hand them out. A player who already holds the
             // link does not need the page to show it, and showing it to everyone would let any
             // visitor claim every unclaimed slot in a room whose URL they were given.
@@ -170,7 +190,22 @@ async fn show(id: RoomParam, session: Session, pool: &State<Pool>) -> Result<Roo
         None
     };
 
-    let slots = slot_views(slot::list(&mut conn, room.id).await?, session.user_id, role);
+    // Which slots have a patch is a property of the *generation*, not of the room's copy: the room
+    // owns who holds a slot, the generation owns what a slot's file is.
+    let patched: std::collections::HashSet<i32> = generation::slots(&mut conn, room.generation_id)
+        .await?
+        .into_iter()
+        .filter(|entry| entry.patch_member.is_some())
+        .map(|entry| entry.slot_number)
+        .collect();
+
+    let room_slots = slot::list(&mut conn, room.id).await?;
+    let owns_a_slot = session
+        .user_id
+        .is_some_and(|user_id| room_slots.iter().any(|s| s.owner_id == Some(user_id)));
+    let can_see_spoiler = room::may_see_spoiler(room.spoiler_policy, role.is_some(), owns_a_slot);
+
+    let slots = slot_views(room_slots, session.user_id, role, &patched);
     let siblings = room::siblings(&mut conn, room.id, room.generation_id).await?;
 
     Ok(RoomTemplate {
@@ -180,6 +215,7 @@ async fn show(id: RoomParam, session: Session, pool: &State<Pool>) -> Result<Roo
         is_staff: role.is_some(),
         is_organizer: role.is_some_and(|r| r >= RoomRole::Organizer),
         siblings,
+        can_see_spoiler,
     })
 }
 

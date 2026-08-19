@@ -35,7 +35,7 @@ start an empty room in its place.</p>
 
 <h2>Slots</h2>
 <table class="slots">
-<thead><tr><th>#</th><th>Player</th><th>Game</th><th>Held by</th></tr></thead>
+<thead><tr><th>#</th><th>Player</th><th>Game</th><th>Held by</th><th>Patch</th></tr></thead>
 <tbody>
 {% for slot in slots %}
 <tr>
@@ -60,10 +60,28 @@ claimed
 unclaimed
 {% endif %}
 </td>
+{# The patch already carries this room's address, so it is ready to open rather than something to
+   configure -- and it carries the right one even while the room is down, because the port
+   reservation outlives the pod. #}
+<td>
+{% if slot.has_patch %}
+{% if slot.can_download %}
+<a href="/room/{{ room.id }}/slot/{{ slot.slot_number }}/patch">download</a>
+{% else %}
+<span class="hint">claim this slot to download</span>
+{% endif %}
+{% else %}
+<span class="hint">&mdash;</span>
+{% endif %}
+</td>
 </tr>
 {% endfor %}
 </tbody>
 </table>
+
+{% if can_see_spoiler %}
+<p><a href="/room/{{ room.id }}/spoiler">Spoiler log</a></p>
+{% endif %}
 
 {% if is_staff %}
 <h2>Manage</h2>

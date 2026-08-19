@@ -256,7 +256,11 @@ fn fill(dir: &Path, bytes: &[u8], meta: &GenerationMeta) -> Result<(), StorageEr
 /// Clients dispatch on the extension, so it has to survive -- but it reaches the filesystem, so
 /// anything that is not plainly alphanumeric is replaced rather than trusted. `bin` is the
 /// fallback for a member with no usable extension at all.
-fn patch_extension(member: &str) -> String {
+///
+/// **Public because the download handler has to derive the same name the writer used.** Two copies
+/// of this rule would diverge on exactly the inputs it exists for, and the symptom would be a 404 on
+/// a patch that is sitting on disk under a slightly different name.
+pub fn patch_extension(member: &str) -> String {
     let raw = member
         .rsplit('/')
         .next()

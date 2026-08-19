@@ -298,6 +298,32 @@ pub async fn release(
     Ok(())
 }
 
+/// The pair a room currently holds, if any.
+///
+/// **Read-only, and therefore not gated on [`Orchestrator`]**: the web tier calls this, and it is
+/// the reason it can. A patch download embeds the room's address, and reservations are sticky, so a
+/// patch taken from a room that is torn down already carries the address it will come back on —
+/// which the lobby cannot do, because it only knows an address while a room is up.
+///
+/// The one thing that invalidates the answer is an LRU reclaim under range pressure, which is why
+/// the room page stays authoritative and the reclaim writes a `room_events` row against the victim.
+pub async fn reserved_pair(
+    conn: &mut AsyncPgConnection,
+    room_id: RoomId,
+) -> Result<Option<u16>, diesel::result::Error> {
+    let rows: Vec<BasePort> =
+        diesel::sql_query("SELECT base_port FROM port_reservations WHERE room_id = $1")
+            .bind::<SqlUuid, _>(room_id)
+            .load(conn)
+            .await?;
+
+    Ok(rows
+        .into_iter()
+        .next()
+        .map(|row| u16::try_from(row.base_port).unwrap_or_default())
+        .filter(|port| *port != 0))
+}
+
 /// Hold a pair out of circulation until `until`.
 ///
 /// Used when a Service comes up on an address other than the expected shared VIP. That collision

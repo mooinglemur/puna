@@ -45,6 +45,13 @@ struct Assets;
 /// room's state directory even though this is spelled as the volume root.
 pub struct DataDir(pub std::path::PathBuf);
 
+/// The DNS name rooms are advertised on, e.g. `mw.ionium-dev.us`.
+///
+/// The web tier needs it for one thing: **embedding the address into a patch**. A name rather than
+/// the literal VIP because it is also the name on the room certificate, so a patch that carried the
+/// address instead would fail TLS verification the day the address moves.
+pub struct AdvertiseHost(pub String);
+
 /// The largest generation zip `inspect` will look at, in bytes.
 ///
 /// Distinct from Rocket's own `limits.data-form`, which caps what is read off the wire. This one
@@ -170,6 +177,7 @@ fn build(
     figment: Figment,
     pool: Pool,
     data_dir: std::path::PathBuf,
+    advertise_host: String,
 ) -> Rocket<Build> {
     // Rocket's `limits.data-form` caps what is read off the wire; this caps what is decompressed.
     // Read the former so the two cannot silently disagree -- a decompression limit above the wire
@@ -187,6 +195,7 @@ fn build(
         .manage(figment)
         .manage(pool)
         .manage(DataDir(data_dir))
+        .manage(AdvertiseHost(advertise_host))
         .manage(UploadLimit(wire_limit))
         .register(
             "/",
@@ -198,6 +207,7 @@ fn build(
     match role {
         Role::Web => rocket
             .mount("/", routes![index, admin, whoami, metrics])
+            .mount("/", routes::downloads::routes())
             .mount("/", routes::generations::routes())
             .mount("/", routes::gates::routes())
             .mount("/", routes::rooms::routes())
@@ -264,7 +274,10 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("PUNA_DATA_DIR").unwrap_or_else(|_| "/var/lib/puna".to_string()),
     );
 
-    build(role, environment, figment, pool, data_dir)
+    let advertise_host = std::env::var("PUNA_ADVERTISE_HOST")
+        .map_err(|_| anyhow::anyhow!("PUNA_ADVERTISE_HOST must be set"))?;
+
+    build(role, environment, figment, pool, data_dir, advertise_host)
         .launch()
         .await?;
     Ok(())

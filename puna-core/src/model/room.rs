@@ -94,6 +94,25 @@ impl SpoilerPolicy {
     }
 }
 
+/// Who may read this room's spoiler, from one rule used by every caller.
+///
+/// The room page and the download route both ask, and they must agree: a page that offers a link
+/// the route refuses is a bug report, and a page that hides a link the route would serve is worse —
+/// it teaches people to guess URLs.
+///
+/// `is_staff` covers global admins too, resolved by the caller, because "admin" is a fact about the
+/// session rather than about the room.
+pub fn may_see_spoiler(policy: SpoilerPolicy, is_staff: bool, owns_a_slot: bool) -> bool {
+    match policy {
+        // Not "hidden": absent. A race's spoiler is not served to anyone, including an admin, and
+        // the route answers 404 rather than 403 so the refusal discloses nothing either.
+        SpoilerPolicy::Never => false,
+        SpoilerPolicy::AdminOnly => is_staff,
+        SpoilerPolicy::Players => is_staff || owns_a_slot,
+        SpoilerPolicy::Public => true,
+    }
+}
+
 /// Who may read a room's tracker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrackerPolicy {
@@ -899,6 +918,37 @@ mod tests {
         // that WANTS to run against one that IS running. Distinct types is what keeps them apart.
         assert_eq!(RoomState::parse("stopped"), None);
         assert_eq!(DesiredState::parse("idle"), None);
+    }
+
+    /// The whole spoiler matrix, because it is short and the cost of getting one cell wrong is a
+    /// leaked spoiler in a race.
+    #[test]
+    fn the_spoiler_policies_admit_exactly_who_they_say() {
+        use SpoilerPolicy::*;
+
+        // (policy, staff, owns a slot) -> may read
+        let cases = [
+            (Never, false, false, false),
+            (Never, true, true, false),
+            (AdminOnly, true, false, true),
+            (AdminOnly, false, true, false),
+            (Players, false, true, true),
+            (Players, true, false, true),
+            (Players, false, false, false),
+            (Public, false, false, true),
+        ];
+
+        for (policy, is_staff, owns, expected) in cases {
+            assert_eq!(
+                may_see_spoiler(policy, is_staff, owns),
+                expected,
+                "{policy:?} staff={is_staff} owner={owns}"
+            );
+        }
+
+        // Stated separately because it is the one people expect to be false and is not: `never`
+        // means never, and an admin who needs it can read the file or change the policy.
+        assert!(!may_see_spoiler(Never, true, true));
     }
 
     /// The states a port pair cannot be reclaimed from.
