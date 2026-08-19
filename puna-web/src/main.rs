@@ -11,6 +11,7 @@ mod auth;
 mod error;
 mod gate;
 mod guards;
+mod metrics_listener;
 mod params;
 mod routes;
 mod tpl;
@@ -262,6 +263,11 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|v| Environment::from_str(&v).map_err(|e| anyhow::anyhow!(e)))?;
 
     puna_core::metrics::init();
+
+    // Started before the pool, and before Rocket, so a tier that is slow to reach Postgres is still
+    // scrapeable while it tries. It registers nothing itself -- `init()` above owns the registry --
+    // so ordering against anything else here does not matter.
+    tokio::spawn(metrics_listener::serve());
 
     // No migrations here: the orchestrator owns them. This process asserts the schema is current
     // at readiness instead, so two web replicas can never race each other applying them.

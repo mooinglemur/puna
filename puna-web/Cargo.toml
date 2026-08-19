@@ -22,6 +22,12 @@ uuid.workspace = true
 diesel.workspace = true
 diesel-async.workspace = true
 
+# For the unauthenticated /metrics listener on :9090 only -- see src/metrics_listener.rs. Rocket
+# already serves this process's public port; axum is here because that port's /metrics is behind a
+# session-cookie guard a scrape cannot satisfy, and because puna-orchestrator already solved the
+# same problem this way. A second Rocket would drag in a second figment, a second secret key and a
+# second set of signal handlers for one route.
+axum.workspace = true
 askama = { version = "0.15", features = ["serde_json"] }
 askama_web = { version = "0.15", features = ["rocket-0.5"] }
 # reqwest's default features route through `default-tls` -> `rustls` -> `__rustls-aws-lc-rs`,

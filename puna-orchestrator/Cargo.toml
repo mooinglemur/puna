@@ -27,7 +27,7 @@ diesel-async.workspace = true
 
 # axum rather than Rocket for /healthz, /readyz and /metrics: three endpoints, and the
 # orchestrator has no business acquiring a figment, a config file or a secret key.
-axum = "0.8"
+axum.workspace = true
 
 # default-features = false drops the openssl-backed TLS stack, so the debian:13-slim runtime
 # image needs nothing but ca-certificates. "ring" must be stated explicitly: kube exposes the

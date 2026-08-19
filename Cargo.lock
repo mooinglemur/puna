@@ -2461,6 +2461,7 @@ dependencies = [
  "anyhow",
  "askama",
  "askama_web",
+ "axum",
  "chrono",
  "diesel",
  "diesel-async",
