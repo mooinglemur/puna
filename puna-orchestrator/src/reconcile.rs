@@ -9,9 +9,16 @@
 //! "requested twice while starting" is not a special case, and a lost `NOTIFY` costs latency
 //! rather than correctness. **`NOTIFY` is latency; the tick is the contract.**
 //!
-//! M6 scope: `provisioning -> idle`, plus the filesystem sweeps. No Kubernetes call exists yet,
-//! so nothing here starts a room -- `ensure_room_running` and the rest of the state machine land
-//! at M7 behind the `ClusterApi` trait.
+//! M6 scope: `provisioning -> idle`, plus the filesystem sweeps. No Kubernetes call exists yet, so
+//! nothing here starts a room.
+//!
+//! **The decisions this module makes inline are the ones [`crate::plan`] already expresses**, and
+//! M7 rewires the tick through it: load every room, `plan()`, then apply each `Step` under its
+//! room's advisory lock. It is deliberately not rewired yet, because at M6 there is no cluster to
+//! snapshot and a planner handed an empty one would read every live room as vanished. The two
+//! things that stay here either way are the ones that are not decisions about a room's state:
+//! the integrity check and the orphan report, both of which are filesystem reads where a failure
+//! must not be mistaken for an answer.
 
 use std::time::Duration;
 

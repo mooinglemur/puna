@@ -123,7 +123,8 @@ impl TrackerPolicy {
     }
 }
 
-/// What a room wants to be doing.
+/// What a room wants to be doing. The **desired** half of the two column families: the web tier
+/// writes it, the orchestrator only reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DesiredState {
     Running,
@@ -139,6 +140,100 @@ impl DesiredState {
             Self::Deleted => "deleted",
         }
     }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "running" => Some(Self::Running),
+            "stopped" => Some(Self::Stopped),
+            "deleted" => Some(Self::Deleted),
+            _ => None,
+        }
+    }
+
+    pub const ALL: [DesiredState; 3] = [Self::Running, Self::Stopped, Self::Deleted];
+}
+
+/// Where a room actually is. The **observed** half: the orchestrator writes it, everyone else
+/// reads it.
+///
+/// Deliberately a different type from [`DesiredState`] rather than one enum with a flag. A room
+/// that *wants* to run and a room that *is* running are different facts, and the whole
+/// reconciler rests on being able to compare them — collapsing them into one value is how a
+/// level-triggered loop turns back into an edge-triggered one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoomState {
+    /// The row exists; the state directory may not. One of the two states where D3's invariant
+    /// does not hold, and it is transient and orchestrator-owned.
+    Provisioning,
+    /// The directory exists, no Deployment. Where a torn-down room rests — **holding its port
+    /// reservation**, which is what lets it come back on the same address.
+    Idle,
+    /// Port allocated, objects created, no ready replica yet.
+    Starting,
+    /// The Deployment reports a ready replica.
+    Running,
+    /// The Deployment is there but has had no ready replica for several sweeps. Still live for
+    /// the allocator's purposes: players may be mid-reconnect, so its port is not reclaimable.
+    Degraded,
+    Stopping,
+    Failed,
+    /// The other state where the directory may not exist.
+    Deleting,
+    /// `provisioned_at` is set and the directory is gone. **Never auto-repaired** — recreating it
+    /// would replace saved progress with an empty room and look like a successful start.
+    IntegrityFault,
+}
+
+impl RoomState {
+    pub fn as_sql(self) -> &'static str {
+        match self {
+            Self::Provisioning => "provisioning",
+            Self::Idle => "idle",
+            Self::Starting => "starting",
+            Self::Running => "running",
+            Self::Degraded => "degraded",
+            Self::Stopping => "stopping",
+            Self::Failed => "failed",
+            Self::Deleting => "deleting",
+            Self::IntegrityFault => "integrity_fault",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "provisioning" => Some(Self::Provisioning),
+            "idle" => Some(Self::Idle),
+            "starting" => Some(Self::Starting),
+            "running" => Some(Self::Running),
+            "degraded" => Some(Self::Degraded),
+            "stopping" => Some(Self::Stopping),
+            "failed" => Some(Self::Failed),
+            "deleting" => Some(Self::Deleting),
+            "integrity_fault" => Some(Self::IntegrityFault),
+            _ => None,
+        }
+    }
+
+    /// Serving players, or close enough that taking its port would be felt.
+    ///
+    /// This is D4: the allocator refuses to reclaim a live room's pair. Reclaiming one takes the
+    /// port out from under connected clients, and Cilium does not report that as an error — the
+    /// room simply answers on an address nobody was told about.
+    pub fn is_live(self) -> bool {
+        matches!(self, Self::Starting | Self::Running | Self::Degraded)
+    }
+
+    pub const ALL: [RoomState; 9] = [
+        Self::Provisioning,
+        Self::Idle,
+        Self::Starting,
+        Self::Running,
+        Self::Degraded,
+        Self::Stopping,
+        Self::Failed,
+        Self::Deleting,
+        Self::IntegrityFault,
+    ];
 }
 
 /// Everything the caller chooses when opening a room.
@@ -790,5 +885,33 @@ mod tests {
         assert_eq!(SpoilerPolicy::parse("everyone"), None);
         assert_eq!(TrackerPolicy::parse("everyone"), None);
         // ...and `From<RoomRow>` maps those `None`s to Never and Disabled; see the impl.
+    }
+
+    #[test]
+    fn states_round_trip_through_their_sql_spelling() {
+        for state in RoomState::ALL {
+            assert_eq!(RoomState::parse(state.as_sql()), Some(state));
+        }
+        for desired in DesiredState::ALL {
+            assert_eq!(DesiredState::parse(desired.as_sql()), Some(desired));
+        }
+        // The two vocabularies overlap on one word, and it means different things in each: a room
+        // that WANTS to run against one that IS running. Distinct types is what keeps them apart.
+        assert_eq!(RoomState::parse("stopped"), None);
+        assert_eq!(DesiredState::parse("idle"), None);
+    }
+
+    /// The states a port pair cannot be reclaimed from.
+    ///
+    /// Spelled out rather than derived, so widening `is_live` has to be a deliberate edit here
+    /// too — this is the predicate standing between a busy room and having its port taken away.
+    #[test]
+    fn exactly_three_states_are_live() {
+        let live: Vec<&str> = RoomState::ALL
+            .into_iter()
+            .filter(|s| s.is_live())
+            .map(RoomState::as_sql)
+            .collect();
+        assert_eq!(live, ["starting", "running", "degraded"]);
     }
 }

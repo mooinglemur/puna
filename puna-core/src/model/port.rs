@@ -432,3 +432,26 @@ pub async fn assert_environment_matches(
     );
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::room::RoomState;
+
+    /// The SQL literal and [`RoomState::is_live`] have to agree, and nothing else makes them.
+    ///
+    /// They are two spellings of D4: the allocator will not take a pair from a live room. If a
+    /// state is added to the enum as live and not here, the exclusion silently stops covering it
+    /// — and the symptom is a room losing its port while players are connected, which Cilium
+    /// reports as nothing at all.
+    #[test]
+    fn the_live_state_list_matches_the_enum() {
+        let expected = RoomState::ALL
+            .into_iter()
+            .filter(|s| s.is_live())
+            .map(|s| format!("'{}'", s.as_sql()))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert_eq!(LIVE_STATES, expected);
+    }
+}

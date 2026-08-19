@@ -1,12 +1,17 @@
 //! The orchestrator. Singleton, holds the Kubernetes credential, takes no inbound internet traffic.
 //!
 //! M6 scope: the leader advisory lock, the reconcile tick, `LISTEN`/`NOTIFY`, the health server,
-//! the Secret builder and room provisioning. **No Kubernetes call exists yet** -- `ClusterApi`,
-//! its in-memory fake and the rest of the state machine land at M7, which is why a room here gets
-//! as far as `idle` and stops there.
+//! room provisioning, the Secret builder, and the state machine -- [`plan`] decides every
+//! transition in §3's table and [`cluster::fake`] stands in for a cluster, both under test.
+//!
+//! **No Kubernetes call exists yet.** What is missing is the applier: the code that carries out a
+//! [`plan::Step`], and the [`cluster::ClusterApi`] implementation that talks to a real API server.
+//! Both land at M7, which is why a room here gets as far as `idle` and stops there.
 
+mod cluster;
 mod health;
 mod leader;
+mod plan;
 mod reconcile;
 mod spec;
 mod storage;
