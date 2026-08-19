@@ -1,3 +1,311 @@
-/* Placeholder. Real styles land with the room page (M8); this exists so rust-embed has a
-   non-empty folder and build.rs has something to hash. */
-:root { color-scheme: light dark; }
+/* Puna's stylesheet. Hand-written, no build step, no dependencies.
+ *
+ * The design doc said "hand-written CSS committed alongside its sass". There is no sass and there
+ * should not be: this is one file that a compiler would not make shorter, in a project that
+ * deliberately has no npm. Plain CSS is the whole toolchain.
+ *
+ * --- THE CLASS NAMES ARE THE SPEC ---------------------------------------------------------------
+ * Every selector here matches markup that already existed. The templates were written with semantic
+ * class names from M3 onward and styled by nothing; this file fills that in without touching a
+ * single template, which is why it can be reviewed on its own.
+ *
+ * --- BOTH THEMES, BECAUSE THE PAGE ALREADY PROMISED BOTH ------------------------------------------
+ * `color-scheme: light dark` was the one real declaration in the placeholder this replaces, so the
+ * browser has been painting form controls and scrollbars for whichever theme the reader prefers.
+ * Dropping it now would break dark mode for people it currently works for. Colors go through
+ * `light-dark()` on custom properties, so there is one palette with two values each rather than a
+ * media query duplicating the rules.
+ *
+ * --- WHAT THIS IS NOT ------------------------------------------------------------------------------
+ * Not a design system. Puna's pages are forms, tables and one address; the job is legibility and
+ * hierarchy, not a look. Anything that needed a class the templates do not already have was left
+ * alone rather than given one.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --bg: light-dark(#fbfbfa, #16181c);
+  --surface: light-dark(#ffffff, #1e2127);
+  --border: light-dark(#d9d9d6, #333842);
+  --text: light-dark(#1b1c1e, #e6e7ea);
+  --muted: light-dark(#5f6570, #969ca8);
+  --link: light-dark(#1a5fb4, #7cb0f0);
+
+  /* Status colors, used by .notice / .warning / .error. Kept distinguishable without relying on
+     hue alone -- each also gets a left border, so a red-green colorblind reader still sees three
+     different things. */
+  --accent: light-dark(#1a5fb4, #7cb0f0);
+  --warn-fg: light-dark(#7a4c00, #f0c86a);
+  --warn-bg: light-dark(#fdf3dd, #33280f);
+  --err-fg: light-dark(#a01b1b, #f29090);
+  --err-bg: light-dark(#fdeaea, #3a1d1d);
+
+  --radius: 6px;
+}
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+a { color: var(--link); }
+a:hover { text-decoration: none; }
+
+/* --- the shell ---------------------------------------------------------------------------------- */
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 1rem;
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.topbar nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 1rem;
+  margin-left: auto;
+}
+
+.brand {
+  font-weight: 700;
+  font-size: 1.1rem;
+  text-decoration: none;
+  color: var(--text);
+}
+
+.who { color: var(--muted); }
+
+main {
+  /* A measure, not a full-bleed page: the slot table is the only wide thing here and it scrolls on
+     its own. */
+  max-width: 62rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 4rem;
+}
+
+footer {
+  max-width: 62rem;
+  margin: 0 auto;
+  padding: 0 1rem 2rem;
+}
+
+.version { color: var(--muted); font-size: 0.85rem; }
+
+h1 { font-size: 1.6rem; line-height: 1.25; margin: 0 0 1rem; }
+h2 { font-size: 1.2rem; margin: 2rem 0 0.6rem; }
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.95em;
+}
+
+/* --- THE ADDRESS, which is the thing players came for ------------------------------------------- */
+
+/* Deliberately the loudest element on the page. It is what someone copies out and pastes into a
+   game client, so it is large, monospaced and selectable as a unit -- `user-select: all` means one
+   click takes the whole `host:port` rather than a double-click taking half of it at the colon. */
+.address {
+  margin: 0 0 1.25rem;
+  padding: 0.9rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+}
+
+.address p { margin: 0.25rem 0; }
+
+.address code {
+  user-select: all;
+  font-size: 1.25rem;
+  font-weight: 600;
+  padding: 0.1rem 0.3rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  /* The address is one token and must not wrap mid-hostname; if it cannot fit, scroll it. */
+  white-space: nowrap;
+}
+
+.tracker { margin: 0 0 1.25rem; }
+
+/* --- status blocks ------------------------------------------------------------------------------ */
+
+.notice,
+.warning,
+.error {
+  margin: 0 0 1.25rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.notice p,
+.warning p,
+.error p { margin: 0.25rem 0; }
+
+.warning {
+  border-left-color: var(--warn-fg);
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+}
+
+.error {
+  border-left-color: var(--err-fg);
+  background: var(--err-bg);
+  color: var(--err-fg);
+}
+
+/* `p.error` is used for a bare one-line message as well as the block form, and a full panel around
+   a single sentence reads as heavier than it is. */
+p.error {
+  padding: 0;
+  border: 0;
+  background: none;
+  border-radius: 0;
+}
+
+/* The most-used class in the templates by a wide margin: secondary explanation next to a control,
+   an em-dash placeholder in a table cell, "this page updates on its own". */
+.hint {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.tag {
+  display: inline-block;
+  padding: 0.05rem 0.4rem;
+  margin-left: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  vertical-align: baseline;
+}
+
+/* --- tables ------------------------------------------------------------------------------------- */
+
+/* The slot table is the one element that can exceed the measure -- a room can carry a long game
+   name and six columns. It scrolls itself rather than widening the page. */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 1.25rem;
+  display: block;
+  overflow-x: auto;
+}
+
+th, td {
+  text-align: left;
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+
+th {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  border-bottom-width: 2px;
+}
+
+/* Player and game names are untrusted text out of an uploaded zip and can be long; they are the
+   two columns allowed to wrap rather than stretch the table. */
+.slots td:nth-child(2),
+.slots td:nth-child(3) { white-space: normal; }
+
+tbody tr:hover { background: var(--surface); }
+
+/* --- lists that are really tables of one thing --------------------------------------------------- */
+
+.rooms,
+.members,
+.invites,
+.generations,
+.gates,
+.allowlist,
+.facts {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1.25rem;
+}
+
+.rooms > li,
+.members > li,
+.invites > li,
+.generations > li,
+.gates > li,
+.allowlist > li,
+.facts > li {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+/* `.facts` is a definition-list-shaped summary rather than a list of records. */
+.facts > li { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+
+/* --- forms --------------------------------------------------------------------------------------- */
+
+form { margin: 0 0 1.25rem; }
+
+label {
+  display: inline-block;
+  margin-right: 0.4rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+input[type="text"],
+input[type="number"],
+select,
+textarea {
+  font: inherit;
+  padding: 0.4rem 0.5rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+input[type="text"] { min-width: 16rem; max-width: 100%; }
+
+button {
+  font: inherit;
+  padding: 0.4rem 0.9rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+button:hover { border-color: var(--muted); }
+
+/* A form whose whole body is one control sitting next to prose, rather than a stacked block. */
+.inline { display: inline; }
+.inline label { margin-left: 0.4rem; }
+
+/* Visible focus, and NOT removed anywhere in this file. Keyboard navigation is the only way some
+   people use the claim and download links. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}

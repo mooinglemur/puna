@@ -42,9 +42,17 @@ start an empty room in its place.</p>
 <noscript><meta http-equiv="refresh" content="5"></noscript>
 {% endif %}
 
+{# OUTSIDE the state branch on purpose. The tracker serves its last cached document with an "as of"
+   banner while the room is down, which for an async is most of the time -- so this is exactly when
+   a player wants it, and gating it on `running` would hide a page that works. #}
+{% if can_see_tracker %}
+<p class="tracker"><a href="/tracker/{{ room.tracker_id }}">Tracker</a>
+<span class="hint">&mdash; shareable, and it names neither this page nor the room's address.</span></p>
+{% endif %}
+
 <h2>Slots</h2>
 <table class="slots">
-<thead><tr><th>#</th><th>Player</th><th>Game</th><th>Held by</th><th>Patch</th></tr></thead>
+<thead><tr><th>#</th><th>Player</th><th>Game</th><th>Held by</th><th>Patch</th><th>Tracker</th></tr></thead>
 <tbody>
 {% for slot in slots %}
 <tr>
@@ -79,6 +87,16 @@ unclaimed
 {% else %}
 <span class="hint">claim this slot to download</span>
 {% endif %}
+{% else %}
+<span class="hint">&mdash;</span>
+{% endif %}
+</td>
+{# Your own slot only. This id is independent of the multiworld's, which is the whole point: it is
+   yours to share with your own audience without handing over the room. Staff deliberately do NOT
+   get every player's link -- see SlotView::tracker_id. #}
+<td>
+{% if let Some(tracker) = slot.tracker_id %}
+<a href="/tracker/{{ tracker }}">yours</a>
 {% else %}
 <span class="hint">&mdash;</span>
 {% endif %}

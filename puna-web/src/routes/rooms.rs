@@ -56,6 +56,14 @@ pub struct RoomTemplate {
     /// A page that offers a link the route refuses is a bug report; one that hides a link the route
     /// would serve teaches people to guess URLs.
     can_see_spoiler: bool,
+    /// From `room::may_see_tracker`, for the same reason as `can_see_spoiler`: the page and the
+    /// tracker tier answer one question in one place.
+    ///
+    /// **Deliberately not gated on the room being `running`.** The tracker serves
+    /// `last_tracker_doc` behind an "as of <time>" banner when the room is down, which for an async
+    /// is most of its life -- that fallback is a designed feature, and hiding the link while it
+    /// applies would conceal the page exactly when it is most useful.
+    can_see_tracker: bool,
     /// The latest event in words, for the transient states. `None` renders the state itself, which
     /// is worse but never wrong.
     message: Option<&'static str>,
@@ -84,6 +92,15 @@ pub struct SlotView {
     pub has_patch: bool,
     /// Whether this viewer would get past `SlotAccess`: its owner, the room's staff, or an admin.
     pub can_download: bool,
+    /// This slot's own tracker id, and **only when the viewer owns the slot**.
+    ///
+    /// Not a permission check that happens to be strict -- it is what the id is FOR. A slot's
+    /// tracker id is independent of the multiworld's precisely so a player can share their own
+    /// progress with their own audience without handing over the room's. Handing an organizer every
+    /// player's shareable link would undo that, so staff get the multiworld tracker and nothing
+    /// per-slot. `None` here means the markup has nothing to render, rather than relying on the
+    /// template to remember a condition.
+    pub tracker_id: Option<puna_core::ids::TrackerId>,
 }
 
 fn slot_views(
@@ -97,6 +114,12 @@ fn slot_views(
         .map(|s| SlotView {
             is_mine: matches!((viewer, s.owner_id), (Some(v), Some(o)) if v == o),
             has_patch: patched.contains(&s.slot_number),
+            // Owner only, and NOT widened to staff -- see the field's note. Computed from the same
+            // comparison as `is_mine` rather than from it, so the two cannot drift apart.
+            tracker_id: match (viewer, s.owner_id) {
+                (Some(v), Some(o)) if v == o => Some(s.tracker_id),
+                _ => None,
+            },
             // The same three-way rule `SlotAccess` applies, and it deliberately does NOT include
             // "holds some other slot in this room".
             can_download: role.is_some()
@@ -240,6 +263,7 @@ async fn show(
         .user_id
         .is_some_and(|user_id| room_slots.iter().any(|s| s.owner_id == Some(user_id)));
     let can_see_spoiler = room::may_see_spoiler(room.spoiler_policy, role.is_some(), owns_a_slot);
+    let can_see_tracker = room::may_see_tracker(room.tracker_policy, role.is_some(), owns_a_slot);
 
     let slots = slot_views(room_slots, session.user_id, role, &patched);
     let siblings = room::siblings(&mut conn, room.id, room.generation_id).await?;
@@ -256,6 +280,7 @@ async fn show(
         is_organizer: role.is_some_and(|r| r >= RoomRole::Organizer),
         siblings,
         can_see_spoiler,
+        can_see_tracker,
         message,
         elapsed,
     })
@@ -705,6 +730,60 @@ pub fn routes() -> Vec<rocket::Route> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn slot(number: i32, owner: Option<i64>) -> Slot {
+        Slot {
+            room_id: puna_core::ids::RoomId::new(),
+            slot_number: number,
+            player_name: format!("player{number}"),
+            game: "A Link to the Past".into(),
+            kind: puna_core::artifact::SlotKind::Player,
+            password: Some("a-secret".into()),
+            owner_id: owner,
+            claim_token: Some("a-claim-token".into()),
+            claimed_at: None,
+            tracker_id: puna_core::ids::TrackerId::new(),
+        }
+    }
+
+    /// **A slot's tracker id reaches its owner and nobody else, staff included.**
+    ///
+    /// The id exists so a player can share their own progress without handing over the multiworld's
+    /// tracker. That promise is only worth anything if the room page does not hand every slot's link
+    /// to whoever is looking -- which is the easy mistake, because staff legitimately see more of
+    /// every other column in this table.
+    #[test]
+    fn a_slot_tracker_id_is_offered_only_to_the_slot_owner() {
+        let mine = 100_i64;
+        let theirs = 200_i64;
+        let slots = vec![slot(1, Some(mine)), slot(2, Some(theirs)), slot(3, None)];
+
+        // The owner, holding no role at all.
+        let views = slot_views(slots.clone(), Some(mine), None, &Default::default());
+        assert!(views[0].tracker_id.is_some(), "own slot: link expected");
+        assert!(
+            views[1].tracker_id.is_none(),
+            "another player's slot leaked"
+        );
+        assert!(views[2].tracker_id.is_none(), "unclaimed slot leaked");
+
+        // Staff who own nothing here. They see claim tokens and every patch, and STILL get no
+        // per-slot tracker link -- this is the case the field's note is about.
+        let views = slot_views(
+            slots.clone(),
+            Some(999),
+            Some(RoomRole::Organizer),
+            &Default::default(),
+        );
+        assert!(
+            views.iter().all(|v| v.tracker_id.is_none()),
+            "an organizer was handed players' personal tracker links"
+        );
+
+        // Anonymous.
+        let views = slot_views(slots, None, None, &Default::default());
+        assert!(views.iter().all(|v| v.tracker_id.is_none()));
+    }
 
     /// The page and the poller must spell a duration the same way, or the first poll visibly
     /// rewrites what the server just rendered.
