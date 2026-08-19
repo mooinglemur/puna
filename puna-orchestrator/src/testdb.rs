@@ -256,6 +256,24 @@ pub async fn reservation(conn: &mut AsyncPgConnection, room: RoomId) -> Option<i
     rows.into_iter().next().map(|row| row.base_port)
 }
 
+/// Shrink an environment's range to its lowest `pairs` reservations.
+///
+/// Exhaustion and reclaim behavior are only observable near the end of a range, and deleting rows
+/// is a far cheaper way to get there than allocating two and a half thousand times.
+pub async fn shrink_range(conn: &mut AsyncPgConnection, pairs: i64) {
+    diesel::sql_query(
+        "DELETE FROM port_reservations
+          WHERE environment = 'dev'
+            AND base_port NOT IN (
+                SELECT base_port FROM port_reservations
+                 WHERE environment = 'dev' ORDER BY base_port ASC LIMIT $1)",
+    )
+    .bind::<diesel::sql_types::BigInt, _>(pairs)
+    .execute(conn)
+    .await
+    .expect("shrink range");
+}
+
 /// A room's advisory-lock key, which every step takes before writing.
 pub async fn lock_key(conn: &mut AsyncPgConnection, room: RoomId) -> i32 {
     #[derive(diesel::QueryableByName)]

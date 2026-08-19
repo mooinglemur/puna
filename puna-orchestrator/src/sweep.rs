@@ -310,6 +310,7 @@ impl Sweeper {
             Err(e) => tracing::warn!(error = ?e, "could not count reclaimable generations"),
         }
 
+        publish_inventory(conn).await;
         removed
     }
 }
@@ -417,11 +418,49 @@ async fn reclaimable_generations(
     Ok(on_disk.iter().filter(|sha| !known.contains(*sha)).count())
 }
 
+/// What the fleet is made of: generations, their bytes, and slots nobody has claimed.
+///
+/// On the slow lane rather than every tick. These are aggregates over whole tables, they change when
+/// somebody uploads or claims rather than when a room moves, and an hour is finer resolution than
+/// any question they answer.
+async fn publish_inventory(conn: &mut AsyncPgConnection) {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        generations: i64,
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        generation_bytes: i64,
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        slots_unclaimed: i64,
+    }
+
+    let rows: Vec<Row> = match diesel::sql_query(
+        "SELECT (SELECT count(*) FROM generations) AS generations,
+                (SELECT COALESCE(sum(size_bytes), 0) FROM generations) AS generation_bytes,
+                (SELECT count(*) FROM room_slots WHERE owner_id IS NULL) AS slots_unclaimed",
+    )
+    .load(conn)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(error = ?e, "could not read the inventory counts");
+            return;
+        }
+    };
+
+    if let Some(row) = rows.into_iter().next() {
+        puna_core::metrics::GENERATIONS.set(row.generations);
+        puna_core::metrics::GENERATION_BYTES.set(row.generation_bytes);
+        puna_core::metrics::SLOTS_UNCLAIMED.set(row.slots_unclaimed);
+    }
+}
+
 /// The port gauges, from one aggregate query.
 async fn publish_port_stats(conn: &mut AsyncPgConnection, environment: Environment) {
     match port::stats(conn, environment).await {
         Ok(stats) => {
-            puna_core::metrics::PORTS_TOTAL.set(stats.total);
+            puna_core::metrics::PORTS_CAPACITY.set(stats.total);
             puna_core::metrics::PORTS_BOUND.set(stats.bound);
             puna_core::metrics::PORTS_QUARANTINED.set(stats.quarantined);
         }

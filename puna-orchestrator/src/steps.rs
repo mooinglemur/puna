@@ -195,8 +195,15 @@ async fn start(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
                 if !leader::try_lock_room(conn, lock_key).await? {
                     return Ok(None);
                 }
-                match port::allocate_pair(&orchestrator, conn, environment, id).await {
-                    Ok(base) => Ok(Some(base)),
+                // `allocate` rather than `allocate_pair`: a reclaim has a victim, and the victim is
+                // owed a record. See `note_reclaim`.
+                match port::allocate(&orchestrator, conn, environment, id).await {
+                    Ok(allocation) => {
+                        if let Some(victim) = allocation.reclaimed_from {
+                            note_reclaim(conn, victim, id, allocation.base_port).await?;
+                        }
+                        Ok(Some(allocation.base_port))
+                    }
                     Err(port::AllocError::Exhausted { .. }) => {
                         // A first-class outcome, not an error to retry: an operator has to free
                         // capacity. Retrying in a loop would spin against a full range.
@@ -368,6 +375,37 @@ async fn start(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
     Ok(Outcome::Done)
 }
 
+/// Record that a pair was taken from an idle room and given to another.
+///
+/// **The victim gets the row, not the taker**, because the victim is the one who will be surprised:
+/// a reclaimed port invalidates the address embedded in every patch its players have already
+/// downloaded, so "why does my client connect to somebody else's room" has an answer in the room's
+/// own history. The reservation is a weak claim by design — honoured while nothing else needs the
+/// port — and this is what makes that claim's expiry visible rather than silent.
+async fn note_reclaim(
+    conn: &mut AsyncPgConnection,
+    victim: RoomId,
+    taken_by: RoomId,
+    base_port: u16,
+) -> Result<(), diesel::result::Error> {
+    puna_core::metrics::PORT_RECLAIMS.inc();
+    tracing::warn!(
+        room = %victim,
+        taken_by = %taken_by,
+        port = base_port,
+        "this room's port was reclaimed: the range had no free pair. Patches already downloaded \
+         from it carry an address that is now another room's."
+    );
+
+    event(
+        conn,
+        victim,
+        "port_reclaimed",
+        serde_json::json!({ "port": base_port, "taken_by": taken_by.to_string() }),
+    )
+    .await
+}
+
 async fn start_inputs(
     conn: &mut AsyncPgConnection,
     room: RoomId,
@@ -439,18 +477,37 @@ async fn recreate(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome>
 async fn mark_running(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
     let mut conn = ctx.pool.get().await?;
 
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = diesel::sql_types::Double)]
+        waited_seconds: f64,
+    }
+
     // `failure_count` is cleared here and nowhere else: a room that has been up is not still
     // carrying the backoff from a failure three weeks ago.
-    diesel::sql_query(
+    //
+    // The elapsed time comes back from the same statement, computed by Postgres. It spans a request
+    // the web tier wrote and a transition this process makes, so measuring it against a local clock
+    // would fold two machines' skew into the one number a player actually experiences.
+    let rows: Vec<Row> = diesel::sql_query(
         "UPDATE rooms
             SET state = 'running', state_changed_at = now(),
                 started_at = COALESCE(started_at, now()),
                 not_ready_sweeps = 0, failure_count = 0, retry_after = NULL, last_error = NULL
-          WHERE id = $1",
+          WHERE id = $1
+        RETURNING EXTRACT(EPOCH FROM (now() - desired_at))::float8 AS waited_seconds",
     )
     .bind::<SqlUuid, _>(action.room)
-    .execute(&mut conn)
+    .load(&mut conn)
     .await?;
+
+    // Desired-to-running: it starts when somebody asked, not when the orchestrator got to it, which
+    // is the difference between measuring the cold start and measuring the last hop of it.
+    if let Some(waited) = rows.into_iter().next().map(|row| row.waited_seconds)
+        && waited >= 0.0
+    {
+        puna_core::metrics::ROOM_START_SECONDS.observe(waited);
+    }
 
     puna_core::metrics::ROOM_STARTS
         .with_label_values(&["ok"])
@@ -1248,6 +1305,131 @@ mod db_tests {
             assert_eq!(running.state, "running");
             assert_eq!(running.not_ready_sweeps, 0);
             assert_eq!(running.failure_count, 0);
+        })
+        .await;
+    }
+}
+
+#[cfg(test)]
+mod reclaim_tests {
+    use super::*;
+    use crate::cluster::fake::FakeCluster;
+    use crate::plan::{Action, Step};
+    use crate::testdb::{self, NewRoom};
+
+    /// A reclaimed port leaves a record **against the room that lost it**.
+    ///
+    /// The victim is the one who will be surprised: every patch its players have already downloaded
+    /// carries an address that now belongs to somebody else. The reservation is a weak claim by
+    /// design, and this is what keeps its expiry from being silent — the room page maps this event
+    /// kind to a sentence, so "why does my client connect to another room" has an answer.
+    #[tokio::test]
+    async fn reclaiming_a_port_is_recorded_against_the_room_that_lost_it() {
+        testdb::with_db(|pool| async move {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let layout = Layout::new(tmp.path());
+            let cluster = FakeCluster::new();
+            let site = crate::spec::Site {
+                namespace: "puna-dev".into(),
+                lb_ip: "38.246.56.121".into(),
+                lb_sharing_key: "ap-lobby-public".into(),
+                tls_secret: "puna-room-tls".into(),
+                data_pvc: "puna-data".into(),
+            };
+            let ctx = Context {
+                pool: &pool,
+                cluster: &cluster,
+                layout: &layout,
+                site: &site,
+                environment: Environment::Dev,
+                advertise_host: "mw.example",
+                orchestrator: Orchestrator::assume_leader(),
+                pahoa_image: "pahoa:test",
+            };
+
+            let mut conn = pool.get().await.expect("connection");
+            // One pair in the whole range, so the second room has nowhere else to go.
+            testdb::shrink_range(&mut conn, 1).await;
+
+            let generation = testdb::insert_generation(&mut conn, &layout, 2).await;
+            let idle = testdb::insert_room(
+                &mut conn,
+                generation,
+                NewRoom {
+                    state: "idle",
+                    desired: "running",
+                    ..Default::default()
+                },
+            )
+            .await;
+            testdb::insert_slot(&mut conn, idle, 1, None).await;
+
+            let start = async |room| Action {
+                room,
+                lock_key: testdb::lock_key(&mut pool.get().await.expect("connection"), room).await,
+                step: Step::Start,
+            };
+
+            execute(&ctx, &start(idle).await)
+                .await
+                .expect("first start");
+            let port = testdb::reservation(&mut conn, idle).await.expect("a port");
+
+            // Put it back to idle, which is what makes it reclaimable: a live room is never a
+            // victim, which the allocator enforces and the D4 test in puna-core pins.
+            execute(
+                &ctx,
+                &Action {
+                    room: idle,
+                    lock_key: testdb::lock_key(&mut conn, idle).await,
+                    step: Step::MarkIdle(crate::plan::IdleReason::StopComplete),
+                },
+            )
+            .await
+            .expect("idle");
+
+            let newcomer = testdb::insert_room(
+                &mut conn,
+                generation,
+                NewRoom {
+                    state: "idle",
+                    desired: "running",
+                    ..Default::default()
+                },
+            )
+            .await;
+            testdb::insert_slot(&mut conn, newcomer, 1, None).await;
+
+            execute(&ctx, &start(newcomer).await)
+                .await
+                .expect("second start");
+
+            assert_eq!(
+                testdb::reservation(&mut conn, newcomer).await,
+                Some(port),
+                "the only pair in the range moved to the newcomer"
+            );
+            assert_eq!(
+                testdb::reservation(&mut conn, idle).await,
+                None,
+                "and the victim lost it"
+            );
+
+            let victim_events = testdb::event_kinds(&mut conn, idle).await;
+            assert!(
+                victim_events.contains(&"port_reclaimed".to_string()),
+                "the room that lost its port has no record of it: {victim_events:?}"
+            );
+            // The taker's history says nothing about it: from its side this was an ordinary start.
+            let taker_events = testdb::event_kinds(&mut conn, newcomer).await;
+            assert!(!taker_events.contains(&"port_reclaimed".to_string()));
+
+            // The victim's room and its state directory are untouched -- losing a port must never
+            // mean losing a room.
+            let observed = testdb::observed(&mut conn, idle)
+                .await
+                .expect("still there");
+            assert_eq!(observed.state, "idle");
         })
         .await;
     }

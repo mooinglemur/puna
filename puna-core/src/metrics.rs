@@ -7,7 +7,9 @@
 
 use std::sync::LazyLock;
 
-use prometheus::{Histogram, HistogramOpts, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry};
+use prometheus::{
+    Histogram, HistogramOpts, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
+};
 
 /// The process registry. `/metrics` renders this and nothing else.
 pub static REGISTRY: LazyLock<Registry> = LazyLock::new(Registry::new);
@@ -59,8 +61,19 @@ pub static ROOM_START_SECONDS: LazyLock<Histogram> = LazyLock::new(|| {
     )
 });
 
-pub static PORTS_TOTAL: LazyLock<IntGauge> = LazyLock::new(|| {
-    register!(IntGauge::new("puna_ports_total", "Port pairs in this environment's range").unwrap())
+/// The size of this environment's range.
+///
+/// **`puna_ports_capacity`, not `puna_ports_total`**, which is what the design sketched: `_total` is
+/// reserved for counters, and this is a capacity that moves only when the range is resized. The
+/// suffix would have promised `rate()` a number that never accumulates.
+pub static PORTS_CAPACITY: LazyLock<IntGauge> = LazyLock::new(|| {
+    register!(
+        IntGauge::new(
+            "puna_ports_capacity",
+            "Port pairs in this environment's range"
+        )
+        .unwrap()
+    )
 });
 
 pub static PORTS_BOUND: LazyLock<IntGauge> = LazyLock::new(|| {
@@ -79,20 +92,51 @@ pub static PORTS_QUARANTINED: LazyLock<IntGauge> = LazyLock::new(|| {
 
 /// LRU reclaims. Each one invalidates the address embedded in an already-downloaded patch, so a
 /// rising rate is a capacity problem players can feel.
-pub static PORT_RECLAIMS: LazyLock<IntGauge> = LazyLock::new(|| {
-    register!(IntGauge::new("puna_port_reclaims_total", "Port pairs reclaimed via LRU").unwrap())
+///
+/// A **counter**, not a gauge, and the `_total` suffix is the reason: it promises monotonicity to
+/// anything that wraps this in `rate()`, and a gauge that only happens to increase is a promise the
+/// type does not keep.
+pub static PORT_RECLAIMS: LazyLock<IntCounter> = LazyLock::new(|| {
+    register!(IntCounter::new("puna_port_reclaims_total", "Port pairs reclaimed via LRU").unwrap())
 });
 
 /// Services that came up on an address other than the expected shared VIP. Should stay zero;
 /// non-zero means something outside Puna took a port on the sharing key.
-pub static PORT_IP_MISMATCH: LazyLock<IntGauge> = LazyLock::new(|| {
+pub static PORT_IP_MISMATCH: LazyLock<IntCounter> = LazyLock::new(|| {
     register!(
-        IntGauge::new(
+        IntCounter::new(
             "puna_port_ip_mismatch_total",
             "Room Services observed on an unexpected address",
         )
         .unwrap()
     )
+});
+
+/// Indexed generations, and the bytes they occupy.
+///
+/// Both from the slow lane rather than every tick: they are aggregates over a table that changes
+/// when somebody uploads, which is not thirty-second news. The bytes are the number to watch
+/// alongside the PVC alert — generations are content-addressed and shared, so this grows with
+/// distinct seeds rather than with rooms.
+pub static GENERATIONS: LazyLock<IntGauge> =
+    LazyLock::new(|| register!(IntGauge::new("puna_generations", "Indexed generations").unwrap()));
+
+pub static GENERATION_BYTES: LazyLock<IntGauge> = LazyLock::new(|| {
+    register!(
+        IntGauge::new(
+            "puna_generation_bytes",
+            "Total size of indexed generation archives"
+        )
+        .unwrap()
+    )
+});
+
+/// Slots nobody has claimed, across every room that is not deleted.
+///
+/// A standing number rather than an alert: it is how much of the fleet is waiting on people to
+/// follow their claim links, which is an organizing problem rather than a fault.
+pub static SLOTS_UNCLAIMED: LazyLock<IntGauge> = LazyLock::new(|| {
+    register!(IntGauge::new("puna_slots_unclaimed", "Room slots with no owner").unwrap())
 });
 
 /// **Alert on `!= 1` for 5m.** Zero means nothing is reconciling; more than one means the leader
@@ -236,7 +280,7 @@ pub const PROBE_CAPABILITIES: &[&str] =
 /// permanent zeros.
 pub fn init() {
     LazyLock::force(&ROOM_START_SECONDS);
-    LazyLock::force(&PORTS_TOTAL);
+    LazyLock::force(&PORTS_CAPACITY);
     LazyLock::force(&PORTS_BOUND);
     LazyLock::force(&PORTS_QUARANTINED);
     LazyLock::force(&PORT_RECLAIMS);
@@ -244,6 +288,9 @@ pub fn init() {
     LazyLock::force(&ORCHESTRATOR_LEADER);
     LazyLock::force(&INTEGRITY_FAULTS);
     LazyLock::force(&ORPHAN_DIRECTORIES);
+    LazyLock::force(&GENERATIONS);
+    LazyLock::force(&GENERATION_BYTES);
+    LazyLock::force(&SLOTS_UNCLAIMED);
     LazyLock::force(&RECONCILE_SECONDS);
     LazyLock::force(&RECONCILE_ERRORS);
     LazyLock::force(&K8S_REQUESTS);
@@ -286,6 +333,39 @@ pub fn gather() -> String {
 
 #[cfg(test)]
 mod tests {
+    /// **`_total` promises monotonicity**, and a gauge that only happens to increase does not keep
+    /// that promise: anything wrapping it in `rate()` is reading a number that may legitimately go
+    /// down. Two families were declared as gauges with counter names until this test existed.
+    #[test]
+    fn every_total_is_a_counter_and_no_counter_is_missing_the_suffix() {
+        super::init();
+        let text = super::gather();
+
+        // `# TYPE <name> <type>` lines, which is the exposition format's own answer.
+        let types: Vec<(&str, &str)> = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("# TYPE "))
+            .filter_map(|rest| rest.split_once(' '))
+            .filter(|(name, _)| name.starts_with("puna_"))
+            .collect();
+        assert!(!types.is_empty(), "no puna_* families were rendered");
+
+        for (name, kind) in types {
+            if name.ends_with("_total") {
+                assert_eq!(
+                    kind, "counter",
+                    "{name} is named like a counter but is a {kind}"
+                );
+            }
+            if kind == "counter" {
+                assert!(
+                    name.ends_with("_total"),
+                    "{name} is a counter without the suffix"
+                );
+            }
+        }
+    }
+
     #[test]
     fn init_is_idempotent_and_publishes_the_known_series() {
         // Called twice on purpose: the registry rejects duplicate names, so this catches both a
@@ -296,7 +376,7 @@ mod tests {
 
         // Unlabeled families appear on registration alone.
         for expected in [
-            "puna_ports_total",
+            "puna_ports_capacity",
             "puna_orchestrator_leader",
             "puna_integrity_faults",
             "puna_room_start_seconds",

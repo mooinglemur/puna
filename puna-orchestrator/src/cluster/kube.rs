@@ -35,6 +35,26 @@ use super::{
 };
 use crate::spec::{self, SPEC_HASH_ANNOTATION, Site};
 
+/// Count one API call, by what it did and how it went.
+///
+/// Wrapping every call rather than sampling: at a few requests per tick the cost is nothing, and the
+/// question this answers -- "is the orchestrator hammering the API server, and which verb" -- is
+/// only answerable if nothing is missing from the denominator. `result` is coarse on purpose: `ok`,
+/// `fatal`, `transient`, `conflict`. A per-status-code label would be a cardinality problem in
+/// exchange for detail the error message already carries.
+fn count<T>(verb: &str, resource: &str, outcome: Result<T>) -> Result<T> {
+    let result = match &outcome {
+        Ok(_) => "ok",
+        Err(ClusterError::AlreadyExists { .. }) => "conflict",
+        Err(e) if e.is_fatal() => "fatal",
+        Err(_) => "transient",
+    };
+    puna_core::metrics::K8S_REQUESTS
+        .with_label_values(&[verb, resource, result])
+        .inc();
+    outcome
+}
+
 /// The field manager server-side apply writes under.
 ///
 /// Stable across restarts on purpose: a changing name would leave one `managedFields` entry per
@@ -75,44 +95,60 @@ impl KubeCluster {
 #[async_trait]
 impl ClusterApi for KubeCluster {
     async fn list_deployments(&self) -> Result<Vec<RoomDeployment>> {
-        let list = self
-            .deployments
-            .list(&Self::list_params())
-            .await
-            .map_err(classify)?;
+        let list = count(
+            "list",
+            "deployments",
+            self.deployments
+                .list(&Self::list_params())
+                .await
+                .map_err(classify),
+        )?;
         Ok(list.items.iter().filter_map(read_deployment).collect())
     }
 
     async fn list_services(&self) -> Result<Vec<RoomService>> {
-        let list = self
-            .services
-            .list(&Self::list_params())
-            .await
-            .map_err(classify)?;
+        let list = count(
+            "list",
+            "services",
+            self.services
+                .list(&Self::list_params())
+                .await
+                .map_err(classify),
+        )?;
         Ok(list.items.iter().filter_map(read_service).collect())
     }
 
     async fn list_secrets(&self) -> Result<Vec<RoomSecret>> {
-        let list = self
-            .secrets
-            .list(&Self::list_params())
-            .await
-            .map_err(classify)?;
+        let list = count(
+            "list",
+            "secrets",
+            self.secrets
+                .list(&Self::list_params())
+                .await
+                .map_err(classify),
+        )?;
         Ok(list.items.iter().filter_map(read_secret).collect())
     }
 
     async fn get_deployment(&self, name: &str) -> Result<Option<RoomDeployment>> {
-        let found = self.deployments.get_opt(name).await.map_err(classify)?;
+        let found = count(
+            "get",
+            "deployments",
+            self.deployments.get_opt(name).await.map_err(classify),
+        )?;
         Ok(found.as_ref().and_then(read_deployment))
     }
 
     async fn create_deployment(&self, spec: &RoomSpec) -> Result<String> {
         let manifest = spec::deployment::build(spec, &self.site);
-        let created = self
-            .deployments
-            .create(&PostParams::default(), &manifest)
-            .await
-            .map_err(classify)?;
+        let created = count(
+            "create",
+            "deployments",
+            self.deployments
+                .create(&PostParams::default(), &manifest)
+                .await
+                .map_err(classify),
+        )?;
 
         // The caller persists this before anything comes to depend on it. An object the API server
         // created always has one, so `None` here means the response was not what it claimed to be.
@@ -126,7 +162,7 @@ impl ClusterApi for KubeCluster {
 
     async fn delete_deployment(&self, name: &str) -> Result<()> {
         // Foreground: see the module note. Absence has to mean the pod is gone.
-        match self
+        let outcome = match self
             .deployments
             .delete(name, &DeleteParams::foreground())
             .await
@@ -136,43 +172,57 @@ impl ClusterApi for KubeCluster {
             // anything else would turn a completed delete into an error that never clears.
             Err(kube::Error::Api(response)) if response.code == 404 => Ok(()),
             Err(e) => Err(classify(e)),
-        }
+        };
+        count("delete", "deployments", outcome)
     }
 
     async fn apply_secret(&self, spec: &SecretSpec) -> Result<()> {
         let manifest = spec::service::secret(spec, &self.site);
         // Server-side apply, forced: Puna owns every field of a room's Secret, and without `force` a
         // field another manager once touched would make every later apply conflict.
-        self.secrets
-            .patch(
-                &spec.name(),
-                &PatchParams::apply(FIELD_MANAGER).force(),
-                &Patch::Apply(&manifest),
-            )
-            .await
-            .map_err(classify)?;
+        count(
+            "apply",
+            "secrets",
+            self.secrets
+                .patch(
+                    &spec.name(),
+                    &PatchParams::apply(FIELD_MANAGER).force(),
+                    &Patch::Apply(&manifest),
+                )
+                .await
+                .map_err(classify),
+        )?;
         Ok(())
     }
 
     async fn delete_secret(&self, name: &str) -> Result<()> {
-        match self.secrets.delete(name, &DeleteParams::default()).await {
+        let outcome = match self.secrets.delete(name, &DeleteParams::default()).await {
             Ok(_) => Ok(()),
             Err(kube::Error::Api(response)) if response.code == 404 => Ok(()),
             Err(e) => Err(classify(e)),
-        }
+        };
+        count("delete", "secrets", outcome)
     }
 
     async fn create_service(&self, spec: &ServiceSpec) -> Result<()> {
         let manifest = spec::service::build(spec, &self.site);
-        self.services
-            .create(&PostParams::default(), &manifest)
-            .await
-            .map_err(classify)?;
+        count(
+            "create",
+            "services",
+            self.services
+                .create(&PostParams::default(), &manifest)
+                .await
+                .map_err(classify),
+        )?;
         Ok(())
     }
 
     async fn get_service(&self, name: &str) -> Result<Option<RoomService>> {
-        let found = self.services.get_opt(name).await.map_err(classify)?;
+        let found = count(
+            "get",
+            "services",
+            self.services.get_opt(name).await.map_err(classify),
+        )?;
         Ok(found.as_ref().and_then(read_service))
     }
 }
