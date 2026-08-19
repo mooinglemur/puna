@@ -8,6 +8,7 @@
 //! page and admin page. Rooms, artifacts, the console and the tracker arrive in M4 onwards.
 
 mod auth;
+mod cookies;
 mod error;
 mod gate;
 mod guards;
@@ -220,7 +221,7 @@ fn build(
         // Served by both roles: liveness, readiness and the embedded assets.
         .mount("/", routes![health, readyz, static_file]);
 
-    match role {
+    let rocket = match role {
         Role::Web => rocket
             .mount("/", routes![index, admin, whoami, metrics])
             .mount("/", routes::downloads::routes())
@@ -234,7 +235,17 @@ fn build(
         // needs only the shared ROCKET_SECRET_KEY -- and its 401 catcher redirects to the web
         // tier's login on the same hostname, which is what makes that split work.
         Role::Tracker => rocket.mount("/", routes::tracker::routes()),
-    }
+    };
+
+    // --- ATTACHED LAST, AND THAT IS NOT COSMETIC ------------------------------------------------
+    // Response fairings run in attach order, so this has to come after the OAuth2 fairing -- the
+    // whole point is to reach `rocket_oauth2_state`, which that fairing sets and offers no way to
+    // configure. Attached before it, this would run first, see no cookie, and do nothing.
+    //
+    // Both roles, though only the web role sets cookies today: the tracker reads the session but
+    // never writes one. Symmetry costs nothing and means a cookie added to the tracker's 401 path
+    // later is covered without anyone remembering this.
+    rocket.attach(cookies::SecureCookies)
 }
 
 #[rocket::main]
