@@ -454,6 +454,45 @@ async fn copy_slots(
     Ok(())
 }
 
+/// The credentials a room's pod needs, deliberately kept OUT of [`Room`].
+///
+/// `Room` is what the web tier hands to templates, and a template has no way to prove it did not
+/// render a field it was given. So the admin token -- which is the only control on a mutating,
+/// internet-reachable API -- is not in it, and reaching these costs a separate, greppable call.
+/// Same reasoning as `SlotView` in the web tier.
+#[derive(Debug, Clone)]
+pub struct RoomSecrets {
+    pub admin_token: String,
+    /// Pahoa's remote-admin gate. Rarely set: Puna's console drives the bearer-token API rather
+    /// than in-game `!admin`, so a Puna room normally has no remote-admin path at all.
+    pub server_password: Option<String>,
+}
+
+/// Read a room's credentials. Orchestrator-facing; nothing in a page needs these.
+pub async fn secrets(
+    conn: &mut AsyncPgConnection,
+    id: RoomId,
+) -> Result<Option<RoomSecrets>, diesel::result::Error> {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = Text)]
+        admin_token: String,
+        #[diesel(sql_type = Nullable<Text>)]
+        server_password: Option<String>,
+    }
+
+    let rows: Vec<Row> =
+        diesel::sql_query("SELECT admin_token, server_password FROM rooms WHERE id = $1")
+            .bind::<SqlUuid, _>(id)
+            .load(conn)
+            .await?;
+
+    Ok(rows.into_iter().next().map(|row| RoomSecrets {
+        admin_token: row.admin_token,
+        server_password: row.server_password,
+    }))
+}
+
 pub async fn get(
     conn: &mut AsyncPgConnection,
     id: RoomId,

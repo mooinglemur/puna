@@ -14,8 +14,8 @@ use diesel_async::async_connection_wrapper::AsyncConnectionWrapper;
 use diesel_async::pooled_connection::deadpool::Pool as DieselPool;
 use diesel_async::pooled_connection::{AsyncDieselConnectionManager, ManagerConfig};
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness};
-use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
+use futures_util::{FutureExt, StreamExt};
 use prometheus::{HistogramOpts, HistogramVec};
 use rustls::Error as TLSError;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
@@ -166,6 +166,75 @@ fn establish_connection(config: &str) -> BoxFuture<'_, ConnectionResult<AsyncPgC
         AsyncPgConnection::try_from(client).await
     };
     fut.boxed()
+}
+
+/// Open a RAW `tokio_postgres` connection, outside the pool.
+///
+/// Two things in Puna need a connection whose *session* they own rather than one borrowed from a
+/// pool: the orchestrator's leader advisory lock, which Postgres releases when the session that
+/// took it ends, and `LISTEN`, whose subscription is likewise session-scoped. A pooled connection
+/// is recycled between callers, so neither would survive in one -- the lock would drop the moment
+/// the handle went back to the pool.
+///
+/// Uses the same TLS setup as [`get_database_pool`], including its inherited `NoVerifier`
+/// weakness, so the two cannot diverge on how they reach the same database.
+pub async fn raw_connection(db_url: &str) -> anyhow::Result<tokio_postgres::Client> {
+    ensure_crypto_provider();
+
+    let rustls_config = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(NoVerifier))
+        .with_no_client_auth();
+
+    let tls = tokio_postgres_rustls::MakeRustlsConnect::new(rustls_config);
+    let (client, conn) = tokio_postgres::connect(db_url, tls).await?;
+
+    tokio::spawn(async move {
+        if let Err(e) = conn.await {
+            tracing::error!(error = %e, "raw database connection closed with an error");
+        }
+    });
+
+    Ok(client)
+}
+
+/// A raw connection plus its notification stream, for `LISTEN`.
+///
+/// Separate from [`raw_connection`] because the two cannot both exist: that one spawns the
+/// connection future and drops every message it yields, which is right for a lock holder and
+/// exactly wrong for a listener. Here the connection is polled by the returned stream instead, so
+/// the caller must keep driving it or notifications simply stop arriving.
+pub async fn raw_connection_with_notifications(
+    db_url: &str,
+) -> anyhow::Result<(
+    tokio_postgres::Client,
+    impl futures_util::Stream<Item = tokio_postgres::AsyncMessage> + Unpin,
+)> {
+    ensure_crypto_provider();
+
+    let rustls_config = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(NoVerifier))
+        .with_no_client_auth();
+
+    let tls = tokio_postgres_rustls::MakeRustlsConnect::new(rustls_config);
+    let (client, mut connection) = tokio_postgres::connect(db_url, tls).await?;
+
+    // `poll_message` yields notifications as well as driving the connection, so the stream IS the
+    // connection's task. Dropping it closes the session.
+    let stream = futures_util::stream::poll_fn(move |cx| connection.poll_message(cx))
+        .filter_map(|message| async move {
+            match message {
+                Ok(message) => Some(message),
+                Err(e) => {
+                    tracing::error!(error = %e, "LISTEN connection failed");
+                    None
+                }
+            }
+        })
+        .boxed();
+
+    Ok((client, stream))
 }
 
 /// Build the pool, optionally running migrations first.

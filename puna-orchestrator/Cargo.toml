@@ -42,3 +42,8 @@ kube = { version = "2", default-features = false, features = [
 # Pinned to the RKE2 minor actually running: v1.34.10+rke2r1, verified against the live cluster.
 # A mismatch surfaces as missing struct fields rather than a build error, so it is worth stating.
 k8s-openapi = { version = "0.26", features = ["v1_34"] }
+
+[dev-dependencies]
+# Provisioning is filesystem behavior -- atomic rename, EEXIST as success, fsync ordering -- so it
+# is tested against a real filesystem rather than a trait, the same as the web tier's promotion.
+tempfile = "3"

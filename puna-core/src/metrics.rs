@@ -266,6 +266,14 @@ pub fn init() {
 }
 
 /// Render the registry in Prometheus text exposition format.
+/// Publish whether this process holds the leader lock.
+///
+/// A setter rather than direct access to the gauge, so the "alert on `sum(...) != 1`" rule has one
+/// place that can write it and a parked replica cannot forget to publish its zero.
+pub fn set_leader(leading: bool) {
+    ORCHESTRATOR_LEADER.set(i64::from(leading));
+}
+
 pub fn gather() -> String {
     use prometheus::Encoder;
     let mut buf = Vec::new();
