@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}{{ room.name }}{% endblock %}
+{% block content %}
+<h1>{{ room.name }}</h1>
+
+{# The address is the thing players came for, so it leads. Both ports are shown: the filtered one
+   is the same server with the PrintJSON firehose dropped, for clients that struggle with a large
+   multiworld. #}
+{% if room.state == "running" %}
+{% if let Some(host) = room.advertised_host %}
+<div class="address">
+{% if let Some(port) = room.advertised_port %}
+<p><strong>Connect to</strong> <code>{{ host }}:{{ port }}</code></p>
+{% endif %}
+{% if let Some(filtered) = room.advertised_filtered_port %}
+<p class="hint">If your client struggles with a large multiworld, use
+<code>{{ host }}:{{ filtered }}</code> &mdash; the same room, without other players' item traffic.</p>
+{% endif %}
+</div>
+{% endif %}
+{% else if room.state == "idle" || room.state == "failed" %}
+<p>This room is not running.</p>
+{% if let Some(error) = room.last_error %}<p class="error">{{ error }}</p>{% endif %}
+<form method="post" action="/room/{{ room.id }}/start"><button type="submit">Start the room</button></form>
+{% else if room.state == "integrity_fault" %}
+<div class="error">
+<p><strong>This room's saved state is missing.</strong></p>
+<p>This is a fault, not a normal condition. An administrator has been alerted. Nothing here will
+start an empty room in its place.</p>
+</div>
+{% else %}
+<p class="notice">This room is{{+ room.state }}&hellip;</p>
+<p class="hint">This page refreshes on its own.</p>
+{% endif %}
+
+<h2>Slots</h2>
+<table class="slots">
+<thead><tr><th>#</th><th>Player</th><th>Game</th><th>Held by</th></tr></thead>
+<tbody>
+{% for slot in slots %}
+<tr>
+<td>{{ slot.slot_number }}</td>
+<td>{{ slot.player_name }}</td>
+<td>
+{{ slot.game }}
+{% if slot.is_spectator %}<span class="tag">spectator</span>{% endif %}
+</td>
+<td>
+{% if slot.is_mine %}
+<strong>you</strong>
+{% if room.slot_auth == puna_core::model::room::SlotAuth::PerSlot %}
+<a href="/room/{{ room.id }}/slot/{{ slot.slot_number }}/password">your password</a>
+{% endif %}
+{% else if slot.owner_id.is_some() %}
+claimed
+{% else if let Some(token) = slot.claim_token %}
+{# Staff only: this link IS the claim, so it is not shown to ordinary visitors. #}
+<a href="/claim/{{ token }}">claim link</a>
+{% else %}
+unclaimed
+{% endif %}
+</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+
+{% if is_staff %}
+<h2>Manage</h2>
+<ul>
+<li><a href="/room/{{ room.id }}/members">Members and invites</a></li>
+</ul>
+
+<form method="post" action="/room/{{ room.id }}/clone">
+<p>
+<label for="name">Create a new room from this seed</label>
+<input type="text" id="name" name="name" placeholder="name for the new room" required>
+<label><input type="checkbox" name="keep_owners" value="true" checked> keep the current slot owners</label>
+<button type="submit">Create</button>
+</p>
+</form>
+
+{% if is_organizer %}
+<form method="post" action="/room/{{ room.id }}/stop"><button type="submit">Stop the room</button></form>
+
+<form method="post" action="/room/{{ room.id }}/settings/slot-auth">
+<p>
+<label for="mode">Password mode</label>
+<select id="mode" name="mode">
+<option value="none"{% if room.slot_auth == puna_core::model::room::SlotAuth::None %} selected{% endif %}>none &mdash; anyone with the address</option>
+<option value="room"{% if room.slot_auth == puna_core::model::room::SlotAuth::Room %} selected{% endif %}>one shared room password</option>
+<option value="per_slot"{% if room.slot_auth == puna_core::model::room::SlotAuth::PerSlot %} selected{% endif %}>a password per slot</option>
+</select>
+<button type="submit">Change</button>
+</p>
+<p class="hint"><strong>Changing this restarts the room.</strong> The server reads passwords when it
+starts, so the change cannot take effect on a running room. Switching away from per-slot passwords
+discards them and they cannot be recovered.</p>
+</form>
+{% endif %}
+{% endif %}
+
+{% if !siblings.is_empty() %}
+<h2>Other rooms from this seed</h2>
+<ul>
+{% for sibling in siblings %}
+<li><a href="/room/{{ sibling.id }}">{{ sibling.name }}</a> &mdash;{{+ sibling.state }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+{% endblock %}

@@ -59,3 +59,8 @@ impl<'r> Responder<'r, 'static> for Error {
         Response::build().status(self.status).ok()
     }
 }
+
+/// A 404 that carries a reason for the log without putting it in the response.
+pub fn not_found(message: &'static str) -> Error {
+    Error::new(Status::NotFound, anyhow::anyhow!(message))
+}

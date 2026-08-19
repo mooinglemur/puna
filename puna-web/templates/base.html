@@ -16,6 +16,8 @@
 <a class="brand" href="/">puna</a>
 <nav>
 {% if base.is_logged_in %}
+<a href="/rooms">your rooms</a>
+<a href="/generations">generations</a>
 {% if base.is_admin %}<a href="/admin">admin</a>{% endif %}
 <span class="who">{{ base.username }}</span>
 <a href="/auth/logout">log out</a>

@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}{{ room.name }} &mdash; members{% endblock %}
+{% block content %}
+<h1>{{ room.name }} &mdash; members</h1>
+<p><a href="/room/{{ room.id }}">back to the room</a></p>
+
+<table class="members">
+<thead><tr><th>Discord id</th><th>Name</th><th>Role</th><th>Added</th><th></th></tr></thead>
+<tbody>
+{% for entry in members %}
+<tr>
+<td><code>{{ entry.user_id }}</code></td>
+<td>{% if let Some(name) = entry.username %}{{ name }}{% else %}&mdash;{% endif %}</td>
+<td>{{ entry.role.as_sql() }}</td>
+<td>{{ entry.added_at.format("%Y-%m-%d") }}</td>
+<td>
+<form method="post" action="/room/{{ room.id }}/members/remove" class="inline">
+<input type="hidden" name="user_id" value="{{ entry.user_id }}">
+<button type="submit">Remove</button>
+</form>
+</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+<p class="hint">A room must always keep at least one organizer. Promote somebody else before
+removing or demoting the last one.</p>
+
+<h2>Add by Discord id</h2>
+<form method="post" action="/room/{{ room.id }}/members">
+<p>
+<input type="text" name="user_id" inputmode="numeric" pattern="[0-9]+" placeholder="Discord id" required>
+<select name="role"><option value="helper">helper</option><option value="organizer">organizer</option></select>
+<button type="submit">Add</button>
+</p>
+</form>
+
+<h2>Invite links</h2>
+<p class="hint">The path that does not need anyone's Discord id. Following the link grants the role;
+it never lowers a role somebody already holds.</p>
+
+<form method="post" action="/room/{{ room.id }}/invites">
+<p>
+<select name="role"><option value="helper">helper</option><option value="organizer">organizer</option></select>
+<input type="text" name="uses" inputmode="numeric" placeholder="uses (blank = unlimited)">
+<button type="submit">Create a link</button>
+</p>
+</form>
+
+{% if !invites.is_empty() %}
+<table class="invites">
+<thead><tr><th>Link</th><th>Role</th><th>Uses left</th><th></th></tr></thead>
+<tbody>
+{% for invite in invites %}
+<tr>
+<td><code>/invite/{{ invite.token }}</code></td>
+<td>{{ invite.role.as_sql() }}</td>
+<td>{% if let Some(left) = invite.uses_remaining %}{{ left }}{% else %}unlimited{% endif %}</td>
+<td>
+<form method="post" action="/room/{{ room.id }}/invites/revoke" class="inline">
+<input type="hidden" name="token" value="{{ invite.token }}">
+<button type="submit">Revoke</button>
+</form>
+</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% endif %}
+{% endblock %}

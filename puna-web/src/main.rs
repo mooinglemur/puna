@@ -10,6 +10,8 @@
 mod auth;
 mod error;
 mod gate;
+mod guards;
+mod params;
 mod routes;
 mod tpl;
 
@@ -151,7 +153,24 @@ fn not_found() -> &'static str {
     "Not found"
 }
 
-fn build(role: Role, figment: Figment, pool: Pool, data_dir: std::path::PathBuf) -> Rocket<Build> {
+/// Rocket answers 422 when a route matches but a parameter or form field will not parse.
+///
+/// The common way to reach it is a truncated room link -- `/room/<half a uuid>` matches the route
+/// and then fails `FromParam` -- so a bare status code would leave someone staring at a number.
+/// The status is left alone rather than remapped to 404: form submissions land here too, and
+/// telling someone their input was not found would be worse than telling them nothing.
+#[catch(422)]
+fn unprocessable() -> &'static str {
+    "That link or form could not be read. If you followed a link, it may have been truncated."
+}
+
+fn build(
+    role: Role,
+    environment: Environment,
+    figment: Figment,
+    pool: Pool,
+    data_dir: std::path::PathBuf,
+) -> Rocket<Build> {
     // Rocket's `limits.data-form` caps what is read off the wire; this caps what is decompressed.
     // Read the former so the two cannot silently disagree -- a decompression limit above the wire
     // limit is unreachable, and below it turns a legitimate upload into Rocket's generic 413.
@@ -164,11 +183,15 @@ fn build(role: Role, figment: Figment, pool: Pool, data_dir: std::path::PathBuf)
 
     let rocket = rocket::custom(figment.clone())
         .manage(role)
+        .manage(environment)
         .manage(figment)
         .manage(pool)
         .manage(DataDir(data_dir))
         .manage(UploadLimit(wire_limit))
-        .register("/", catchers![unauthorized, forbidden, not_found])
+        .register(
+            "/",
+            catchers![unauthorized, forbidden, not_found, unprocessable],
+        )
         // Served by both roles: liveness, readiness and the embedded assets.
         .mount("/", routes![health, readyz, static_file]);
 
@@ -177,6 +200,7 @@ fn build(role: Role, figment: Figment, pool: Pool, data_dir: std::path::PathBuf)
             .mount("/", routes![index, admin, whoami, metrics])
             .mount("/", routes::generations::routes())
             .mount("/", routes::gates::routes())
+            .mount("/", routes::rooms::routes())
             .mount("/auth", auth::routes())
             .attach(rocket_oauth2::OAuth2::<auth::Discord>::fairing("discord")),
         // The tracker tier deliberately gets no OAuth fairing and no Discord credentials: it
@@ -240,6 +264,8 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("PUNA_DATA_DIR").unwrap_or_else(|_| "/var/lib/puna".to_string()),
     );
 
-    build(role, figment, pool, data_dir).launch().await?;
+    build(role, environment, figment, pool, data_dir)
+        .launch()
+        .await?;
     Ok(())
 }

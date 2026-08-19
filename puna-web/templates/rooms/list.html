@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}your rooms{% endblock %}
+{% block content %}
+<h1>Your rooms</h1>
+
+{% if rooms.is_empty() %}
+<p>No rooms yet. Claiming a slot or being added to one puts it here &mdash; rooms you have merely
+visited do not appear.</p>
+{% else %}
+<table class="rooms">
+<thead><tr><th>Room</th><th>You are</th><th>State</th><th>Address</th></tr></thead>
+<tbody>
+{% for entry in rooms %}
+<tr>
+<td><a href="/room/{{ entry.room.id }}">{{ entry.room.name }}</a></td>
+<td>
+{% match entry.relationship %}
+{% when puna_core::model::room::Relationship::Staff with (role) %}{{ role.as_sql() }}
+{% when puna_core::model::room::Relationship::Player %}a player
+{% endmatch %}
+</td>
+<td>{{ entry.room.state }}</td>
+<td>
+{% if let Some(host) = entry.room.advertised_host %}
+{% if let Some(port) = entry.room.advertised_port %}<code>{{ host }}:{{ port }}</code>{% endif %}
+{% else %}&mdash;{% endif %}
+</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% endif %}
+{% endblock %}

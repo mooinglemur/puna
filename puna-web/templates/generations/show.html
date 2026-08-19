@@ -37,5 +37,21 @@ generation rather than storing a second copy.</p>
 </tbody>
 </table>
 
-<p class="hint">Creating a room from this generation arrives in the next milestone.</p>
+<h2>Open a room from this seed</h2>
+<p class="hint">One generation can back any number of rooms &mdash; they are independent
+multiworlds sharing the same seed, and a second one costs no storage.</p>
+<form method="post" action="/rooms">
+<input type="hidden" name="generation_id" value="{{ generation.id }}">
+<p>
+<label for="name">Room name</label>
+<input type="text" id="name" name="name" required>
+<label for="slot_auth">Passwords</label>
+<select id="slot_auth" name="slot_auth">
+<option value="none">none &mdash; anyone with the address</option>
+<option value="room">one shared room password</option>
+<option value="per_slot">a password per slot</option>
+</select>
+<button type="submit">Create the room</button>
+</p>
+</form>
 {% endblock %}
