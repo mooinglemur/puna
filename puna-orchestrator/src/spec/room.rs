@@ -26,16 +26,6 @@
 //! and recreate every pod in the cluster, for nothing. The canonical string below is Puna's own, so
 //! only Puna's own decisions move it.
 
-// Consumed by the Deployment builder and the applier, both M7. `expect` rather than `allow` so this
-// warns the moment they arrive.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the Deployment builder and the applier land at M7"
-    )
-)]
-
 use puna_core::hash::sha256_hex;
 use puna_core::ids::RoomId;
 use puna_core::model::room::SlotAuth;

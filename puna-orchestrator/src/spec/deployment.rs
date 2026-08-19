@@ -26,13 +26,6 @@
 //! with almost no margin, and the case that eats it is a CephFS MDS failover, where I/O blocks and no
 //! userspace timeout helps. Overrunning means SIGKILL and a fall back to the last completed save —
 //! exactly the loss pahoa's SIGTERM handling exists to remove.
-// Consumed by the applier, which lands with `ensure_room_running`. `expect` rather than `allow` so
-// this warns the moment it does.
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the applier lands with ensure_room_running")
-)]
-
 use std::collections::BTreeMap;
 
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec, DeploymentStrategy};

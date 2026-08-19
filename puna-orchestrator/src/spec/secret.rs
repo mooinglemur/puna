@@ -24,17 +24,6 @@
 //! it lands now rather than then -- the fail-closed property is worth pinning while the reasoning
 //! behind it is fresh, and `expect` rather than `allow` means the attribute itself warns once
 //! something starts calling `build`.
-// `not(test)` because the tests below DO call `build`, so the expectation would be unfulfilled --
-// and an unfulfilled `expect` is itself a lint. `expect` rather than `allow` so this attribute
-// starts warning the moment M7 gives the module a real caller.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the Secret is applied by ensure_room_running, which lands at M7"
-    )
-)]
-
 use std::collections::BTreeMap;
 
 use puna_core::model::room::{Room, RoomSecrets, SlotAuth};

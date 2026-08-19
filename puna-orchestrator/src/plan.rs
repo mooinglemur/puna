@@ -22,16 +22,6 @@
 //! **Orphans and stale Secrets.** Both need memory across ticks (an orphan is only an orphan on the
 //! second consecutive sighting) or a comparison with a column no room transition reads. They are
 //! M9's sweep, and they are cluster-scoped rather than room-scoped, so they do not fit [`Action`].
-// The applier is M7; the tests below are the whole of this module's use until then. `expect` rather
-// than `allow` so this warns the moment `ensure_room_running` starts consuming these.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the applier that executes these Steps lands at M7"
-    )
-)]
-
 use chrono::{DateTime, Duration, Utc};
 use puna_core::ids::RoomId;
 use puna_core::model::room::{DesiredState, RoomState};

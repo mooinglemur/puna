@@ -75,6 +75,11 @@ pub const SPEC_HASH_ANNOTATION: &str = "puna.onelemur.com/spec-hash";
 /// half of the tier split: a room cannot reach the Kubernetes API even in principle.
 pub const ROOM_SERVICE_ACCOUNT: &str = "puna-room";
 
+/// The label selector every list call uses.
+pub fn managed_selector() -> String {
+    format!("{MANAGED_BY_KEY}={MANAGED_BY}")
+}
+
 /// The labels that identify one room's pods, and nothing more.
 ///
 /// **This is the Deployment's `selector.matchLabels` and the Service's `selector`, from one
@@ -95,13 +100,6 @@ pub fn labels(room: RoomId) -> BTreeMap<String, String> {
 /// The room id carried by an object's labels, if it has one that parses.
 ///
 /// `None` makes it an orphan by definition — there is no room row it could belong to.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "KubeCluster reads it off every listed object, the last M7 step"
-    )
-)]
 pub fn room_of(labels: &BTreeMap<String, String>) -> Option<RoomId> {
     labels
         .get(ROOM_KEY)?

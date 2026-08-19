@@ -25,18 +25,9 @@
 //!
 //! The manifest builders and the real client land at M7; the trait and the fake land here so the
 //! lifecycle is testable before either exists.
-// Nothing implements this yet outside the tests: `KubeCluster` and `ensure_room_running` are M7.
-// `expect` rather than `allow` so the attribute itself warns the moment M7 gives it a caller.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "KubeCluster and ensure_room_running land at M7; the fake exercises this now"
-    )
-)]
-
 #[cfg(test)]
 pub mod fake;
+pub mod kube;
 
 use async_trait::async_trait;
 use puna_core::ids::RoomId;
@@ -217,10 +208,28 @@ impl ClusterSnapshot {
         self.deployments.iter().find(|d| d.room_id == Some(room))
     }
 
+    /// Neither of these has a production caller yet: nothing in the room lifecycle asks about a
+    /// Service or a Secret by room — the Deployment is the object the state machine turns on, and the
+    /// other two follow it through ownership. **M9's sweep is what reads them**, to find the ones
+    /// whose owner is gone. The lifecycle tests use them today to assert that ownership landed.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "M9's orphan sweep reads these; the tests already do"
+        )
+    )]
     pub fn service(&self, room: RoomId) -> Option<&RoomService> {
         self.services.iter().find(|s| s.room_id == Some(room))
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "M9's orphan sweep reads these; the tests already do"
+        )
+    )]
     pub fn secret(&self, room: RoomId) -> Option<&RoomSecret> {
         self.secrets.iter().find(|s| s.room_id == Some(room))
     }

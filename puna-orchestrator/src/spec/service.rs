@@ -19,19 +19,13 @@
 //!   * **`allocateLoadBalancerNodePorts: false`**. The default allocates a NodePort per port, and the
 //!     range holds 2768 — two per room means it runs out at around 1400 rooms, on a design whose
 //!     port ranges allow 5000.
-// Consumed by the applier, which lands with `ensure_room_running`.
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the applier lands with ensure_room_running")
-)]
-
 use std::collections::BTreeMap;
 
 use k8s_openapi::api::core::v1::{Secret, Service, ServicePort, ServiceSpec};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 
-use crate::cluster::{OwnerRef, SecretSpec, ServiceSpec as RoomServiceSpec, object_name};
+use crate::cluster::{OwnerRef, SecretSpec, ServiceSpec as RoomServiceSpec};
 use crate::spec::deployment::{PORT_FILTERED, PORT_FULL};
 use crate::spec::{LB_POOL, LB_POOL_KEY, Site};
 
@@ -65,7 +59,7 @@ pub fn build(spec: &RoomServiceSpec, site: &Site) -> Service {
 
     Service {
         metadata: ObjectMeta {
-            name: Some(object_name(spec.room_id)),
+            name: Some(spec.name()),
             namespace: Some(site.namespace.clone()),
             labels: Some(labels),
             annotations: Some(BTreeMap::from([
@@ -103,7 +97,7 @@ pub fn build(spec: &RoomServiceSpec, site: &Site) -> Service {
 pub fn secret(spec: &SecretSpec, site: &Site) -> Secret {
     Secret {
         metadata: ObjectMeta {
-            name: Some(object_name(spec.room_id)),
+            name: Some(spec.name()),
             namespace: Some(site.namespace.clone()),
             labels: Some(crate::spec::labels(spec.room_id)),
             // `None` on the first apply, because the Deployment it would point at does not exist
@@ -143,6 +137,7 @@ fn owner_reference(owner: &OwnerRef) -> OwnerReference {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cluster::object_name;
     use puna_core::ids::RoomId;
 
     fn site() -> Site {

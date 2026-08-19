@@ -15,6 +15,7 @@ mod leader;
 mod plan;
 mod reconcile;
 mod spec;
+mod steps;
 mod storage;
 
 use std::sync::Arc;
@@ -77,8 +78,20 @@ async fn main() -> anyhow::Result<()> {
 
     let health_server = tokio::spawn(health::serve(Arc::clone(&state)));
 
-    let layout = storage::Layout::new(&config.common.data_dir);
-    let result = run(&config, &pool, &layout, &state).await;
+    // Before the lock, so a missing kubeconfig or ServiceAccount fails at startup rather than on the
+    // first room somebody tries to start. The orchestrator cannot do its job without this.
+    let site = spec::Site {
+        namespace: config.namespace.clone(),
+        lb_ip: config.lb_ip.clone(),
+        lb_sharing_key: config.lb_sharing_key.clone(),
+        tls_secret: config.room_tls_secret.clone(),
+        data_pvc: config.data_pvc.clone(),
+    };
+    let cluster: Arc<dyn cluster::ClusterApi> =
+        Arc::new(cluster::kube::KubeCluster::connect(site).await?);
+
+    let reconciler = reconcile::Reconciler::new(&config, pool.clone(), cluster);
+    let result = run(&config, &pool, &reconciler, &state).await;
 
     health_server.abort();
     result
@@ -88,7 +101,7 @@ async fn main() -> anyhow::Result<()> {
 async fn run(
     config: &OrchestratorConfig,
     pool: &puna_core::db::Pool,
-    layout: &storage::Layout,
+    reconciler: &reconcile::Reconciler,
     state: &Arc<health::State>,
 ) -> anyhow::Result<()> {
     loop {
@@ -114,7 +127,7 @@ async fn run(
             Arc::clone(&wake),
         ));
 
-        let outcome = reconcile_until_lost(&lock, pool, layout, state, config, &wake).await;
+        let outcome = reconcile_until_lost(&lock, reconciler, state, config, &wake).await;
 
         listener.abort();
         state.set_leader(false);
@@ -125,8 +138,7 @@ async fn run(
 
 async fn reconcile_until_lost(
     lock: &leader::LeaderLock,
-    pool: &puna_core::db::Pool,
-    layout: &storage::Layout,
+    reconciler: &reconcile::Reconciler,
     state: &Arc<health::State>,
     config: &OrchestratorConfig,
     wake: &Arc<Notify>,
@@ -153,10 +165,12 @@ async fn reconcile_until_lost(
             return Ok(());
         }
 
-        match reconcile::tick(lock, pool, layout, orchestrator).await {
+        match reconciler.tick(lock, orchestrator).await {
             Ok(report) => {
                 state.mark_ticked();
-                if report != reconcile::TickReport::default() {
+                // A tick over a stable namespace reports only its room count, which is not news
+                // every thirty seconds. Anything actually happening is.
+                if report.actions > 0 || report.errors > 0 || report.integrity_faults > 0 {
                     tracing::info!(?report, "reconciled");
                 }
             }

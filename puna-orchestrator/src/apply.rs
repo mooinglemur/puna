@@ -29,17 +29,6 @@
 //! room, and the address is not needed until the pod is ready — which is an image pull and a save
 //! restore away. So a missing address is [`Started::AwaitingAddress`] and the next tick looks again.
 
-// Driven by the tick, which is rewired through `plan()` once `KubeCluster` exists -- the last M7
-// step. Until then the fake-cluster suite below is the only caller. `expect` rather than `allow` so
-// the attribute itself warns when that lands.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the tick rewire, which needs KubeCluster, is the last M7 step"
-    )
-)]
-
 use puna_core::ids::RoomId;
 
 use crate::cluster::{
