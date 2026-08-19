@@ -34,9 +34,13 @@ use puna_core::model::{member, slot, tracker};
 use rocket::http::{Header, Status};
 use rocket::{Responder, State, get, routes};
 
+use askama::Template;
+use askama_web::WebTemplate;
+
 use crate::auth::Session;
 use crate::error::{Error, Result, forbidden, not_found, unauthorized};
 use crate::params::TrackerParam;
+use crate::tpl::TplContext;
 use crate::upstream::{Document, Upstream, UpstreamError};
 
 type Pool = puna_core::db::Pool;
@@ -72,6 +76,48 @@ impl Memo {
 
 /// The largest document that will be written to the shared cache, in bytes.
 pub struct TrackerCacheMax(pub usize);
+
+/// The three pieces of Rocket state every tracker handler needs, as one guard.
+///
+/// Threading them individually made every handler take eight arguments, which is both unreadable
+/// and the kind of list where two same-typed parameters get swapped. A guard is what Rocket offers
+/// for exactly this.
+pub struct TrackerState<'r> {
+    upstream: &'r Upstream,
+    memo: &'r Memo,
+    cache_max: usize,
+}
+
+#[rocket::async_trait]
+impl<'r> rocket::request::FromRequest<'r> for TrackerState<'r> {
+    type Error = Error;
+
+    async fn from_request(
+        request: &'r rocket::Request<'_>,
+    ) -> rocket::request::Outcome<Self, Self::Error> {
+        let missing = |what: &str| {
+            Error::new(
+                Status::InternalServerError,
+                anyhow::anyhow!("no {what} in Rocket state"),
+            )
+        };
+
+        let (Some(upstream), Some(memo), Some(cache_max)) = (
+            request.guard::<&State<Upstream>>().await.succeeded(),
+            request.guard::<&State<Memo>>().await.succeeded(),
+            request.guard::<&State<TrackerCacheMax>>().await.succeeded(),
+        ) else {
+            let e = missing("tracker state");
+            return rocket::outcome::Outcome::Error((e.status, e));
+        };
+
+        rocket::outcome::Outcome::Success(TrackerState {
+            upstream: upstream.inner(),
+            memo: memo.inner(),
+            cache_max: cache_max.0,
+        })
+    }
+}
 
 /// A JSON document, with the caching headers that make the first layer work.
 #[derive(Responder)]
@@ -156,21 +202,9 @@ async fn live(
     session: Session,
     conditional: IfNoneMatch,
     pool: &State<Pool>,
-    upstream: &State<Upstream>,
-    memo: &State<Memo>,
-    cache_max: &State<TrackerCacheMax>,
+    state: TrackerState<'_>,
 ) -> Result<Json> {
-    document(
-        id,
-        session,
-        conditional,
-        pool,
-        upstream,
-        memo,
-        cache_max,
-        Document::Live,
-    )
-    .await
+    document(id, session, conditional, pool, state, Document::Live).await
 }
 
 /// The static document: games, location totals, datapackage checksums.
@@ -180,50 +214,57 @@ async fn statics(
     session: Session,
     conditional: IfNoneMatch,
     pool: &State<Pool>,
-    upstream: &State<Upstream>,
-    memo: &State<Memo>,
-    cache_max: &State<TrackerCacheMax>,
+    state: TrackerState<'_>,
 ) -> Result<Json> {
-    document(
-        id,
-        session,
-        conditional,
-        pool,
-        upstream,
-        memo,
-        cache_max,
-        Document::Static,
-    )
-    .await
+    document(id, session, conditional, pool, state, Document::Static).await
 }
 
-#[expect(clippy::too_many_arguments, reason = "Rocket state, threaded once")]
 async fn document(
     id: TrackerParam,
     session: Session,
     conditional: IfNoneMatch,
     pool: &State<Pool>,
-    upstream: &State<Upstream>,
-    memo: &State<Memo>,
-    cache_max: &State<TrackerCacheMax>,
+    state: TrackerState<'_>,
     which: Document,
 ) -> Result<Json> {
     let mut conn = pool.get().await?;
     let access = access(&mut conn, &session, id.0).await?;
-    let room_id = access.room.id;
 
     // Scoping happens after every cache layer, so the caches hold ONE document per room per kind
     // and a slot view is a projection of it -- rather than one cached document per slot, which
     // would multiply both the upstream fetches and the memory by the room's slot count.
     let scope = access.target.slot_number();
+    let fetched = obtain(&mut conn, &state, &access.room, which).await?;
 
+    Ok(respond(project(fetched.body, scope), which, &conditional))
+}
+
+/// One document, from whichever layer has it.
+struct Fetched {
+    body: String,
+    /// When this was true, if it is no longer. `Some` means **the room did not answer** and this is
+    /// the last thing it said — which for an async is most of its life, and is exactly what the
+    /// page's "as of" banner reports.
+    stale_since: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+async fn obtain(
+    conn: &mut diesel_async::AsyncPgConnection,
+    state: &TrackerState<'_>,
+    room: &Room,
+    which: Document,
+) -> Result<Fetched> {
+    let (upstream, memo, cache_max) = (state.upstream, state.memo, state.cache_max);
     // Layer 3: this process, five seconds.
-    if let Some(body) = memo.get((room_id, which)) {
-        return Ok(respond(project(body, scope), which, &conditional));
+    if let Some(body) = memo.get((room.id, which)) {
+        return Ok(Fetched {
+            body,
+            stale_since: None,
+        });
     }
 
     // Layer 2: the shared cache, honoring pahoa's own window.
-    let cached = tracker::cached(&mut conn, room_id).await?;
+    let cached = tracker::cached(conn, room.id).await?;
     let fresh = cached.as_ref().is_some_and(|c| {
         chrono::Utc::now()
             .signed_duration_since(c.at)
@@ -237,38 +278,280 @@ async fn document(
         && let Some(value) = pick(cache, which)
     {
         let body = value.to_string();
-        memo.put((room_id, which), body.clone());
-        return Ok(respond(project(body, scope), which, &conditional));
+        memo.put((room.id, which), body.clone());
+        return Ok(Fetched {
+            body,
+            stale_since: None,
+        });
     }
 
     // Nothing fresh: ask the room.
-    match fetch(&mut conn, upstream, &access.room, which, cache_max.0).await {
+    match fetch(conn, upstream, room, which, cache_max).await {
         Ok(value) => {
             let body = value.to_string();
-            memo.put((room_id, which), body.clone());
-            Ok(respond(project(body, scope), which, &conditional))
+            memo.put((room.id, which), body.clone());
+            Ok(Fetched {
+                body,
+                stale_since: None,
+            })
         }
         Err(e) => {
-            // **The torn-down room, which for an async is most of its life.** Serving the last
-            // known document is the whole reason the column exists; the page says how old it is,
-            // and deliberately offers no start button -- a tracker's audience is not necessarily
-            // authorized to provision a pod, and a widely-shared link that spins up compute is the
-            // hazard D8 exists to prevent.
-            if let Some(stale) = cached.as_ref().and_then(|c| pick(c, which)) {
+            // **The torn-down room.** Serving the last known document is the whole reason the
+            // column exists; the page says how old it is, and deliberately offers **no start
+            // button** -- a tracker's audience is not necessarily authorized to provision a pod,
+            // and a widely-shared link that spins up compute is the hazard D8 exists to prevent.
+            if let Some(cache) = &cached
+                && let Some(stale) = pick(cache, which)
+            {
                 tracing::debug!(
-                    room = %room_id,
+                    room = %room.id,
                     document = which.as_str(),
                     error = %e,
                     "serving a stale tracker document"
                 );
-                return Ok(respond(
-                    project(stale.to_string(), scope),
-                    which,
-                    &conditional,
-                ));
+                return Ok(Fetched {
+                    body: stale.to_string(),
+                    stale_since: Some(cache.at),
+                });
             }
             Err(unreachable_room(e))
         }
+    }
+}
+
+// ---- the page ---------------------------------------------------------------------------------
+
+#[derive(Template, WebTemplate)]
+#[template(path = "tracker/show.html")]
+pub struct TrackerTemplate {
+    base: TplContext,
+    /// The room's name. **Not its id**, and not its address: the page identifies the multiworld to
+    /// somebody who was given the link, and identifies it to nobody else.
+    room_name: String,
+    /// Set when this is one slot's view, whether reached by the slot's own id or by the
+    /// reference-compatible `/<team>/<player>` path.
+    slot_name: Option<String>,
+    rows: Vec<TrackerRow>,
+    /// `Some` when the room did not answer and this is the last thing it said.
+    as_of: Option<String>,
+    /// How often the page reloads itself, in seconds. Matched to the document's own cache window:
+    /// refreshing faster than the upstream can change is work that buys nothing.
+    refresh_secs: u64,
+}
+
+/// One row of the slot table.
+pub struct TrackerRow {
+    pub slot_number: i32,
+    pub player_name: String,
+    pub game: String,
+    pub is_spectator: bool,
+    pub checks_done: usize,
+    pub checks_total: i64,
+    pub percent: i64,
+    pub status: &'static str,
+    pub last_activity: String,
+    pub hints: usize,
+    /// Whether somebody has claimed this slot in Puna. **The reference cannot show this**, because
+    /// it does not know who is playing — only that a slot exists.
+    pub claimed: bool,
+}
+
+/// The multiworld's tracker, or one slot's.
+#[get("/tracker/<id>")]
+async fn page(
+    id: TrackerParam,
+    session: Session,
+    pool: &State<Pool>,
+    state: TrackerState<'_>,
+) -> Result<TrackerTemplate> {
+    let mut conn = pool.get().await?;
+    let access = access(&mut conn, &session, id.0).await?;
+    let scope = access.target.slot_number();
+    render(&mut conn, &session, &state, access, scope).await
+}
+
+/// The reference implementation's per-slot URL, so tools that construct it keep working.
+///
+/// It leaks nothing new: anyone who can build this path already holds the multiworld's tracker id.
+/// The *other* per-slot form -- a slot's own id -- is the one that discloses nothing about the room,
+/// and both render the same page.
+#[get("/tracker/<id>/<team>/<player>")]
+async fn slot_page(
+    id: TrackerParam,
+    team: i32,
+    player: i32,
+    session: Session,
+    pool: &State<Pool>,
+    state: TrackerState<'_>,
+) -> Result<TrackerTemplate> {
+    let mut conn = pool.get().await?;
+    let access = access(&mut conn, &session, id.0).await?;
+
+    // Pahoa rooms are single-team, as the reference's own default is. Accepting only team 0 keeps
+    // the URL honest rather than silently ignoring a segment somebody meant.
+    if team != 0 {
+        return Err(not_found("no such team"));
+    }
+    // A slot's own id already names its slot; combining it with a different one would be two
+    // answers to one question.
+    if let Some(own) = access.target.slot_number()
+        && own != player
+    {
+        return Err(not_found("no such slot"));
+    }
+
+    render(&mut conn, &session, &state, access, Some(player)).await
+}
+
+async fn render(
+    conn: &mut diesel_async::AsyncPgConnection,
+    session: &Session,
+    state: &TrackerState<'_>,
+    access: Access,
+    scope: Option<i32>,
+) -> Result<TrackerTemplate> {
+    // Both documents, because a slot table needs progress from one and games and totals from the
+    // other. Each goes through the same three cache layers, so the common case costs no upstream
+    // call at all.
+    let live = obtain(conn, state, &access.room, Document::Live).await?;
+    let statics = obtain(conn, state, &access.room, Document::Static).await?;
+
+    let slots = slot::list(conn, access.room.id).await?;
+    let live_doc: serde_json::Value = serde_json::from_str(&live.body).unwrap_or_default();
+    let static_doc: serde_json::Value = serde_json::from_str(&statics.body).unwrap_or_default();
+
+    let mut rows = rows(&slots, &live_doc, &static_doc);
+    let mut slot_name = None;
+    if let Some(slot_number) = scope {
+        rows.retain(|row| row.slot_number == slot_number);
+        slot_name = rows.first().map(|row| row.player_name.clone());
+    }
+
+    Ok(TrackerTemplate {
+        base: TplContext::new(session),
+        room_name: access.room.name.clone(),
+        slot_name,
+        rows,
+        // The older of the two, because a page is only as current as its stalest half.
+        as_of: live
+            .stale_since
+            .into_iter()
+            .chain(statics.stale_since)
+            .min()
+            .map(|at| format!("{}", at.format("%Y-%m-%d %H:%M UTC"))),
+        refresh_secs: Document::Live.ttl().as_secs(),
+    })
+}
+
+/// Merge Puna's slot list with the room's two documents.
+///
+/// **Puna's list leads.** The documents describe only what pahoa knows about — and a spectator has
+/// no progress to report, so it appears in neither per-player array — but a spectator is still a
+/// slot somebody claimed, and a tracker that silently omitted it would be describing a different
+/// room from the one on the room page.
+fn rows(
+    slots: &[puna_core::model::slot::Slot],
+    live: &serde_json::Value,
+    statics: &serde_json::Value,
+) -> Vec<TrackerRow> {
+    slots
+        .iter()
+        .map(|slot| {
+            let n = i64::from(slot.slot_number);
+            let checks_done = array_for(live, "player_checks_done", n)
+                .and_then(|entry| entry.get("locations").and_then(|l| l.as_array()))
+                .map_or(0, Vec::len);
+            let checks_total = array_for(statics, "player_locations_total", n)
+                .and_then(|entry| {
+                    entry
+                        .get("total_locations")
+                        .and_then(serde_json::Value::as_i64)
+                })
+                .unwrap_or(0);
+            let hints = array_for(live, "hints", n)
+                .and_then(|entry| entry.get("hints").and_then(|h| h.as_array()))
+                .map_or(0, Vec::len);
+
+            TrackerRow {
+                slot_number: slot.slot_number,
+                // From Puna's row, not the document: the document's `alias` is whatever the client
+                // last called itself, and the roster is what the room page shows.
+                player_name: slot.player_name.clone(),
+                game: array_for(statics, "player_game", n)
+                    .and_then(|entry| entry.get("game").and_then(|g| g.as_str()))
+                    .unwrap_or(&slot.game)
+                    .to_string(),
+                is_spectator: slot.kind == puna_core::artifact::SlotKind::Spectator,
+                checks_done,
+                checks_total,
+                percent: if checks_total > 0 {
+                    (checks_done as i64 * 100 / checks_total).clamp(0, 100)
+                } else {
+                    0
+                },
+                status: status_word(
+                    array_for(live, "player_status", n)
+                        .and_then(|entry| entry.get("status").and_then(serde_json::Value::as_i64)),
+                ),
+                last_activity: activity(
+                    array_for(live, "activity_timers", n)
+                        .and_then(|entry| entry.get("time").and_then(|t| t.as_str())),
+                ),
+                hints,
+                claimed: slot.owner_id.is_some(),
+            }
+        })
+        .collect()
+}
+
+/// The entry for one slot in one of the document's per-player arrays.
+fn array_for<'a>(
+    document: &'a serde_json::Value,
+    key: &str,
+    slot_number: i64,
+) -> Option<&'a serde_json::Value> {
+    document
+        .get(key)?
+        .as_array()?
+        .iter()
+        .find(|entry| entry.get("player").and_then(serde_json::Value::as_i64) == Some(slot_number))
+}
+
+/// Archipelago's `ClientStatus`, in words.
+///
+/// The numbers are the protocol's and are sparse (0, 5, 10, 20, 30) because the reference leaves
+/// room between them. An unknown value renders as "unknown" rather than as itself: a number in this
+/// column would mean nothing to the person reading it.
+fn status_word(status: Option<i64>) -> &'static str {
+    match status {
+        Some(5) => "connected",
+        Some(10) => "ready",
+        Some(20) => "playing",
+        Some(30) => "goal",
+        _ => "unknown",
+    }
+}
+
+/// An RFC 1123 timestamp, as an age.
+///
+/// **`null` means never, and never is not 1970.** A slot that has genuinely not acted reports null,
+/// which the reference renders as nothing at all — and rendering it as an epoch date is the classic
+/// way to make an untouched slot look like an abandoned one.
+fn activity(time: Option<&str>) -> String {
+    let Some(time) = time else {
+        return "never".to_string();
+    };
+    let Ok(at) = chrono::DateTime::parse_from_rfc2822(time) else {
+        return "unknown".to_string();
+    };
+
+    let age = chrono::Utc::now().signed_duration_since(at.with_timezone(&chrono::Utc));
+    let minutes = age.num_minutes();
+    match minutes {
+        ..1 => "just now".to_string(),
+        1..60 => format!("{minutes}m ago"),
+        60..2880 => format!("{}h ago", age.num_hours()),
+        _ => format!("{}d ago", age.num_days()),
     }
 }
 
@@ -466,7 +749,7 @@ impl<'r> rocket::request::FromRequest<'r> for IfNoneMatch {
 }
 
 pub fn routes() -> Vec<rocket::Route> {
-    routes![live, statics]
+    routes![page, slot_page, live, statics]
 }
 
 #[cfg(test)]
@@ -581,6 +864,152 @@ mod tests {
         // A cached document this build cannot parse must not widen into the multiworld's.
         assert_eq!(project("not json".to_string(), Some(1)), "{}");
         assert_eq!(project("not json".to_string(), None), "not json");
+    }
+
+    fn slots() -> Vec<puna_core::model::slot::Slot> {
+        use puna_core::artifact::SlotKind;
+        use puna_core::ids::TrackerId;
+
+        let room_id = RoomId::new();
+        vec![
+            puna_core::model::slot::Slot {
+                room_id,
+                slot_number: 1,
+                player_name: "Troy".into(),
+                game: "A Link to the Past".into(),
+                kind: SlotKind::Player,
+                password: Some("a-secret".into()),
+                owner_id: Some(7),
+                claim_token: Some("a-claim-token".into()),
+                claimed_at: None,
+                tracker_id: TrackerId::new(),
+            },
+            puna_core::model::slot::Slot {
+                room_id,
+                slot_number: 4,
+                player_name: "Watcher".into(),
+                game: "Archipelago".into(),
+                kind: SlotKind::Spectator,
+                password: None,
+                owner_id: None,
+                claim_token: Some("another-token".into()),
+                claimed_at: None,
+                tracker_id: TrackerId::new(),
+            },
+        ]
+    }
+
+    fn statics() -> serde_json::Value {
+        serde_json::json!({
+            "player_game": [{"team": 0, "player": 1, "game": "A Link to the Past"}],
+            "player_locations_total": [{"team": 0, "player": 1, "total_locations": 216}],
+        })
+    }
+
+    #[test]
+    fn a_row_is_built_from_both_documents_and_punas_own_roster() {
+        let rows = rows(&slots(), &multiworld(), &statics());
+
+        assert_eq!(
+            rows.len(),
+            2,
+            "Puna's roster leads, so the spectator is here"
+        );
+
+        let player = &rows[0];
+        assert_eq!(player.player_name, "Troy");
+        assert_eq!((player.checks_done, player.checks_total), (3, 216));
+        assert_eq!(player.percent, 1);
+        assert_eq!(player.hints, 1);
+        assert!(
+            player.claimed,
+            "claim state is what the reference cannot show"
+        );
+
+        // A spectator appears in neither per-player array, and must not therefore read as a player
+        // who has done nothing.
+        let spectator = &rows[1];
+        assert!(spectator.is_spectator);
+        assert_eq!(spectator.checks_total, 0);
+        assert!(!spectator.claimed);
+    }
+
+    /// **The property this whole tier exists for.** A tracker link is the one meant for broad
+    /// sharing, so the page must give away neither the multiworld's address nor the room's URL.
+    #[test]
+    fn the_rendered_page_leaks_neither_the_address_nor_the_room() {
+        let room_id = RoomId::new();
+        let page = TrackerTemplate {
+            base: TplContext {
+                is_logged_in: false,
+                is_admin: false,
+                username: String::new(),
+                version: "test",
+                static_version: "test",
+            },
+            room_name: "Friday async".into(),
+            slot_name: None,
+            rows: rows(&slots(), &multiworld(), &statics()),
+            as_of: Some("2026-08-19 16:00 UTC".into()),
+            refresh_secs: 60,
+        };
+
+        let html = page.render().expect("renders");
+
+        assert!(
+            !html.contains(&room_id.to_string()),
+            "the room id is in the page"
+        );
+        assert!(!html.contains("/room/"), "a link back to the room page");
+        assert!(!html.contains("mw."), "the advertised hostname");
+        // No `host:port` in any shape: the ports are five digits in the 40000-49998 range.
+        assert!(
+            !regex_free_port_like(&html),
+            "something that reads as an address: {html}"
+        );
+
+        // And no credential from the slot rows, which carry a password and a claim token.
+        assert!(!html.contains("a-secret"));
+        assert!(!html.contains("a-claim-token"));
+
+        // What it *does* say.
+        assert!(html.contains("Friday async"));
+        assert!(html.contains("Troy"));
+        assert!(html.contains("2026-08-19 16:00 UTC"), "the as-of banner");
+        // No start button, however the room is doing: a tracker's audience is not necessarily
+        // authorized to provision a pod, and a widely-shared link that spins up compute is exactly
+        // the hazard D8 exists to prevent.
+        assert!(
+            !html.contains("/start"),
+            "a start control reached the tracker"
+        );
+    }
+
+    /// A crude port-shaped-number check, so the leak test does not need a regex dependency.
+    fn regex_free_port_like(html: &str) -> bool {
+        html.split(|c: char| !c.is_ascii_digit())
+            .filter_map(|run| run.parse::<u32>().ok())
+            .any(|n| (40000..=49999).contains(&n))
+    }
+
+    #[test]
+    fn statuses_and_activity_read_as_words() {
+        assert_eq!(status_word(Some(30)), "goal");
+        assert_eq!(status_word(Some(20)), "playing");
+        // A value from a newer protocol renders as a word, never as itself: a number in that column
+        // would mean nothing to the person reading it.
+        assert_eq!(status_word(Some(99)), "unknown");
+        assert_eq!(status_word(None), "unknown");
+
+        // `null` is never, and never is not 1970 -- rendering an epoch date would make an untouched
+        // slot look like an abandoned one.
+        assert_eq!(activity(None), "never");
+        assert_eq!(activity(Some("not a date")), "unknown");
+
+        // pahoa emits RFC 1123 with a `GMT` zone, which is what this has to parse.
+        let hour_ago = chrono::Utc::now() - chrono::TimeDelta::hours(1);
+        let stamp = hour_ago.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+        assert_eq!(activity(Some(&stamp)), "1h ago");
     }
 
     /// A caller presenting the current ETag gets a 304 and no body, which is the layer that removes

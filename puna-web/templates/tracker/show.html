@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}{{ room_name }} &mdash; tracker{% endblock %}
+{% block content %}
+
+{# NOTHING here links to the room or names its address. A tracker link is the one meant for broad
+   sharing -- stream chats, spectators -- so the room page's URL and the multiworld's host:port are
+   deliberately absent, and there is no start button: this audience is not necessarily authorized to
+   provision a pod. #}
+<h1>{{ room_name }}</h1>
+{% if let Some(slot) = slot_name %}
+<p class="hint">Showing{{+ slot }}&rsquo;s progress.</p>
+{% endif %}
+
+{% if let Some(at) = as_of %}
+<p class="notice"><strong>As of{{+ at }}</strong> &mdash; this room is not currently running, so
+this is the last state it reported. Members can start it from the room page.</p>
+{% endif %}
+
+<table class="slots">
+<thead><tr>
+<th>#</th><th>Player</th><th>Game</th><th>Checks</th><th>Status</th><th>Hints</th><th>Last seen</th>
+</tr></thead>
+<tbody>
+{% for row in rows %}
+<tr>
+<td>{{ row.slot_number }}</td>
+<td>
+{{ row.player_name }}
+{% if !row.claimed %}<span class="tag">unclaimed</span>{% endif %}
+</td>
+<td>
+{{ row.game }}
+{% if row.is_spectator %}<span class="tag">spectator</span>{% endif %}
+</td>
+<td>
+{% if row.is_spectator %}
+<span class="hint">&mdash;</span>
+{% else %}
+{{ row.checks_done }} / {{ row.checks_total }}
+<span class="hint">({{ row.percent }}%)</span>
+{% endif %}
+</td>
+<td>{{ row.status }}</td>
+<td>{% if row.is_spectator %}<span class="hint">&mdash;</span>{% else %}{{ row.hints }}{% endif %}</td>
+<td>{{ row.last_activity }}</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+
+{% if rows.is_empty() %}
+<p>This room has no slots to show yet.</p>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{# No JavaScript at all: the document behind this page cannot change faster than its own cache
+   window, so reloading on that window is exactly as live as polling would be, and works with
+   scripting turned off. Pahoa's planned WebSocket delta feed is what replaces this, and replacing a
+   meta refresh with a socket is a smaller change than replacing a poller with one. #}
+<meta http-equiv="refresh" content="{{ refresh_secs }}">
+{% endblock %}
