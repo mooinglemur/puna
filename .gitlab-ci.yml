@@ -156,13 +156,25 @@ schema-drift:
     CARGO_HOME: $CI_PROJECT_DIR/.cargo
     DATABASE_URL: postgres://puna:puna@postgres:5432/puna
   script:
+    # CARGO_HOME is redirected into the project directory so cargo's registry can be cached, and
+    # that moves the install root with it: `cargo install` writes to $CARGO_HOME/bin, which is NOT
+    # the image's /usr/local/cargo/bin and is not on PATH. Without this, diesel installs fine and
+    # then the next line is `diesel: command not found`.
+    - export PATH="$CARGO_HOME/bin:$PATH"
     - cargo install diesel_cli --no-default-features --features postgres --locked
+    # Capture the COMMITTED schema before diesel can touch the working tree.
+    #
+    # This ordering is the whole check. `diesel migration run` REGENERATES
+    # puna-core/src/schema.rs in place, because diesel.toml sets print_schema.file -- verified by
+    # putting a marker line in the file and watching it disappear. So comparing the on-disk file
+    # against `print-schema` output compares two freshly generated files, which are identical by
+    # construction: the job passes unconditionally and asserts nothing.
+    - git show HEAD:puna-core/src/schema.rs > /tmp/schema.committed.rs
     - diesel migration run --migration-dir puna-core/migrations
-    - diesel print-schema > /tmp/schema.rs
-    # Compare the regenerated schema against the committed one. `diff` rather than
-    # `git diff --exit-code` so the failure prints exactly which lines drifted.
+    - diesel print-schema > /tmp/schema.generated.rs
+    # `diff` rather than `git diff --exit-code` so the failure prints exactly which lines drifted.
     - |
-      if ! diff -u puna-core/src/schema.rs /tmp/schema.rs; then
+      if ! diff -u /tmp/schema.committed.rs /tmp/schema.generated.rs; then
         echo
         echo "puna-core/src/schema.rs is out of date with the migrations."
         echo "Regenerate it -- see the instructions at the top of diesel.toml -- and commit."
