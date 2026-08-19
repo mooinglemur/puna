@@ -71,6 +71,7 @@ pub const PAHOA_SERVE_OPTS: &[Opt] = &[
     value("--tls-key"),
     flag("--allow-plaintext"),
     flag("--open-tracker"),
+    flag("--journal"),
     value("--password"),
     value("--server-password"),
     value("--hint-cost"),
@@ -244,7 +245,23 @@ pub fn serve(spec: &RoomSpec) -> Vec<String> {
         .value("--snapshot", SNAPSHOT_PATH)
         .value("--tls-cert", TLS_CERT_PATH)
         .value("--tls-key", TLS_KEY_PATH)
-        .value("--log-format", LOG_FORMAT);
+        .value("--log-format", LOG_FORMAT)
+        // On every room, always. `history.jsonl` in the save directory: one JSON line per check,
+        // appended across every restart, which is the organizer-facing answer to "when did each
+        // check happen".
+        //
+        // **Deliberately not the log stream**, and the reason is access rather than durability.
+        // Loki has no label-level authorization, so "this organizer reads this room and nothing
+        // else" is not something the store can enforce; its retention is a platform setting an
+        // async room outlives; and a restarted room is a new pod, so reassembling one room's
+        // history from pod logs needs a stable label promoted through the shipper. A file in the
+        // room's own directory needs none of that.
+        //
+        // Two consequences for Puna. It needs `--save-dir`, which is above and always passed. And
+        // **it grows monotonically and pahoa never prunes it** -- about 264 bytes per check, so
+        // ~6 MB for a 96-slot seed and ~90 MB for a 2000-slot one, on a volume whose quota is
+        // shared across every room. This is the file that will find that quota first.
+        .flag("--journal");
 
     if spec.use_embedded_options {
         // Load-bearing rather than cosmetic: precedence is environment → seed → argv, so a seed's
@@ -290,6 +307,7 @@ mod tests {
                 "--tls-cert=/etc/pahoa/tls/tls.crt",
                 "--tls-key=/etc/pahoa/tls/tls.key",
                 "--log-format=json",
+                "--journal",
                 "--use-embedded-options",
                 "/var/lib/pahoa/seed.archipelago",
             ]
@@ -357,6 +375,23 @@ mod tests {
     #[test]
     fn the_log_format_is_json() {
         assert!(serve(&spec()).contains(&"--log-format=json".to_string()));
+    }
+
+    /// Every room, unconditionally. A room started without it has a history with a hole in it that
+    /// nothing can fill in afterwards — the events are gone, not merely unrecorded.
+    #[test]
+    fn the_journal_is_always_on() {
+        let mut spec = spec();
+        assert!(serve(&spec).contains(&"--journal".to_string()));
+
+        // Not tied to any room setting: there is no configuration under which a room should keep
+        // no history.
+        spec.wants_filtered = false;
+        spec.use_embedded_options = false;
+        assert!(serve(&spec).contains(&"--journal".to_string()));
+
+        // A flag, not a value option -- pahoa refuses a value on it.
+        assert!(!serve(&spec).iter().any(|a| a.starts_with("--journal=")));
     }
 
     /// One statement of a path, used by both the argv and the mounts.

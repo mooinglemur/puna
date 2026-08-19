@@ -110,8 +110,13 @@ pub fn room_of(labels: &BTreeMap<String, String>) -> Option<RoomId> {
 
 /// The room's own state directory: `rooms/<id>` on the shared volume, by `subPath`.
 ///
-/// Holds one Puna-written file and two of pahoa's. **Puna never writes `room.lock` or `room.save`.**
+/// Holds one Puna-written file and three of pahoa's. **Puna never writes `room.lock`, `room.save`
+/// or `history.jsonl`.**
 pub const SAVE_DIR: &str = "/var/lib/pahoa";
+
+// The journal is `history.jsonl` inside SAVE_DIR, and Puna never names that path: pahoa derives it
+// from `--save-dir` itself. The constant lands with its reader -- the organizer download, which
+// reaches it as `rooms/<id>/history.jsonl` on the volume rather than at the container's path.
 
 /// The seed, copied in at provisioning so a room is self-contained — generation retention can never
 /// make an existing room unstartable.
