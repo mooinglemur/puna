@@ -809,3 +809,446 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod db_tests {
+    use super::*;
+    use crate::cluster::fake::FakeCluster;
+    use crate::plan::{Action, IdleReason, Step};
+    use crate::testdb::{self, NewRoom};
+    use puna_core::db::Pool;
+
+    fn site() -> Site {
+        Site {
+            namespace: "puna-dev".into(),
+            lb_ip: "38.246.56.121".into(),
+            lb_sharing_key: "ap-lobby-public".into(),
+            tls_secret: "puna-room-tls".into(),
+            data_pvc: "puna-data".into(),
+        }
+    }
+
+    fn context<'a>(
+        pool: &'a Pool,
+        cluster: &'a FakeCluster,
+        layout: &'a Layout,
+        site: &'a Site,
+    ) -> Context<'a> {
+        Context {
+            pool,
+            cluster,
+            layout,
+            site,
+            environment: Environment::Dev,
+            advertise_host: "mw.example",
+            orchestrator: Orchestrator::assume_leader(),
+            pahoa_image: "pahoa:test",
+        }
+    }
+
+    async fn action(pool: &Pool, room: RoomId, step: Step) -> Action {
+        let mut conn = pool.get().await.expect("connection");
+        Action {
+            room,
+            lock_key: testdb::lock_key(&mut conn, room).await,
+            step,
+        }
+    }
+
+    /// The directory lands before the row claims it, and the row's claim is what `provisioned_at`
+    /// means. A crash between the two is recoverable; the reverse order is an `integrity_fault`.
+    #[tokio::test]
+    async fn provisioning_creates_the_directory_and_then_claims_it() {
+        testdb::with_db(|pool| async move {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let layout = Layout::new(tmp.path());
+            let cluster = FakeCluster::new();
+            let site = site();
+            let ctx = context(&pool, &cluster, &layout, &site);
+
+            let mut conn = pool.get().await.expect("connection");
+            let generation = testdb::insert_generation(&mut conn, &layout, 4).await;
+            let room = testdb::insert_room(&mut conn, generation, NewRoom::default()).await;
+
+            let outcome = execute(&ctx, &action(&pool, room, Step::Provision).await)
+                .await
+                .expect("provision");
+            assert_eq!(outcome, Outcome::Done);
+
+            let observed = testdb::observed(&mut conn, room).await.expect("the room");
+            assert_eq!(observed.state, "idle");
+            assert!(observed.provisioned_at.is_some());
+            assert!(
+                layout.room(room).join("seed.archipelago").exists(),
+                "the seed is copied in, so a room is self-contained"
+            );
+            assert!(
+                testdb::event_kinds(&mut conn, room)
+                    .await
+                    .contains(&"provisioned".to_string())
+            );
+
+            // Level-triggered: running it again is a no-op rather than an error.
+            execute(&ctx, &action(&pool, room, Step::Provision).await)
+                .await
+                .expect("second provision");
+            assert_eq!(
+                testdb::observed(&mut conn, room).await.unwrap().state,
+                "idle"
+            );
+        })
+        .await;
+    }
+
+    /// The whole start path, against the fake: a port, the objects, the uid written down, and a
+    /// room that says where it will be.
+    #[tokio::test]
+    async fn starting_allocates_a_port_and_records_what_it_created() {
+        testdb::with_db(|pool| async move {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let layout = Layout::new(tmp.path());
+            let cluster = FakeCluster::new();
+            let site = site();
+            let ctx = context(&pool, &cluster, &layout, &site);
+
+            let mut conn = pool.get().await.expect("connection");
+            let generation = testdb::insert_generation(&mut conn, &layout, 4).await;
+            let room = testdb::insert_room(
+                &mut conn,
+                generation,
+                NewRoom {
+                    state: "idle",
+                    desired: "running",
+                    ..Default::default()
+                },
+            )
+            .await;
+            testdb::insert_slot(&mut conn, room, 1, None).await;
+
+            execute(&ctx, &action(&pool, room, Step::Start).await)
+                .await
+                .expect("start");
+
+            let observed = testdb::observed(&mut conn, room).await.expect("the room");
+            assert_eq!(observed.state, "starting");
+            assert_eq!(observed.advertised_host.as_deref(), Some("mw.example"));
+
+            let port = testdb::reservation(&mut conn, room)
+                .await
+                .expect("a reservation");
+            assert_eq!(observed.advertised_port, Some(port));
+            // The adjacent half of the pair, never allocated separately.
+            assert_eq!(observed.advertised_filtered_port, Some(port + 1));
+
+            // The uid and hash are persisted, which is what makes a crash here recoverable.
+            assert!(observed.deployment_uid.is_some());
+            assert!(observed.spec_hash.is_some());
+
+            // And the cluster has exactly the three objects, all owned by that uid.
+            let snapshot = cluster.snapshot().await.expect("snapshot");
+            assert_eq!(
+                snapshot.deployment(room).map(|d| d.uid.clone()),
+                observed.deployment_uid
+            );
+            assert_eq!(
+                snapshot.service(room).and_then(|s| s.owner_uid.clone()),
+                observed.deployment_uid
+            );
+            assert_eq!(
+                snapshot.secret(room).and_then(|s| s.owner_uid.clone()),
+                observed.deployment_uid
+            );
+        })
+        .await;
+    }
+
+    /// **The fail-closed rule, end to end.** A per-slot room with a slot that has no password would
+    /// render a map that locks that player out, so the Secret builder refuses and the room lands in
+    /// `failed` with the slots named -- rather than starting and quietly turning a player away.
+    #[tokio::test]
+    async fn an_incomplete_slot_password_map_fails_the_room_rather_than_starting_it() {
+        testdb::with_db(|pool| async move {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let layout = Layout::new(tmp.path());
+            let cluster = FakeCluster::new();
+            let site = site();
+            let ctx = context(&pool, &cluster, &layout, &site);
+
+            let mut conn = pool.get().await.expect("connection");
+            let generation = testdb::insert_generation(&mut conn, &layout, 2).await;
+            let room = testdb::insert_room(
+                &mut conn,
+                generation,
+                NewRoom {
+                    state: "idle",
+                    desired: "running",
+                    slot_auth: "per_slot",
+                },
+            )
+            .await;
+            testdb::insert_slot(&mut conn, room, 1, Some("has-one")).await;
+            testdb::insert_slot(&mut conn, room, 2, None).await;
+
+            execute(&ctx, &action(&pool, room, Step::Start).await)
+                .await
+                .expect("the step itself succeeds; the room fails");
+
+            let observed = testdb::observed(&mut conn, room).await.expect("the room");
+            assert_eq!(observed.state, "failed");
+            let error = observed.last_error.expect("a reason");
+            assert!(error.contains("[2]"), "the failing slot is named: {error}");
+            assert_eq!(observed.failure_count, 1);
+            assert!(observed.retry_after.is_some(), "and it will be retried");
+
+            // Nothing was created: a room that cannot be configured correctly must not run.
+            assert!(
+                cluster
+                    .snapshot()
+                    .await
+                    .expect("snapshot")
+                    .deployment(room)
+                    .is_none(),
+                "no Deployment for a room whose Secret was refused"
+            );
+        })
+        .await;
+    }
+
+    /// The reservation is the point of the reservation table: a room that goes idle keeps its port,
+    /// because coming back on the same address is the requirement the whole design rests on.
+    #[tokio::test]
+    async fn going_idle_forgets_the_deployment_and_keeps_the_port() {
+        testdb::with_db(|pool| async move {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let layout = Layout::new(tmp.path());
+            let cluster = FakeCluster::new();
+            let site = site();
+            let ctx = context(&pool, &cluster, &layout, &site);
+
+            let mut conn = pool.get().await.expect("connection");
+            let generation = testdb::insert_generation(&mut conn, &layout, 4).await;
+            let room = testdb::insert_room(
+                &mut conn,
+                generation,
+                NewRoom {
+                    state: "idle",
+                    desired: "running",
+                    ..Default::default()
+                },
+            )
+            .await;
+            testdb::insert_slot(&mut conn, room, 1, None).await;
+
+            execute(&ctx, &action(&pool, room, Step::Start).await)
+                .await
+                .expect("start");
+            let port = testdb::reservation(&mut conn, room).await.expect("a port");
+
+            execute(
+                &ctx,
+                &action(&pool, room, Step::MarkIdle(IdleReason::DeploymentGone)).await,
+            )
+            .await
+            .expect("mark idle");
+
+            let observed = testdb::observed(&mut conn, room).await.expect("the room");
+            assert_eq!(observed.state, "idle");
+            assert_eq!(
+                observed.advertised_port, None,
+                "not reachable, so not advertised"
+            );
+            assert_eq!(observed.deployment_uid, None);
+            assert_eq!(
+                observed.spec_hash, None,
+                "the row stops claiming a Deployment"
+            );
+
+            assert_eq!(
+                testdb::reservation(&mut conn, room).await,
+                Some(port),
+                "the room must come back on the same port"
+            );
+        })
+        .await;
+    }
+
+    /// Deletion: the objects go, the directory moves to the trash, the row goes, and the pair is
+    /// released -- in that order, so a crash leaves something recoverable.
+    #[tokio::test]
+    async fn deleting_a_room_trashes_its_directory_and_releases_its_pair() {
+        testdb::with_db(|pool| async move {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let layout = Layout::new(tmp.path());
+            let cluster = FakeCluster::new();
+            let site = site();
+            let ctx = context(&pool, &cluster, &layout, &site);
+
+            let mut conn = pool.get().await.expect("connection");
+            let generation = testdb::insert_generation(&mut conn, &layout, 4).await;
+            let room = testdb::insert_room(
+                &mut conn,
+                generation,
+                NewRoom {
+                    state: "idle",
+                    desired: "running",
+                    ..Default::default()
+                },
+            )
+            .await;
+            testdb::insert_slot(&mut conn, room, 1, None).await;
+
+            execute(&ctx, &action(&pool, room, Step::Provision).await)
+                .await
+                .expect("provision");
+            execute(&ctx, &action(&pool, room, Step::Start).await)
+                .await
+                .expect("start");
+            let port = testdb::reservation(&mut conn, room).await.expect("a port");
+
+            let deletion = action(&pool, room, Step::Delete).await;
+            execute(&ctx, &deletion).await.expect("delete");
+
+            assert!(
+                testdb::observed(&mut conn, room).await.is_none(),
+                "the row is gone"
+            );
+            assert!(cluster.object_names().is_empty(), "and so are its objects");
+            assert!(!layout.room(room).exists(), "the directory moved");
+            assert!(
+                std::fs::read_dir(layout.trash())
+                    .expect("trash")
+                    .filter_map(std::result::Result::ok)
+                    .any(|entry| entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(&room.to_string())),
+                "the directory is recoverable from the trash, not destroyed"
+            );
+
+            // The pair is free again -- released by the FK's ON DELETE SET NULL -- and its place in
+            // the LRU order is untouched, so it is not handed out ahead of never-used pairs.
+            #[derive(diesel::QueryableByName)]
+            struct Row {
+                #[diesel(sql_type = Bool)]
+                free: bool,
+                #[diesel(sql_type = Bool)]
+                never_used: bool,
+            }
+            let rows: Vec<Row> = diesel::sql_query(
+                "SELECT room_id IS NULL AS free, last_activity > '-infinity' AS never_used
+                   FROM port_reservations WHERE environment = 'dev' AND base_port = $1",
+            )
+            .bind::<Integer, _>(port)
+            .load(&mut conn)
+            .await
+            .expect("read the reservation");
+            let row = rows.into_iter().next().expect("the pair");
+            assert!(row.free);
+            assert!(row.never_used, "a released pair keeps its last_activity");
+        })
+        .await;
+    }
+
+    /// Failure, backoff, and the retry that clears it.
+    #[tokio::test]
+    async fn a_failure_backs_off_and_a_retry_returns_the_room_to_idle() {
+        testdb::with_db(|pool| async move {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let layout = Layout::new(tmp.path());
+            let cluster = FakeCluster::new();
+            let site = site();
+            let ctx = context(&pool, &cluster, &layout, &site);
+
+            let mut conn = pool.get().await.expect("connection");
+            let generation = testdb::insert_generation(&mut conn, &layout, 4).await;
+            let room = testdb::insert_room(
+                &mut conn,
+                generation,
+                NewRoom {
+                    state: "starting",
+                    desired: "running",
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            execute(&ctx, &action(&pool, room, Step::FailStart).await)
+                .await
+                .expect("fail");
+
+            let failed = testdb::observed(&mut conn, room).await.expect("the room");
+            assert_eq!(failed.state, "failed");
+            assert_eq!(failed.failure_count, 1);
+            let retry_after = failed.retry_after.expect("a backoff");
+            assert!(
+                retry_after > chrono::Utc::now(),
+                "the backoff is in the future"
+            );
+
+            execute(&ctx, &action(&pool, room, Step::Retry).await)
+                .await
+                .expect("retry");
+
+            let retried = testdb::observed(&mut conn, room).await.expect("the room");
+            assert_eq!(retried.state, "idle");
+            assert_eq!(retried.retry_after, None);
+            assert_eq!(
+                retried.failure_count, 1,
+                "the count survives, so the backoff keeps growing until a start succeeds"
+            );
+        })
+        .await;
+    }
+
+    /// The degraded counter lives on the row, so a leader handover does not reset it.
+    #[tokio::test]
+    async fn not_ready_sweeps_accumulate_and_then_degrade() {
+        testdb::with_db(|pool| async move {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let layout = Layout::new(tmp.path());
+            let cluster = FakeCluster::new();
+            let site = site();
+            let ctx = context(&pool, &cluster, &layout, &site);
+
+            let mut conn = pool.get().await.expect("connection");
+            let generation = testdb::insert_generation(&mut conn, &layout, 4).await;
+            let room = testdb::insert_room(
+                &mut conn,
+                generation,
+                NewRoom {
+                    state: "running",
+                    desired: "running",
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            execute(&ctx, &action(&pool, room, Step::NotReady).await)
+                .await
+                .expect("not ready");
+            execute(&ctx, &action(&pool, room, Step::NotReady).await)
+                .await
+                .expect("not ready");
+            let counted = testdb::observed(&mut conn, room).await.expect("the room");
+            assert_eq!(counted.not_ready_sweeps, 2);
+            assert_eq!(counted.state, "running", "not degraded yet");
+
+            execute(&ctx, &action(&pool, room, Step::MarkDegraded).await)
+                .await
+                .expect("degraded");
+            let degraded = testdb::observed(&mut conn, room).await.expect("the room");
+            assert_eq!(degraded.state, "degraded");
+            assert_eq!(degraded.not_ready_sweeps, 3);
+
+            // Coming back clears the counter and the failure history both.
+            execute(&ctx, &action(&pool, room, Step::MarkRunning).await)
+                .await
+                .expect("running");
+            let running = testdb::observed(&mut conn, room).await.expect("the room");
+            assert_eq!(running.state, "running");
+            assert_eq!(running.not_ready_sweeps, 0);
+            assert_eq!(running.failure_count, 0);
+        })
+        .await;
+    }
+}

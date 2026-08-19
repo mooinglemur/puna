@@ -290,6 +290,77 @@ pub fn sweep_temp_dirs(
     Ok(removed)
 }
 
+/// Every generation directory on the volume, by content hash.
+///
+/// For counting what nothing references. **Never for deleting**: a generation is content-addressed
+/// and shared between every room built from it, so reclaiming one is an administrator's action with
+/// a listing in front of it — and a room whose generation was removed is permanently unstartable,
+/// which is the failure D2 exists to prevent.
+pub fn list_generation_dirs(layout: &Layout) -> Result<Vec<String>, StorageError> {
+    let generations = layout.generations();
+    if !generations.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let entries = io(
+        std::fs::read_dir(&generations),
+        format!("reading {}", generations.display()),
+    )?;
+
+    Ok(entries
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        // `.tmp-*` is an ingest in flight, which is not a generation and is swept by its own rule.
+        .filter(|name| !name.starts_with(".tmp-"))
+        .collect())
+}
+
+/// Remove trashed room directories older than `retention`, returning how many went.
+///
+/// **This is the one place Puna destroys a player's progress**, which is why it is the slowest and
+/// most conservative thing here: a room's directory is moved to the trash on deletion rather than
+/// removed, and only time takes it from there. The window is the undo.
+pub fn sweep_trash(layout: &Layout, retention: std::time::Duration) -> Result<usize, StorageError> {
+    let trash = layout.trash();
+    if !trash.is_dir() {
+        return Ok(0);
+    }
+
+    let entries = io(
+        std::fs::read_dir(&trash),
+        format!("reading {}", trash.display()),
+    )?;
+    let now = std::time::SystemTime::now();
+    let mut removed = 0;
+
+    for entry in entries.flatten() {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        // The directory's own mtime, not the timestamp in its name: the name is for a human
+        // reading `ls`, and parsing it would make the retention depend on a format string.
+        let Ok(age) = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .and_then(|t| now.duration_since(t).map_err(std::io::Error::other))
+        else {
+            continue;
+        };
+        if age >= retention {
+            match std::fs::remove_dir_all(entry.path()) {
+                Ok(()) => removed += 1,
+                Err(e) => tracing::warn!(
+                    path = %entry.path().display(),
+                    error = %e,
+                    "could not remove an expired trash directory"
+                ),
+            }
+        }
+    }
+    Ok(removed)
+}
+
 fn is_already_present(e: &std::io::Error) -> bool {
     matches!(
         e.kind(),
@@ -304,6 +375,13 @@ fn sync_dir(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Backdate a directory's mtime, so an age-based sweep can be tested without waiting.
+    fn age(path: &Path, by: std::time::Duration) {
+        let when = std::time::SystemTime::now() - by;
+        let file = std::fs::File::open(path).expect("open");
+        file.set_modified(when).expect("set mtime");
+    }
 
     /// A layout with one generation already on disk, as the web tier would have left it.
     fn layout_with_generation(dir: &tempfile::TempDir) -> (Layout, String) {
@@ -430,6 +508,55 @@ mod tests {
         let mut expected = vec![a, b];
         expected.sort_by_key(|id| id.to_string());
         assert_eq!(found, expected, "only well-formed room ids are room dirs");
+    }
+
+    /// The one place Puna destroys a player's progress, so the window is the whole point: a
+    /// directory that has not aged out is left exactly where it is.
+    #[test]
+    fn the_trash_is_swept_only_after_the_retention_window() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let layout = Layout::new(tmp.path());
+        std::fs::create_dir_all(layout.trash()).expect("trash");
+
+        let fresh = layout.trash().join("fresh-20260819T120000Z");
+        let expired = layout.trash().join("expired-20260101T120000Z");
+        for dir in [&fresh, &expired] {
+            std::fs::create_dir(dir).expect("dir");
+            std::fs::write(dir.join("room.save"), b"progress").expect("save");
+        }
+        age(&expired, std::time::Duration::from_secs(8 * 24 * 3600));
+
+        let removed =
+            sweep_trash(&layout, std::time::Duration::from_secs(7 * 24 * 3600)).expect("sweep");
+        assert_eq!(removed, 1);
+        assert!(fresh.is_dir(), "inside the window, so still recoverable");
+        assert!(!expired.is_dir());
+
+        // No trash directory at all is not an error: a deployment that has never deleted a room
+        // has nothing to sweep.
+        let empty = tempfile::tempdir().expect("tempdir");
+        assert_eq!(
+            sweep_trash(&Layout::new(empty.path()), std::time::Duration::ZERO).expect("sweep"),
+            0
+        );
+    }
+
+    /// Counted, never deleted: a generation is shared, and removing one makes every room built from
+    /// it permanently unstartable.
+    #[test]
+    fn generation_directories_are_listed_and_ingests_in_flight_are_not() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let layout = Layout::new(tmp.path());
+        std::fs::create_dir_all(layout.generations()).expect("generations");
+
+        for name in ["aa00", "bb11", ".tmp-halfway"] {
+            std::fs::create_dir(layout.generations().join(name)).expect("dir");
+        }
+        std::fs::write(layout.generations().join("stray.txt"), b"not a directory").expect("file");
+
+        let mut listed = list_generation_dirs(&layout).expect("list");
+        listed.sort();
+        assert_eq!(listed, ["aa00", "bb11"]);
     }
 
     #[test]

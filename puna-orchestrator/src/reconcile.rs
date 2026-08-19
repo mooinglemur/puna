@@ -41,6 +41,7 @@ use crate::plan::{self, RoomView};
 use crate::spec::Site;
 use crate::steps::{self, Outcome};
 use crate::storage::{self, Layout};
+use crate::sweep::Sweeper;
 
 /// What one tick did, for the log line and the metrics.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +54,13 @@ pub struct TickReport {
     /// Directories with no row. **Counted, never removed** -- see `report_orphan_dirs`.
     pub orphan_dirs: usize,
     pub integrity_faults: usize,
+    /// Deployments removed because their room no longer exists, on their second sighting.
+    pub orphans_deleted: usize,
+    /// Orphans on their first strike. A number that stays above zero means the rule is not
+    /// converging, which is worth seeing.
+    pub orphans_pending: usize,
+    pub secrets_refreshed: usize,
+    pub trash_removed: usize,
 }
 
 /// Abandoned provisioning attempts older than this are swept.
@@ -67,6 +75,7 @@ pub struct Reconciler {
     environment: Environment,
     advertise_host: String,
     pahoa_image: String,
+    sweeper: Sweeper,
 }
 
 impl Reconciler {
@@ -85,6 +94,7 @@ impl Reconciler {
             environment: config.common.environment,
             advertise_host: config.common.advertise_host.clone(),
             pahoa_image: config.pahoa_image.clone(),
+            sweeper: Sweeper::new(config.trash_retention),
         }
     }
 
@@ -174,6 +184,26 @@ impl Reconciler {
         report.integrity_faults =
             detect_integrity_faults(&mut conn, &self.layout, orchestrator).await?;
         report.orphan_dirs = report_orphan_dirs(&mut conn, &self.layout).await?;
+
+        // Everything that is about the world rather than one room: objects nothing owns, Secrets
+        // that have drifted, the LRU touch, and -- once an hour -- the trash.
+        let swept = self
+            .sweeper
+            .run(
+                &mut conn,
+                &crate::sweep::World {
+                    cluster: self.cluster.as_ref(),
+                    snapshot: &snapshot,
+                    layout: &self.layout,
+                    environment: self.environment,
+                    orchestrator,
+                },
+            )
+            .await;
+        report.orphans_deleted = swept.orphans_deleted;
+        report.orphans_pending = swept.orphans_pending;
+        report.secrets_refreshed = swept.secrets_refreshed;
+        report.trash_removed = swept.trash_removed;
 
         match storage::sweep_temp_dirs(&self.layout, TEMP_DIR_MAX_AGE) {
             Ok(0) => {}

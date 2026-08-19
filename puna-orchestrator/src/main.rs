@@ -1,12 +1,15 @@
 //! The orchestrator. Singleton, holds the Kubernetes credential, takes no inbound internet traffic.
 //!
-//! M6 scope: the leader advisory lock, the reconcile tick, `LISTEN`/`NOTIFY`, the health server,
-//! room provisioning, the Secret builder, and the state machine -- [`plan`] decides every
-//! transition in §3's table and [`cluster::fake`] stands in for a cluster, both under test.
+//! One pass reads the world and applies the difference:
 //!
-//! **No Kubernetes call exists yet.** What is missing is the applier: the code that carries out a
-//! [`plan::Step`], and the [`cluster::ClusterApi`] implementation that talks to a real API server.
-//! Both land at M7, which is why a room here gets as far as `idle` and stops there.
+//! ```text
+//! leader lock -> snapshot the cluster -> load the rooms -> plan() -> execute -> sweep
+//! ```
+//!
+//! [`plan`] is pure and decides; [`steps`] carries a decision out against the database and the
+//! cluster; [`apply`] knows the one safe ordering for a room's objects; [`sweep`] handles what is
+//! about the world rather than one room. [`cluster::ClusterApi`] is the only way any of it reaches
+//! Kubernetes, which is what lets the whole lifecycle be tested against `cluster::fake`.
 
 mod apply;
 mod cluster;
@@ -17,6 +20,9 @@ mod reconcile;
 mod spec;
 mod steps;
 mod storage;
+mod sweep;
+#[cfg(test)]
+mod testdb;
 
 use std::sync::Arc;
 use std::time::Duration;
