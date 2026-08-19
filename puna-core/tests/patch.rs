@@ -44,11 +44,11 @@ fn members(zip: &[u8]) -> std::collections::BTreeMap<String, Vec<u8>> {
 
 #[test]
 fn a_real_patch_keeps_everything_but_its_server_field() {
+    // Skipped, never failed, when the fixture is absent -- and deliberately NOT tied to
+    // `PUNA_REQUIRE_DB_TESTS`, which is about Postgres. CI has a database and does not have a
+    // generation zip: real ones are tens of megabytes and carry real players' names, so they stay
+    // out of the repository. Coupling the two turns "CI has no fixture" into a red pipeline.
     let Some(bytes) = fixture() else {
-        assert!(
-            std::env::var("PUNA_REQUIRE_DB_TESTS").is_err(),
-            "PUNA_REQUIRE_DB_TESTS is set but PUNA_TEST_GENERATION_ZIP is not"
-        );
         eprintln!("PUNA_TEST_GENERATION_ZIP unset; skipping the real-patch test");
         return;
     };
