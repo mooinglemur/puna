@@ -234,29 +234,5 @@ async fn assert_environment(
 /// callers. If it dies the loop falls back to the interval: **`NOTIFY` is latency, the tick is the
 /// contract**, so losing this costs responsiveness rather than correctness.
 async fn listen(database_url: String, wake: Arc<Notify>) {
-    use futures_util::StreamExt;
-
-    loop {
-        match puna_core::db::raw_connection_with_notifications(&database_url).await {
-            Ok((client, mut notifications)) => {
-                if let Err(e) = client
-                    .batch_execute(&format!("LISTEN {WAKE_CHANNEL}"))
-                    .await
-                {
-                    tracing::warn!(error = %e, "LISTEN failed; falling back to the tick");
-                } else {
-                    tracing::info!(channel = WAKE_CHANNEL, "listening for wake-ups");
-                    while let Some(message) = notifications.next().await {
-                        if matches!(message, tokio_postgres::AsyncMessage::Notification(_)) {
-                            wake.notify_one();
-                        }
-                    }
-                }
-            }
-            Err(e) => tracing::warn!(error = %e, "could not open a LISTEN connection"),
-        }
-
-        tracing::warn!("LISTEN connection lost; the reconcile interval still applies");
-        tokio::time::sleep(LEADER_RETRY).await;
-    }
+    puna_core::notify::listen(&database_url, WAKE_CHANNEL, |_payload| wake.notify_one()).await;
 }

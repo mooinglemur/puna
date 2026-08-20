@@ -8,6 +8,7 @@
 //! page and admin page. Rooms, artifacts, the console and the tracker arrive in M4 onwards.
 
 mod auth;
+mod commands;
 mod cookies;
 mod digest;
 mod error;
@@ -192,6 +193,7 @@ fn build(
     environment: Environment,
     figment: Figment,
     pool: Pool,
+    waiters: std::sync::Arc<commands::Waiters>,
     settings: Settings,
 ) -> Rocket<Build> {
     // Rocket's `limits.data-form` caps what is read off the wire; this caps what is decompressed.
@@ -216,6 +218,7 @@ fn build(
         .manage(routes::tracker::NameCache::default())
         .manage(routes::tracker::TrackerCacheMax(settings.tracker_cache_max))
         .manage(UploadLimit(wire_limit))
+        .manage(waiters)
         .register(
             "/",
             catchers![unauthorized, forbidden, not_found, unprocessable],
@@ -228,6 +231,7 @@ fn build(
             .mount("/", routes![index, admin, whoami, metrics])
             .mount("/", routes::downloads::routes())
             .mount("/", routes::generations::routes())
+            .mount("/", routes::console::routes())
             .mount("/", routes::gates::routes())
             .mount("/", routes::rooms::routes())
             .mount("/auth", auth::routes())
@@ -342,11 +346,23 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|raw| raw.trim().parse::<usize>().ok())
         .unwrap_or(2 * 1024 * 1024);
 
+    // One `LISTEN` for the whole process, feeding every console request waiting on a result.
+    // **Only the web role**: the tracker tier mounts no console, so a connection held there would
+    // be a Postgres session per replica for notifications nothing consumes.
+    let waiters = std::sync::Arc::new(commands::Waiters::default());
+    if role == Role::Web {
+        tokio::spawn(commands::listen(
+            database_url.clone(),
+            std::sync::Arc::clone(&waiters),
+        ));
+    }
+
     build(
         role,
         environment,
         figment,
         pool,
+        waiters,
         Settings {
             data_dir,
             advertise_host,

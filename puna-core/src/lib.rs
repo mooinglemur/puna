@@ -11,6 +11,7 @@ pub mod hash;
 pub mod ids;
 pub mod metrics;
 pub mod model;
+pub mod notify;
 pub mod probe;
 pub mod room;
 pub mod secret;

@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}{{ room_name }} &mdash; console{% endblock %}
+{% block content %}
+
+<h1>{{ room_name }}</h1>
+<p class="hint"><a href="/room/{{ room_id }}">Back to the room</a> &mdash; console</p>
+
+{% if room_state != "running" %}
+{# Stated rather than enforced by hiding the form: a command against a stopped room is REJECTED
+   with a readable reason, and that is a better answer than a form that does nothing. Deliberately
+   no auto-start -- a hint that silently provisions a pod is surprising. #}
+<p class="warning">This room is {{+ room_state }}. Commands need a running room; start it from the
+room page first.</p>
+{% endif %}
+
+{% if still_running %}
+<p class="notice">That command is taking longer than usual. It is still running &mdash; it will
+appear below when it finishes.</p>
+{% endif %}
+
+{% if let Some(result) = outcome %}
+<div class="{% if result.succeeded %}notice{% else %}warning{% endif %}">
+<p><strong>{{ result.kind }}</strong> &mdash; {{ result.state }}</p>
+{% for line in result.lines %}
+<p>{{ line }}</p>
+{% endfor %}
+</div>
+{% endif %}
+
+<form method="post" action="/room/{{ room_id }}/command" class="console">
+  <label>Command
+    <select name="kind" required>
+      <option value="status">status &mdash; what the room reports</option>
+      <option value="say">say &mdash; announce to everyone</option>
+      <option value="countdown">countdown</option>
+      <option value="hint">hint &mdash; for a slot</option>
+      {% if is_organizer %}
+      {# Organizer-only, and hidden rather than disabled: a control that is visible and refuses
+         teaches people the tool is broken. The route checks the tier again regardless -- this is
+         the affordance, not the enforcement. #}
+      <option value="release">release &mdash; send a slot&rsquo;s remaining items</option>
+      <option value="collect">collect &mdash; gather a slot&rsquo;s own items</option>
+      <option value="send_item">send item &mdash; give a slot an item</option>
+      <option value="kick">kick &mdash; disconnect a slot</option>
+      {% endif %}
+    </select>
+  </label>
+
+  <label>Slot
+    <select name="slot">
+      <option value="">&mdash;</option>
+      {% for slot in slots %}
+      <option value="{{ slot.0 }}">{{ slot.0 }} &mdash; {{ slot.1 }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>Text <input type="text" name="text" placeholder="for say"></label>
+  <label>Item <input type="text" name="item" placeholder="for hint and send item"></label>
+  <label>Seconds <input type="number" name="seconds" placeholder="for countdown"></label>
+  <label>Reason <input type="text" name="reason" placeholder="for kick, optional"></label>
+
+  {# `force` grants the hint outright and spends nothing. The default charges the slot's own points
+     as `!hint` would, and MAY GRANT FEWER THAN ASKED OR NONE -- so the answer below is the truth,
+     not this checkbox. #}
+  <label class="inline"><input type="checkbox" name="force" value="true"> Force the hint (grant it
+  without spending the slot&rsquo;s points)</label>
+
+  <button type="submit">Run</button>
+</form>
+
+<h2>Recent commands</h2>
+{% if history.is_empty() %}
+<p>Nothing has been run in this room yet.</p>
+{% else %}
+<table class="commands">
+<thead><tr><th>When</th><th>Command</th><th>Result</th></tr></thead>
+<tbody>
+{% for entry in history %}
+<tr>
+<td>{{ entry.requested_at }}</td>
+<td>{{ entry.kind }}</td>
+<td>
+  {# The state AND whether the room said yes: a `rejected` command never reached the room, and an
+     `ok` one that answered no is a different thing again. Collapsing them is how "it worked" gets
+     misread. #}
+  {% if entry.succeeded %}
+  <span class="tag">ok</span>
+  {% else %}
+  <span class="tag">{{ entry.state }}</span>
+  {% endif %}
+  {% for line in entry.lines %}
+  <div class="hint">{{ line }}</div>
+  {% endfor %}
+  {# The row itself, which is what makes giving up on the request safe: a command that outlived the
+     ten-second budget is still running and still readable here. #}
+  <div class="hint"><a href="/room/{{ room_id }}/command/{{ entry.id }}">raw</a></div>
+</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% endif %}
+
+{% endblock %}

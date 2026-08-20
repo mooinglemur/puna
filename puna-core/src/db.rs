@@ -198,17 +198,26 @@ pub async fn raw_connection(db_url: &str) -> anyhow::Result<tokio_postgres::Clie
     Ok(client)
 }
 
-/// A raw connection plus its notification stream, for `LISTEN`.
+/// A raw connection, plus the notifications it receives.
 ///
-/// Separate from [`raw_connection`] because the two cannot both exist: that one spawns the
-/// connection future and drops every message it yields, which is right for a lock holder and
-/// exactly wrong for a listener. Here the connection is polled by the returned stream instead, so
-/// the caller must keep driving it or notifications simply stop arriving.
+/// **The connection is driven by a spawned task, not by the caller.** That is the whole point of the
+/// shape, and it was learned the hard way: an earlier version returned the raw message *stream* and
+/// left the caller to poll it, which meant `client.batch_execute("LISTEN ...")` deadlocked —
+/// the query went out, and the response could only arrive if somebody polled the stream, which the
+/// caller could not do while awaiting the query. It hung forever, silently, with no error and no
+/// log line. Every `LISTEN` in Puna was dead for weeks and nothing noticed, because every caller
+/// has a polling fallback and "NOTIFY is latency, the tick is the contract" held.
+///
+/// Handing back a receiver instead makes the misuse unspellable: the connection is always being
+/// driven, so a query on the client always completes.
+///
+/// Separate from [`raw_connection`] because that one *discards* every message, which is right for a
+/// lock holder and exactly wrong for a listener.
 pub async fn raw_connection_with_notifications(
     db_url: &str,
 ) -> anyhow::Result<(
     tokio_postgres::Client,
-    impl futures_util::Stream<Item = tokio_postgres::AsyncMessage> + Unpin,
+    tokio::sync::mpsc::UnboundedReceiver<tokio_postgres::Notification>,
 )> {
     ensure_crypto_provider();
 
@@ -220,21 +229,29 @@ pub async fn raw_connection_with_notifications(
     let tls = tokio_postgres_rustls::MakeRustlsConnect::new(rustls_config);
     let (client, mut connection) = tokio_postgres::connect(db_url, tls).await?;
 
-    // `poll_message` yields notifications as well as driving the connection, so the stream IS the
-    // connection's task. Dropping it closes the session.
-    let stream = futures_util::stream::poll_fn(move |cx| connection.poll_message(cx))
-        .filter_map(|message| async move {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        // `poll_message` both drives the connection and yields notifications, so this task is the
+        // connection. It ends when the client is dropped or the session dies.
+        let mut messages = futures_util::stream::poll_fn(move |cx| connection.poll_message(cx));
+        while let Some(message) = messages.next().await {
             match message {
-                Ok(message) => Some(message),
+                Ok(tokio_postgres::AsyncMessage::Notification(note)) => {
+                    // A closed receiver means the listener gave up; nothing left to drive this for.
+                    if tx.send(note).is_err() {
+                        break;
+                    }
+                }
+                Ok(_) => {}
                 Err(e) => {
                     tracing::error!(error = %e, "LISTEN connection failed");
-                    None
+                    break;
                 }
             }
-        })
-        .boxed();
+        }
+    });
 
-    Ok((client, stream))
+    Ok((client, rx))
 }
 
 /// Build the pool, optionally running migrations first.

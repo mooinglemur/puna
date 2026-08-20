@@ -49,9 +49,6 @@ const POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// timeout bounds at a few seconds. Anything older belongs to a dispatcher that went away.
 const STALE_AFTER: Duration = Duration::from_secs(120);
 
-/// How long to wait before reconnecting a dropped `LISTEN`.
-const RECONNECT_DELAY: Duration = Duration::from_secs(5);
-
 pub struct Dispatcher {
     pool: Pool,
     prober: Arc<Prober>,
@@ -250,29 +247,7 @@ struct Reachable {
 /// Its own raw connection, because `LISTEN` is session-scoped and a pooled one is recycled between
 /// callers. Losing it costs latency: the backstop poll still drains the queue.
 async fn listen(database_url: String, wake: Arc<tokio::sync::Notify>) {
-    use futures_util::StreamExt;
-
-    loop {
-        match puna_core::db::raw_connection_with_notifications(&database_url).await {
-            Ok((client, mut notifications)) => {
-                if let Err(e) = client
-                    .batch_execute(&format!("LISTEN {REQUEST_CHANNEL}"))
-                    .await
-                {
-                    tracing::warn!(error = %e, "LISTEN failed; the console falls back to polling");
-                } else {
-                    tracing::info!(channel = REQUEST_CHANNEL, "listening for console commands");
-                    while let Some(message) = notifications.next().await {
-                        if matches!(message, tokio_postgres::AsyncMessage::Notification(_)) {
-                            wake.notify_one();
-                        }
-                    }
-                }
-            }
-            Err(e) => tracing::warn!(error = %e, "could not open a command LISTEN connection"),
-        }
-
-        tracing::warn!("command LISTEN connection lost; polling until it returns");
-        tokio::time::sleep(RECONNECT_DELAY).await;
-    }
+    // The payload is the command id, and it is deliberately ignored: each pass claims every
+    // pending command, so this only has to say "something arrived".
+    puna_core::notify::listen(&database_url, REQUEST_CHANNEL, |_payload| wake.notify_one()).await;
 }
