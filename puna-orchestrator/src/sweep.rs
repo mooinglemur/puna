@@ -70,6 +70,8 @@ pub struct World<'a> {
     pub layout: &'a Layout,
     pub environment: Environment,
     pub orchestrator: Orchestrator,
+    /// What rooms would be started with right now, for the drift comparison on the hourly lane.
+    pub pahoa_image: &'a str,
 }
 
 /// The sweep's memory between ticks.
@@ -97,6 +99,7 @@ impl Sweeper {
             layout,
             environment,
             orchestrator,
+            pahoa_image,
         } = *world;
         let mut report = SweepReport::default();
 
@@ -125,7 +128,7 @@ impl Sweeper {
         publish_port_stats(conn, environment).await;
 
         if self.slow_lane_due() {
-            report.trash_removed = self.slow_lane(conn, layout).await;
+            report.trash_removed = self.slow_lane(conn, layout, pahoa_image).await;
         }
 
         report
@@ -285,7 +288,12 @@ impl Sweeper {
     }
 
     /// The hourly lane: expired trash, and a count of generations nothing references.
-    async fn slow_lane(&self, conn: &mut AsyncPgConnection, layout: &Layout) -> usize {
+    async fn slow_lane(
+        &self,
+        conn: &mut AsyncPgConnection,
+        layout: &Layout,
+        pahoa_image: &str,
+    ) -> usize {
         let removed = match storage::sweep_trash(layout, self.trash_retention) {
             Ok(removed) => {
                 if removed > 0 {
@@ -310,9 +318,79 @@ impl Sweeper {
             Err(e) => tracing::warn!(error = ?e, "could not count reclaimable generations"),
         }
 
+        refresh_desired_spec_hashes(conn, pahoa_image).await;
         publish_inventory(conn).await;
         removed
     }
+}
+
+/// Recompute what each live room's spec **would** render to now, for the admin table's drift column.
+///
+/// **On the hourly lane, and that is the whole design decision.** Rendering a spec costs four
+/// queries per room — the row, its secrets, its slots, its reservation — which is why `reconcile`
+/// pays it only for failed rooms whose decision it can change. Paying it every thirty seconds for
+/// every room would put a per-room cost on every pass to answer a question only a human reading an
+/// admin page ever asks, and that page does not need drift detected within thirty seconds.
+///
+/// Nothing here decides anything. **Drift never causes a restart** — an image bump lands on the
+/// whole environment at once and a room mid-session is not something a `git push` may interrupt —
+/// so this column is read by the admin table and by nothing in the planner.
+///
+/// Only live rooms: an idle room is running nothing, so it has nothing to disagree with, and it
+/// picks up the current spec whenever it next starts.
+async fn refresh_desired_spec_hashes(conn: &mut AsyncPgConnection, pahoa_image: &str) {
+    let live: Result<Vec<RoomId>, _> = async {
+        #[derive(diesel::QueryableByName)]
+        struct Row {
+            #[diesel(sql_type = SqlUuid)]
+            id: RoomId,
+        }
+        let rows: Vec<Row> = diesel::sql_query(
+            "SELECT id FROM rooms WHERE state IN ('starting', 'running', 'degraded')",
+        )
+        .load(conn)
+        .await?;
+        Ok::<_, diesel::result::Error>(rows.into_iter().map(|row| row.id).collect())
+    }
+    .await;
+
+    let live = match live {
+        Ok(live) => live,
+        Err(e) => {
+            tracing::warn!(error = ?e, "could not list live rooms for the drift comparison");
+            return;
+        }
+    };
+
+    let mut drifted = 0;
+    for room in live {
+        // `None` is "could not render", which stays `None` on the row: not computed is never the
+        // same as unchanged, and a room whose spec cannot be rendered is one this must not claim
+        // to know anything about.
+        let desired = crate::steps::desired_spec_hash(conn, pahoa_image, room).await;
+
+        let updated = diesel::sql_query(
+            "UPDATE rooms
+                SET desired_spec_hash = $2
+              WHERE id = $1
+                AND desired_spec_hash IS DISTINCT FROM $2",
+        )
+        .bind::<SqlUuid, _>(room)
+        .bind::<diesel::sql_types::Nullable<Text>, _>(desired.clone())
+        .execute(conn)
+        .await;
+
+        match updated {
+            Ok(_) => {
+                if desired.is_some() {
+                    drifted += 1;
+                }
+            }
+            Err(e) => tracing::warn!(room = %room, error = ?e, "could not record the desired spec"),
+        }
+    }
+
+    tracing::debug!(rooms = drifted, "refreshed the desired spec hashes");
 }
 
 /// Services and Secrets whose owner is gone but whose room still exists.
@@ -565,5 +643,94 @@ mod tests {
         assert!(sweeper.slow_lane_due(), "the first tick runs it");
         assert!(!sweeper.slow_lane_due());
         assert!(!sweeper.slow_lane_due());
+    }
+}
+
+#[cfg(test)]
+mod db_tests {
+    use super::*;
+    use crate::testdb::{self, NewRoom};
+
+    async fn desired(conn: &mut AsyncPgConnection, room: RoomId) -> Option<String> {
+        #[derive(diesel::QueryableByName)]
+        struct Row {
+            #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+            desired_spec_hash: Option<String>,
+        }
+        let rows: Vec<Row> = diesel::sql_query("SELECT desired_spec_hash FROM rooms WHERE id = $1")
+            .bind::<SqlUuid, _>(room)
+            .load(conn)
+            .await
+            .expect("read the room");
+        rows.into_iter().next().and_then(|r| r.desired_spec_hash)
+    }
+
+    /// The hourly lane fills the column in for live rooms and leaves idle ones alone.
+    ///
+    /// An idle room is running nothing, so it has nothing to disagree with — and computing a
+    /// desired hash for one would cost four queries to answer a question with no meaning.
+    #[tokio::test]
+    async fn only_live_rooms_get_a_desired_spec_hash() {
+        testdb::with_db(|pool| async move {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let layout = Layout::new(tmp.path());
+            let mut conn = pool.get().await.expect("connection");
+            let generation = testdb::insert_generation(&mut conn, &layout, 4).await;
+
+            let live = testdb::insert_room(
+                &mut conn,
+                generation,
+                NewRoom {
+                    state: "running",
+                    desired: "running",
+                    ..Default::default()
+                },
+            )
+            .await;
+            let idle = testdb::insert_room(
+                &mut conn,
+                generation,
+                NewRoom {
+                    state: "idle",
+                    desired: "running",
+                    ..Default::default()
+                },
+            )
+            .await;
+            testdb::insert_slot(&mut conn, live, 1, None).await;
+            testdb::insert_slot(&mut conn, idle, 1, None).await;
+
+            // **Both rooms get a reservation, and that is what makes this test prove anything.**
+            // A room with no port cannot be rendered against at all, so an idle room without one
+            // would come back `None` whatever this function did -- the assertion below would pass
+            // against a version that ignored the state filter entirely. Mutation-checked: with a
+            // port on each, widening the query to include `idle` fails this.
+            for room in [live, idle] {
+                puna_core::model::port::allocate(
+                    &puna_core::model::Orchestrator::assume_leader(),
+                    &mut conn,
+                    Environment::Dev,
+                    room,
+                )
+                .await
+                .expect("a port");
+            }
+
+            refresh_desired_spec_hashes(&mut conn, "pahoa:sha-one").await;
+
+            let first = desired(&mut conn, live).await.expect("a desired hash");
+            assert_eq!(
+                desired(&mut conn, idle).await,
+                None,
+                "an idle room has nothing to disagree with"
+            );
+
+            // **The comparison the admin table makes.** A different image renders a different
+            // hash, which is what a drifted room looks like against its recorded `spec_hash`.
+            refresh_desired_spec_hashes(&mut conn, "pahoa:sha-two").await;
+            let second = desired(&mut conn, live).await.expect("a desired hash");
+            assert_ne!(first, second, "the image is part of the spec hash");
+        })
+        .await;
     }
 }

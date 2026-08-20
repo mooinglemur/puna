@@ -236,6 +236,7 @@ impl Reconciler {
                     layout: &self.layout,
                     environment: self.environment,
                     orchestrator,
+                    pahoa_image: &self.pahoa_image,
                 },
             )
             .await;

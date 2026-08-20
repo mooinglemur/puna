@@ -535,12 +535,24 @@ struct RowRecorder<'a> {
 #[async_trait::async_trait]
 impl DeploymentRecorder for RowRecorder<'_> {
     async fn record(&mut self, room: RoomId, uid: &str, spec_hash: &str) -> anyhow::Result<()> {
-        diesel::sql_query("UPDATE rooms SET deployment_uid = $2, spec_hash = $3 WHERE id = $1")
-            .bind::<SqlUuid, _>(room)
-            .bind::<Text, _>(uid)
-            .bind::<Text, _>(spec_hash)
-            .execute(&mut *self.conn)
-            .await?;
+        // `desired_spec_hash` is cleared, not set to the value just recorded. It answers *what
+        // would this room render to now*, and the hourly lane is what answers it -- so anything
+        // written here would be an answer from a different question's clock.
+        //
+        // Leaving the old one in place is the bug this prevents: after a legitimate recreate the
+        // room's `spec_hash` moves and the stale desired hash does not, so the admin table would
+        // report spec drift on a room that had *just* been brought exactly up to date, for up to
+        // an hour. NULL is "not computed yet", which is true and renders as no drift.
+        diesel::sql_query(
+            "UPDATE rooms
+                SET deployment_uid = $2, spec_hash = $3, desired_spec_hash = NULL
+              WHERE id = $1",
+        )
+        .bind::<SqlUuid, _>(room)
+        .bind::<Text, _>(uid)
+        .bind::<Text, _>(spec_hash)
+        .execute(&mut *self.conn)
+        .await?;
         Ok(())
     }
 }
@@ -1607,6 +1619,68 @@ mod db_tests {
 
     /// **M10c, half two — the drift guard.** The backoff interrupt compares the hash `start`
     /// recorded against the hash `desired_spec_hash` recomputes, so those two renderings agreeing is
+    /// **Starting a room clears the stale answer to "what would it render to now".**
+    ///
+    /// `desired_spec_hash` is written by the hourly lane and `spec_hash` by every start, so after a
+    /// recreate the second moves and the first does not. Left in place, the admin table compares
+    /// them, finds them different, and reports spec drift on the one room that was *just* brought
+    /// exactly up to date — for up to an hour, and most visibly right after somebody pressed
+    /// Restart to fix drift. NULL is "not computed yet", which renders as no drift.
+    #[tokio::test]
+    async fn starting_a_room_clears_the_stale_desired_spec_hash() {
+        testdb::with_db(|pool| async move {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let layout = Layout::new(tmp.path());
+            let cluster = FakeCluster::new();
+            let site = site();
+            let ctx = context(&pool, &cluster, &layout, &site);
+
+            let mut conn = pool.get().await.expect("connection");
+            let generation = testdb::insert_generation(&mut conn, &layout, 4).await;
+            let room = testdb::insert_room(
+                &mut conn,
+                generation,
+                NewRoom {
+                    state: "idle",
+                    desired: "running",
+                    ..Default::default()
+                },
+            )
+            .await;
+            testdb::insert_slot(&mut conn, room, 1, None).await;
+
+            // An hour-old answer from before whatever changed.
+            diesel::sql_query("UPDATE rooms SET desired_spec_hash = 'stale-hash' WHERE id = $1")
+                .bind::<SqlUuid, _>(room)
+                .execute(&mut conn)
+                .await
+                .expect("seed a stale hash");
+
+            execute(&ctx, &action(&pool, room, Step::Start).await)
+                .await
+                .expect("start");
+
+            #[derive(diesel::QueryableByName)]
+            struct Row {
+                #[diesel(sql_type = Nullable<Text>)]
+                desired_spec_hash: Option<String>,
+            }
+            let rows: Vec<Row> =
+                diesel::sql_query("SELECT desired_spec_hash FROM rooms WHERE id = $1")
+                    .bind::<SqlUuid, _>(room)
+                    .load(&mut conn)
+                    .await
+                    .expect("read the room");
+
+            assert_eq!(
+                rows.into_iter().next().and_then(|r| r.desired_spec_hash),
+                None,
+                "the stale hash survived the start, so the room will report phantom drift"
+            );
+        })
+        .await;
+    }
+
     /// the entire property. If they ever disagreed for a room nobody had touched, every failed room
     /// would retry on every tick and the backoff would be gone — silently, because a retrying room
     /// looks like a room being fixed.
