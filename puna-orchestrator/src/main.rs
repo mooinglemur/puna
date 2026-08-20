@@ -16,6 +16,7 @@ mod cluster;
 mod health;
 mod leader;
 mod plan;
+mod probing;
 mod reconcile;
 mod spec;
 mod steps;

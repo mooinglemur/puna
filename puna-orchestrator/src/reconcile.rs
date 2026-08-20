@@ -38,6 +38,7 @@ use puna_core::{Environment, OrchestratorConfig};
 
 use crate::cluster::ClusterApi;
 use crate::plan::{self, RoomView};
+use crate::probing::Prober;
 use crate::spec::Site;
 use crate::steps::{self, Outcome};
 use crate::storage::{self, Layout};
@@ -61,6 +62,12 @@ pub struct TickReport {
     pub orphans_pending: usize,
     pub secrets_refreshed: usize,
     pub trash_removed: usize,
+    /// Live rooms asked how they are. See [`crate::probing`].
+    pub probed: usize,
+    pub probe_answers: usize,
+    /// Rooms skipped because they asked to be left alone. Worth reporting rather than hiding: a
+    /// number that stays above zero means something is exhausting a room's auth rate limit.
+    pub probe_rate_limited: usize,
 }
 
 /// Abandoned provisioning attempts older than this are swept.
@@ -76,6 +83,7 @@ pub struct Reconciler {
     advertise_host: String,
     pahoa_image: String,
     sweeper: Sweeper,
+    prober: Prober,
 }
 
 impl Reconciler {
@@ -95,6 +103,12 @@ impl Reconciler {
             advertise_host: config.common.advertise_host.clone(),
             pahoa_image: config.pahoa_image.clone(),
             sweeper: Sweeper::new(config.trash_retention),
+            prober: Prober::new(
+                config.room_probe.build(),
+                config.room_route.clone(),
+                config.common.advertise_host.clone(),
+                config.room_probe_timeout,
+            ),
         }
     }
 
@@ -152,6 +166,9 @@ impl Reconciler {
             advertise_host: &self.advertise_host,
             orchestrator,
             pahoa_image: &self.pahoa_image,
+            probe: self.prober.probe(),
+            room_route: self.prober.route(),
+            probe_timeout: self.prober.timeout(),
         };
 
         for action in &actions {
@@ -205,6 +222,15 @@ impl Reconciler {
         report.orphans_pending = swept.orphans_pending;
         report.secrets_refreshed = swept.secrets_refreshed;
         report.trash_removed = swept.trash_removed;
+
+        // **Last, and never able to fail the tick.** A room that will not answer its admin API may
+        // still be serving a multiworld perfectly, so this only refreshes numbers -- it moves no
+        // room's state and returns no error. Put after the sweep so a slow room cannot delay
+        // anything that actually converges the world.
+        let probed = self.prober.run(&mut conn, self.environment).await;
+        report.probed = probed.probed;
+        report.probe_answers = probed.answered;
+        report.probe_rate_limited = probed.rate_limited;
 
         match storage::sweep_temp_dirs(&self.layout, TEMP_DIR_MAX_AGE) {
             Ok(0) => {}

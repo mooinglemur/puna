@@ -21,6 +21,8 @@ use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use puna_core::Environment;
 use puna_core::ids::RoomId;
 use puna_core::model::{Orchestrator, port, room, slot};
+use puna_core::probe::RoomProbe;
+use puna_core::room::{RoomEndpoint, Route};
 
 use crate::apply::{self, DeploymentRecorder, StartRequest, Started};
 use crate::cluster::{ClusterApi, object_name};
@@ -41,6 +43,24 @@ pub struct Context<'a> {
     pub advertise_host: &'a str,
     pub orchestrator: Orchestrator,
     pub pahoa_image: &'a str,
+    /// How rooms are reached, so a stop can ask before it deletes. Behind the same trait the probe
+    /// pass uses, so a room on an old image degrades rather than erroring.
+    pub probe: &'a dyn RoomProbe,
+    pub room_route: &'a Route,
+    pub probe_timeout: std::time::Duration,
+}
+
+impl Context<'_> {
+    /// One room, as something that can be dialed.
+    pub fn endpoint(&self, room: RoomId, base_port: u16) -> RoomEndpoint {
+        RoomEndpoint {
+            room,
+            base_port,
+            advertise_host: self.advertise_host.to_string(),
+            route: self.room_route.clone(),
+            timeout: self.probe_timeout,
+        }
+    }
 }
 
 /// What one step did, for the tick's report.
@@ -643,9 +663,40 @@ async fn mark_idle(
 async fn stop(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
     let mut conn = ctx.pool.get().await?;
 
-    // Deleting the Deployment is the graceful path today: the pod gets SIGTERM and 45 seconds, which
-    // is what pahoa's final save needs. `POST /admin/v1/shutdown` is a nicety on top of it and
-    // arrives with the probe at M11 -- it saves a few seconds, not a save.
+    // **Ask first, then delete anyway.** `POST /admin/v1/shutdown` lets the room quiesce, flush a
+    // final save and release its `flock` on its own schedule rather than inside a 45-second grace
+    // period -- but it is a nicety on top of the delete, never a replacement for it. Deleting the
+    // Deployment is what actually stops a room, and a room that cannot be asked (an old image, a
+    // missing Secret, a wedged process) must still stop.
+    //
+    // The answer is `202` = **accepted, not finished**: quiescing closes every connection including
+    // the one that asked, so a room that only answered when it was done could not answer at all.
+    // Nothing here waits on completion; the planner watches for the Deployment to go away.
+    if ctx.probe.capabilities().graceful_shutdown
+        && let Some(base_port) = port::reserved_pair(&mut conn, action.room).await?
+        && let Ok(Some(secrets)) = room::secrets(&mut conn, action.room).await
+    {
+        let endpoint = ctx.endpoint(action.room, base_port);
+        match ctx
+            .probe
+            .request_shutdown(
+                &endpoint,
+                &secrets.admin_token,
+                "an operator stopped this room",
+            )
+            .await
+        {
+            Ok(()) => tracing::info!(room = %action.room, "the room accepted a graceful shutdown"),
+            // Logged at debug: the delete below is the real mechanism, and a room that will not
+            // answer is the ordinary case this path degrades for rather than an incident.
+            Err(e) => tracing::debug!(
+                room = %action.room,
+                error = %e,
+                "the room did not accept a graceful shutdown; deleting its Deployment"
+            ),
+        }
+    }
+
     ctx.cluster
         .delete_deployment(&object_name(action.room))
         .await?;
@@ -994,6 +1045,12 @@ mod db_tests {
             advertise_host: "mw.example",
             orchestrator: Orchestrator::assume_leader(),
             pahoa_image: "pahoa:test",
+            // The fallback on purpose: these tests have no room to dial, and it is the probe whose
+            // `request_shutdown` refuses -- so a stop here takes exactly the degrade path a room on
+            // an old image would.
+            probe: &puna_core::probe::TcpProbe,
+            room_route: &Route::Public,
+            probe_timeout: std::time::Duration::from_millis(50),
         }
     }
 
@@ -1563,6 +1620,9 @@ mod reclaim_tests {
                 advertise_host: "mw.example",
                 orchestrator: Orchestrator::assume_leader(),
                 pahoa_image: "pahoa:test",
+                probe: &puna_core::probe::TcpProbe,
+                room_route: &Route::Public,
+                probe_timeout: std::time::Duration::from_millis(50),
             };
 
             let mut conn = pool.get().await.expect("connection");

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ generation.seed_name }}{% endblock %}
 {% block content %}
-<h1>Generation{{+ generation.seed_name }}</h1>
+<h1>Generation {{+ generation.seed_name }}</h1>
 
 {% if deduplicated %}
 <p class="notice">These exact contents were already on file, so this upload reused the existing

@@ -2,7 +2,12 @@
 
    askama.toml sets whitespace = "suppress", which strips whitespace adjacent to EVERY tag --
    including a single significant space before an expression. `role: {{ role }}` renders as
-   `role:value`. Use `{{+ ... }}` to keep the space. #}
+   `role:value`.
+
+   `+` PRESERVES whitespace; it does not INSERT any. So the fix is `role: {{+ role }}` -- the space
+   stays in the source and the `+` stops it being eaten. Writing `role:{{+ role }}` looks like it
+   does the same thing and silently renders `role:value`, which is how every one of these templates
+   was wrong until 2026-08-20. `tests/templates.rs` now fails on that shape. #}
 <!doctype html>
 <html lang="en">
 <head>
@@ -29,7 +34,7 @@
 <main>
 {% block content %}{% endblock %}
 </main>
-<footer><span class="version">puna{{+ base.version }}</span></footer>
+<footer><span class="version">puna {{+ base.version }}</span></footer>
 {# Pages that need script say so; every other page ships none. #}
 {% block scripts %}{% endblock %}
 </body>

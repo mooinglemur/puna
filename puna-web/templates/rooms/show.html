@@ -33,7 +33,7 @@ start an empty room in its place.</p>
    from "stuck", which a spinner alone cannot say. #}
 <div class="notice" data-room="{{ room.id }}" data-state="{{ room.state }}">
 <p><span data-room-message>
-{% if let Some(message) = message %}{{ message }}{% else %}This room is{{+ room.state }}{% endif %}
+{% if let Some(message) = message %}{{ message }}{% else %}This room is {{+ room.state }}{% endif %}
 </span>
 &mdash; <span data-room-elapsed>{{ elapsed }}</span></p>
 <p class="hint">This page updates on its own.</p>
@@ -152,7 +152,7 @@ discards them and they cannot be recovered.</p>
 <h2>Other rooms from this seed</h2>
 <ul>
 {% for sibling in siblings %}
-<li><a href="/room/{{ sibling.id }}">{{ sibling.name }}</a> &mdash;{{+ sibling.state }}</li>
+<li><a href="/room/{{ sibling.id }}">{{ sibling.name }}</a> &mdash; {{+ sibling.state }}</li>
 {% endfor %}
 </ul>
 {% endif %}

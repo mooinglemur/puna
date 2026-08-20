@@ -1068,7 +1068,12 @@ mod tests {
 
         // What it *does* say: the room's name, the slot it is about, and where the client fetches.
         assert!(html.contains("Friday async"));
-        assert!(html.contains("Troy"));
+        // The rendered form, not just the substring: `whitespace = "suppress"` once made this
+        // "ShowingTroy" on every page that named somebody. See `tests/templates.rs`.
+        assert!(
+            html.contains("Showing Troy"),
+            "the space before the name is gone again"
+        );
         assert!(html.contains(&format!("/api/puna/tracker/{tracker_id}")));
         assert!(html.contains("<noscript>"), "the no-JavaScript explanation");
 

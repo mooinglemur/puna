@@ -150,6 +150,12 @@ pub struct OrchestratorConfig {
     /// surface; `tcp` exists for a room pinned to an image older than that, and under it the
     /// console is hidden entirely rather than shown greyed out.
     pub room_probe: crate::probe::ProbeKind,
+    /// How Puna reaches a room: in-cluster by Service name, or out through the public address.
+    ///
+    /// `service` is the default and the right answer in a cluster — the public route hairpins
+    /// in-cluster traffic out to the load balancer and back. Either way TLS is verified against the
+    /// advertised host, which is the only name on the room certificate.
+    pub room_route: crate::room::Route,
     /// How long a room has to answer a probe.
     ///
     /// Short on purpose: a tick reconciles every room, so a room that has wedged must not be able
@@ -173,6 +179,12 @@ impl OrchestratorConfig {
             room_probe: optional("PUNA_ROOM_PROBE", "https")
                 .parse()
                 .map_err(|e| anyhow::anyhow!("{e}"))?,
+            room_route: match optional("PUNA_ROOM_ROUTE", "service").as_str() {
+                "public" => crate::room::Route::Public,
+                _ => crate::room::Route::Service {
+                    namespace: require("PUNA_NAMESPACE")?,
+                },
+            },
             room_probe_timeout: parse_duration("PUNA_ROOM_PROBE_TIMEOUT", 5)?,
         })
     }
