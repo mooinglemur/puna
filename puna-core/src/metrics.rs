@@ -466,8 +466,22 @@ pub const ROOM_STATES: &[&str] = &[
 pub const START_RESULTS: &[&str] = &["ok", "failed", "port_exhausted", "ip_mismatch"];
 
 /// Capabilities a room probe may or may not have, depending on the pahoa build it is talking to.
-pub const PROBE_CAPABILITIES: &[&str] =
-    &["activity", "client_count", "graceful_shutdown", "commands"];
+/// Publish what the room probe can do.
+///
+/// **One writer, one vocabulary.** This used to be a `const` list declared here, before any probe
+/// existed, guessing at `activity` and `client_count`; M11 then built the real capabilities under
+/// different names. Both wrote to the same gauge, so it carried the union and asserted `0` for two
+/// capabilities that no longer name anything -- next to the very series that disproved them.
+///
+/// Now the names come from [`ProbeCapabilities`] itself, and this is the only thing that writes
+/// them.
+pub fn publish_probe_capabilities(capabilities: &crate::probe::ProbeCapabilities) {
+    for (name, present) in capabilities.as_pairs() {
+        PROBE_CAPABILITY
+            .with_label_values(&[name])
+            .set(i64::from(present));
+    }
+}
 
 /// Families every component exports, because every component does the thing they measure.
 ///
@@ -642,7 +656,9 @@ fn init_orchestrator() {
     for result in START_RESULTS {
         ROOM_STARTS.with_label_values(&[result]).reset();
     }
-    for capability in PROBE_CAPABILITIES {
+    // Seeded to zero so a cold orchestrator renders every capability rather than none, and from
+    // the SAME vocabulary the publisher uses -- the two diverging is exactly what went wrong.
+    for capability in crate::probe::ProbeCapabilities::NAMES {
         PROBE_CAPABILITY.with_label_values(&[capability]).set(0);
     }
 }
@@ -713,6 +729,9 @@ mod tests {
 
     #[test]
     fn init_is_idempotent_and_publishes_the_known_series() {
+        // Shares the registry with the capability test, which publishes to the same gauge.
+        let _guard = exclusive();
+
         // Called twice on purpose: the registry rejects duplicate names, so this catches both a
         // collision between two families and an init that cannot be run more than once.
         super::init(super::Component::Orchestrator);
@@ -736,7 +755,7 @@ mod tests {
             let series = format!("puna_rooms{{state=\"{state}\"}} 0");
             assert!(text.contains(&series), "missing series: {series}");
         }
-        for capability in super::PROBE_CAPABILITIES {
+        for capability in crate::probe::ProbeCapabilities::NAMES {
             let series = format!("puna_probe_capability{{capability=\"{capability}\"}} 0");
             assert!(text.contains(&series), "missing series: {series}");
         }
@@ -886,5 +905,80 @@ mod tests {
         );
 
         retain_rooms(&std::collections::HashSet::new());
+    }
+
+    /// **The regression.** Two writers had two vocabularies, so the gauge carried their union and
+    /// asserted `puna_probe_capability{capability="client_count"} 0` beside a populated
+    /// `puna_room_clients_connected` — a flat contradiction, live, for as long as both existed.
+    ///
+    /// Asserted on the RENDERED label set rather than on the constant, because comparing the
+    /// constant to itself is what the old code would also have passed.
+    #[test]
+    fn the_capability_gauge_carries_exactly_the_capabilities_that_exist() {
+        use crate::probe::{ProbeCapabilities, RoomProbe};
+
+        let _guard = exclusive();
+
+        // **The real seeding path, not a hand-rolled copy of it.** Seeding from `NAMES` here would
+        // compare the constant to itself and pass against the very divergence this exists to catch
+        // -- which it did, until a mutation test said so.
+        init(Component::Orchestrator);
+        publish_probe_capabilities(&crate::probe::HttpsProbe.capabilities());
+
+        let published: std::collections::BTreeSet<String> =
+            prometheus::core::Collector::collect(&*PROBE_CAPABILITY)
+                .iter()
+                .flat_map(prometheus::proto::MetricFamily::get_metric)
+                .flat_map(|m| m.get_label().to_vec())
+                .filter(|l| l.name() == "capability")
+                .map(|l| l.value().to_string())
+                .collect();
+
+        let expected: std::collections::BTreeSet<String> = ProbeCapabilities::NAMES
+            .iter()
+            .map(|n| (*n).to_string())
+            .collect();
+
+        assert_eq!(
+            published, expected,
+            "the gauge names capabilities that do not exist, or omits ones that do"
+        );
+
+        // And the values are the probe's own answers, not a seeded zero left behind.
+        for (name, present) in crate::probe::HttpsProbe.capabilities().as_pairs() {
+            assert_eq!(
+                PROBE_CAPABILITY
+                    .get_metric_with_label_values(&[name])
+                    .expect("the child")
+                    .get(),
+                i64::from(present),
+                "{name} was seeded but never published"
+            );
+        }
+
+        // Left as the seeding leaves it, because a sibling test asserts a cold process's view.
+        for capability in ProbeCapabilities::NAMES {
+            PROBE_CAPABILITY.with_label_values(&[capability]).set(0);
+        }
+    }
+
+    /// The pairs and the names are one list, so a capability added to the struct cannot be
+    /// published under a name the seeding does not know.
+    #[test]
+    fn every_capability_has_a_name_and_every_name_a_capability() {
+        use crate::probe::ProbeCapabilities;
+
+        let all = ProbeCapabilities {
+            status: true,
+            commands: true,
+            graceful_shutdown: true,
+        };
+        let named: Vec<&str> = all.as_pairs().iter().map(|(n, _)| *n).collect();
+
+        assert_eq!(named, ProbeCapabilities::NAMES);
+        assert!(
+            all.as_pairs().iter().all(|(_, present)| *present),
+            "a field was dropped from as_pairs, so it would never be published"
+        );
     }
 }

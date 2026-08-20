@@ -83,6 +83,30 @@ pub struct ProbeCapabilities {
     pub graceful_shutdown: bool,
 }
 
+impl ProbeCapabilities {
+    /// **The vocabulary, owned by the type that has the capabilities.**
+    ///
+    /// It lives here because it was previously written down twice: M9 declared the metric's label
+    /// set before a probe existed, guessing `activity` and `client_count`, and M11 then built the
+    /// real capabilities as `status`/`commands`/`graceful_shutdown`. Both writers ran, so the gauge
+    /// carried the *union* — and reported `puna_probe_capability{capability="client_count"} 0`
+    /// beside a populated `puna_room_clients_connected`, which is a flat contradiction on a
+    /// dashboard.
+    ///
+    /// Deriving both the seeding and the publishing from [`Self::as_pairs`] is what makes a third
+    /// divergence impossible rather than unlikely.
+    pub const NAMES: &'static [&'static str] = &["status", "commands", "graceful_shutdown"];
+
+    /// Each capability and whether this probe has it, in [`Self::NAMES`] order.
+    pub fn as_pairs(&self) -> [(&'static str, bool); 3] {
+        [
+            ("status", self.status),
+            ("commands", self.commands),
+            ("graceful_shutdown", self.graceful_shutdown),
+        ]
+    }
+}
+
 /// The room's persistence, or `None` for a room that keeps nothing.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SaveStatus {

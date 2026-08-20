@@ -211,16 +211,7 @@ impl Prober {
     /// degraded mode is otherwise invisible: under the TCP fallback the console is hidden and the
     /// numbers are blank, which looks like a quiet room rather than a room Puna cannot talk to.
     pub fn publish_capabilities(&self) {
-        let caps = self.probe.capabilities();
-        for (name, on) in [
-            ("status", caps.status),
-            ("commands", caps.commands),
-            ("graceful_shutdown", caps.graceful_shutdown),
-        ] {
-            puna_core::metrics::PROBE_CAPABILITY
-                .with_label_values(&[name])
-                .set(i64::from(on));
-        }
+        puna_core::metrics::publish_probe_capabilities(&self.probe.capabilities());
     }
 
     fn probe_kind(&self) -> &'static str {
