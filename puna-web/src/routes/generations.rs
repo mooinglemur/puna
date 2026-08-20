@@ -14,7 +14,7 @@ use rocket::form::Form;
 use rocket::fs::TempFile;
 use rocket::http::Status;
 use rocket::response::Redirect;
-use rocket::{FromForm, State, get, post, routes};
+use rocket::{FromForm, State, get, post, routes, uri};
 
 use crate::auth::{AdminSession, LoggedInSession};
 use crate::error::{Error, Result};
@@ -286,51 +286,79 @@ async fn read_upload(form: &mut Form<UploadForm<'_>>) -> std::result::Result<Vec
         .map_err(|e| format!("the upload could not be read: {e}"))
 }
 
+/// The admin view of the name cache, and where a rebuild is triggered from.
+///
+/// **A page rather than a documented curl**, because the repair is rare enough that nobody will
+/// remember the path and important enough that the tracker shows raw ids until it runs. `result`
+/// rides in the query string because a POST redirects here, and a redirect carries nothing else.
+#[derive(Template, WebTemplate)]
+#[template(path = "admin/generations.html")]
+pub struct AdminGenerationsTemplate {
+    base: TplContext,
+    generations: Vec<names::CacheStatus>,
+    result: Option<String>,
+}
+
+#[get("/admin/generations?<result>")]
+async fn admin_generations(
+    session: AdminSession,
+    result: Option<String>,
+    pool: &State<puna_core::db::Pool>,
+) -> Result<AdminGenerationsTemplate> {
+    let mut conn = pool.get().await?;
+    Ok(AdminGenerationsTemplate {
+        base: TplContext::new(session.session()),
+        generations: names::status(&mut conn).await?,
+        result,
+    })
+}
+
 /// Rebuild the tracker's name cache for every generation that has none.
 ///
 /// **This is the backfill**, and it is a route rather than a migration for one reason: the names
 /// come out of a file on a volume Postgres cannot see, so the repair has to run somewhere with the
 /// mount. That is this tier and only this tier.
 ///
-/// Safe to run repeatedly — it only touches generations with nothing cached, and the write is an
-/// upsert. A generation whose seed is missing from disk is reported and skipped rather than failing
-/// the run, because one unreadable seed must not stop the other forty being repaired.
+/// Safe to run repeatedly — it only touches generations with nothing cached. A generation whose seed
+/// is missing from disk is reported and skipped rather than failing the run, because one unreadable
+/// seed must not stop the other forty being repaired.
 #[post("/admin/generations/rebuild-names")]
 async fn rebuild_all_names(
     _session: AdminSession,
     pool: &State<puna_core::db::Pool>,
     data_dir: &State<DataDir>,
-) -> Result<String> {
+) -> Result<Redirect> {
     let mut conn = pool.get().await?;
     let pending = names::uncached(&mut conn).await?;
 
     let mut rebuilt = 0usize;
-    let mut failed = Vec::new();
+    let mut failed = 0usize;
     for generation in &pending {
         if cache_names(&mut conn, &data_dir.0, &generation.sha256, generation.id).await {
             rebuilt += 1;
         } else {
-            failed.push(generation.id.to_string());
+            failed += 1;
         }
     }
 
     tracing::info!(
         considered = pending.len(),
         rebuilt,
-        failed = failed.len(),
+        failed,
         "rebuilt the tracker's name cache"
     );
 
-    Ok(format!(
-        "{} generation(s) had no cached names; {rebuilt} rebuilt, {} failed{}\n",
-        pending.len(),
-        failed.len(),
-        if failed.is_empty() {
-            String::new()
-        } else {
-            format!(" ({})", failed.join(", "))
-        }
-    ))
+    let summary = if pending.is_empty() {
+        "Every generation already has cached names; nothing to do.".to_string()
+    } else if failed == 0 {
+        format!("Rebuilt {rebuilt} generation(s).")
+    } else {
+        format!("Rebuilt {rebuilt} generation(s); {failed} failed — see the log for which and why.")
+    };
+
+    Ok(Redirect::to(uri!(admin_generations(
+        result = Some(summary)
+    ))))
 }
 
 /// Rebuild one generation's names whether or not it already has them.
@@ -343,7 +371,7 @@ async fn rebuild_names(
     id: &str,
     pool: &State<puna_core::db::Pool>,
     data_dir: &State<DataDir>,
-) -> Result<String> {
+) -> Result<Redirect> {
     // Parsed here rather than through a `FromParam`, matching `show` above: the generation page
     // already takes its id this way and one convention per route set is worth more than a type.
     let id: puna_core::ids::GenerationId = id
@@ -362,14 +390,20 @@ async fn rebuild_names(
         )
     })?;
 
-    if cache_names(&mut conn, &data_dir.0, &sha256, id).await {
-        Ok(format!("rebuilt the name cache for {id}\n"))
+    let summary = if cache_names(&mut conn, &data_dir.0, &sha256, id).await {
+        format!("Rebuilt the names for {}.", generation.seed_name)
     } else {
-        Err(Error::new(
-            Status::InternalServerError,
-            anyhow::anyhow!("could not rebuild the name cache; the reason has been logged"),
-        ))
-    }
+        // Not an error page: the reason is in the log with the generation id, and an operator who
+        // just pressed a button is better served by the list plus a sentence than by a 500.
+        format!(
+            "Could not rebuild the names for {} — see the log for why.",
+            generation.seed_name
+        )
+    };
+
+    Ok(Redirect::to(uri!(admin_generations(
+        result = Some(summary)
+    ))))
 }
 
 pub fn routes() -> Vec<rocket::Route> {
@@ -378,7 +412,96 @@ pub fn routes() -> Vec<rocket::Route> {
         list,
         show,
         upload,
+        admin_generations,
         rebuild_all_names,
         rebuild_names
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use puna_core::ids::GenerationId;
+
+    fn status(games: &[&str], games_cached: i64, slots_cached: i64) -> names::CacheStatus {
+        names::CacheStatus {
+            id: GenerationId::new(),
+            seed_name: "70327325896653383029".into(),
+            games: games.iter().map(|g| (*g).to_string()).collect(),
+            slots: 4,
+            games_cached,
+            slots_cached,
+        }
+    }
+
+    /// **The three states have to look different**, and "partial" is the one that matters: a
+    /// half-finished rebuild renders *some* names, so the tracker looks fine until you hit an item
+    /// from the game that is missing. Rounding it to "cached" would hide the only case that needs a
+    /// person.
+    #[test]
+    fn the_three_cache_states_are_distinguishable() {
+        let none = status(&["Yacht Dice Bliss"], 0, 0);
+        let partial = status(&["Yacht Dice Bliss", "Timespinner"], 1, 4);
+        let complete = status(&["Yacht Dice Bliss"], 1, 4);
+
+        assert!(!none.cached() && !none.complete());
+        assert!(partial.cached() && !partial.complete());
+        assert!(complete.cached() && complete.complete());
+
+        let page = AdminGenerationsTemplate {
+            base: TplContext {
+                is_logged_in: true,
+                is_admin: true,
+                username: "troy".into(),
+                version: "test",
+                static_version: "test",
+            },
+            generations: vec![none.clone(), partial.clone(), complete.clone()],
+            result: Some("Rebuilt 1 generation(s).".into()),
+        };
+
+        let html = page.render().expect("renders");
+
+        assert!(html.contains("none"), "the uncached state is not labelled");
+        assert!(
+            html.contains("partial"),
+            "the half-rebuilt state is not called out"
+        );
+        // `1/2`, not "1 of 2": `askama.toml` sets `whitespace = "suppress"`, so a space written
+        // between two expressions in the template vanishes. The template separates values with
+        // entities and punctuation for that reason, and this asserts the form it actually renders.
+        assert!(html.contains("1/2"), "partial does not say how much");
+        assert!(
+            html.contains("Rebuilt 1 generation(s)."),
+            "the result notice"
+        );
+
+        // Every row offers its own rebuild, and the backfill is separate from them.
+        for row in [none, partial, complete] {
+            assert!(
+                html.contains(&format!("/admin/generations/{}/rebuild-names", row.id)),
+                "a row has no rebuild control"
+            );
+        }
+        assert!(html.contains(r#"action="/admin/generations/rebuild-names""#));
+    }
+
+    /// An empty deployment says so rather than rendering an empty table with no explanation.
+    #[test]
+    fn no_generations_reads_as_a_sentence() {
+        let page = AdminGenerationsTemplate {
+            base: TplContext {
+                is_logged_in: true,
+                is_admin: true,
+                username: "troy".into(),
+                version: "test",
+                static_version: "test",
+            },
+            generations: Vec::new(),
+            result: None,
+        };
+
+        let html = page.render().expect("renders");
+        assert!(html.contains("No generations have been uploaded yet."));
+    }
 }

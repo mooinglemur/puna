@@ -32,11 +32,17 @@ use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use crate::artifact::names::{GameNames, NameTables};
 use crate::ids::GenerationId;
 
-/// Store (or replace) a generation's name tables.
+/// Replace a generation's name tables.
 ///
-/// One transaction, so a rebuild cannot leave half the games replaced — a reader holding a mix of
-/// two datapackages would produce names that are individually plausible and collectively wrong,
-/// which is the hardest kind of wrong to notice.
+/// **Replace, not merge**, and the distinction is the whole reason this deletes first. An upsert
+/// keyed by `(generation_id, game)` can only ever add or overwrite, so a rebuild that produced
+/// *fewer* games than the run before it — after a fix to the extraction, say — would leave the
+/// extra rows behind with nothing able to shift them. "Rebuild" has to mean what it says, or the
+/// repair path has a state it cannot repair.
+///
+/// One transaction, so a rebuild cannot be observed half-done: the delete and the writes land
+/// together, and a reader holding a mix of two datapackages would produce names that are
+/// individually plausible and collectively wrong — the hardest kind of wrong to notice.
 pub async fn store(
     conn: &mut AsyncPgConnection,
     generation_id: GenerationId,
@@ -44,6 +50,14 @@ pub async fn store(
 ) -> Result<(), diesel::result::Error> {
     conn.transaction::<(), diesel::result::Error, _>(|conn| {
         async move {
+            for table in ["generation_game_names", "generation_slot_locations"] {
+                // The table name is a literal from the array above, never a caller's string.
+                diesel::sql_query(format!("DELETE FROM {table} WHERE generation_id = $1"))
+                    .bind::<SqlUuid, _>(generation_id)
+                    .execute(conn)
+                    .await?;
+            }
+
             for (game, names) in &tables.games {
                 diesel::sql_query(
                     "INSERT INTO generation_game_names
@@ -199,6 +213,83 @@ pub async fn is_cached(
     .await?;
 
     Ok(rows.into_iter().next().is_some_and(|row| row.present))
+}
+
+/// What the admin page shows: one generation, and how much of it is cached.
+///
+/// The counts are deliberately counts rather than a boolean. "Some games cached" is a real state — a
+/// rebuild that half-failed, or a seed whose extraction changed — and it looks nothing like "none",
+/// which is the ordinary pre-Stage-A case. Collapsing them would hide the one that needs attention.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CacheStatus {
+    pub id: GenerationId,
+    pub seed_name: String,
+    pub games: Vec<String>,
+    pub slots: i32,
+    pub games_cached: i64,
+    pub slots_cached: i64,
+}
+
+impl CacheStatus {
+    /// Whether the tracker can name anything at all for this generation.
+    pub fn cached(&self) -> bool {
+        self.games_cached > 0
+    }
+
+    /// Whether every game being played has names. False here with `cached()` true is the
+    /// half-a-rebuild state worth looking at.
+    pub fn complete(&self) -> bool {
+        self.games_cached >= self.games.len() as i64 && !self.games.is_empty()
+    }
+}
+
+/// Every generation, newest first, with its cache counts.
+///
+/// A global listing, unlike `generation::list_for_user` — generations are content-addressed and
+/// shared, so a per-user list is the right default *for a user*. An operator repairing a cache needs
+/// to see the ones nobody has claimed as well.
+pub async fn status(
+    conn: &mut AsyncPgConnection,
+) -> Result<Vec<CacheStatus>, diesel::result::Error> {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = SqlUuid)]
+        id: GenerationId,
+        #[diesel(sql_type = Text)]
+        seed_name: String,
+        #[diesel(sql_type = Array<Text>)]
+        games: Vec<String>,
+        #[diesel(sql_type = Integer)]
+        slots: i32,
+        #[diesel(sql_type = BigInt)]
+        games_cached: i64,
+        #[diesel(sql_type = BigInt)]
+        slots_cached: i64,
+    }
+
+    let rows: Vec<Row> = diesel::sql_query(
+        "SELECT g.id, g.seed_name, g.games, g.slots,
+                (SELECT count(*) FROM generation_game_names n WHERE n.generation_id = g.id)
+                  AS games_cached,
+                (SELECT count(*) FROM generation_slot_locations l WHERE l.generation_id = g.id)
+                  AS slots_cached
+           FROM generations g
+          ORDER BY g.created_at DESC",
+    )
+    .load(conn)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| CacheStatus {
+            id: row.id,
+            seed_name: row.seed_name,
+            games: row.games,
+            slots: row.slots,
+            games_cached: row.games_cached,
+            slots_cached: row.slots_cached,
+        })
+        .collect())
 }
 
 /// One generation, as the rebuild path needs it: its id and the sha that names its directory.

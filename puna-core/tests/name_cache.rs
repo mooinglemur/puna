@@ -170,6 +170,62 @@ async fn storing_again_replaces_what_was_there() {
     .await;
 }
 
+/// **A rebuild REPLACES, it does not merge**, and this is the case an upsert alone cannot reach: a
+/// game — or a slot — that the new extraction no longer produces has to disappear. Without it a fix
+/// to the extraction could never remove what the bug had written, and the repair path would have a
+/// state it could not repair.
+#[tokio::test]
+async fn a_rebuild_removes_what_the_previous_one_wrote() {
+    with_db(|pool| async move {
+        let mut conn = pool.get().await.expect("connection");
+        let generation = insert_generation(&mut conn).await;
+
+        names::store(&mut conn, generation, &tables())
+            .await
+            .expect("first store");
+        assert_eq!(
+            names::all_games(&mut conn, generation)
+                .await
+                .expect("query")
+                .len(),
+            2
+        );
+
+        // The second run knows about one game and one slot, not two of each.
+        let mut narrower = NameTables::default();
+        narrower.games.insert(
+            "Timespinner".to_string(),
+            game(&[(1, "Talaria Attachment")], &[(100, "Lake Serene")]),
+        );
+        narrower.slot_locations.insert(2, vec![100]);
+
+        names::store(&mut conn, generation, &narrower)
+            .await
+            .expect("second store");
+
+        let all = names::all_games(&mut conn, generation)
+            .await
+            .expect("query");
+        assert_eq!(all.len(), 1, "the dropped game is still cached: {all:?}");
+        assert!(all.contains_key("Timespinner"));
+        assert_eq!(
+            names::game(&mut conn, generation, "A Link to the Past")
+                .await
+                .expect("query"),
+            None,
+            "a game the rebuild no longer produces must be gone"
+        );
+        assert_eq!(
+            names::slot_locations(&mut conn, generation, 1)
+                .await
+                .expect("query"),
+            None,
+            "a slot the rebuild no longer produces must be gone"
+        );
+    })
+    .await;
+}
+
 /// The backfill's work list: generations with nothing cached, and only those.
 #[tokio::test]
 async fn the_rebuild_list_holds_exactly_the_uncached_generations() {

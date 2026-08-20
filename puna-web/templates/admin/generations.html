@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}generations &mdash; puna admin{% endblock %}
+{% block content %}
+
+<h1>Generations</h1>
+
+{% if let Some(result) = result %}
+<p class="notice">{{ result }}</p>
+{% endif %}
+
+<h2>The tracker&rsquo;s name cache</h2>
+
+{# Why this page exists rather than a one-line explanation: the names item and location ids resolve
+   to live in a generation's seed, on a volume the TRACKER tier deliberately cannot read. They are
+   extracted at upload and cached in Postgres, so a generation ingested before that existed -- or one
+   whose extraction failed -- shows raw ids on its tracker until somebody rebuilds it. That is the
+   only repair, and this is where it lives. #}
+<p>Item and location names are extracted from each generation&rsquo;s seed at upload and cached, so
+the tracker can name things without reading the volume. A generation with nothing cached still
+works &mdash; its tracker shows raw ids instead of names.</p>
+
+<form method="post" action="/admin/generations/rebuild-names">
+  <button type="submit">Rebuild every generation with nothing cached</button>
+</form>
+
+<table class="generations">
+<thead><tr>
+<th>Seed</th><th>Games</th><th>Slots</th><th>Names</th><th></th>
+</tr></thead>
+<tbody>
+{% for row in generations %}
+<tr>
+<td>{{ row.seed_name }}</td>
+<td>{{ row.games.len() }}</td>
+<td>{{ row.slots }}</td>
+<td>
+{# `askama.toml` sets `whitespace = "suppress"`, which strips whitespace ADJACENT TO TAGS -- so a
+   space written between two `{{ }}` disappears and "1 of 2" renders as "1of2". Everything below
+   therefore separates values with entities and punctuation rather than with spaces. #}
+{% if !row.cached() %}
+<span class="tag">none</span>
+{% else if row.complete() %}
+{{ row.games_cached }}&nbsp;games,&nbsp;{{ row.slots_cached }}&nbsp;slots
+{% else %}
+{# Some but not all: a half-finished rebuild, or an extraction that changed. Called out rather
+   than rounded to "cached", because it is the state that needs a person -- a tracker missing one
+   game's names looks fine until somebody hits an item from that game. #}
+<span class="tag">partial</span>&nbsp;{{ row.games_cached }}/{{ row.games.len() }}&nbsp;games
+{% endif %}
+</td>
+<td>
+  <form method="post" action="/admin/generations/{{ row.id }}/rebuild-names">
+    <button type="submit">Rebuild</button>
+  </form>
+</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+
+{% if generations.is_empty() %}
+<p>No generations have been uploaded yet.</p>
+{% endif %}
+
+<p><a href="/admin">Back to administration</a></p>
+{% endblock %}
