@@ -836,7 +836,7 @@ fn unreachable_room(e: UpstreamError) -> Error {
         // A `404` from a room means no admin token is configured there -- pahoa answers `404`
         // rather than `401` precisely so this is distinguishable -- which means the Secret did not
         // arrive. That is a Puna fault, not a caller's.
-        UpstreamError::Status { status: 404 } => Error::new(
+        UpstreamError::Room(puna_core::room::RoomError::Status { status: 404 }) => Error::new(
             Status::BadGateway,
             anyhow::anyhow!(
                 "the room has no admin token configured; its Secret may not have arrived"

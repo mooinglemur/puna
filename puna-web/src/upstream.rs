@@ -24,6 +24,7 @@
 use std::time::Duration;
 
 use puna_core::ids::RoomId;
+use puna_core::room::{RoomEndpoint, RoomError, classify};
 
 /// Which of a room's two tracker documents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -62,17 +63,12 @@ impl Document {
     }
 }
 
-/// How to reach a room from here.
-#[derive(Debug, Clone)]
-pub enum Route {
-    /// `mw-<room>.<namespace>.svc`, resolved to an address, with TLS still verified against the
-    /// advertised hostname. The normal path: no hairpin through the public VIP, and the room's
-    /// address never leaves the cluster.
-    Service { namespace: String },
-    /// The public `host:port`, resolved by ordinary DNS. A debugging switch for running the tracker
-    /// tier outside the cluster; it works, but it sends room traffic out and back.
-    Public,
-}
+/// Re-exported so the tier's configuration keeps naming one type.
+///
+/// The transport itself -- resolving the Service address while verifying against the advertised
+/// hostname -- lives in `puna_core::room`, because the orchestrator's probe dials rooms the same
+/// way and that property must not be implemented twice.
+pub use puna_core::room::Route;
 
 #[derive(Debug, Clone)]
 pub struct Upstream {
@@ -86,24 +82,17 @@ pub struct Upstream {
 #[derive(Debug, thiserror::Error)]
 pub enum UpstreamError {
     /// The room has no port reserved, so there is nothing to fetch from.
+    ///
+    /// The one failure that is this tier's own rather than the transport's: it is answered from the
+    /// database before anything is dialed.
     #[error("this room has no address yet")]
     NoAddress,
 
-    #[error("could not resolve {name}: {source}")]
-    Resolve {
-        name: String,
-        #[source]
-        source: std::io::Error,
-    },
-
-    #[error("the room did not answer: {0}")]
-    Transport(#[from] reqwest::Error),
-
-    /// Pahoa answered, and said no. `404` here is the diagnostic worth knowing: it means **no admin
-    /// token is configured on that room**, i.e. the Secret did not arrive — pahoa answers `404`
-    /// rather than `401` for exactly this reason, so it reads as "old image" instead of "bad auth".
-    #[error("the room answered {status}")]
-    Status { status: u16 },
+    /// Everything that can go wrong once a room is actually dialed, classified once in
+    /// `puna_core::room` so the tracker and the orchestrator's probe agree about what a `404` and a
+    /// `429` mean.
+    #[error(transparent)]
+    Room(#[from] puna_core::room::RoomError),
 }
 
 impl Upstream {
@@ -119,54 +108,32 @@ impl Upstream {
         admin_token: &str,
         document: Document,
     ) -> Result<serde_json::Value, UpstreamError> {
-        // Built from the advertised host and the room's own port, never from anything in a request.
-        let url = format!(
-            "https://{}:{}{}",
-            self.advertise_host,
+        let endpoint = RoomEndpoint {
+            room,
             base_port,
-            document.path()
-        );
+            advertise_host: self.advertise_host.clone(),
+            route: self.route.clone(),
+            timeout: self.timeout,
+        };
 
-        let mut builder = reqwest::Client::builder()
-            .timeout(self.timeout)
-            .user_agent(concat!("puna/", env!("CARGO_PKG_VERSION")));
-
-        if let Route::Service { namespace } = &self.route {
-            // Point the *hostname on the certificate* at the room's Service address. SNI and
-            // verification still use `advertise_host`, because that is the only name the room
-            // certificate carries -- dialing `mw-<id>.<ns>.svc` directly would fail verification.
-            let name = format!("mw-{room}.{namespace}.svc:{base_port}");
-            let addr = tokio::net::lookup_host(&name)
-                .await
-                .map_err(|source| UpstreamError::Resolve {
-                    name: name.clone(),
-                    source,
-                })?
-                .next()
-                .ok_or_else(|| UpstreamError::Resolve {
-                    name: name.clone(),
-                    source: std::io::Error::other("no addresses"),
-                })?;
-            builder = builder.resolve(&self.advertise_host, addr);
-        }
-
-        let response = builder
-            .build()?
-            .get(&url)
+        let response = endpoint
+            .client()
+            .await?
+            // `document.path()` is a constant per variant, so no path from a request can reach the
+            // wire. That is the allowlist, and it stays here rather than in the transport.
+            .get(endpoint.url(document.path()))
             // Mandatory, not optional: pahoa gates the tracker whenever a token is configured, and
             // every Puna room has one.
             .bearer_auth(admin_token)
             .send()
-            .await?;
+            .await
+            .map_err(RoomError::from)?;
 
-        let status = response.status();
-        if !status.is_success() {
-            return Err(UpstreamError::Status {
-                status: status.as_u16(),
-            });
+        if let Some(e) = classify(&response) {
+            return Err(e.into());
         }
 
-        Ok(response.json().await?)
+        Ok(response.json().await.map_err(RoomError::from)?)
     }
 }
 

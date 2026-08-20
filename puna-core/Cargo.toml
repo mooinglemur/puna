@@ -25,6 +25,9 @@ prometheus.workspace = true
 # Already in the graph via rocket_oauth2 and uuid; named here because `secret.rs` depends on it
 # being a CSPRNG, which is a property of `rand`'s default `ThreadRng` and not of "some rand crate".
 rand = "0.8"
+# The orchestrator's probe dials rooms over pahoa's own TLS. See the workspace declaration for
+# why the feature list is not restated here.
+reqwest.workspace = true
 rustls.workspace = true
 rustls-pki-types.workspace = true
 serde.workspace = true

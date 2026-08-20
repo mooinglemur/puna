@@ -30,20 +30,7 @@ diesel-async.workspace = true
 axum.workspace = true
 askama = { version = "0.15", features = ["serde_json"] }
 askama_web = { version = "0.15", features = ["rocket-0.5"] }
-# reqwest's default features route through `default-tls` -> `rustls` -> `__rustls-aws-lc-rs`,
-# which is the single largest source of the aws-lc-rs provider. `rustls-no-provider` gives the
-# same rustls stack (including rustls-platform-verifier for roots) while leaving the provider
-# choice to the workspace's rustls pin, i.e. ring. The three non-TLS defaults are re-stated
-# because default-features = false drops them too.
-reqwest = { version = "0.13", default-features = false, features = [
-    "charset",
-    "http2",
-    "system-proxy",
-    "rustls-no-provider",
-    "json",
-    "form",
-    "multipart",
-] }
+reqwest.workspace = true
 rocket = { version = "0.5.1", features = ["json", "secrets", "uuid"] }
 rust-embed = { version = "8", features = ["rocket"] }
 zip = "7"

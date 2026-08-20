@@ -146,6 +146,15 @@ pub struct OrchestratorConfig {
     pub reconcile_interval: Duration,
     pub command_timeout: Duration,
     pub trash_retention: Duration,
+    /// Which probe reaches rooms. `https` is the default because pahoa has shipped the whole admin
+    /// surface; `tcp` exists for a room pinned to an image older than that, and under it the
+    /// console is hidden entirely rather than shown greyed out.
+    pub room_probe: crate::probe::ProbeKind,
+    /// How long a room has to answer a probe.
+    ///
+    /// Short on purpose: a tick reconciles every room, so a room that has wedged must not be able
+    /// to hold the sweep open behind it.
+    pub room_probe_timeout: Duration,
 }
 
 impl OrchestratorConfig {
@@ -161,6 +170,10 @@ impl OrchestratorConfig {
             reconcile_interval: parse_duration("PUNA_RECONCILE_INTERVAL", 30)?,
             command_timeout: parse_duration("PUNA_COMMAND_TIMEOUT", 15)?,
             trash_retention: parse_duration("PUNA_TRASH_RETENTION", 7 * 24 * 3600)?,
+            room_probe: optional("PUNA_ROOM_PROBE", "https")
+                .parse()
+                .map_err(|e| anyhow::anyhow!("{e}"))?,
+            room_probe_timeout: parse_duration("PUNA_ROOM_PROBE_TIMEOUT", 5)?,
         })
     }
 }

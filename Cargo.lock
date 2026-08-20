@@ -2413,6 +2413,7 @@ dependencies = [
  "pahoa-multidata",
  "prometheus",
  "rand 0.8.7",
+ "reqwest",
  "rustls",
  "rustls-pki-types",
  "serde",

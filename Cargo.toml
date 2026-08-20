@@ -48,6 +48,26 @@ async-trait = "0.1"
 # on a side listener that Rocket has no business owning. Pinned here rather than per-crate so the
 # two cannot drift onto different axum majors while serving what is meant to be one scrape shape.
 axum = "0.8"
+# Here for the same reason as axum, and with more at stake. Two crates now dial rooms -- the
+# tracker tier for its documents and the orchestrator for its probe -- and reqwest's default
+# features route through `default-tls` -> `rustls` -> `__rustls-aws-lc-rs`, which is the single
+# largest source of the aws-lc-rs provider. `rustls-no-provider` gives the same rustls stack
+# (including rustls-platform-verifier for roots) while leaving the provider choice to the
+# workspace's rustls pin, i.e. ring. The three non-TLS defaults are re-stated because
+# default-features = false drops them too.
+#
+# Declared once so the two cannot drift: with two providers compiled in, rustls cannot infer a
+# process default and `ClientConfig::builder()` PANICS at runtime. `grep -c 'name = "aws-lc'
+# Cargo.lock` must stay 0.
+reqwest = { version = "0.13", default-features = false, features = [
+    "charset",
+    "http2",
+    "system-proxy",
+    "rustls-no-provider",
+    "json",
+    "form",
+    "multipart",
+] }
 chrono = { version = "0.4", features = ["serde"] }
 prometheus = { version = "0.14", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
