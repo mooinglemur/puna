@@ -12,6 +12,7 @@ use super::{
     ActivityStatus, NetStatus, ProbeCapabilities, ProbeError, RoomProbe, RoomStatus, SaveStatus,
     SlotStatus,
 };
+use crate::model::command::{CommandOutput, RoomCommand};
 use crate::room::{RoomEndpoint, classify};
 
 /// `GET /admin/v1/status` and `POST /admin/v1/shutdown`.
@@ -19,6 +20,7 @@ pub struct HttpsProbe;
 
 const STATUS: &str = "/admin/v1/status";
 const SHUTDOWN: &str = "/admin/v1/shutdown";
+const COMMAND: &str = "/admin/v1/command";
 
 #[async_trait::async_trait]
 impl RoomProbe for HttpsProbe {
@@ -72,6 +74,37 @@ impl RoomProbe for HttpsProbe {
         // the Deployment to disappear; waiting on this response for completion would wait forever,
         // because quiescing closes the connection that asked.
         Ok(())
+    }
+
+    async fn execute(
+        &self,
+        endpoint: &RoomEndpoint,
+        admin_token: &str,
+        command: &RoomCommand,
+    ) -> Result<CommandOutput, ProbeError> {
+        let response = endpoint
+            .client()
+            .await?
+            .post(endpoint.url(COMMAND))
+            .bearer_auth(admin_token)
+            // Serialized from the typed enum, so the body cannot be a shape pahoa has to reject --
+            // which is why a `400` here is a Puna bug rather than a caller's.
+            .json(command)
+            .send()
+            .await
+            .map_err(crate::room::RoomError::from)?;
+
+        if let Some(e) = classify(&response) {
+            return Err(e.into());
+        }
+
+        // **A refusal arrives here, not in the error path.** pahoa answers `200` with `ok: false`
+        // for "no such slot", "nobody to kick", "countdown out of range" -- the room understood and
+        // said no. Mapping that to an error would invite a retry, and retrying a refusal loops.
+        response
+            .json()
+            .await
+            .map_err(|e| ProbeError::Malformed(e.to_string()))
     }
 
     fn capabilities(&self) -> ProbeCapabilities {
@@ -179,6 +212,34 @@ fn timestamp(value: &serde_json::Value, key: &str) -> Option<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **Every request this module builds must carry the token.**
+    ///
+    /// Found the accidental way: `execute` was written without `.bearer_auth`, and only an
+    /// *unused variable* warning caught it. Had the token been used anywhere else in the function
+    /// the compiler would have been silent, and the symptom would have been actively misleading —
+    /// pahoa answers `404` to an unauthenticated admin call, which Puna reads as "the Secret did
+    /// not arrive" and reports as a provisioning fault.
+    ///
+    /// A source lint rather than a wire test because there is no room to dial here, and the
+    /// property is about what the code says rather than what one call did.
+    #[test]
+    fn every_request_authenticates() {
+        let source = include_str!("http.rs");
+        // One per request built against this endpoint. `url()` is the only way to name one.
+        let requests = source.matches("endpoint.url(").count();
+        let authenticated = source.matches(".bearer_auth(admin_token)").count();
+
+        assert!(
+            requests > 0,
+            "the lint found no requests, so it proves nothing"
+        );
+        assert_eq!(
+            requests, authenticated,
+            "a request to a room was built without an admin token: {requests} request(s), \
+             {authenticated} authenticated"
+        );
+    }
 
     /// A full document, transcribed from pahoa's own `status::document` rather than invented.
     fn document() -> serde_json::Value {

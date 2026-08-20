@@ -15,6 +15,7 @@
 use tokio::net::TcpStream;
 
 use super::{ProbeCapabilities, ProbeError, RoomProbe, RoomStatus};
+use crate::model::command::{CommandOutput, RoomCommand};
 use crate::room::{RoomEndpoint, RoomError, Route};
 
 pub struct TcpProbe;
@@ -67,6 +68,20 @@ impl RoomProbe for TcpProbe {
         // route saves a few seconds, not a save.
         Err(ProbeError::Unsupported {
             what: "ask a room to shut down gracefully",
+        })
+    }
+
+    async fn execute(
+        &self,
+        _endpoint: &RoomEndpoint,
+        _admin_token: &str,
+        _command: &RoomCommand,
+    ) -> Result<CommandOutput, ProbeError> {
+        // Unsupported rather than failed, so the console is HIDDEN rather than shown greyed out.
+        // A control that is visible and refuses reads as a bug in Puna; an absent one reads as a
+        // room Puna cannot drive, which is what it is.
+        Err(ProbeError::Unsupported {
+            what: "run commands against a room",
         })
     }
 
@@ -130,6 +145,24 @@ mod tests {
             result.is_err(),
             "a closed port must not read as a live room"
         );
+    }
+
+    /// Commands are refused as *unsupported* too, and for the same reason: the console is hidden
+    /// entirely under this probe rather than shown greyed out. A visible control that refuses reads
+    /// as a bug in Puna; an absent one reads as what it is.
+    #[tokio::test]
+    async fn commands_are_unsupported_rather_than_broken() {
+        let e = TcpProbe
+            .execute(
+                &endpoint(1),
+                "unused",
+                &crate::model::command::RoomCommand::Status,
+            )
+            .await
+            .expect_err("must refuse");
+
+        assert!(matches!(e, ProbeError::Unsupported { .. }));
+        assert!(!e.is_transient());
     }
 
     /// Graceful shutdown is refused as *unsupported* rather than as a failure, so a caller hides

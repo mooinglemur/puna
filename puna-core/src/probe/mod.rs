@@ -32,6 +32,7 @@ pub mod tcp;
 
 use chrono::{DateTime, Utc};
 
+use crate::model::command::{CommandOutput, RoomCommand};
 use crate::room::{RoomEndpoint, RoomError};
 
 pub use http::HttpsProbe;
@@ -181,6 +182,18 @@ pub trait RoomProbe: Send + Sync {
         admin_token: &str,
         reason: &str,
     ) -> Result<(), ProbeError>;
+
+    /// Run one typed command against a room.
+    ///
+    /// Returns the room's **answer**, including a refusal: `ok: false` is a `CommandOutput`, not an
+    /// `Err`. Only a request the room could not understand, could not be sent, or was rate limited
+    /// becomes an error — see [`crate::model::command::Disposition`] for why that line matters.
+    async fn execute(
+        &self,
+        endpoint: &RoomEndpoint,
+        admin_token: &str,
+        command: &RoomCommand,
+    ) -> Result<CommandOutput, ProbeError>;
 
     fn capabilities(&self) -> ProbeCapabilities;
 }
