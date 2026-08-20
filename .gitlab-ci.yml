@@ -5,7 +5,7 @@
 #   - puna-orchestrator : the Kubernetes-facing singleton
 #
 # Pattern per binary, mirroring Archipelago-lobby's pipeline: a cargo job builds in a rust
-# image with a branch-keyed workspace cache, stages the binary as `build-result` next to its
+# image with a cached crate registry, stages the binary as `build-result` next to its
 # Dockerfile, then a buildah job builds that context. The Dockerfiles expect `build-result`
 # and need no knowledge of CI.
 #
@@ -36,11 +36,21 @@ stages:
 
 # ---- shared anchors ----
 
+# THE REGISTRY ONLY, deliberately not `target/`.
+#
+# Caching `target/` looks like the obvious win and is not one here. The directory runs to gigabytes
+# for this workspace, and GitLab's cache is not a mounted volume -- it is zipped, uploaded,
+# downloaded and unpacked around every job. That round trip costs more wall-clock than the compile
+# it saves, and it costs it on every job rather than only on the ones that would have rebuilt.
+#
+# It is also the cache most likely to be WRONG rather than merely slow: a stale `target/` keyed by
+# branch is how a job passes against object files from a commit nobody is looking at.
+#
+# Downloading crates is the part actually worth keeping, so that is what stays.
 .rust-cache: &rust-cache
   cache:
     key: cargo-$CI_COMMIT_REF_SLUG
     paths:
-      - target/
       - .cargo/
   variables:
     CARGO_HOME: $CI_PROJECT_DIR/.cargo
