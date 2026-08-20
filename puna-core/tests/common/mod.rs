@@ -110,9 +110,13 @@ where
 /// Insert a generation so rooms have something to reference.
 pub async fn insert_generation(conn: &mut AsyncPgConnection) -> GenerationId {
     let id = GenerationId::new();
+    // **Two md5s, because a sha256 is 32 bytes and one md5 is 16.** A real `generations.sha256`
+    // always names a directory on disk, and code that turns the column back into a `[u8; 32]` --
+    // the name-cache rebuild does -- would silently skip every row this helper made if it were
+    // short. Cheap to be honest here; confusing not to be.
     diesel::sql_query(
         "INSERT INTO generations (id, sha256, size_bytes, seed_name, slots, locations)
-         VALUES ($1, decode(md5(random()::text), 'hex'), 1, 'seed', 1, 1)",
+         VALUES ($1, decode(md5(random()::text) || md5(random()::text), 'hex'), 1, 'seed', 1, 1)",
     )
     .bind::<SqlUuid, _>(id)
     .execute(conn)

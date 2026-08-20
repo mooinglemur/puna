@@ -56,6 +56,23 @@ diesel::table! {
 }
 
 diesel::table! {
+    generation_game_names (generation_id, game) {
+        generation_id -> Uuid,
+        game -> Text,
+        item_names -> Jsonb,
+        location_names -> Jsonb,
+    }
+}
+
+diesel::table! {
+    generation_slot_locations (generation_id, slot_number) {
+        generation_id -> Uuid,
+        slot_number -> Int4,
+        location_ids -> Array<Nullable<Int8>>,
+    }
+}
+
+diesel::table! {
     use diesel::sql_types::*;
     use super::sql_types::SlotKind;
 
@@ -260,6 +277,8 @@ diesel::table! {
 }
 
 diesel::joinable!(creator_allowlist -> users (added_by));
+diesel::joinable!(generation_game_names -> generations (generation_id));
+diesel::joinable!(generation_slot_locations -> generations (generation_id));
 diesel::joinable!(generation_slots -> generations (generation_id));
 diesel::joinable!(generations -> users (first_ingested_by));
 diesel::joinable!(port_reservations -> rooms (room_id));
@@ -277,6 +296,8 @@ diesel::joinable!(settings -> users (updated_by));
 
 diesel::allow_tables_to_appear_in_same_query!(
     creator_allowlist,
+    generation_game_names,
+    generation_slot_locations,
     generation_slots,
     generations,
     port_reservations,

@@ -3,6 +3,7 @@
 pub mod event;
 pub mod generation;
 pub mod member;
+pub mod names;
 pub mod port;
 pub mod room;
 pub mod settings;
