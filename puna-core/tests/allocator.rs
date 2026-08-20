@@ -38,14 +38,14 @@ async fn path_1_a_room_returns_to_its_own_port() {
 }
 
 #[tokio::test]
-async fn path_2_never_allocated_ports_come_first_and_are_distinct() {
+async fn path_2_never_allocated_ports_are_distinct_and_not_sequential() {
     with_db(|pool| async move {
         let orch = Orchestrator::assume_leader();
         let mut conn = pool.get().await.expect("connection");
         let generation = insert_generation(&mut conn).await;
 
         let mut seen = Vec::new();
-        for _ in 0..5 {
+        for _ in 0..8 {
             let room = insert_room(&mut conn, generation, "idle").await;
             seen.push(
                 port::allocate_pair(&orch, &mut conn, DEV, room)
@@ -54,11 +54,31 @@ async fn path_2_never_allocated_ports_come_first_and_are_distinct() {
             );
         }
 
-        let (lo, _) = DEV.port_range();
-        // '-infinity' sorts first and ties break on base_port, so a fresh range hands out its
-        // lowest pairs in order. Asserting the exact sequence pins the ordering the LRU rule and
-        // the never-allocated rule share.
-        assert_eq!(seen, vec![lo, lo + 2, lo + 4, lo + 6, lo + 8]);
+        let (lo, hi) = common::port_range(&mut conn, "dev").await;
+
+        // Every pair is distinct, even, and inside the range.
+        let mut sorted = seen.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), seen.len(), "ports must not repeat: {seen:?}");
+        for port in &seen {
+            assert!((lo..=hi).contains(port), "{port} outside {lo}..={hi}");
+            assert_eq!(port % 2, 0, "{port} must be an even base port");
+        }
+
+        // **The property this ordering exists for: a live port must not reveal how many rooms have
+        // ever existed.** Filling from the bottom made the highest allocated port a room counter,
+        // which is at its most telling early in an environment's life. So the allocations must not
+        // be the lowest N pairs in order.
+        //
+        // This is probabilistic, and the probability is the reason it is safe to assert: with 2500
+        // pairs, drawing exactly the lowest 8 is one chance in about 10^22. A failure here is a
+        // change in the ordering, not luck.
+        let lowest: Vec<u16> = (0..seen.len() as u16).map(|i| lo + i * 2).collect();
+        assert_ne!(
+            seen, lowest,
+            "allocation is filling sequentially from the bottom of the range"
+        );
     })
     .await;
 }
@@ -146,16 +166,15 @@ async fn an_unbound_pair_is_always_preferred_over_reclaiming() {
         let orch = Orchestrator::assume_leader();
         let mut conn = pool.get().await.expect("connection");
         let generation = insert_generation(&mut conn).await;
-        let (lo, _) = DEV.port_range();
 
         shrink_range(&mut conn, "dev", 2).await;
 
-        // Bind the LOW pair to an idle room, then age it so LRU ordering alone would pick it.
+        // Bind ONE of the two pairs to an idle room, then age it so LRU ordering alone would pick
+        // it. Which pair is arbitrary; the property is that the other one is taken anyway.
         let holder = insert_room(&mut conn, generation, "idle").await;
         let held = port::allocate_pair(&orch, &mut conn, DEV, holder)
             .await
             .expect("allocation");
-        assert_eq!(held, lo);
         set_last_activity_ancient(&mut conn, held).await;
 
         // The remaining pair is unbound but has a NEWER last_activity, so a single-statement
@@ -244,13 +263,13 @@ async fn quarantine_holds_a_pair_out_then_releases_it() {
         let generation = insert_generation(&mut conn).await;
 
         shrink_range(&mut conn, "dev", 2).await;
-        let (lo, _) = DEV.port_range();
 
         let room = insert_room(&mut conn, generation, "idle").await;
+        // Which of the two pairs it lands on is arbitrary -- the tie among never-allocated pairs
+        // is broken randomly -- and this test is about the quarantine, not the choice.
         let first = port::allocate_pair(&orch, &mut conn, DEV, room)
             .await
             .expect("allocation");
-        assert_eq!(first, lo);
 
         // Simulates the ingress-IP read-back finding the Service on an unexpected address.
         let until = chrono::Utc::now() + chrono::Duration::hours(1);
@@ -423,4 +442,157 @@ async fn room_still_exists(
         .await
         .expect("count");
     rows.into_iter().next().map(|r| r.n).unwrap_or(0) == 1
+}
+
+/// **A narrowed range never blocks startup, and a room caught outside it moves.**
+///
+/// A range is configuration, so refusing to run because it changed would let one edit wedge the
+/// orchestrator for a whole environment. Instead the reservation is released and — for a room that
+/// is actually serving on that port — a restart is queued, which stops it and brings it back on a
+/// valid port through the ordinary path.
+#[tokio::test]
+async fn narrowing_the_range_moves_a_live_room_rather_than_refusing() {
+    with_db(|pool| async move {
+        let orch = Orchestrator::assume_leader();
+        let mut conn = pool.get().await.expect("connection");
+        let generation = insert_generation(&mut conn).await;
+
+        // Four pairs only, so both rooms land somewhere in a known low band -- WHICH of the four
+        // each takes is random, so the window below is chosen to sit above all of them rather than
+        // relative to whatever they happened to get.
+        shrink_range(&mut conn, "dev", 4).await;
+        let (lo, _) = common::port_range(&mut conn, "dev").await;
+
+        let running = insert_room(&mut conn, generation, "running").await;
+        let idle = insert_room(&mut conn, generation, "idle").await;
+        let held = port::allocate_pair(&orch, &mut conn, DEV, running)
+            .await
+            .expect("a port");
+        let idle_held = port::allocate_pair(&orch, &mut conn, DEV, idle)
+            .await
+            .expect("a port");
+
+        // Strictly above every pair either room could be holding.
+        let (window_lo, window_hi) = (lo + 8, lo + 20);
+        port::ensure_range(&orch, &mut conn, DEV, (window_lo, window_hi))
+            .await
+            .expect("a narrowed range must not fail");
+
+        // Neither keeps a reservation it could return to.
+        assert_eq!(
+            port::reserved_pair(&mut conn, running).await.expect("read"),
+            None
+        );
+        assert_eq!(
+            port::reserved_pair(&mut conn, idle).await.expect("read"),
+            None
+        );
+        assert_ne!(held, idle_held, "they held different ports to begin with");
+
+        // The serving one is queued for a restart; the idle one is left alone, because it is not
+        // on that port and will take a valid one when it next starts.
+        assert!(
+            common::redeploy_requested(&mut conn, running).await,
+            "a room serving on a now-invalid port must be moved"
+        );
+        assert!(
+            !common::redeploy_requested(&mut conn, idle).await,
+            "an idle room needs no restart -- there is nothing to move"
+        );
+
+        // And the room that has to move gets a port inside the new range.
+        let fresh = port::allocate_pair(&orch, &mut conn, DEV, running)
+            .await
+            .expect("a fresh port");
+        assert!(
+            (window_lo..=window_hi).contains(&fresh),
+            "reallocated inside the configured range, got {fresh}"
+        );
+    })
+    .await;
+}
+
+/// The allocator's own guard, independent of startup reconciliation.
+///
+/// Step one of allocation is "the room's own previous pair", which is what makes a torn-down room
+/// come back on the address its players already hold. That must not resurrect a reservation the
+/// range no longer covers — the room would return to a port this deployment does not own, and the
+/// collision is silent.
+#[tokio::test]
+async fn a_reservation_outside_the_range_is_never_handed_back() {
+    with_db(|pool| async move {
+        let orch = Orchestrator::assume_leader();
+        let mut conn = pool.get().await.expect("connection");
+        let generation = insert_generation(&mut conn).await;
+        let room = insert_room(&mut conn, generation, "idle").await;
+
+        let held = port::allocate_pair(&orch, &mut conn, DEV, room)
+            .await
+            .expect("a port");
+
+        // Move the recorded range out from under the reservation WITHOUT reconciling the rows, so
+        // the stale binding survives -- the state a mid-flight range change would leave behind.
+        common::set_recorded_range(&mut conn, "dev", held + 100, held + 300).await;
+
+        let fresh = port::allocate_pair(&orch, &mut conn, DEV, room)
+            .await
+            .expect("a fresh port");
+        assert_ne!(fresh, held, "the stale reservation must not be returned");
+        assert!(
+            (held + 100..=held + 300).contains(&fresh),
+            "and the replacement is inside the range, got {fresh}"
+        );
+    })
+    .await;
+}
+
+/// Widening adds capacity without disturbing what is already there, and narrowing removes only
+/// what nobody holds.
+///
+/// The `last_activity` check is the subtle half: that column IS the LRU ordering, so a reconcile
+/// that deleted and re-seeded rows would silently reset every port's age and make the allocator
+/// hand out a recently-released port ahead of one idle for weeks.
+#[tokio::test]
+async fn reconciling_the_range_preserves_existing_reservations() {
+    with_db(|pool| async move {
+        let orch = Orchestrator::assume_leader();
+        let mut conn = pool.get().await.expect("connection");
+        let generation = insert_generation(&mut conn).await;
+        let room = insert_room(&mut conn, generation, "idle").await;
+
+        let held = port::allocate_pair(&orch, &mut conn, DEV, room)
+            .await
+            .expect("a port");
+        let (low, high) = common::port_range(&mut conn, "dev").await;
+
+        // Narrow to a window that still contains the held port, then restore.
+        port::ensure_range(&orch, &mut conn, DEV, (low, held + 10))
+            .await
+            .expect("narrowing around a held port is fine");
+        assert_eq!(
+            common::port_range(&mut conn, "dev").await,
+            (low, held + 10),
+            "the recorded range follows configuration"
+        );
+        assert_eq!(
+            port::reserved_pair(&mut conn, room).await.expect("read"),
+            Some(held),
+            "the held reservation survived"
+        );
+
+        port::ensure_range(&orch, &mut conn, DEV, (low, high))
+            .await
+            .expect("widening back");
+        assert_eq!(common::port_range(&mut conn, "dev").await, (low, high));
+
+        // Idempotent: running it again writes nothing and changes nothing.
+        port::ensure_range(&orch, &mut conn, DEV, (low, high))
+            .await
+            .expect("second pass");
+        assert_eq!(
+            port::reserved_pair(&mut conn, room).await.expect("read"),
+            Some(held)
+        );
+    })
+    .await;
 }

@@ -62,9 +62,10 @@ pub const ROOM_KEY: &str = "onelemur.com/room";
 
 /// Which LoadBalancer IP pool a Service draws from.
 ///
-/// **Required on room Services**, not decorative: the `br-v5` pool's `NotIn` selector matches
-/// anything without it, so an unlabeled Service lands on `172.29.0.x` — a private address, from
-/// which the room is simply unreachable.
+/// **Required on room Services**, not decorative. A cluster is expected to carry more than one
+/// address pool, with the internal one selecting anything that does not ask for the public one — so
+/// an unlabeled Service is not merely unlabeled, it is allocated a private address from which the
+/// room is unreachable, while otherwise looking entirely healthy.
 pub const LB_POOL_KEY: &str = "onelemur.com/lb-pool";
 pub const LB_POOL: &str = "public";
 

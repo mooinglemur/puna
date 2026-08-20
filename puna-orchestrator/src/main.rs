@@ -141,6 +141,10 @@ async fn run(
         // Before a single port is allocated. See the function's own note: this is the one mistake
         // in the system that cannot be undone.
         assert_environment(pool, config.common.environment).await?;
+        // And in the same breath, because it is the same concern: record the range this deployment
+        // owns and make the reservation rows match it. Held here rather than in the tick because
+        // nothing may allocate before the database knows which ports are legitimate.
+        assert_port_range(pool, config).await?;
 
         let wake = Arc::new(Notify::new());
         let listener = tokio::spawn(listen(
@@ -226,6 +230,29 @@ async fn assert_environment(
     let mut conn = pool.get().await?;
     puna_core::model::port::assert_environment_matches(&mut conn, environment).await?;
     Ok(())
+}
+
+/// Write the configured port range into the database and reconcile the reservation rows to it.
+///
+/// The range is a property of the deployment's network rather than of Puna, so it arrives as
+/// configuration — but the database is what enforces it, both through the trigger on
+/// `port_reservations` and by simply not having rows for ports outside it. This is what puts the
+/// configured value there.
+async fn assert_port_range(
+    pool: &puna_core::db::Pool,
+    config: &OrchestratorConfig,
+) -> anyhow::Result<()> {
+    let mut conn = pool.get().await?;
+    // Legitimate here for the same reason as in `reconcile`: the lock is held, and this runs before
+    // anything else can touch a reservation.
+    let orchestrator = Orchestrator::assume_leader();
+    puna_core::model::port::ensure_range(
+        &orchestrator,
+        &mut conn,
+        config.common.environment,
+        config.port_range,
+    )
+    .await
 }
 
 /// Hold a `LISTEN` connection and poke `wake` on every notification.

@@ -42,7 +42,7 @@ use super::{
 };
 
 /// The address the fake's IPAM hands out, matching the one dev is configured with.
-const DEFAULT_LB_IP: &str = "38.246.56.121";
+const DEFAULT_LB_IP: &str = "192.0.2.10";
 
 /// One call, as the log records it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -689,7 +689,7 @@ mod tests {
         // Sharing degraded: healthy, allocated, and on an address DNS never mentions.
         let other = RoomId::new();
         cluster.delay_ingress(0);
-        cluster.set_ingress_ip("38.246.56.122");
+        cluster.set_ingress_ip("192.0.2.11");
         cluster
             .create_service(&service_spec(other, owner(other, "uid-2")))
             .await
@@ -699,7 +699,7 @@ mod tests {
             .await
             .expect("get")
             .unwrap();
-        assert_eq!(wrong.ingress_ip.as_deref(), Some("38.246.56.122"));
+        assert_eq!(wrong.ingress_ip.as_deref(), Some("192.0.2.11"));
     }
 
     #[tokio::test]

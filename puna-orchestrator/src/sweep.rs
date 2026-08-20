@@ -619,7 +619,7 @@ mod tests {
             services: vec![RoomService {
                 name: "mw-live".into(),
                 room_id: Some(room),
-                ingress_ip: Some("38.246.56.121".into()),
+                ingress_ip: Some("192.0.2.10".into()),
                 owner_uid: Some("uid-mw-live".into()),
             }],
             ..Default::default()

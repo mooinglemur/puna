@@ -1066,9 +1066,9 @@ mod db_tests {
 
     fn site() -> Site {
         Site {
-            namespace: "puna-dev".into(),
-            lb_ip: "38.246.56.121".into(),
-            lb_sharing_key: "ap-lobby-public".into(),
+            namespace: "rooms-test".into(),
+            lb_ip: "192.0.2.10".into(),
+            lb_sharing_key: "shared-public".into(),
             tls_secret: "puna-room-tls".into(),
             data_pvc: "puna-data".into(),
         }
@@ -1810,9 +1810,9 @@ mod reclaim_tests {
             let layout = Layout::new(tmp.path());
             let cluster = FakeCluster::new();
             let site = crate::spec::Site {
-                namespace: "puna-dev".into(),
-                lb_ip: "38.246.56.121".into(),
-                lb_sharing_key: "ap-lobby-public".into(),
+                namespace: "rooms-test".into(),
+                lb_ip: "192.0.2.10".into(),
+                lb_sharing_key: "shared-public".into(),
                 tls_secret: "puna-room-tls".into(),
                 data_pvc: "puna-data".into(),
             };

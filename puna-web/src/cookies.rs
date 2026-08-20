@@ -21,7 +21,7 @@
 //! ## Why it matters more here than in a typical app
 //!
 //! The UI and the multiworld rooms **share a hostname**, differing only by port, and cookies have
-//! no port isolation -- a cookie scoped to `mw.ionium-dev.us` is sent to `mw.ionium-dev.us:41234`,
+//! no port isolation -- a cookie scoped to `rooms.example.com` is sent to `rooms.example.com:41234`,
 //! a pahoa room, exactly as it is to `:443`. pahoa neither parses nor logs cookies and the values
 //! are AEAD-encrypted, so it cannot read them. But they are bearer credentials: `punasession`
 //! replays a login, and `rocket_oauth2_state` is what stops an attacker completing an OAuth flow

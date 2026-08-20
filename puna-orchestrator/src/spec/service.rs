@@ -35,8 +35,8 @@ const REQUESTED_IPS_ANNOTATION: &str = "lbipam.cilium.io/ips";
 
 pub fn build(spec: &RoomServiceSpec, site: &Site) -> Service {
     let mut labels = crate::spec::labels(spec.room_id);
-    // Required, not decorative: the `br-v5` pool's NotIn selector matches anything without it, and
-    // the Service lands on a private 172.29.0.x address the room is unreachable from.
+    // Required, not decorative: an unlabeled Service is allocated from the internal pool instead,
+    // landing on a private address the room is unreachable from. See `LB_POOL_KEY`.
     labels.insert(LB_POOL_KEY.to_string(), LB_POOL.to_string());
 
     let mut ports = vec![ServicePort {
@@ -142,9 +142,9 @@ mod tests {
 
     fn site() -> Site {
         Site {
-            namespace: "puna-dev".into(),
-            lb_ip: "38.246.56.121".into(),
-            lb_sharing_key: "ap-lobby-public".into(),
+            namespace: "rooms-test".into(),
+            lb_ip: "192.0.2.10".into(),
+            lb_sharing_key: "shared-public".into(),
             tls_secret: "puna-room-tls".into(),
             data_pvc: "puna-data".into(),
         }
@@ -172,9 +172,9 @@ mod tests {
         let service = build(&spec(room), &site());
         let annotations = service.metadata.annotations.clone().unwrap();
 
-        assert_eq!(annotations[SHARING_KEY_ANNOTATION], "ap-lobby-public");
+        assert_eq!(annotations[SHARING_KEY_ANNOTATION], "shared-public");
         assert_eq!(annotations[SHARING_CROSS_NAMESPACE_ANNOTATION], "*");
-        assert_eq!(annotations[REQUESTED_IPS_ANNOTATION], "38.246.56.121");
+        assert_eq!(annotations[REQUESTED_IPS_ANNOTATION], "192.0.2.10");
         assert_eq!(
             service.metadata.labels.as_ref().unwrap()[LB_POOL_KEY],
             LB_POOL

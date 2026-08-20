@@ -53,20 +53,6 @@ pub enum Environment {
 }
 
 impl Environment {
-    /// The inclusive base-port range this environment owns. Base ports are even; each room
-    /// reserves `base` and `base + 1` as an adjacent pair.
-    ///
-    /// These bounds are duplicated as a CHECK constraint on `port_reservations`. That is
-    /// deliberate belt-and-braces on the one mistake in the system that is unrecoverable: a room
-    /// allocated outside its environment's half would collide with the other environment on the
-    /// shared address, and the symptom is a room nobody can reach rather than an error.
-    pub fn port_range(self) -> (u16, u16) {
-        match self {
-            Environment::Dev => (40000, 44998),
-            Environment::Prod => (45000, 49998),
-        }
-    }
-
     pub fn as_str(self) -> &'static str {
         match self {
             Environment::Dev => "dev",
@@ -94,7 +80,7 @@ impl FromStr for Environment {
 pub struct CommonConfig {
     pub environment: Environment,
     pub database_url: String,
-    /// The hostname rooms are advertised on, e.g. `mw.ionium-dev.us`.
+    /// The hostname rooms are advertised on, e.g. `rooms.example.com`.
     ///
     /// A DNS name rather than the literal VIP, so the address can be re-pointed without
     /// invalidating every bookmarked room -- and it is also the name on the room certificate,
@@ -174,6 +160,22 @@ pub struct OrchestratorConfig {
     /// rooms a minute, which is the right default for an environment where a room is a game in
     /// progress rather than a stateless replica.
     pub max_recreates_per_tick: usize,
+    /// The inclusive port range this environment may allocate from, as `(low, high)` **base**
+    /// ports — both even, because each room reserves `base` and `base + 1` as an adjacent pair.
+    ///
+    /// **From the environment, not from the code.** Which ports a deployment owns is a property of
+    /// that deployment's network, not of Puna: the range depends on what else shares the address,
+    /// what the firewall permits, and how the space was divided. A constant here would be one
+    /// deployment's answer compiled into everyone's binary.
+    ///
+    /// It stays load-bearing, though, and the reason is worth keeping: where two environments share
+    /// one public address they share one port space, and an overlap is the one mistake in this
+    /// system that is unrecoverable — the second allocation silently lands on a different address
+    /// rather than erroring, leaving a room reachable at a name DNS never mentions. The database
+    /// records the configured range per environment and refuses reservations outside it, but it can
+    /// only see its own environment. **Non-overlap between environments is the deployment's to get
+    /// right**, which is why it belongs beside the addresses rather than in here.
+    pub port_range: (u16, u16),
 }
 
 impl OrchestratorConfig {
@@ -182,7 +184,11 @@ impl OrchestratorConfig {
             common: CommonConfig::from_env()?,
             namespace: require("PUNA_NAMESPACE")?,
             lb_ip: require("PUNA_LB_IP")?,
-            lb_sharing_key: optional("PUNA_LB_SHARING_KEY", "ap-lobby-public"),
+            // Required, not defaulted. A default here would name one deployment's sharing group,
+            // so a second deployment that forgot to set it would silently join the first's shared
+            // address instead of failing at startup -- and sharing an address is exactly the thing
+            // whose failures are hardest to see.
+            lb_sharing_key: require("PUNA_LB_SHARING_KEY")?,
             pahoa_image: require("PUNA_PAHOA_IMAGE")?,
             room_tls_secret: optional("PUNA_ROOM_TLS_SECRET", "puna-room-tls"),
             data_pvc: optional("PUNA_DATA_PVC", "puna-data"),
@@ -200,12 +206,53 @@ impl OrchestratorConfig {
             },
             room_probe_timeout: parse_duration("PUNA_ROOM_PROBE_TIMEOUT", 5)?,
             max_recreates_per_tick: parse_count("PUNA_MAX_RECREATES_PER_TICK", 1)?,
+            port_range: parse_port_range("PUNA_PORT_RANGE")?,
         })
     }
 }
 
 fn require(key: &str) -> anyhow::Result<String> {
     std::env::var(key).map_err(|_| anyhow::anyhow!("{key} must be set"))
+}
+
+/// `"40000-44999"` — the inclusive range of PORTS the environment owns, returned as the inclusive
+/// range of **base** ports.
+///
+/// Written as ports rather than as bases because that is what an operator reads off a firewall rule
+/// or a load balancer, and asking them to subtract one for the filtered half is asking for the
+/// off-by-one. So the parser does it: `40000-44999` is 2500 pairs, base ports 40000 through 44998.
+///
+/// Both ends are checked rather than rounded. A range starting on an odd port or ending on an even
+/// one is a typo, and quietly repairing it would hand back a range the operator did not write —
+/// which, for the one value where an overlap between environments is unrecoverable, is the wrong
+/// kindness.
+fn parse_port_range(key: &str) -> anyhow::Result<(u16, u16)> {
+    let raw = require(key)?;
+    let (low, high) = raw.trim().split_once('-').ok_or_else(|| {
+        anyhow::anyhow!("{key} must look like \"40000-44999\" (inclusive), got {raw:?}")
+    })?;
+
+    let parse = |s: &str, which| -> anyhow::Result<u16> {
+        s.trim()
+            .parse::<u16>()
+            .map_err(|_| anyhow::anyhow!("{key}'s {which} bound is not a port number: {s:?}"))
+    };
+    let (low, high) = (parse(low, "lower")?, parse(high, "upper")?);
+
+    anyhow::ensure!(low < high, "{key}: the lower bound must be below the upper");
+    anyhow::ensure!(
+        low % 2 == 0,
+        "{key}: the range must start on an EVEN port -- each room takes a pair, and the lower of \
+         the two is the one advertised. Got {low}."
+    );
+    anyhow::ensure!(
+        high % 2 == 1,
+        "{key}: the range must end on an ODD port, so it holds whole pairs. Got {high}; did you \
+         mean {}?",
+        high.saturating_add(1)
+    );
+
+    Ok((low, high - 1))
 }
 
 fn optional(key: &str, default: &str) -> String {
@@ -255,26 +302,39 @@ fn parse_duration(key: &str, default_secs: u64) -> anyhow::Result<Duration> {
 mod tests {
     use super::*;
 
+    /// The range is written as PORTS and returned as BASE ports, so the upper bound moves by one.
+    ///
+    /// Getting this backwards would hand out a base port whose `base + 1` sits outside the range —
+    /// the filtered half landing in the next environment's space, which is the collision the whole
+    /// partition exists to prevent and which nothing downstream would notice.
     #[test]
-    fn port_ranges_do_not_overlap() {
-        let (dev_lo, dev_hi) = Environment::Dev.port_range();
-        let (prod_lo, prod_hi) = Environment::Prod.port_range();
-        assert!(
-            dev_hi < prod_lo,
-            "dev and prod port ranges must be disjoint"
-        );
-        for p in [dev_lo, dev_hi, prod_lo, prod_hi] {
-            assert_eq!(p % 2, 0, "{p} must be an even base port");
-        }
+    fn a_port_range_is_parsed_as_ports_and_returned_as_base_ports() {
+        let parse = |value: &str| {
+            // SAFETY: single-threaded test, and the variable is read immediately below.
+            unsafe { std::env::set_var("PUNA_TEST_RANGE", value) };
+            parse_port_range("PUNA_TEST_RANGE")
+        };
+
+        let (low, high) = parse("40000-44999").expect("a whole number of pairs");
+        assert_eq!((low, high), (40000, 44998), "2500 pairs, top base is 44998");
+        assert_eq!(high + 1, 44999, "the pair's upper half is still inside");
     }
 
+    /// Both ends are checked rather than rounded. Quietly repairing a typo would hand back a range
+    /// the operator did not write, and for this value an overlap between environments is the one
+    /// mistake that cannot be undone.
     #[test]
-    fn port_ranges_leave_room_for_the_pair() {
-        // Each reservation covers base and base+1, so the top of a range must not run into the
-        // next one even after the +1.
-        let (_, dev_hi) = Environment::Dev.port_range();
-        let (prod_lo, _) = Environment::Prod.port_range();
-        assert!(dev_hi + 1 < prod_lo);
+    fn a_range_that_is_not_whole_pairs_is_refused() {
+        let parse = |value: &str| {
+            unsafe { std::env::set_var("PUNA_TEST_RANGE2", value) };
+            parse_port_range("PUNA_TEST_RANGE2")
+        };
+
+        assert!(parse("40001-44999").is_err(), "starts on an odd port");
+        assert!(parse("40000-44998").is_err(), "ends mid-pair");
+        assert!(parse("44999-40000").is_err(), "inverted");
+        assert!(parse("40000").is_err(), "not a range");
+        assert!(parse("forty-thousand").is_err(), "not numbers");
     }
 
     #[test]

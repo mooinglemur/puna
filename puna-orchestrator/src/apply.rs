@@ -236,9 +236,9 @@ mod tests {
 
     fn site() -> Site {
         Site {
-            namespace: "puna-dev".into(),
-            lb_ip: "38.246.56.121".into(),
-            lb_sharing_key: "ap-lobby-public".into(),
+            namespace: "rooms-test".into(),
+            lb_ip: "192.0.2.10".into(),
+            lb_sharing_key: "shared-public".into(),
             tls_secret: "puna-room-tls".into(),
             data_pvc: "puna-data".into(),
         }
@@ -295,7 +295,7 @@ mod tests {
             started,
             Started::Converged {
                 uid: "uid-1".into(),
-                ingress_ip: "38.246.56.121".into()
+                ingress_ip: "192.0.2.10".into()
             }
         );
 
@@ -455,7 +455,7 @@ mod tests {
             started,
             Started::Converged {
                 uid: "uid-2".into(),
-                ingress_ip: "38.246.56.121".into()
+                ingress_ip: "192.0.2.10".into()
             }
         );
         // The new uid is what owns the new objects; a stale one would leak them at teardown.
@@ -493,12 +493,12 @@ mod tests {
         let room = RoomId::new();
         let spec = spec(room, "pahoa:test");
 
-        cluster.set_ingress_ip("38.246.56.122");
+        cluster.set_ingress_ip("192.0.2.11");
         let started = start(&cluster, &spec, &mut recorder).await.expect("start");
         assert_eq!(
             started,
             Started::AddressMismatch {
-                observed: "38.246.56.122".into()
+                observed: "192.0.2.11".into()
             }
         );
 

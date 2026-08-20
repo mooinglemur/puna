@@ -316,9 +316,9 @@ mod tests {
 
     fn site() -> Site {
         Site {
-            namespace: "puna-dev".into(),
-            lb_ip: "38.246.56.121".into(),
-            lb_sharing_key: "ap-lobby-public".into(),
+            namespace: "rooms-test".into(),
+            lb_ip: "192.0.2.10".into(),
+            lb_sharing_key: "shared-public".into(),
             tls_secret: "puna-room-tls".into(),
             data_pvc: "puna-data".into(),
         }
@@ -356,7 +356,7 @@ mod tests {
         let name = object_name(spec.room_id);
 
         assert_eq!(deployment.metadata.name.as_deref(), Some(name.as_str()));
-        assert_eq!(deployment.metadata.namespace.as_deref(), Some("puna-dev"));
+        assert_eq!(deployment.metadata.namespace.as_deref(), Some("rooms-test"));
         assert_eq!(
             crate::spec::room_of(deployment.metadata.labels.as_ref().unwrap()),
             Some(spec.room_id)

@@ -39,7 +39,7 @@ kube = { version = "2", default-features = false, features = [
     "ring",
     "runtime",
 ] }
-# Pinned to the RKE2 minor actually running: v1.34.10+rke2r1, verified against the live cluster.
+# Pinned to the Kubernetes minor this is deployed against, and verified there rather than assumed.
 # A mismatch surfaces as missing struct fields rather than a build error, so it is worth stating.
 k8s-openapi = { version = "0.26", features = ["v1_34"] }
 

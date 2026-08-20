@@ -81,7 +81,7 @@ fn a_real_patch_keeps_everything_but_its_server_field() {
     // A patch is itself a zip; if this one is not, the passthrough path is what is under test and
     // the assertion below still holds.
     let embedded =
-        artifact::embed_server(original.clone(), "mw.ionium-dev.us", 41234).expect("embed");
+        artifact::embed_server(original.clone(), "rooms.example.com", 41234).expect("embed");
 
     let Ok(before) = zip::ZipArchive::new(Cursor::new(&original)) else {
         assert_eq!(
@@ -121,7 +121,7 @@ fn a_real_patch_keeps_everything_but_its_server_field() {
     let rewritten: serde_json::Value =
         serde_json::from_slice(&after["archipelago.json"]).expect("the rewritten manifest is json");
 
-    assert_eq!(rewritten["server"], "mw.ionium-dev.us:41234");
+    assert_eq!(rewritten["server"], "rooms.example.com:41234");
 
     // Every other key of a real manifest -- `game`, `player`, `patch_file_ending`,
     // `compatible_version`, whatever this game happens to carry -- survives untouched. This is the

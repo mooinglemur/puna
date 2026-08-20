@@ -119,6 +119,18 @@ diesel::table! {
     use diesel::sql_types::*;
     use super::sql_types::PunaEnvironment;
 
+    port_ranges (environment) {
+        environment -> PunaEnvironment,
+        base_low -> Int4,
+        base_high -> Int4,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    use diesel::sql_types::*;
+    use super::sql_types::PunaEnvironment;
+
     port_reservations (environment, base_port) {
         environment -> PunaEnvironment,
         base_port -> Int4,
@@ -317,6 +329,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     generation_slot_locations,
     generation_slots,
     generations,
+    port_ranges,
     port_reservations,
     room_commands,
     room_events,

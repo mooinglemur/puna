@@ -12,13 +12,31 @@
 //!
 //! The allocator, in order:
 //!   1. the room's own previous pair, if the reservation still points at that room
-//!   2. any pair never allocated
+//!   2. any pair never allocated, chosen at RANDOM among them
 //!   3. otherwise the least recently used reservation
 //!
-//! Steps 2 and 3 are ONE statement, because the table is pre-seeded with every pair and
+//! Steps 2 and 3 share one `ORDER BY`, because the table is pre-seeded with every pair and
 //! `last_activity` defaults to `'-infinity'` -- so "never allocated" sorts first under the same
-//! `ORDER BY` that expresses "least recently used". That collapse is why there is no sentinel
-//! and no `COALESCE` here.
+//! expression that means "least recently used". That collapse is why there is no sentinel and no
+//! `COALESCE` here.
+//!
+//! ## Why the tie is broken randomly rather than by port
+//!
+//! Every never-allocated pair carries the same `'-infinity'`, so the tiebreak decides the whole
+//! order in a fresh environment. Breaking it on `base_port` filled the range from the bottom
+//! upward, which made the highest live port a **room counter**: see one room on 40036 and you know
+//! roughly nineteen have ever existed. That is not information a room's address should carry,
+//! least of all early in an environment's life when the number is small and telling.
+//!
+//! `random()` costs nothing here -- the ordering only ever decides *which* equally-good pair is
+//! taken -- and it leaves both real properties intact, because `last_activity` still dominates:
+//! never-allocated pairs are still taken before released ones, and released ones are still taken
+//! oldest-first. It also breaks ties fairly in step 3, where `touch_live_rooms` stamps every live
+//! room with the same `now()` and a port-ordered tiebreak would always pick the lowest.
+//!
+//! The cost is that allocation is no longer reproducible from the table alone. If that is ever
+//! wanted back, a persistent random column ordered on instead of `random()` buys the same
+//! unpredictability while keeping the sequence stable.
 //!
 //! Reservations are a WEAK claim, not a lease: honored while nothing else needs the port, taken
 //! away when something does. There is deliberately no TTL and no expiry sweep -- reclaiming on
@@ -131,12 +149,23 @@ pub async fn allocate(
 ) -> Result<Allocation, AllocError> {
     // Step 1: the room's own previous pair. The common case, and the reason a torn-down room
     // comes back on the address players already have.
+    //
+    // **Unless that pair is no longer inside the configured range**, in which case the room gets a
+    // new one instead. Startup reconciliation already deletes out-of-range rows, so this is the
+    // second guard rather than the first -- but the cost of missing it is a room brought back onto
+    // a port the deployment does not own, which collides silently on a shared address rather than
+    // erroring. Falling through to a fresh allocation is always safe; returning a stale port is
+    // not.
     let existing: Vec<BasePort> = diesel::sql_query(
         "UPDATE port_reservations
             SET last_activity = now()
           WHERE environment = $1::puna_environment
             AND room_id = $2
             AND (quarantined_until IS NULL OR quarantined_until <= now())
+            AND EXISTS (
+                SELECT 1 FROM port_ranges r
+                 WHERE r.environment = port_reservations.environment
+                   AND port_reservations.base_port BETWEEN r.base_low AND r.base_high)
         RETURNING base_port",
     )
     .bind::<Text, _>(environment.as_str())
@@ -160,10 +189,17 @@ pub async fn allocate(
     // would be stuck for as long as the quarantine lasts.
     release(_orchestrator, conn, room_id).await?;
 
+    // **`port_ranges` is the authority in every phase below, not the rows.** Reservation rows are
+    // the working set and can lag the configured range -- a range narrowed while the orchestrator
+    // is running leaves rows behind until the next startup reconciles them. Selecting from rows
+    // alone would then hand out a port the deployment no longer owns, which does not error: it
+    // collides on the shared address and leaves the room reachable at a name DNS never mentions.
+    // Filtering here means an inconsistent table can produce *no* port, never an invalid one.
     for _ in 0..MAX_CONTENTION_RETRIES {
         // Phase 2: an unbound pair. Ordered by `last_activity`, so never-allocated ('-infinity')
         // comes first and a recently *released* pair comes last -- which is what lets a room torn
-        // down and restarted land back on its own port.
+        // down and restarted land back on its own port. Among the never-allocated, which all tie,
+        // the pick is random; see the module note on why not `base_port`.
         //
         // `AND r.room_id IS NULL` on the OUTER update is the race guard: READ COMMITTED
         // re-evaluates it against the committed row version after locking, so a row taken by a
@@ -175,7 +211,10 @@ pub async fn allocate(
                   WHERE c.environment = $1::puna_environment
                     AND c.room_id IS NULL
                     AND (c.quarantined_until IS NULL OR c.quarantined_until <= now())
-                  ORDER BY c.last_activity ASC, c.base_port ASC
+                    AND EXISTS (SELECT 1 FROM port_ranges pr
+                                 WHERE pr.environment = c.environment
+                                   AND c.base_port BETWEEN pr.base_low AND pr.base_high)
+                  ORDER BY c.last_activity ASC, random()
                   LIMIT 1
                     FOR UPDATE SKIP LOCKED)
              UPDATE port_reservations r
@@ -210,10 +249,13 @@ pub async fn allocate(
                   WHERE c.environment = $1::puna_environment
                     AND c.room_id IS NOT NULL
                     AND (c.quarantined_until IS NULL OR c.quarantined_until <= now())
+                    AND EXISTS (SELECT 1 FROM port_ranges pr
+                                 WHERE pr.environment = c.environment
+                                   AND c.base_port BETWEEN pr.base_low AND pr.base_high)
                     AND NOT EXISTS (SELECT 1 FROM rooms x
                                      WHERE x.id = c.room_id
                                        AND x.state IN ({LIVE_STATES}))
-                  ORDER BY c.last_activity ASC, c.base_port ASC
+                  ORDER BY c.last_activity ASC, random()
                   LIMIT 1
                     FOR UPDATE SKIP LOCKED)
              UPDATE port_reservations r
@@ -456,6 +498,154 @@ pub async fn assert_environment_matches(
         environment.as_str(),
         foreign,
     );
+    Ok(())
+}
+
+/// Record the configured port range and make the reservation rows match it.
+///
+/// Called once at orchestrator startup, before anything can allocate. Idempotent: the ordinary case
+/// is a range that has not moved, which writes nothing.
+///
+/// **A range that has SHRUNK is the interesting case, and it never blocks startup.** A range is
+/// configuration; refusing to run because it moved would mean one edit could wedge the orchestrator
+/// for the whole environment, which is worse than anything it was protecting against.
+///
+/// Every reservation outside the new range is released, because a row that cannot legitimately be
+/// allocated should not exist. What happens to the room depends on whether it is serving:
+///
+///   * **Live** — a restart is queued. The room is genuinely on a port this deployment no longer
+///     claims, so it cannot simply stay there; the recreate stops it and [`allocate`] gives it a
+///     fresh port inside the range. That goes through the same `redeploy_requested_at` signal an
+///     operator's restart uses, so it inherits the per-tick cap and rolls gradually rather than
+///     restarting an environment at once.
+///   * **Anything else** — nothing to do. It is not serving on that port, and it will allocate a
+///     valid one whenever it next starts.
+pub async fn ensure_range(
+    _orchestrator: &Orchestrator,
+    conn: &mut AsyncPgConnection,
+    environment: Environment,
+    (low, high): (u16, u16),
+) -> anyhow::Result<()> {
+    #[derive(diesel::QueryableByName)]
+    struct Stranded {
+        #[diesel(sql_type = Integer)]
+        base_port: i32,
+        #[diesel(sql_type = SqlUuid)]
+        room_id: RoomId,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        live: bool,
+    }
+
+    let (low, high) = (i32::from(low), i32::from(high));
+
+    // Read before writing, because the delete below destroys the evidence of which rooms were
+    // affected -- and those are exactly the rooms that need a restart queued.
+    let stranded: Vec<Stranded> = diesel::sql_query(format!(
+        "SELECT p.base_port, p.room_id, (r.state IN ({LIVE_STATES})) AS live
+           FROM port_reservations p
+           JOIN rooms r ON r.id = p.room_id
+          WHERE p.environment = $1::puna_environment
+            AND (p.base_port < $2 OR p.base_port > $3)
+          ORDER BY p.base_port"
+    ))
+    .bind::<Text, _>(environment.as_str())
+    .bind::<Integer, _>(low)
+    .bind::<Integer, _>(high)
+    .load(conn)
+    .await?;
+
+    // The range first, because the trigger reads it and the seed below has to pass.
+    diesel::sql_query(
+        "INSERT INTO port_ranges (environment, base_low, base_high)
+              VALUES ($1::puna_environment, $2, $3)
+         ON CONFLICT (environment) DO UPDATE
+                SET base_low = EXCLUDED.base_low,
+                    base_high = EXCLUDED.base_high,
+                    updated_at = now()
+              WHERE port_ranges.base_low IS DISTINCT FROM EXCLUDED.base_low
+                 OR port_ranges.base_high IS DISTINCT FROM EXCLUDED.base_high",
+    )
+    .bind::<Text, _>(environment.as_str())
+    .bind::<Integer, _>(low)
+    .bind::<Integer, _>(high)
+    .execute(conn)
+    .await?;
+
+    // Everything outside the range, bound or not. A row for a port this deployment does not own is
+    // a row that must never be handed out, and leaving a bound one in place would let the room
+    // return to the same invalid port on its next start -- [`allocate`]'s first step is "the room's
+    // own previous pair".
+    let dropped = diesel::sql_query(
+        "DELETE FROM port_reservations
+          WHERE environment = $1::puna_environment
+            AND (base_port < $2 OR base_port > $3)",
+    )
+    .bind::<Text, _>(environment.as_str())
+    .bind::<Integer, _>(low)
+    .bind::<Integer, _>(high)
+    .execute(conn)
+    .await?;
+
+    // Every pair in range that has no row yet. `ON CONFLICT DO NOTHING` makes a widened range and
+    // an unchanged one the same statement, and keeps every existing row's `last_activity` -- which
+    // is the LRU ordering, and would be destroyed by a delete-and-reseed.
+    let added = diesel::sql_query(
+        "INSERT INTO port_reservations (environment, base_port)
+              SELECT $1::puna_environment, p FROM generate_series($2, $3, 2) AS p
+         ON CONFLICT (environment, base_port) DO NOTHING",
+    )
+    .bind::<Text, _>(environment.as_str())
+    .bind::<Integer, _>(low)
+    .bind::<Integer, _>(high)
+    .execute(conn)
+    .await?;
+
+    // A live room genuinely IS serving on a port outside the range, so it cannot be left alone.
+    // Queued through the ordinary redeploy signal rather than stopped here: that path already
+    // stops the room, allocates a fresh port on the way back up, and is capped per tick -- so a
+    // range change rolls through the environment instead of taking it down at once.
+    let restarting: Vec<RoomId> = stranded
+        .iter()
+        .filter(|row| row.live)
+        .map(|row| row.room_id)
+        .collect();
+
+    for row in &stranded {
+        if row.live {
+            tracing::warn!(
+                room = %row.room_id,
+                port = row.base_port,
+                low,
+                high,
+                "this room is serving on a port outside the configured range; queueing a restart \
+                 onto a valid one"
+            );
+        } else {
+            tracing::info!(
+                room = %row.room_id,
+                port = row.base_port,
+                "released a reservation outside the configured range; this room is not running, so \
+                 it will simply take a valid port when it next starts"
+            );
+        }
+    }
+
+    if !restarting.is_empty() {
+        crate::model::fleet::request_redeploy(conn, &restarting).await?;
+    }
+
+    if added > 0 || dropped > 0 {
+        tracing::info!(
+            environment = environment.as_str(),
+            low,
+            high,
+            added,
+            dropped,
+            restarting = restarting.len(),
+            "reconciled the port range against configuration"
+        );
+    }
+
     Ok(())
 }
 

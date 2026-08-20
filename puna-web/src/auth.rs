@@ -89,7 +89,7 @@ impl Session {
             //
             // It matters more than the usual amount because the UI and the rooms SHARE A HOSTNAME,
             // differing only by port, and cookies have no port isolation: this cookie is sent to
-            // mw.ionium-dev.us:41234 -- a pahoa room -- exactly as it is to :443. pahoa neither
+            // rooms.example.com:41234 -- a pahoa room -- exactly as it is to :443. pahoa neither
             // parses nor logs cookies, and the value is AEAD-encrypted, so it cannot read it. But
             // it is still a bearer credential: anyone who captures it can replay it here. Without
             // `Secure`, a single plaintext request to a room port puts it on the wire in the

@@ -497,7 +497,7 @@ mod tests {
         service.status = Some(ServiceStatus {
             load_balancer: Some(LoadBalancerStatus {
                 ingress: Some(vec![LoadBalancerIngress {
-                    ip: Some("38.246.56.121".into()),
+                    ip: Some("192.0.2.10".into()),
                     ..Default::default()
                 }]),
             }),
@@ -505,7 +505,7 @@ mod tests {
         });
         assert_eq!(
             read_service(&service).unwrap().ingress_ip.as_deref(),
-            Some("38.246.56.121")
+            Some("192.0.2.10")
         );
     }
 

@@ -156,11 +156,11 @@ mod tests {
             &payload,
         );
 
-        let embedded = embed_server(original.clone(), "mw.ionium-dev.us", 41234).expect("embed");
+        let embedded = embed_server(original.clone(), "rooms.example.com", 41234).expect("embed");
 
         let manifest: serde_json::Value =
             serde_json::from_slice(&member(&embedded, MANIFEST)).expect("json");
-        assert_eq!(manifest["server"], "mw.ionium-dev.us:41234");
+        assert_eq!(manifest["server"], "rooms.example.com:41234");
         // No scheme and no path: this is what the reference writes and what clients parse.
         assert!(!manifest["server"].as_str().unwrap().contains("://"));
 
@@ -177,14 +177,14 @@ mod tests {
     fn an_absent_server_field_is_added() {
         let embedded = embed_server(
             patch(serde_json::json!({ "game": "Timespinner" }), b"x"),
-            "mw.ionium-dev.us",
+            "rooms.example.com",
             40000,
         )
         .expect("embed");
 
         let manifest: serde_json::Value =
             serde_json::from_slice(&member(&embedded, MANIFEST)).expect("json");
-        assert_eq!(manifest["server"], "mw.ionium-dev.us:40000");
+        assert_eq!(manifest["server"], "rooms.example.com:40000");
         assert_eq!(manifest["game"], "Timespinner");
     }
 
@@ -257,17 +257,17 @@ mod tests {
     fn embedding_is_idempotent_and_overwrites_a_previous_address() {
         let original = patch(serde_json::json!({ "server": "old.example:1234" }), b"data");
 
-        let once = embed_server(original, "mw.ionium-dev.us", 41234).expect("first");
-        let twice = embed_server(once.clone(), "mw.ionium-dev.us", 41234).expect("second");
-        let moved = embed_server(twice, "mw.ionium-dev.us", 40002).expect("third");
+        let once = embed_server(original, "rooms.example.com", 41234).expect("first");
+        let twice = embed_server(once.clone(), "rooms.example.com", 41234).expect("second");
+        let moved = embed_server(twice, "rooms.example.com", 40002).expect("third");
 
         let manifest: serde_json::Value =
             serde_json::from_slice(&member(&moved, MANIFEST)).expect("json");
-        assert_eq!(manifest["server"], "mw.ionium-dev.us:40002");
+        assert_eq!(manifest["server"], "rooms.example.com:40002");
 
         let first: serde_json::Value =
             serde_json::from_slice(&member(&once, MANIFEST)).expect("json");
-        assert_eq!(first["server"], "mw.ionium-dev.us:41234");
+        assert_eq!(first["server"], "rooms.example.com:41234");
     }
 
     /// Directory entries are members too, and reading one as a file yields nothing -- so a patch

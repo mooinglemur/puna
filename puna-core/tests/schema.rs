@@ -55,12 +55,13 @@ async fn port_reservations_are_preseeded_and_partitioned() {
 
         assert_eq!(rows.len(), 2, "both environments must be pre-seeded");
         for row in rows {
-            let expected = match row.environment.as_str() {
-                "dev" => puna_core::Environment::Dev,
-                "prod" => puna_core::Environment::Prod,
-                other => panic!("unexpected environment {other}"),
-            };
-            let (lo, hi) = expected.port_range();
+            // **The invariant is agreement, not a particular pair of numbers.** The range is the
+            // deployment's to choose, so asserting literals here would only re-state whatever this
+            // database happens to hold. What must be true is that the recorded range and the rows
+            // that exist describe the same thing: a reservation outside the recorded range is
+            // unallocatable-but-present, and a recorded range wider than the rows is capacity the
+            // allocator will never find.
+            let (lo, hi) = common::port_range(&mut conn, &row.environment).await;
             assert_eq!(row.lo as u16, lo, "{} low bound", row.environment);
             assert_eq!(row.hi as u16, hi, "{} high bound", row.environment);
             // One row per PAIR, not per port: (hi - lo) / 2 + 1.

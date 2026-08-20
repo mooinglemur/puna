@@ -186,3 +186,72 @@ pub fn rendered_families(text: &str) -> Vec<String> {
     names.dedup();
     names
 }
+
+/// The port range this database records for an environment.
+///
+/// Read from `port_ranges` rather than from a constant, because the range is a property of a
+/// deployment rather than of Puna: the orchestrator writes it from configuration at startup, and a
+/// fresh database inherits whatever the initial migration seeded.
+pub async fn port_range(conn: &mut AsyncPgConnection, environment: &str) -> (u16, u16) {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = diesel::sql_types::Integer)]
+        base_low: i32,
+        #[diesel(sql_type = diesel::sql_types::Integer)]
+        base_high: i32,
+    }
+
+    let rows: Vec<Row> = diesel::sql_query(
+        "SELECT base_low, base_high FROM port_ranges WHERE environment = $1::puna_environment",
+    )
+    .bind::<diesel::sql_types::Text, _>(environment)
+    .load(conn)
+    .await
+    .expect("read the configured port range");
+
+    let row = rows
+        .into_iter()
+        .next()
+        .expect("every environment must have a recorded range");
+    (row.base_low as u16, row.base_high as u16)
+}
+
+/// Whether a restart has been queued for a room.
+pub async fn redeploy_requested(conn: &mut AsyncPgConnection, room: RoomId) -> bool {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        queued: bool,
+    }
+
+    let rows: Vec<Row> = diesel::sql_query(
+        "SELECT redeploy_requested_at IS NOT NULL AS queued FROM rooms WHERE id = $1",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(room)
+    .load(conn)
+    .await
+    .expect("read the room");
+    rows.into_iter().next().map(|r| r.queued).unwrap_or(false)
+}
+
+/// Move the recorded range WITHOUT touching the reservation rows.
+///
+/// Only a test wants this: it produces the state a range change would leave behind if the rows were
+/// not reconciled, which is what the allocator's own range guard has to survive.
+pub async fn set_recorded_range(
+    conn: &mut AsyncPgConnection,
+    environment: &str,
+    low: u16,
+    high: u16,
+) {
+    diesel::sql_query(
+        "UPDATE port_ranges SET base_low = $2, base_high = $3
+          WHERE environment = $1::puna_environment",
+    )
+    .bind::<diesel::sql_types::Text, _>(environment)
+    .bind::<diesel::sql_types::Integer, _>(i32::from(low))
+    .bind::<diesel::sql_types::Integer, _>(i32::from(high))
+    .execute(conn)
+    .await
+    .expect("move the recorded range");
+}

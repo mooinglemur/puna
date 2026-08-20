@@ -469,7 +469,7 @@ mod tests {
     fn a_malformed_legacy_name_is_read_or_refused_never_misattributed() {
         // Only one delimited P-component, so it resolves -- and to the right slot.
         assert_eq!(
-            slot_from_filename("AP_bciP6tGNR-GbEx0RqU-2Bg_P16_MooingLemurMC.apmc"),
+            slot_from_filename("AP_bciP6tGNR-GbEx0RqU-2Bg_P16_ExamplePlayerMC.apmc"),
             Some(16),
             "a bare P(\\d+) search would pick the seed's embedded P6"
         );

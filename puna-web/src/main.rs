@@ -50,7 +50,7 @@ struct Assets;
 /// room's state directory even though this is spelled as the volume root.
 pub struct DataDir(pub std::path::PathBuf);
 
-/// The DNS name rooms are advertised on, e.g. `mw.ionium-dev.us`.
+/// The DNS name rooms are advertised on, e.g. `rooms.example.com`.
 ///
 /// The web tier needs it for one thing: **embedding the address into a patch**. A name rather than
 /// the literal VIP because it is also the name on the room certificate, so a patch that carried the
@@ -331,9 +331,14 @@ async fn main() -> anyhow::Result<()> {
         advertise_host: advertise_host.clone(),
         route: match std::env::var("PUNA_ROOM_ROUTE").as_deref() {
             Ok("public") => upstream::Route::Public,
+            // Required rather than defaulted, and the default it replaces was actively hiding a
+            // manifest gap: the tracker tier builds every upstream as `mw-<room>.<namespace>.svc`,
+            // so a namespace nobody set resolved to whichever one the default named. That is
+            // invisible wherever the default happens to be right and silently wrong everywhere
+            // else.
             _ => upstream::Route::Service {
                 namespace: std::env::var("PUNA_NAMESPACE")
-                    .unwrap_or_else(|_| "puna-dev".to_string()),
+                    .map_err(|_| anyhow::anyhow!("PUNA_NAMESPACE must be set"))?,
             },
         },
         // A room that does not answer promptly is a room that is down, and this request is holding

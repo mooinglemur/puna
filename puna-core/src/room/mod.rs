@@ -8,7 +8,7 @@
 //! ## The certificate names the room, and the address does not
 //!
 //! In-cluster, Puna connects to `mw-<room>.<namespace>.svc` — but the room's certificate carries
-//! exactly one name, `mw.ionium-dev.us`, because every room shares that hostname and differs only by
+//! exactly one name, `rooms.example.com`, because every room shares that hostname and differs only by
 //! port (D10). So the connection **resolves the Service name to an address and then verifies against
 //! the advertised host**, via reqwest's `resolve` override. Dialing the Service name directly would
 //! fail verification; disabling verification to make it work would throw away the reason the

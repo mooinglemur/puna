@@ -3,7 +3,7 @@
 //! ## The browser never talks to the room, and this is why
 //!
 //! Two properties the reference implementation has that a naive tracker page loses. A page whose
-//! JavaScript fetched `https://mw.ionium-dev.us:41234/api/tracker` would put **the room's address in
+//! JavaScript fetched `https://rooms.example.com:41234/api/tracker` would put **the room's address in
 //! view-source** — and the tracker is the link meant for broad sharing, so that hands the multiworld's
 //! address to a stream chat. And a URL of the form `/room/<id>/tracker` would leak the **room id**,
 //! so sharing a tracker would share the room page. Proxying from an independent id solves both, and
