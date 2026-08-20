@@ -134,6 +134,16 @@ impl Prober {
             }
         };
 
+        // **Reconcile the published series against the live set, every tick.** A `GaugeVec` keyed
+        // by room keeps a series forever unless it is removed, so without this every room that ever
+        // ran would leave one behind asserting its last client count -- and a stale gauge reads as a
+        // live room, which is worse than no metric. Done here rather than on each transition
+        // because there are four ways to stop being live and a hook per path is one somebody
+        // forgets. Rooms that are live but backing off keep their series: they are still rooms.
+        let live: std::collections::HashSet<String> =
+            targets.iter().map(|t| t.id.to_string()).collect();
+        puna_core::metrics::retain_rooms(&live);
+
         let now = Utc::now();
         let (ready, waiting): (Vec<_>, Vec<_>) =
             targets.into_iter().partition(|t| self.may_probe(t.id, now));
@@ -161,6 +171,7 @@ impl Prober {
                     if let Err(e) = record(conn, room, &status, self.probe_kind()).await {
                         tracing::warn!(%room, error = ?e, "could not record a probe result");
                     }
+                    puna_core::metrics::publish_room(&room.to_string(), &status);
                 }
 
                 Err(e)
@@ -192,6 +203,24 @@ impl Prober {
         }
 
         report
+    }
+
+    /// Publish what this probe can do, once at startup.
+    ///
+    /// The family has existed since M9 with nothing writing it. It is worth writing because the
+    /// degraded mode is otherwise invisible: under the TCP fallback the console is hidden and the
+    /// numbers are blank, which looks like a quiet room rather than a room Puna cannot talk to.
+    pub fn publish_capabilities(&self) {
+        let caps = self.probe.capabilities();
+        for (name, on) in [
+            ("status", caps.status),
+            ("commands", caps.commands),
+            ("graceful_shutdown", caps.graceful_shutdown),
+        ] {
+            puna_core::metrics::PROBE_CAPABILITY
+                .with_label_values(&[name])
+                .set(i64::from(on));
+        }
     }
 
     fn probe_kind(&self) -> &'static str {

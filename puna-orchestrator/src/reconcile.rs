@@ -227,6 +227,7 @@ impl Reconciler {
         // still be serving a multiworld perfectly, so this only refreshes numbers -- it moves no
         // room's state and returns no error. Put after the sweep so a slow room cannot delay
         // anything that actually converges the world.
+        self.prober.publish_capabilities();
         let probed = self.prober.run(&mut conn, self.environment).await;
         report.probed = probed.probed;
         report.probe_answers = probed.answered;

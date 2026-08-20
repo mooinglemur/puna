@@ -38,6 +38,9 @@
 
 use std::sync::LazyLock;
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
 use prometheus::{
     Histogram, HistogramOpts, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
 };
@@ -274,6 +277,159 @@ pub static COMMAND_SECONDS: LazyLock<Histogram> = LazyLock::new(|| {
     )
 });
 
+// --- per-room, re-exported from the probe ---------------------------------------------------------
+//
+// **Polled by the orchestrator and cached here, never scraped from a room.** A Prometheus scrape
+// reads these values and never touches a live multiworld, which decouples scrape rate from room
+// load: a monitoring change cannot add work to a game in progress. The rejected alternative — a
+// ServiceMonitor per room — is argued in `puna-orchestrator/src/probing.rs`.
+//
+// Every one is labeled by room, which makes them the only families here with an **unbounded** label
+// space. That is what `retain_rooms` exists for.
+
+macro_rules! room_gauge {
+    ($name:literal, $help:literal) => {
+        LazyLock::new(|| register!(IntGaugeVec::new(Opts::new($name, $help), &["room"]).unwrap()))
+    };
+}
+
+/// **Sockets, not players.** One player commonly holds three — game client, text client, tracker —
+/// so a dashboard that labels this "players online" is wrong, and an idle reaper built on it would
+/// never reap a room full of abandoned tracker tabs. `puna_room_idle_seconds` is the reaper's
+/// number.
+pub static ROOM_CLIENTS: LazyLock<IntGaugeVec> = room_gauge!(
+    "puna_room_clients_connected",
+    "Open client sockets per room, which is not a player count"
+);
+
+pub static ROOM_MAILBOX_DEPTH: LazyLock<IntGaugeVec> = room_gauge!(
+    "puna_room_mailbox_depth",
+    "Queued messages in a room's actor mailbox"
+);
+
+pub static ROOM_OUTBOUND_QUEUED_BYTES: LazyLock<IntGaugeVec> = room_gauge!(
+    "puna_room_outbound_queued_bytes",
+    "Bytes queued for delivery to a room's clients"
+);
+
+/// What turns §7's `slots * 3 * 96KiB` memory request from a heuristic into a measurement — but
+/// only after a week of it, not from one reading.
+pub static ROOM_RESIDENT_BYTES: LazyLock<IntGaugeVec> =
+    room_gauge!("puna_room_resident_bytes", "A room's resident set size");
+
+/// Seconds since any client last spoke. **The number an idle reaper reads**, and `null` until a
+/// client has spoken at all — which is absent here rather than zero.
+pub static ROOM_IDLE_SECONDS: LazyLock<IntGaugeVec> = room_gauge!(
+    "puna_room_idle_seconds",
+    "Seconds since a room last heard from any client"
+);
+
+/// Clients dropped for falling too far behind.
+///
+/// **A counter fed by deltas, and that shape is forced.** pahoa reports a cumulative total, but
+/// `prometheus`'s `IntCounter` exposes only `inc`/`inc_by` — there is no `set`. Storing the total in
+/// a gauge would fail M9's naming invariant both ways round: `..._total` on a gauge, or a counter's
+/// semantics behind a gauge's name. So [`publish_room`] keeps the last polled value and advances by
+/// the difference.
+pub static ROOM_LAG_DISCONNECTS: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register!(
+        IntCounterVec::new(
+            Opts::new(
+                "puna_room_lag_disconnects_total",
+                "Clients disconnected for lagging, per room"
+            ),
+            &["room"],
+        )
+        .unwrap()
+    )
+});
+
+/// Rooms with series published, and the last cumulative counter value seen for each.
+///
+/// Two jobs in one map because they have the same lifetime: a room leaves both at the same moment.
+static ROOM_SERIES: LazyLock<Mutex<HashMap<String, i64>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Publish one room's numbers.
+///
+/// **`None` removes the series rather than publishing a zero.** That is the same rule the database
+/// columns follow: a probe that cannot tell must not be indistinguishable from a room with nobody
+/// in it, and on a dashboard a zero is worse than a gap because it looks like a reading.
+pub fn publish_room(room: &str, status: &crate::probe::RoomStatus) {
+    fn set(vec: &IntGaugeVec, room: &str, value: Option<i64>) {
+        match value {
+            Some(v) => vec.with_label_values(&[room]).set(v),
+            None => {
+                let _ = vec.remove_label_values(&[room]);
+            }
+        }
+    }
+
+    set(&ROOM_CLIENTS, room, status.net.clients_connected);
+    set(&ROOM_MAILBOX_DEPTH, room, status.net.mailbox_depth);
+    set(
+        &ROOM_OUTBOUND_QUEUED_BYTES,
+        room,
+        status.net.outbound_queued_bytes,
+    );
+    set(&ROOM_RESIDENT_BYTES, room, status.net.resident_bytes);
+    set(&ROOM_IDLE_SECONDS, room, status.activity.idle_seconds);
+
+    let Ok(mut series) = ROOM_SERIES.lock() else {
+        return;
+    };
+    let previous = series.get(room).copied();
+    series.insert(room.to_string(), status.net.lag_disconnects.unwrap_or(0));
+
+    if let Some(total) = status.net.lag_disconnects {
+        // **`total < previous` means the ROOM restarted** and began its counters again at zero, so
+        // the delta is the new total rather than a negative. On the first sighting the whole total
+        // is added: the room may have been running before this orchestrator was, and the process's
+        // own counter started at zero, so this is what makes the series mean what its name says.
+        let delta = match previous {
+            Some(previous) if total >= previous => total - previous,
+            _ => total,
+        };
+        if delta > 0 {
+            ROOM_LAG_DISCONNECTS
+                .with_label_values(&[room])
+                .inc_by(delta as u64);
+        }
+    }
+}
+
+/// Drop every series for a room that is no longer live.
+///
+/// **The trap this exists for**: a `GaugeVec` keyed by room id keeps a series forever unless it is
+/// removed, so without this every room that has ever run would leave behind a series asserting its
+/// last-known client count. A stale gauge reads as a live room, which is worse than no metric.
+///
+/// Level-triggered on purpose — it reconciles the published set against the live set rather than
+/// hooking each transition. There are several ways a room stops being live (stopped, deleted,
+/// failed, vanished) and a hook per path is a hook somebody forgets.
+pub fn retain_rooms(live: &std::collections::HashSet<String>) {
+    let Ok(mut series) = ROOM_SERIES.lock() else {
+        return;
+    };
+
+    series.retain(|room, _| {
+        if live.contains(room) {
+            return true;
+        }
+        for vec in [
+            &*ROOM_CLIENTS,
+            &*ROOM_MAILBOX_DEPTH,
+            &*ROOM_OUTBOUND_QUEUED_BYTES,
+            &*ROOM_RESIDENT_BYTES,
+            &*ROOM_IDLE_SECONDS,
+        ] {
+            let _ = vec.remove_label_values(&[room]);
+        }
+        let _ = ROOM_LAG_DISCONNECTS.remove_label_values(&[room]);
+        false
+    });
+}
+
 /// Which capabilities the room probe currently has. Makes a room stuck on an old pahoa image
 /// visible on a dashboard instead of surfacing as features that quietly do nothing.
 pub static PROBE_CAPABILITY: LazyLock<IntGaugeVec> = LazyLock::new(|| {
@@ -359,6 +515,13 @@ pub const ORCHESTRATOR_FAMILIES: &[&str] = &[
     "puna_commands_total",
     "puna_command_seconds",
     "puna_probe_capability",
+    // Re-exported from the probe, labeled by room. See `publish_room`.
+    "puna_room_clients_connected",
+    "puna_room_mailbox_depth",
+    "puna_room_outbound_queued_bytes",
+    "puna_room_resident_bytes",
+    "puna_room_idle_seconds",
+    "puna_room_lag_disconnects_total",
 ];
 
 /// Families that are REGISTERED but do not appear until something writes a series.
@@ -381,6 +544,14 @@ pub const DEFERRED_FAMILIES: &[&str] = &[
     "puna_commands_total",
     "puna_k8s_requests_total",
     "puna_reconcile_errors_total",
+    // Labeled by room, so they appear only once a room has been probed -- and disappear again when
+    // it stops, which is what `retain_rooms` is for.
+    "puna_room_clients_connected",
+    "puna_room_mailbox_depth",
+    "puna_room_outbound_queued_bytes",
+    "puna_room_resident_bytes",
+    "puna_room_idle_seconds",
+    "puna_room_lag_disconnects_total",
 ];
 
 /// The families `component` registers, shared ones included.
@@ -440,6 +611,13 @@ pub fn init(component: Component) {
 
 /// Everything the reconcile loop and the sweep produce.
 fn init_orchestrator() {
+    // Labeled by room: registered here, empty until a probe writes one. See `DEFERRED_FAMILIES`.
+    LazyLock::force(&ROOM_CLIENTS);
+    LazyLock::force(&ROOM_MAILBOX_DEPTH);
+    LazyLock::force(&ROOM_OUTBOUND_QUEUED_BYTES);
+    LazyLock::force(&ROOM_RESIDENT_BYTES);
+    LazyLock::force(&ROOM_IDLE_SECONDS);
+    LazyLock::force(&ROOM_LAG_DISCONNECTS);
     LazyLock::force(&ROOM_START_SECONDS);
     LazyLock::force(&PORTS_CAPACITY);
     LazyLock::force(&PORTS_BOUND);
@@ -490,6 +668,8 @@ pub fn gather() -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     /// **`_total` promises monotonicity**, and a gauge that only happens to increase does not keep
     /// that promise: anything wrapping it in `rate()` is reading a number that may legitimately go
     /// down. Two families were declared as gauges with counter names until this test existed.
@@ -564,5 +744,147 @@ mod tests {
             let series = format!("puna_room_starts_total{{result=\"{result}\"}} 0");
             assert!(text.contains(&series), "missing series: {series}");
         }
+    }
+
+    // --- the two traps in the room re-export ------------------------------------------------------
+
+    use crate::probe::{ActivityStatus, NetStatus, RoomStatus};
+
+    /// The room series are PROCESS-GLOBAL, and `retain_rooms` is a whole-fleet reconcile -- so a
+    /// test that ends by clearing the fleet deletes the series of any test running beside it.
+    /// Cargo runs these on parallel threads, so they take turns.
+    ///
+    /// Found the honest way: the suite passed single-threaded and failed at random otherwise.
+    static SERIALIZE: Mutex<()> = Mutex::new(());
+
+    fn exclusive() -> std::sync::MutexGuard<'static, ()> {
+        // A panicking test poisons the lock; the state it guards is rebuilt by the next test
+        // anyway, so recovering beats turning one failure into four.
+        SERIALIZE.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn status(clients: Option<i64>, idle: Option<i64>, lag: Option<i64>) -> RoomStatus {
+        RoomStatus {
+            net: NetStatus {
+                clients_connected: clients,
+                lag_disconnects: lag,
+                ..Default::default()
+            },
+            activity: ActivityStatus {
+                idle_seconds: idle,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// The published value for a room, or `None` if it has no series at all.
+    ///
+    /// Read from the COLLECTED family rather than `get_metric_with_label_values`, which creates the
+    /// child if it is missing and so can never answer "is there a series" -- the exact question
+    /// both traps turn on.
+    fn gauge(room: &str) -> Option<i64> {
+        prometheus::core::Collector::collect(&*ROOM_CLIENTS)
+            .iter()
+            .flat_map(prometheus::proto::MetricFamily::get_metric)
+            .find(|m| {
+                m.get_label()
+                    .iter()
+                    .any(|l| l.name() == "room" && l.value() == room)
+            })
+            .map(|m| m.get_gauge().get_value() as i64)
+    }
+
+    /// **Trap one: a stale series reads as a live room.** A `GaugeVec` keyed by room keeps its
+    /// children forever, so a room that has stopped would otherwise keep asserting its last client
+    /// count -- indefinitely, and indistinguishably from a room that really has three people in it.
+    #[test]
+    fn a_room_that_stops_being_live_loses_its_series() {
+        let _guard = exclusive();
+        let room = "11111111-1111-1111-1111-111111111111";
+        publish_room(room, &status(Some(3), Some(60), Some(0)));
+        assert_eq!(gauge(room), Some(3));
+
+        // Still live: kept.
+        retain_rooms(&std::collections::HashSet::from([room.to_string()]));
+        assert_eq!(gauge(room), Some(3));
+
+        // Gone: dropped, rather than left asserting three players forever.
+        retain_rooms(&std::collections::HashSet::new());
+        assert_eq!(gauge(room), None, "a stale gauge reads as a live room");
+    }
+
+    /// A probe that cannot tell removes the series rather than publishing a zero -- the same
+    /// null-is-not-zero rule the database columns follow. On a dashboard a zero is worse than a
+    /// gap, because a gap looks like missing data and a zero looks like a reading.
+    #[test]
+    fn a_value_the_probe_cannot_supply_is_absent_rather_than_zero() {
+        let _guard = exclusive();
+        let room = "22222222-2222-2222-2222-222222222222";
+        publish_room(room, &status(Some(2), None, None));
+        assert_eq!(gauge(room), Some(2));
+
+        // The TCP fallback: reachable, nothing known.
+        publish_room(room, &status(None, None, None));
+        assert_eq!(gauge(room), None, "not 0");
+
+        retain_rooms(&std::collections::HashSet::new());
+    }
+
+    /// **Trap two: a cumulative counter fed into `inc_by`.** pahoa reports a total and
+    /// `IntCounter` has no `set`, so this advances by the difference -- and a room restart, where
+    /// the total goes BACKWARDS, must add the new total rather than underflow or stall.
+    #[test]
+    fn a_cumulative_counter_advances_by_its_delta_and_survives_a_room_restart() {
+        let _guard = exclusive();
+        let room = "33333333-3333-3333-3333-333333333333";
+        let total = || {
+            ROOM_LAG_DISCONNECTS
+                .get_metric_with_label_values(&[room])
+                .expect("the child")
+                .get()
+        };
+
+        // First sighting adds the whole total: the room may have been running before this process
+        // was, and this process's own counter started at zero.
+        publish_room(room, &status(Some(1), None, Some(7)));
+        assert_eq!(total(), 7);
+
+        // Then deltas.
+        publish_room(room, &status(Some(1), None, Some(9)));
+        assert_eq!(total(), 9);
+
+        // Unchanged adds nothing.
+        publish_room(room, &status(Some(1), None, Some(9)));
+        assert_eq!(total(), 9);
+
+        // **The room restarted**: its total began again at 2. The counter must move forward by 2,
+        // never backwards and never by a negative that would panic or wrap.
+        publish_room(room, &status(Some(1), None, Some(2)));
+        assert_eq!(total(), 11, "a room restart must not stall or underflow");
+
+        retain_rooms(&std::collections::HashSet::new());
+    }
+
+    /// The baseline is dropped with the series, so a room that comes back is not credited with the
+    /// difference against a total it no longer has.
+    #[test]
+    fn a_removed_rooms_counter_baseline_goes_with_it() {
+        let _guard = exclusive();
+        let room = "44444444-4444-4444-4444-444444444444";
+        publish_room(room, &status(Some(1), None, Some(100)));
+        retain_rooms(&std::collections::HashSet::new());
+
+        // Fresh series, fresh baseline: the room's current total, not a delta against 100.
+        publish_room(room, &status(Some(1), None, Some(5)));
+        assert_eq!(
+            ROOM_LAG_DISCONNECTS
+                .get_metric_with_label_values(&[room])
+                .expect("the child")
+                .get(),
+            5
+        );
+
+        retain_rooms(&std::collections::HashSet::new());
     }
 }
