@@ -41,7 +41,11 @@ appear below when it finishes.</p>
       <option value="release">release &mdash; send a slot&rsquo;s remaining items</option>
       <option value="collect">collect &mdash; gather a slot&rsquo;s own items</option>
       <option value="send_item">send item &mdash; give a slot an item</option>
-      <option value="kick">kick &mdash; disconnect a slot</option>
+      {# **A disconnect, not a ban.** Every socket the slot holds closes, the reason is delivered as
+         chat, and the client may reconnect immediately -- most do, automatically, within seconds.
+         Measured: a kick here took the room from 4 connections to 5. The label says so because the
+         alternative is somebody pressing it twice and concluding the console is broken. #}
+      <option value="kick">kick &mdash; disconnect a slot (they can reconnect at once)</option>
       {% endif %}
     </select>
   </label>
