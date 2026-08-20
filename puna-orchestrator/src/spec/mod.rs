@@ -39,11 +39,14 @@ pub struct Site {
     pub tls_secret: String,
     /// The CephFS PVC holding `generations/`, `rooms/`, `shared/` and `trash/`.
     pub data_pvc: String,
+    /// The label and annotation keys this cluster uses. See [`Naming`].
+    pub naming: Naming,
 }
 
 // A `from_config` constructor belongs here and is deliberately absent until there is a caller: the
 // tick builds the `Site` once, when it is rewired. An untested mapping of five same-typed String
-// fields is exactly the shape that silently swaps two of them.
+// fields is exactly the shape that silently swaps two of them — which is also why [`Naming`] is its
+// own struct rather than four more of them here.
 
 /// `app.kubernetes.io/managed-by=puna` — what makes an object Puna's to reason about.
 ///
@@ -54,23 +57,83 @@ pub const MANAGED_BY: &str = "puna";
 pub const NAME_KEY: &str = "app.kubernetes.io/name";
 pub const NAME: &str = "pahoa";
 
-/// The room id, as a label value.
+/// The label and annotation vocabulary this deployment uses.
 ///
-/// A UUID is 36 characters and a label value allows 63, so the id goes in whole. Worth stating
-/// because truncating or hashing it later would collide silently rather than fail.
-pub const ROOM_KEY: &str = "onelemur.com/room";
-
-/// Which LoadBalancer IP pool a Service draws from.
+/// **These are the cluster's words, not Puna's**, which is why they arrive as configuration. Every
+/// one of them is a prefixed key under a domain the operator owns, and two of them are read by
+/// things outside this repository entirely — an address-pool selector and an L2 announcement policy
+/// both match on their own copies of these strings.
 ///
-/// **Required on room Services**, not decorative. A cluster is expected to carry more than one
-/// address pool, with the internal one selecting anything that does not ask for the public one — so
-/// an unlabeled Service is not merely unlabeled, it is allocated a private address from which the
-/// room is unreachable, while otherwise looking entirely healthy.
-pub const LB_POOL_KEY: &str = "onelemur.com/lb-pool";
-pub const LB_POOL: &str = "public";
+/// A struct rather than four more fields on [`Site`], for the reason stated there: same-typed
+/// strings in one initializer are the shape that silently swaps two, and swapping the room key with
+/// the pool key would be a bad afternoon.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Naming {
+    /// The room id label. **This one is identity**: it is written onto every object, read back to
+    /// answer *which room is this*, and used as the Deployment's `spec.selector`.
+    ///
+    /// A UUID is 36 characters and a label value allows 63, so the id goes in whole — truncating or
+    /// hashing it later would collide silently rather than fail.
+    ///
+    /// Changing the value on a live deployment is not a configuration change. `spec.selector` is
+    /// immutable in Kubernetes, so the apply is refused outright; and every existing object stops
+    /// resolving to a room, which is exactly the sweep's orphan condition. See
+    /// `assert_room_label_resolves` in the orchestrator's startup for the guard against doing it by
+    /// accident.
+    pub room_key: String,
 
-/// Where the spec fingerprint rides. Read back off a live Deployment and compared with the row.
-pub const SPEC_HASH_ANNOTATION: &str = "puna.onelemur.com/spec-hash";
+    /// Which LoadBalancer address pool a Service draws from, and the value that asks for it.
+    ///
+    /// **Required on room Services**, not decorative. A cluster is expected to carry more than one
+    /// address pool, with the internal one selecting anything that does not ask for the public one —
+    /// so an unlabeled Service is not merely unlabeled, it is allocated a private address from which
+    /// the room is unreachable, while otherwise looking entirely healthy.
+    ///
+    /// Labels are not part of the spec hash, so changing these does not recreate anything: existing
+    /// Services keep the old label until they are recreated for some other reason.
+    pub lb_pool_key: String,
+    pub lb_pool: String,
+
+    /// Where the spec fingerprint rides. Read back off a live Deployment and compared with the row.
+    ///
+    /// Prefixed under Puna's own subdomain rather than the bare operator domain, and the distinction
+    /// is deliberate: the two labels above are shared vocabulary that cluster policy reads, while
+    /// this is Puna talking to itself and nothing else should match on it.
+    ///
+    /// Changing it makes every live Deployment's fingerprint unreadable, which reads as a differing
+    /// hash and recreates the fleet — paced, but a real bounce.
+    pub spec_hash_annotation: String,
+}
+
+impl Naming {
+    /// The keys this deployment was configured with.
+    pub fn from_config(config: &puna_core::OrchestratorConfig) -> Self {
+        Self {
+            room_key: config.room_label_key.clone(),
+            lb_pool_key: config.lb_pool_label_key.clone(),
+            lb_pool: config.lb_pool_value.clone(),
+            spec_hash_annotation: config.spec_hash_annotation.clone(),
+        }
+    }
+
+    /// Just the room id: the Deployment's `spec.selector` and the Service's pod selector.
+    pub fn selector_labels(&self, room: RoomId) -> BTreeMap<String, String> {
+        BTreeMap::from([(self.room_key.clone(), room.to_string())])
+    }
+
+    /// Everything an object carries: the room id plus the two well-known keys that make it Puna's.
+    pub fn labels(&self, room: RoomId) -> BTreeMap<String, String> {
+        let mut labels = self.selector_labels(room);
+        labels.insert(MANAGED_BY_KEY.to_string(), MANAGED_BY.to_string());
+        labels.insert(NAME_KEY.to_string(), NAME.to_string());
+        labels
+    }
+
+    /// Which room an object belongs to, or `None` if it does not say.
+    pub fn room_of(&self, labels: &BTreeMap<String, String>) -> Option<RoomId> {
+        labels.get(&self.room_key)?.parse().ok()
+    }
+}
 
 /// The room container's name, written by [`deployment`] and read back by the cluster client to
 /// answer *which image is this room actually running*.
@@ -88,34 +151,6 @@ pub const ROOM_SERVICE_ACCOUNT: &str = "puna-room";
 /// The label selector every list call uses.
 pub fn managed_selector() -> String {
     format!("{MANAGED_BY_KEY}={MANAGED_BY}")
-}
-
-/// The labels that identify one room's pods, and nothing more.
-///
-/// **This is the Deployment's `selector.matchLabels` and the Service's `selector`, from one
-/// function.** Two hand-written copies that disagree produce a Service with no endpoints, which
-/// presents as a connection refused on a room that Kubernetes reports as perfectly healthy.
-pub fn selector_labels(room: RoomId) -> BTreeMap<String, String> {
-    BTreeMap::from([(ROOM_KEY.to_string(), room.to_string())])
-}
-
-/// The full label set for an object belonging to one room.
-pub fn labels(room: RoomId) -> BTreeMap<String, String> {
-    let mut labels = selector_labels(room);
-    labels.insert(MANAGED_BY_KEY.to_string(), MANAGED_BY.to_string());
-    labels.insert(NAME_KEY.to_string(), NAME.to_string());
-    labels
-}
-
-/// The room id carried by an object's labels, if it has one that parses.
-///
-/// `None` makes it an orphan by definition — there is no room row it could belong to.
-pub fn room_of(labels: &BTreeMap<String, String>) -> Option<RoomId> {
-    labels
-        .get(ROOM_KEY)?
-        .parse::<uuid::Uuid>()
-        .ok()
-        .map(RoomId::from)
 }
 
 /// The room's own state directory: `rooms/<id>` on the shared volume, by `subPath`.
@@ -151,6 +186,15 @@ pub const TLS_KEY_PATH: &str = "/etc/pahoa/tls/tls.key";
 mod tests {
     use super::*;
 
+    fn naming() -> Naming {
+        Naming {
+            room_key: "example.test/room".into(),
+            lb_pool_key: "example.test/lb-pool".into(),
+            lb_pool: "public".into(),
+            spec_hash_annotation: "puna.example.test/spec-hash".into(),
+        }
+    }
+
     /// A path pahoa is told to read must be inside something the pod mounts. Cheap to assert, and
     /// the failure it prevents is silent: pahoa would start, find nothing, and serve an empty room.
     #[test]
@@ -173,22 +217,23 @@ mod tests {
     #[test]
     fn a_rooms_labels_carry_its_id_and_survive_a_round_trip() {
         let room = RoomId::new();
-        let labels = labels(room);
+        let naming = naming();
+        let labels = naming.labels(room);
 
-        assert_eq!(room_of(&labels), Some(room));
+        assert_eq!(naming.room_of(&labels), Some(room));
         assert_eq!(
             labels.get(MANAGED_BY_KEY).map(String::as_str),
             Some(MANAGED_BY)
         );
         // The id goes in whole: 36 characters against a label value's 63.
-        assert!(labels[ROOM_KEY].len() <= 63);
+        assert!(labels[&naming.room_key].len() <= 63);
 
         // Anything else is an orphan rather than a room, including a label that is present and not
         // a uuid -- guessing would attach a live pod to the wrong row.
-        assert_eq!(room_of(&BTreeMap::new()), None);
+        assert_eq!(naming.room_of(&BTreeMap::new()), None);
         assert_eq!(
-            room_of(&BTreeMap::from([(
-                ROOM_KEY.to_string(),
+            naming.room_of(&BTreeMap::from([(
+                naming.room_key.clone(),
                 "not-a-uuid".to_string()
             )])),
             None
@@ -199,12 +244,13 @@ mod tests {
     #[test]
     fn the_selector_is_a_subset_of_the_labels() {
         let room = RoomId::new();
-        let labels = labels(room);
-        for (key, value) in selector_labels(room) {
+        let naming = naming();
+        let labels = naming.labels(room);
+        for (key, value) in naming.selector_labels(room) {
             assert_eq!(labels.get(&key), Some(&value));
         }
         // Only the room id: adding a label to the selector would orphan every pod created before
         // the change, since selectors are immutable on a Deployment.
-        assert_eq!(selector_labels(room).len(), 1);
+        assert_eq!(naming.selector_labels(room).len(), 1);
     }
 }

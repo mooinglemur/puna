@@ -33,7 +33,7 @@ use super::{
     ClusterApi, ClusterError, Result, RoomDeployment, RoomSecret, RoomService, RoomSpec,
     SecretSpec, ServiceSpec,
 };
-use crate::spec::{self, SPEC_HASH_ANNOTATION, Site};
+use crate::spec::{self, Site};
 
 /// Count one API call, by what it did and how it went.
 ///
@@ -103,7 +103,11 @@ impl ClusterApi for KubeCluster {
                 .await
                 .map_err(classify),
         )?;
-        Ok(list.items.iter().filter_map(read_deployment).collect())
+        Ok(list
+            .items
+            .iter()
+            .filter_map(|d| read_deployment(d, &self.site.naming))
+            .collect())
     }
 
     async fn list_services(&self) -> Result<Vec<RoomService>> {
@@ -115,7 +119,11 @@ impl ClusterApi for KubeCluster {
                 .await
                 .map_err(classify),
         )?;
-        Ok(list.items.iter().filter_map(read_service).collect())
+        Ok(list
+            .items
+            .iter()
+            .filter_map(|x| read_service(x, &self.site.naming))
+            .collect())
     }
 
     async fn list_secrets(&self) -> Result<Vec<RoomSecret>> {
@@ -127,7 +135,11 @@ impl ClusterApi for KubeCluster {
                 .await
                 .map_err(classify),
         )?;
-        Ok(list.items.iter().filter_map(read_secret).collect())
+        Ok(list
+            .items
+            .iter()
+            .filter_map(|x| read_secret(x, &self.site.naming))
+            .collect())
     }
 
     async fn get_deployment(&self, name: &str) -> Result<Option<RoomDeployment>> {
@@ -136,7 +148,9 @@ impl ClusterApi for KubeCluster {
             "deployments",
             self.deployments.get_opt(name).await.map_err(classify),
         )?;
-        Ok(found.as_ref().and_then(read_deployment))
+        Ok(found
+            .as_ref()
+            .and_then(|d| read_deployment(d, &self.site.naming)))
     }
 
     async fn create_deployment(&self, spec: &RoomSpec) -> Result<String> {
@@ -223,7 +237,9 @@ impl ClusterApi for KubeCluster {
             "services",
             self.services.get_opt(name).await.map_err(classify),
         )?;
-        Ok(found.as_ref().and_then(read_service))
+        Ok(found
+            .as_ref()
+            .and_then(|x| read_service(x, &self.site.naming)))
     }
 }
 
@@ -253,7 +269,7 @@ fn classify(error: kube::Error) -> ClusterError {
     }
 }
 
-fn read_deployment(deployment: &Deployment) -> Option<RoomDeployment> {
+fn read_deployment(deployment: &Deployment, naming: &spec::Naming) -> Option<RoomDeployment> {
     let metadata = &deployment.metadata;
     // An object with no name or uid cannot be acted on or owned. Skipping keeps the snapshot a set
     // of things that can be reasoned about, rather than one with holes in it.
@@ -263,11 +279,11 @@ fn read_deployment(deployment: &Deployment) -> Option<RoomDeployment> {
     Some(RoomDeployment {
         name,
         uid,
-        room_id: metadata.labels.as_ref().and_then(spec::room_of),
+        room_id: metadata.labels.as_ref().and_then(|l| naming.room_of(l)),
         spec_hash: metadata
             .annotations
             .as_ref()
-            .and_then(|a| a.get(SPEC_HASH_ANNOTATION))
+            .and_then(|a| a.get(&naming.spec_hash_annotation))
             .cloned(),
         // By container NAME, not `containers[0]`: an injected sidecar would take that slot and the
         // admin table would confidently report the wrong image. No match is `None`.
@@ -293,11 +309,11 @@ fn read_deployment(deployment: &Deployment) -> Option<RoomDeployment> {
     })
 }
 
-fn read_service(service: &Service) -> Option<RoomService> {
+fn read_service(service: &Service, naming: &spec::Naming) -> Option<RoomService> {
     let metadata = &service.metadata;
     Some(RoomService {
         name: metadata.name.clone()?,
-        room_id: metadata.labels.as_ref().and_then(spec::room_of),
+        room_id: metadata.labels.as_ref().and_then(|l| naming.room_of(l)),
         ingress_ip: service
             .status
             .as_ref()
@@ -309,11 +325,11 @@ fn read_service(service: &Service) -> Option<RoomService> {
     })
 }
 
-fn read_secret(secret: &Secret) -> Option<RoomSecret> {
+fn read_secret(secret: &Secret, naming: &spec::Naming) -> Option<RoomSecret> {
     let metadata = &secret.metadata;
     Some(RoomSecret {
         name: metadata.name.clone()?,
-        room_id: metadata.labels.as_ref().and_then(spec::room_of),
+        room_id: metadata.labels.as_ref().and_then(|l| naming.room_of(l)),
         owner_uid: controller_uid(metadata),
     })
 }
@@ -335,6 +351,16 @@ fn controller_uid(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn naming() -> spec::Naming {
+        spec::Naming {
+            room_key: "example.test/room".into(),
+            lb_pool_key: "example.test/lb-pool".into(),
+            lb_pool: "public".into(),
+            spec_hash_annotation: "puna.example.test/spec-hash".into(),
+        }
+    }
+
     use k8s_openapi::api::apps::v1::DeploymentStatus;
     use k8s_openapi::api::core::v1::{LoadBalancerIngress, LoadBalancerStatus, ServiceStatus};
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
@@ -395,9 +421,9 @@ mod tests {
             metadata: ObjectMeta {
                 name: Some(format!("mw-{room}")),
                 uid: Some("uid-1".into()),
-                labels: Some(spec::labels(room)),
+                labels: Some(naming().labels(room)),
                 annotations: Some(std::collections::BTreeMap::from([(
-                    SPEC_HASH_ANNOTATION.to_string(),
+                    naming().spec_hash_annotation.clone(),
                     "hash-1".to_string(),
                 )])),
                 ..Default::default()
@@ -410,7 +436,7 @@ mod tests {
             ..Default::default()
         };
 
-        let read = read_deployment(&deployment).expect("readable");
+        let read = read_deployment(&deployment, &naming()).expect("readable");
         assert_eq!(read.room_id, Some(room));
         assert_eq!(read.uid, "uid-1");
         assert_eq!(read.spec_hash.as_deref(), Some("hash-1"));
@@ -434,7 +460,12 @@ mod tests {
             }),
             ..Default::default()
         };
-        assert_eq!(read_deployment(&deployment).unwrap().ready_replicas, 0);
+        assert_eq!(
+            read_deployment(&deployment, &naming())
+                .unwrap()
+                .ready_replicas,
+            0
+        );
     }
 
     /// An object Puna cannot own or address is left out of the snapshot rather than half-read.
@@ -448,7 +479,7 @@ mod tests {
             },
             ..Default::default()
         };
-        assert!(read_deployment(&deployment).is_none());
+        assert!(read_deployment(&deployment, &naming()).is_none());
     }
 
     /// A Deployment with our label and no parseable room is an orphan by definition.
@@ -466,7 +497,10 @@ mod tests {
             },
             ..Default::default()
         };
-        assert_eq!(read_deployment(&deployment).unwrap().room_id, None);
+        assert_eq!(
+            read_deployment(&deployment, &naming()).unwrap().room_id,
+            None
+        );
     }
 
     #[test]
@@ -475,7 +509,7 @@ mod tests {
         let mut service = Service {
             metadata: ObjectMeta {
                 name: Some(format!("mw-{room}")),
-                labels: Some(spec::labels(room)),
+                labels: Some(naming().labels(room)),
                 owner_references: Some(vec![OwnerReference {
                     api_version: "apps/v1".into(),
                     kind: "Deployment".into(),
@@ -489,7 +523,7 @@ mod tests {
             ..Default::default()
         };
 
-        let pending = read_service(&service).expect("readable");
+        let pending = read_service(&service, &naming()).expect("readable");
         assert_eq!(pending.ingress_ip, None, "IPAM has not answered yet");
         assert_eq!(pending.owner_uid.as_deref(), Some("uid-1"));
         assert_eq!(pending.room_id, Some(room));
@@ -504,7 +538,10 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(
-            read_service(&service).unwrap().ingress_ip.as_deref(),
+            read_service(&service, &naming())
+                .unwrap()
+                .ingress_ip
+                .as_deref(),
             Some("192.0.2.10")
         );
     }
@@ -529,7 +566,7 @@ mod tests {
             },
             ..Default::default()
         };
-        assert_eq!(read_secret(&secret).unwrap().owner_uid, None);
+        assert_eq!(read_secret(&secret, &naming()).unwrap().owner_uid, None);
     }
 
     /// Three list calls per tick regardless of room count, and both properties matter: the label

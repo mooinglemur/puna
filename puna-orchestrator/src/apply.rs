@@ -241,6 +241,12 @@ mod tests {
             lb_sharing_key: "shared-public".into(),
             tls_secret: "puna-room-tls".into(),
             data_pvc: "puna-data".into(),
+            naming: crate::spec::Naming {
+                room_key: "example.test/room".into(),
+                lb_pool_key: "example.test/lb-pool".into(),
+                lb_pool: "public".into(),
+                spec_hash_annotation: "puna.example.test/spec-hash".into(),
+            },
         }
     }
 

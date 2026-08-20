@@ -26,18 +26,18 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference}
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 
 use crate::cluster::{OwnerRef, SecretSpec, ServiceSpec as RoomServiceSpec};
+use crate::spec::Site;
 use crate::spec::deployment::{PORT_FILTERED, PORT_FULL};
-use crate::spec::{LB_POOL, LB_POOL_KEY, Site};
 
 const SHARING_KEY_ANNOTATION: &str = "lbipam.cilium.io/sharing-key";
 const SHARING_CROSS_NAMESPACE_ANNOTATION: &str = "lbipam.cilium.io/sharing-cross-namespace";
 const REQUESTED_IPS_ANNOTATION: &str = "lbipam.cilium.io/ips";
 
 pub fn build(spec: &RoomServiceSpec, site: &Site) -> Service {
-    let mut labels = crate::spec::labels(spec.room_id);
+    let mut labels = site.naming.labels(spec.room_id);
     // Required, not decorative: an unlabeled Service is allocated from the internal pool instead,
     // landing on a private address the room is unreachable from. See `LB_POOL_KEY`.
-    labels.insert(LB_POOL_KEY.to_string(), LB_POOL.to_string());
+    labels.insert(site.naming.lb_pool_key.clone(), site.naming.lb_pool.clone());
 
     let mut ports = vec![ServicePort {
         name: Some(PORT_FULL.to_string()),
@@ -83,7 +83,7 @@ pub fn build(spec: &RoomServiceSpec, site: &Site) -> Service {
             // leaves the Service pending forever.
             ip_family_policy: Some("SingleStack".to_string()),
             ip_families: Some(vec!["IPv4".to_string()]),
-            selector: Some(crate::spec::selector_labels(spec.room_id)),
+            selector: Some(site.naming.selector_labels(spec.room_id)),
             ports: Some(ports),
             // `externalTrafficPolicy` deliberately unset: Cluster is correct under DSR, and Local
             // would drop traffic arriving at a node not running this room's single pod.
@@ -99,7 +99,7 @@ pub fn secret(spec: &SecretSpec, site: &Site) -> Secret {
         metadata: ObjectMeta {
             name: Some(spec.name()),
             namespace: Some(site.namespace.clone()),
-            labels: Some(crate::spec::labels(spec.room_id)),
+            labels: Some(site.naming.labels(spec.room_id)),
             // `None` on the first apply, because the Deployment it would point at does not exist
             // yet — the pod cannot start without the Secret, so the Secret cannot wait for the pod.
             owner_references: spec
@@ -147,6 +147,12 @@ mod tests {
             lb_sharing_key: "shared-public".into(),
             tls_secret: "puna-room-tls".into(),
             data_pvc: "puna-data".into(),
+            naming: crate::spec::Naming {
+                room_key: "example.test/room".into(),
+                lb_pool_key: "example.test/lb-pool".into(),
+                lb_pool: "public".into(),
+                spec_hash_annotation: "puna.example.test/spec-hash".into(),
+            },
         }
     }
 
@@ -176,8 +182,8 @@ mod tests {
         assert_eq!(annotations[SHARING_CROSS_NAMESPACE_ANNOTATION], "*");
         assert_eq!(annotations[REQUESTED_IPS_ANNOTATION], "192.0.2.10");
         assert_eq!(
-            service.metadata.labels.as_ref().unwrap()[LB_POOL_KEY],
-            LB_POOL
+            service.metadata.labels.as_ref().unwrap()[&site().naming.lb_pool_key],
+            site().naming.lb_pool
         );
     }
 
@@ -338,7 +344,7 @@ mod tests {
             service.metadata.labels.clone().unwrap(),
             secret.metadata.labels.clone().unwrap(),
         ] {
-            assert_eq!(crate::spec::room_of(&labels), Some(room));
+            assert_eq!(site().naming.room_of(&labels), Some(room));
             assert_eq!(labels[crate::spec::MANAGED_BY_KEY], crate::spec::MANAGED_BY);
         }
         assert_eq!(service.metadata.namespace, secret.metadata.namespace);

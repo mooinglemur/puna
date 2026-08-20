@@ -106,6 +106,7 @@ impl Reconciler {
                 lb_sharing_key: config.lb_sharing_key.clone(),
                 tls_secret: config.room_tls_secret.clone(),
                 data_pvc: config.data_pvc.clone(),
+                naming: crate::spec::Naming::from_config(config),
             },
             cluster,
             environment: config.common.environment,
@@ -115,6 +116,11 @@ impl Reconciler {
             sweeper: Sweeper::new(config.trash_retention),
             prober,
         }
+    }
+
+    /// The cluster client, for the startup checks that run before the first tick.
+    pub fn cluster(&self) -> &dyn ClusterApi {
+        self.cluster.as_ref()
     }
 
     /// One pass.

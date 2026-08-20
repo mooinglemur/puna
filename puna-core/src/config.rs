@@ -176,6 +176,20 @@ pub struct OrchestratorConfig {
     /// only see its own environment. **Non-overlap between environments is the deployment's to get
     /// right**, which is why it belongs beside the addresses rather than in here.
     pub port_range: (u16, u16),
+    /// The label and annotation KEYS this cluster uses, and the address-pool value.
+    ///
+    /// Prefixed keys belong to whoever owns the domain in them, and two of these are matched by
+    /// objects outside this repository — an address-pool selector and an L2 announcement policy —
+    /// so they are the cluster's vocabulary rather than Puna's and arrive from the deployment.
+    ///
+    /// **Changing `room_label_key` on a live deployment is not a config change.** It is the
+    /// Deployment's `spec.selector`, which Kubernetes will not let you update, and it is what every
+    /// object is read back through — so a new value makes the whole fleet unrecognisable at once.
+    /// The orchestrator refuses to start rather than let that proceed silently.
+    pub room_label_key: String,
+    pub lb_pool_label_key: String,
+    pub lb_pool_value: String,
+    pub spec_hash_annotation: String,
 }
 
 impl OrchestratorConfig {
@@ -207,6 +221,10 @@ impl OrchestratorConfig {
             room_probe_timeout: parse_duration("PUNA_ROOM_PROBE_TIMEOUT", 5)?,
             max_recreates_per_tick: parse_count("PUNA_MAX_RECREATES_PER_TICK", 1)?,
             port_range: parse_port_range("PUNA_PORT_RANGE")?,
+            room_label_key: require("PUNA_ROOM_LABEL_KEY")?,
+            lb_pool_label_key: require("PUNA_LB_POOL_LABEL_KEY")?,
+            lb_pool_value: require("PUNA_LB_POOL_VALUE")?,
+            spec_hash_annotation: require("PUNA_SPEC_HASH_ANNOTATION")?,
         })
     }
 }

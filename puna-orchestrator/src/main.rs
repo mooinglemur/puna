@@ -96,6 +96,7 @@ async fn main() -> anyhow::Result<()> {
         lb_sharing_key: config.lb_sharing_key.clone(),
         tls_secret: config.room_tls_secret.clone(),
         data_pvc: config.data_pvc.clone(),
+        naming: crate::spec::Naming::from_config(&config),
     };
     let cluster: Arc<dyn cluster::ClusterApi> =
         Arc::new(cluster::kube::KubeCluster::connect(site).await?);
@@ -141,6 +142,7 @@ async fn run(
         // Before a single port is allocated. See the function's own note: this is the one mistake
         // in the system that cannot be undone.
         assert_environment(pool, config.common.environment).await?;
+        assert_room_label_resolves(pool, reconciler).await?;
         // And in the same breath, because it is the same concern: record the range this deployment
         // owns and make the reservation rows match it. Held here rather than in the tick because
         // nothing may allocate before the database knows which ports are legitimate.
@@ -232,6 +234,46 @@ async fn assert_environment(
     Ok(())
 }
 
+/// Refuse to start if the configured room label does not recognise the objects already running.
+///
+/// **The failure this exists for is a fleet deletion carried out by the garbage collector.** The
+/// room label is identity: every object is read back through it to answer *which room is this*, and
+/// an object that does not answer is, by the sweep's definition, an orphan. Change the key and every
+/// existing Deployment stops resolving at once — two strikes and two minutes later they are all
+/// removed, with players still connected, by the one code path in the system whose job is deleting
+/// things nobody owns.
+///
+/// (It would not even succeed. The label is the Deployment's `spec.selector`, which Kubernetes will
+/// not let you update — so the recreate that followed would fail too. The point is that the deletion
+/// happens first.)
+///
+/// The signature is specific rather than paranoid: refuse only when there are managed Deployments,
+/// **none** of them resolve, and at least one room row exists. A genuine orphan or two is ordinary
+/// and the sweep handles it; *all* of them unresolvable while rooms exist means the key moved.
+async fn assert_room_label_resolves(
+    pool: &puna_core::db::Pool,
+    reconciler: &reconcile::Reconciler,
+) -> anyhow::Result<()> {
+    let deployments = reconciler.cluster().list_deployments().await?;
+    if deployments.is_empty() || deployments.iter().any(|d| d.room_id.is_some()) {
+        return Ok(());
+    }
+
+    let mut conn = pool.get().await?;
+    let rooms = puna_core::model::room::count(&mut conn).await?;
+    anyhow::ensure!(
+        rooms == 0,
+        "none of the {} room Deployment(s) in the cluster carry a room id under the configured \
+         label key, but this database has {} room(s). Refusing to start: every one of them would \
+         be treated as an orphan and deleted. If the room label key was just changed, change it \
+         back -- it is the Deployment's immutable selector, so moving it needs every room recreated \
+         deliberately rather than by restarting with a new value.",
+        deployments.len(),
+        rooms,
+    );
+    Ok(())
+}
+
 /// Write the configured port range into the database and reconcile the reservation rows to it.
 ///
 /// The range is a property of the deployment's network rather than of Puna, so it arrives as
@@ -246,6 +288,18 @@ async fn assert_port_range(
     // Legitimate here for the same reason as in `reconcile`: the lock is held, and this runs before
     // anything else can touch a reservation.
     let orchestrator = Orchestrator::assume_leader();
+
+    // **Strictly after `assert_environment` above.** That guard reads foreign reservations bound to
+    // rooms to catch a `DATABASE_URL` pointed at the wrong environment; this deletes foreign rows.
+    // In the other order the cleanup would erase the evidence and the guard would pass on a
+    // database it should have refused.
+    puna_core::model::port::forget_foreign_environment(
+        &orchestrator,
+        &mut conn,
+        config.common.environment,
+    )
+    .await?;
+
     puna_core::model::port::ensure_range(
         &orchestrator,
         &mut conn,

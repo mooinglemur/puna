@@ -898,6 +898,25 @@ pub async fn siblings(
     Ok(rows.into_iter().map(Room::from).collect())
 }
 
+/// How many rooms this database holds, in any state.
+///
+/// Used by the orchestrator's startup checks, where "are there rooms at all" separates a fresh
+/// environment from one whose fleet is about to be misread.
+pub async fn count(conn: &mut AsyncPgConnection) -> Result<i64, diesel::result::Error> {
+    use diesel_async::RunQueryDsl;
+
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        n: i64,
+    }
+
+    let rows: Vec<Row> = diesel::sql_query("SELECT count(*) AS n FROM rooms")
+        .load(conn)
+        .await?;
+    Ok(rows.into_iter().next().map(|r| r.n).unwrap_or(0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

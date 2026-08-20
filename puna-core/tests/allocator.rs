@@ -596,3 +596,76 @@ async fn reconciling_the_range_preserves_existing_reservations() {
     })
     .await;
 }
+
+/// **The other environment's rows are removed, and the range row only once they are gone.**
+///
+/// Every database is seeded with reservations for both environments and carries a backfilled range
+/// row for each, but a database serves exactly one. The foreign rows are inert — `allocate` filters
+/// on environment — and they are removed because `port_ranges` is what somebody reads to answer
+/// "which ports does this environment own", where a stale row answers with a number that is no
+/// longer true.
+#[tokio::test]
+async fn the_other_environments_rows_are_forgotten() {
+    with_db(|pool| async move {
+        let orch = Orchestrator::assume_leader();
+        let mut conn = pool.get().await.expect("connection");
+
+        // A fresh database has both, from the initial seed and the range backfill.
+        assert!(common::reservation_count(&mut conn, "prod").await > 0);
+        assert!(common::has_range_row(&mut conn, "prod").await);
+
+        port::forget_foreign_environment(&orch, &mut conn, DEV)
+            .await
+            .expect("cleanup");
+
+        assert_eq!(
+            common::reservation_count(&mut conn, "prod").await,
+            0,
+            "the other environment's reservations are gone"
+        );
+        assert!(
+            !common::has_range_row(&mut conn, "prod").await,
+            "and so is its range row"
+        );
+
+        // This environment is untouched.
+        assert!(common::reservation_count(&mut conn, "dev").await > 0);
+        assert!(common::has_range_row(&mut conn, "dev").await);
+    })
+    .await;
+}
+
+/// The range row is kept while ANY foreign reservation survives.
+///
+/// The condition is a second opinion rather than the mechanism — the delete above should already
+/// have emptied them. But a bound foreign reservation is a wrong-database misconfiguration, and in
+/// that case the row documenting the other environment is exactly what a person needs to see rather
+/// than something to tidy away.
+#[tokio::test]
+async fn a_surviving_foreign_reservation_keeps_its_range_row() {
+    with_db(|pool| async move {
+        let orch = Orchestrator::assume_leader();
+        let mut conn = pool.get().await.expect("connection");
+        let generation = insert_generation(&mut conn).await;
+        let squatter = insert_room(&mut conn, generation, "running").await;
+
+        // A prod reservation bound to a room: the shape `assert_environment_matches` refuses to
+        // start on, and which this cleanup must not erase.
+        common::bind_foreign_reservation(&mut conn, "prod", squatter).await;
+
+        port::forget_foreign_environment(&orch, &mut conn, DEV)
+            .await
+            .expect("cleanup");
+
+        assert_eq!(
+            common::reservation_count(&mut conn, "prod").await,
+            1,
+            "a bound foreign reservation is left alone"
+        );
+        assert!(
+            common::has_range_row(&mut conn, "prod").await,
+            "and its range row stays, because a reservation still references that environment"
+        );
+    })
+    .await;
+}

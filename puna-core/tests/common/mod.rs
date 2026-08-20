@@ -255,3 +255,60 @@ pub async fn set_recorded_range(
     .await
     .expect("move the recorded range");
 }
+
+pub async fn reservation_count(conn: &mut AsyncPgConnection, environment: &str) -> i64 {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        n: i64,
+    }
+    let rows: Vec<Row> = diesel::sql_query(
+        "SELECT count(*) AS n FROM port_reservations WHERE environment = $1::puna_environment",
+    )
+    .bind::<diesel::sql_types::Text, _>(environment)
+    .load(conn)
+    .await
+    .expect("count reservations");
+    rows.into_iter().next().map(|r| r.n).unwrap_or(0)
+}
+
+pub async fn has_range_row(conn: &mut AsyncPgConnection, environment: &str) -> bool {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        n: i64,
+    }
+    let rows: Vec<Row> = diesel::sql_query(
+        "SELECT count(*) AS n FROM port_ranges WHERE environment = $1::puna_environment",
+    )
+    .bind::<diesel::sql_types::Text, _>(environment)
+    .load(conn)
+    .await
+    .expect("count ranges");
+    rows.into_iter().next().map(|r| r.n).unwrap_or(0) == 1
+}
+
+/// Leave exactly one reservation in `environment`, bound to `room`.
+///
+/// The shape a wrong-database misconfiguration produces, which the startup guard exists to catch.
+pub async fn bind_foreign_reservation(
+    conn: &mut AsyncPgConnection,
+    environment: &str,
+    room: RoomId,
+) {
+    diesel::sql_query("DELETE FROM port_reservations WHERE environment = $1::puna_environment")
+        .bind::<diesel::sql_types::Text, _>(environment)
+        .execute(conn)
+        .await
+        .expect("clear");
+    diesel::sql_query(
+        "INSERT INTO port_reservations (environment, base_port, room_id)
+              VALUES ($1::puna_environment, (SELECT base_low FROM port_ranges
+                                              WHERE environment = $1::puna_environment), $2)",
+    )
+    .bind::<diesel::sql_types::Text, _>(environment)
+    .bind::<diesel::sql_types::Uuid, _>(room)
+    .execute(conn)
+    .await
+    .expect("bind a foreign reservation");
+}

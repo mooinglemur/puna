@@ -501,6 +501,70 @@ pub async fn assert_environment_matches(
     Ok(())
 }
 
+/// Forget the environment this database does not serve.
+///
+/// Every database is seeded by the initial migration with reservations for **both** environments,
+/// and the migration that made the range configurable backfilled a `port_ranges` row for each. Only
+/// one of those is ever real: a database belongs to exactly one environment, and nothing else in
+/// this module touches the other one -- `ensure_range` writes only its own row, and `allocate`
+/// filters on `environment`, so the foreign rows are inert.
+///
+/// Inert but **misleading**, which is the reason to remove them. `port_ranges` is the table someone
+/// reads to answer "which ports does this environment own", and a stale foreign row answers a
+/// question nobody asked with a number that is no longer true -- the dev database's `prod` row still
+/// claimed a range that dev itself had since expanded into.
+///
+/// ## Ordering, which is the part that matters
+///
+/// **[`assert_environment_matches`] must run first**, and this function must never be called before
+/// it. That guard refuses to start when it finds foreign reservations *bound to rooms*, which is how
+/// a `DATABASE_URL` pointed at the wrong environment is caught — the one mistake the design calls
+/// unrecoverable. Cleaning up first would delete exactly the evidence it reads, turning a loud
+/// refusal into a silent adoption of somebody else's database.
+///
+/// The range row goes only **if no foreign reservation remains**. The deletion above should have
+/// ensured that, so the condition is a second opinion rather than the mechanism: if anything raced,
+/// or the delete failed partway, the row that documents the other environment stays rather than
+/// leaving the database describing a partition it no longer records.
+pub async fn forget_foreign_environment(
+    _orchestrator: &Orchestrator,
+    conn: &mut AsyncPgConnection,
+    environment: Environment,
+) -> anyhow::Result<()> {
+    // Unbound by construction: the assertion above refuses to start otherwise. Bound rows are a
+    // wrong-database misconfiguration and are never this function's to resolve.
+    let reservations = diesel::sql_query(
+        "DELETE FROM port_reservations
+          WHERE environment <> $1::puna_environment
+            AND room_id IS NULL",
+    )
+    .bind::<Text, _>(environment.as_str())
+    .execute(conn)
+    .await?;
+
+    let ranges = diesel::sql_query(
+        "DELETE FROM port_ranges
+          WHERE environment <> $1::puna_environment
+            AND NOT EXISTS (
+                SELECT 1 FROM port_reservations r
+                 WHERE r.environment = port_ranges.environment)",
+    )
+    .bind::<Text, _>(environment.as_str())
+    .execute(conn)
+    .await?;
+
+    if reservations > 0 || ranges > 0 {
+        tracing::info!(
+            environment = environment.as_str(),
+            reservations,
+            ranges,
+            "removed rows belonging to the other environment; this database serves one"
+        );
+    }
+
+    Ok(())
+}
+
 /// Record the configured port range and make the reservation rows match it.
 ///
 /// Called once at orchestrator startup, before anything can allocate. Idempotent: the ordinary case

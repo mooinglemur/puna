@@ -40,7 +40,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 
 use crate::cluster::{RoomSpec, object_name};
-use crate::spec::{ROOM_SERVICE_ACCOUNT, SAVE_DIR, SPEC_HASH_ANNOTATION, Site, TLS_DIR};
+use crate::spec::{ROOM_SERVICE_ACCOUNT, SAVE_DIR, Site, TLS_DIR};
 
 /// The full feed. Named, because the Service and both probes refer to it by name.
 pub const PORT_FULL: &str = "game-full";
@@ -69,7 +69,7 @@ const TLS_FILE_MODE: i32 = 0o440;
 
 pub fn build(spec: &RoomSpec, site: &Site) -> Deployment {
     let name = object_name(spec.room_id);
-    let labels = crate::spec::labels(spec.room_id);
+    let labels = site.naming.labels(spec.room_id);
 
     Deployment {
         metadata: ObjectMeta {
@@ -77,7 +77,7 @@ pub fn build(spec: &RoomSpec, site: &Site) -> Deployment {
             namespace: Some(site.namespace.clone()),
             labels: Some(labels.clone()),
             annotations: Some(BTreeMap::from([(
-                SPEC_HASH_ANNOTATION.to_string(),
+                site.naming.spec_hash_annotation.clone(),
                 spec.spec_hash.clone(),
             )])),
             ..Default::default()
@@ -91,7 +91,7 @@ pub fn build(spec: &RoomSpec, site: &Site) -> Deployment {
                 rolling_update: None,
             }),
             selector: LabelSelector {
-                match_labels: Some(crate::spec::selector_labels(spec.room_id)),
+                match_labels: Some(site.naming.selector_labels(spec.room_id)),
                 match_expressions: None,
             },
             template: PodTemplateSpec {
@@ -321,6 +321,12 @@ mod tests {
             lb_sharing_key: "shared-public".into(),
             tls_secret: "puna-room-tls".into(),
             data_pvc: "puna-data".into(),
+            naming: crate::spec::Naming {
+                room_key: "example.test/room".into(),
+                lb_pool_key: "example.test/lb-pool".into(),
+                lb_pool: "public".into(),
+                spec_hash_annotation: "puna.example.test/spec-hash".into(),
+            },
         }
     }
 
@@ -358,11 +364,13 @@ mod tests {
         assert_eq!(deployment.metadata.name.as_deref(), Some(name.as_str()));
         assert_eq!(deployment.metadata.namespace.as_deref(), Some("rooms-test"));
         assert_eq!(
-            crate::spec::room_of(deployment.metadata.labels.as_ref().unwrap()),
+            site()
+                .naming
+                .room_of(deployment.metadata.labels.as_ref().unwrap()),
             Some(spec.room_id)
         );
         assert_eq!(
-            deployment.metadata.annotations.as_ref().unwrap()[SPEC_HASH_ANNOTATION],
+            deployment.metadata.annotations.as_ref().unwrap()[&site().naming.spec_hash_annotation],
             "f00d"
         );
         // 39 characters with a UUID, against the 63 an RFC 1035 name allows.
