@@ -3,14 +3,18 @@
 //! ## Both read the room id from the route's FIRST dynamic segment
 //!
 //! Rocket guards take no parameters, so a guard cannot be told which room it is guarding -- it has
-//! to find out. `Request::param(0)` is the first dynamic segment of the matched route, so **every
-//! room-scoped route must spell the room id first**: `/room/<id>/...`, and for slots
-//! `/room/<id>/slot/<n>/...` with the slot number second.
+//! to find out, from the routed URI. **`Request::param(n)` is SEGMENT-indexed**, so for
+//! `/room/<id>/...` the id is segment **1** (segment 0 is the literal `room`), and for
+//! `/room/<id>/slot/<n>/...` the slot number is segment **3**.
 //!
-//! That is a convention, and conventions rot. What holds it up is that breaking it fails loudly
-//! and immediately: a route whose first parameter is not a room id gets a 404 from the guard on
-//! its very first request, rather than authorizing against the wrong room. The failure mode is
-//! "this page never works", not "this page works for the wrong people".
+//! Reading `param(0)` as "the first dynamic parameter" is the obvious misreading and it compiles.
+//! It also made every guarded route here answer 404 for everybody from M5 until 2026-08-20 -- see
+//! [`ROOM_ID_SEGMENT`].
+//!
+//! So every room-scoped route must spell the room id first: `/room/<id>/...`. That is a convention,
+//! and conventions rot -- but breaking it fails loudly and immediately, with a 404 on the first
+//! request rather than authorization against the wrong room. The failure mode is "this page never
+//! works", not "this page works for the wrong people".
 //!
 //! ## Admins short-circuit; nothing else does
 //!
@@ -112,12 +116,38 @@ impl<M: MinRole> RoomAccess<M> {
     }
 }
 
-/// Pull the room id out of the route's first dynamic segment, then load it.
-async fn room_from_request(request: &Request<'_>) -> Result<(Room, Pool), Error> {
-    let id: RoomId = request
-        .param::<crate::params::RoomParam>(0)
+/// Where the room id sits in `/room/<id>/...`.
+///
+/// **`Request::param` is SEGMENT-indexed, not parameter-indexed.** It returns "the 0-indexed nth
+/// non-empty segment from the routed request", so segment 0 is the literal `room` and the id is
+/// segment 1. Reading it as "the first dynamic parameter" is the obvious misreading, it compiles,
+/// and it makes every guarded route answer **404 for everybody**.
+///
+/// It did, from M5 until 2026-08-20: eleven `RoomAccess` routes — stop, clone, members, invites,
+/// settings, the whole console — plus the two `SlotAccess` ones. Nothing caught it because
+/// `/room/<id>` itself takes its id as a handler argument rather than through this guard, so the
+/// room page worked perfectly and everything behind it did not. It surfaced when somebody went
+/// looking for a console link.
+const ROOM_ID_SEGMENT: usize = 1;
+
+/// Where the slot number sits in `/room/<id>/slot/<n>/...`: `room`, `<id>`, `slot`, `<n>`.
+const SLOT_NUMBER_SEGMENT: usize = 3;
+
+fn room_id_from_route(request: &Request<'_>) -> Option<RoomId> {
+    request
+        .param::<crate::params::RoomParam>(ROOM_ID_SEGMENT)
         .and_then(Result::ok)
         .map(|p| p.0)
+}
+
+fn slot_number_from_route(request: &Request<'_>) -> Option<i32> {
+    request
+        .param::<i32>(SLOT_NUMBER_SEGMENT)
+        .and_then(Result::ok)
+}
+
+async fn room_from_request(request: &Request<'_>) -> Result<(Room, Pool), Error> {
+    let id: RoomId = room_id_from_route(request)
         .ok_or_else(|| not_found("no room id in this route's first parameter"))?;
 
     let pool = request
@@ -241,7 +271,7 @@ impl<'r> FromRequest<'r> for SlotAccess {
             Err(e) => return Outcome::Error((e.status, e)),
         };
 
-        let Some(Ok(slot_number)) = request.param::<i32>(1) else {
+        let Some(slot_number) = slot_number_from_route(request) else {
             return Outcome::Error((
                 Status::NotFound,
                 not_found("no slot number in this route's second parameter"),
@@ -312,6 +342,7 @@ mod tests {
     use super::*;
     use rocket::http::Header;
     use rocket::local::blocking::Client;
+    use rocket::{get, routes};
 
     #[rocket::get("/probe")]
     fn probe(navigation: Navigation) -> String {
@@ -371,5 +402,87 @@ mod tests {
             .header(Header::new("Accept", "text/html,*/*;q=0.8"))
             .dispatch();
         assert_eq!(response.into_string().as_deref(), Some("true"));
+    }
+
+    /// Echoes what the guards would extract, without needing a database or a session.
+    struct Extracted(Option<String>, Option<i32>);
+
+    #[rocket::async_trait]
+    impl<'r> FromRequest<'r> for Extracted {
+        type Error = std::convert::Infallible;
+        async fn from_request(request: &'r Request<'_>) -> Outcome<Self, Self::Error> {
+            RocketOutcome::Success(Extracted(
+                room_id_from_route(request).map(|id| id.to_string()),
+                slot_number_from_route(request),
+            ))
+        }
+    }
+
+    #[get("/room/<_id>/console")]
+    fn console(_id: &str, extracted: Extracted) -> String {
+        format!("{:?}|{:?}", extracted.0, extracted.1)
+    }
+
+    #[get("/room/<_id>/command/<_cid>")]
+    fn command(_id: &str, _cid: &str, extracted: Extracted) -> String {
+        format!("{:?}|{:?}", extracted.0, extracted.1)
+    }
+
+    #[get("/room/<_id>/slot/<_n>/patch")]
+    fn patch(_id: &str, _n: i32, extracted: Extracted) -> String {
+        format!("{:?}|{:?}", extracted.0, extracted.1)
+    }
+
+    fn route_client() -> Client {
+        Client::tracked(rocket::build().mount("/", routes![console, command, patch]))
+            .expect("a test client")
+    }
+
+    /// **The bug, pinned.** `param` is segment-indexed, so `param(0)` is the literal `"room"` and
+    /// can never parse as a uuid — which made every guarded route 404 for everybody, for months.
+    ///
+    /// Exercised through Rocket's real router rather than by asserting the constant, because the
+    /// constant was not the thing that was wrong: the *reading* of the API was.
+    #[test]
+    fn the_room_id_is_extracted_from_every_guarded_route_shape() {
+        let client = route_client();
+        let room = "e41ca59b-9084-4a44-855e-b14c61eff9b0";
+
+        for path in [
+            format!("/room/{room}/console"),
+            format!("/room/{room}/command/11111111-1111-1111-1111-111111111111"),
+            format!("/room/{room}/slot/3/patch"),
+        ] {
+            let body = client.get(&path).dispatch().into_string().expect("a body");
+            assert!(
+                body.contains(room),
+                "{path} did not yield the room id: {body}"
+            );
+        }
+    }
+
+    /// And the slot number comes from the slot route, not from wherever the room id happened to be.
+    #[test]
+    fn the_slot_number_is_extracted_from_the_slot_route() {
+        let client = route_client();
+        let room = "e41ca59b-9084-4a44-855e-b14c61eff9b0";
+
+        let body = client
+            .get(format!("/room/{room}/slot/3/patch"))
+            .dispatch()
+            .into_string()
+            .expect("a body");
+        assert!(
+            body.ends_with("Some(3)"),
+            "the slot number is wrong: {body}"
+        );
+
+        // A route with no slot in it yields none, rather than reading some other segment as one.
+        let body = client
+            .get(format!("/room/{room}/console"))
+            .dispatch()
+            .into_string()
+            .expect("a body");
+        assert!(body.ends_with("None"), "a slot was invented: {body}");
     }
 }
