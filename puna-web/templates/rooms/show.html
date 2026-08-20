@@ -116,6 +116,10 @@ unclaimed
 {% if is_staff %}
 <h2>Manage</h2>
 <ul>
+{# `is_staff` is the helper floor, which is exactly the console's own guard -- so this link is
+   never offered to somebody the route would refuse. The console itself shows only the commands
+   the viewer's tier can run. #}
+<li><a href="/room/{{ room.id }}/console">Console</a> &mdash; hints, releases, announcements</li>
 <li><a href="/room/{{ room.id }}/members">Members and invites</a></li>
 </ul>
 

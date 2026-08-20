@@ -836,4 +836,84 @@ mod tests {
             );
         }
     }
+
+    fn a_room() -> Room {
+        Room {
+            id: puna_core::ids::RoomId::new(),
+            name: "Friday async".into(),
+            environment: puna_core::Environment::Dev,
+            generation_id: puna_core::ids::GenerationId::new(),
+            source: puna_core::model::RoomSource::Direct,
+            created_by: Some(7),
+            created_at: chrono::Utc::now(),
+            cloned_from: None,
+            desired_state: "running".into(),
+            slot_auth: puna_core::model::room::SlotAuth::None,
+            password: None,
+            spoiler_policy: puna_core::model::room::SpoilerPolicy::AdminOnly,
+            tracker_id: puna_core::ids::TrackerId::new(),
+            tracker_policy: puna_core::model::room::TrackerPolicy::Link,
+            wants_filtered: true,
+            state: "running".into(),
+            state_changed_at: chrono::Utc::now(),
+            advertised_host: Some("mw.example".into()),
+            advertised_port: Some(40000),
+            advertised_filtered_port: Some(40001),
+            last_error: None,
+        }
+    }
+
+    fn page(is_staff: bool) -> RoomTemplate {
+        RoomTemplate {
+            base: crate::tpl::TplContext {
+                is_logged_in: true,
+                is_admin: false,
+                username: "troy".into(),
+                version: "test",
+                static_version: "test",
+            },
+            room: a_room(),
+            slots: Vec::new(),
+            is_staff,
+            is_organizer: is_staff,
+            siblings: Vec::new(),
+            can_see_spoiler: false,
+            can_see_tracker: true,
+            message: None,
+            elapsed: "1m".into(),
+        }
+    }
+
+    /// **A route with no link is a route nobody uses, and this has now happened twice.** The
+    /// tracker link was built and never rendered; the console was built, deployed, and never
+    /// rendered. Both were found by somebody going looking for a feature that already existed.
+    #[test]
+    fn staff_see_a_link_to_everything_staff_can_do() {
+        let html = page(true).render().expect("renders");
+
+        for (path, what) in [
+            ("/console", "the console"),
+            ("/members", "members and invites"),
+            ("/clone", "create a room from this seed"),
+        ] {
+            assert!(
+                html.contains(path),
+                "the room page offers no way to reach {what}"
+            );
+        }
+    }
+
+    /// And the links follow the guard rather than the other way round: somebody who is not staff is
+    /// offered none of them.
+    #[test]
+    fn a_visitor_is_offered_no_management_links() {
+        let html = page(false).render().expect("renders");
+
+        assert!(
+            !html.contains("/console"),
+            "a non-member was offered the console"
+        );
+        assert!(!html.contains("/members"));
+        assert!(!html.contains("/clone"));
+    }
 }
