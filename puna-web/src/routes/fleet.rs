@@ -9,11 +9,13 @@ use puna_core::Environment;
 use puna_core::db::Pool;
 use puna_core::ids::RoomId;
 use puna_core::model::fleet::{self, FleetRoom, Overview};
-use rocket::response::Redirect;
+use rocket::request::FlashMessage;
+use rocket::response::{Flash, Redirect};
 use rocket::{State, get, post, routes, uri};
 
 use crate::auth::AdminSession;
 use crate::error::Result;
+use crate::flash::Notice;
 use crate::params::RoomParam;
 use crate::tpl::TplContext;
 
@@ -50,7 +52,8 @@ pub struct RoomsTemplate {
     desired_image: Option<String>,
     rows: Vec<Row>,
     drifted: usize,
-    notice: Option<String>,
+    /// The sentence the last POST left behind, shown once. See [`crate::flash`].
+    notice: Option<Notice>,
 }
 
 /// `registry/host/image:tag` -> `tag`, leaving anything without one alone.
@@ -102,7 +105,7 @@ async fn render(
     session: AdminSession,
     pool: &State<Pool>,
     environment: Environment,
-    notice: Option<String>,
+    notice: Option<Notice>,
 ) -> Result<RoomsTemplate> {
     let mut conn = pool.get().await?;
     let overview = fleet::overview(&mut conn, environment).await?;
@@ -116,29 +119,34 @@ async fn render(
     })
 }
 
-#[get("/admin/rooms?<notice>")]
+#[get("/admin/rooms")]
 async fn show(
     session: AdminSession,
     pool: &State<Pool>,
     environment: &State<Environment>,
-    notice: Option<String>,
+    flash: Option<FlashMessage<'_>>,
 ) -> Result<RoomsTemplate> {
-    render(session, pool, **environment, notice).await
+    render(session, pool, **environment, Notice::take(flash)).await
 }
 
 #[post("/admin/rooms/<id>/redeploy")]
-async fn redeploy(_session: AdminSession, pool: &State<Pool>, id: RoomParam) -> Result<Redirect> {
+async fn redeploy(
+    _session: AdminSession,
+    pool: &State<Pool>,
+    id: RoomParam,
+) -> Result<Flash<Redirect>> {
     let mut conn = pool.get().await?;
     let marked = fleet::request_redeploy(&mut conn, &[id.0]).await?;
 
     // "Already queued" is a real answer and a different one from "queued", because the whole
     // question an operator has after pressing this is whether anything is going to happen.
     let notice = if marked == 1 {
-        "Queued. The room restarts within a tick or two and comes back on the same address."
+        "Queued. The room stops on the next reconcile and is back on the same address about a \
+         minute later."
     } else {
         "That room already had a restart queued; its place in the queue is unchanged."
     };
-    Ok(Redirect::to(uri!(show(notice = Some(notice)))))
+    Ok(Flash::success(Redirect::to(uri!(show)), notice))
 }
 
 #[post("/admin/rooms/redeploy-drifted")]
@@ -146,7 +154,7 @@ async fn redeploy_drifted(
     _session: AdminSession,
     pool: &State<Pool>,
     environment: &State<Environment>,
-) -> Result<Redirect> {
+) -> Result<Flash<Redirect>> {
     let mut conn = pool.get().await?;
     let overview = fleet::overview(&mut conn, **environment).await?;
 
@@ -161,7 +169,7 @@ async fn redeploy_drifted(
          the rollout is gradual rather than all at once.",
         ids.len()
     );
-    Ok(Redirect::to(uri!(show(notice = Some(notice)))))
+    Ok(Flash::success(Redirect::to(uri!(show)), notice))
 }
 
 pub fn routes() -> Vec<rocket::Route> {
@@ -261,6 +269,9 @@ mod tests {
                 is_logged_in: true,
                 is_admin: true,
                 username: "troy".into(),
+                // Not "puna", so the assertion below is about the deployment's configured name
+                // rather than about a default that happens to match the software's.
+                site_name: "Example Multiworld",
                 version: "test",
                 static_version: "test",
             },
@@ -299,6 +310,53 @@ mod tests {
             html.contains("Restart all drifted rooms"),
             "the bulk control appears when something has drifted"
         );
+
+        // The corner link and the tab both carry the deployment's name, so a page cannot be
+        // mistaken for the other environment's at a glance -- which is the whole point of setting
+        // it, and which a page rendering the hardcoded "puna" would silently defeat.
+        assert!(
+            html.contains(">Example Multiworld</a>"),
+            "the brand link is the configured name"
+        );
+        assert!(
+            html.contains("<title>Example Multiworld admin"),
+            "and so is the tab: {html:.400}"
+        );
+    }
+
+    /// The notice is delivered out of band and rendered with its own severity class, so a failure
+    /// cannot arrive in the color of a success.
+    #[test]
+    fn a_notice_renders_with_the_class_its_kind_names() {
+        let page = |notice: Option<Notice>| RoomsTemplate {
+            base: TplContext {
+                is_logged_in: true,
+                is_admin: true,
+                username: "troy".into(),
+                site_name: "puna",
+                version: "test",
+                static_version: "test",
+            },
+            desired_tag: None,
+            desired_image: None,
+            drifted: 0,
+            rows: Vec::new(),
+            notice,
+        };
+
+        let quiet = page(None).render().expect("renders");
+        assert!(
+            !quiet.contains("class=\"notice\""),
+            "no notice when nothing was queued -- which is what a refresh must look like"
+        );
+
+        let warned = page(Some(Notice {
+            class: "warning",
+            message: "Queued 0 of 3 drifted rooms.".into(),
+        }))
+        .render()
+        .expect("renders");
+        assert!(warned.contains("class=\"warning\">Queued 0 of 3 drifted rooms."));
     }
 
     #[test]

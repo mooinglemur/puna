@@ -3,9 +3,10 @@
 //! ## The spec hash decides when a room gets bounced, so what it covers is a contract
 //!
 //! The reconciler compares the hash on a running Deployment against the one the row describes, and
-//! a difference means delete-and-recreate — about ten seconds of downtime with clients reconnecting
-//! on their own. So every field is a decision about whether a change is worth that, and two of them
-//! are the reason this is not simply "hash the manifest":
+//! a difference means delete-and-recreate — roughly a minute of downtime with clients reconnecting
+//! on their own. Most of that is the two reconcile intervals a recreate crosses, not the pod: one
+//! tick stops the room, the next starts it. So every field is a decision about whether a change is
+//! worth that, and two of them are the reason this is not simply "hash the manifest":
 //!
 //!   * **`slot_auth` is covered**, though it moves nothing in the pod spec. The password mode
 //!     reaches pahoa through the Secret with `envFrom`, so without folding it in, turning passwords

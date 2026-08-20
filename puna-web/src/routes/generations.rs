@@ -13,11 +13,13 @@ use puna_core::model::{generation, names};
 use rocket::form::Form;
 use rocket::fs::TempFile;
 use rocket::http::Status;
-use rocket::response::Redirect;
+use rocket::request::FlashMessage;
+use rocket::response::{Flash, Redirect};
 use rocket::{FromForm, State, get, post, routes, uri};
 
 use crate::auth::{AdminSession, LoggedInSession};
 use crate::error::{Error, Result};
+use crate::flash::Notice;
 use crate::gate::{CanCreateRoom, Direct};
 use crate::tpl::TplContext;
 use crate::{DataDir, UploadLimit};
@@ -289,27 +291,28 @@ async fn read_upload(form: &mut Form<UploadForm<'_>>) -> std::result::Result<Vec
 /// The admin view of the name cache, and where a rebuild is triggered from.
 ///
 /// **A page rather than a documented curl**, because the repair is rare enough that nobody will
-/// remember the path and important enough that the tracker shows raw ids until it runs. `result`
-/// rides in the query string because a POST redirects here, and a redirect carries nothing else.
+/// remember the path and important enough that the tracker shows raw ids until it runs. The
+/// rebuild's summary rides back in a one-shot cookie -- see [`crate::flash`] for why not the query
+/// string.
 #[derive(Template, WebTemplate)]
 #[template(path = "admin/generations.html")]
 pub struct AdminGenerationsTemplate {
     base: TplContext,
     generations: Vec<names::CacheStatus>,
-    result: Option<String>,
+    result: Option<Notice>,
 }
 
-#[get("/admin/generations?<result>")]
+#[get("/admin/generations")]
 async fn admin_generations(
     session: AdminSession,
-    result: Option<String>,
+    flash: Option<FlashMessage<'_>>,
     pool: &State<puna_core::db::Pool>,
 ) -> Result<AdminGenerationsTemplate> {
     let mut conn = pool.get().await?;
     Ok(AdminGenerationsTemplate {
         base: TplContext::new(session.session()),
         generations: names::status(&mut conn).await?,
-        result,
+        result: Notice::take(flash),
     })
 }
 
@@ -327,7 +330,7 @@ async fn rebuild_all_names(
     _session: AdminSession,
     pool: &State<puna_core::db::Pool>,
     data_dir: &State<DataDir>,
-) -> Result<Redirect> {
+) -> Result<Flash<Redirect>> {
     let mut conn = pool.get().await?;
     let pending = names::uncached(&mut conn).await?;
 
@@ -348,17 +351,24 @@ async fn rebuild_all_names(
         "rebuilt the tracker's name cache"
     );
 
-    let summary = if pending.is_empty() {
-        "Every generation already has cached names; nothing to do.".to_string()
+    let back = Redirect::to(uri!(admin_generations));
+    // A partial rebuild is reported as a warning rather than as a success, because "Rebuilt 39
+    // generation(s); 1 failed" in the color of a success is the sentence somebody skims past.
+    Ok(if pending.is_empty() {
+        Flash::success(
+            back,
+            "Every generation already has cached names; nothing to do.",
+        )
     } else if failed == 0 {
-        format!("Rebuilt {rebuilt} generation(s).")
+        Flash::success(back, format!("Rebuilt {rebuilt} generation(s)."))
     } else {
-        format!("Rebuilt {rebuilt} generation(s); {failed} failed — see the log for which and why.")
-    };
-
-    Ok(Redirect::to(uri!(admin_generations(
-        result = Some(summary)
-    ))))
+        Flash::warning(
+            back,
+            format!(
+                "Rebuilt {rebuilt} generation(s); {failed} failed — see the log for which and why."
+            ),
+        )
+    })
 }
 
 /// Rebuild one generation's names whether or not it already has them.
@@ -371,7 +381,7 @@ async fn rebuild_names(
     id: &str,
     pool: &State<puna_core::db::Pool>,
     data_dir: &State<DataDir>,
-) -> Result<Redirect> {
+) -> Result<Flash<Redirect>> {
     // Parsed here rather than through a `FromParam`, matching `show` above: the generation page
     // already takes its id this way and one convention per route set is worth more than a type.
     let id: puna_core::ids::GenerationId = id
@@ -390,20 +400,23 @@ async fn rebuild_names(
         )
     })?;
 
-    let summary = if cache_names(&mut conn, &data_dir.0, &sha256, id).await {
-        format!("Rebuilt the names for {}.", generation.seed_name)
+    let back = Redirect::to(uri!(admin_generations));
+    Ok(if cache_names(&mut conn, &data_dir.0, &sha256, id).await {
+        Flash::success(
+            back,
+            format!("Rebuilt the names for {}.", generation.seed_name),
+        )
     } else {
         // Not an error page: the reason is in the log with the generation id, and an operator who
         // just pressed a button is better served by the list plus a sentence than by a 500.
-        format!(
-            "Could not rebuild the names for {} — see the log for why.",
-            generation.seed_name
+        Flash::error(
+            back,
+            format!(
+                "Could not rebuild the names for {} — see the log for why.",
+                generation.seed_name
+            ),
         )
-    };
-
-    Ok(Redirect::to(uri!(admin_generations(
-        result = Some(summary)
-    ))))
+    })
 }
 
 pub fn routes() -> Vec<rocket::Route> {
@@ -456,11 +469,15 @@ mod tests {
                 is_logged_in: true,
                 is_admin: true,
                 username: "troy".into(),
+                site_name: "puna",
                 version: "test",
                 static_version: "test",
             },
             generations: vec![none.clone(), partial.clone(), complete.clone()],
-            result: Some("Rebuilt 1 generation(s).".into()),
+            result: Some(Notice {
+                class: "notice",
+                message: "Rebuilt 1 generation(s).".into(),
+            }),
         };
 
         let html = page.render().expect("renders");
@@ -519,6 +536,7 @@ mod tests {
                 is_logged_in: true,
                 is_admin: true,
                 username: "troy".into(),
+                site_name: "puna",
                 version: "test",
                 static_version: "test",
             },

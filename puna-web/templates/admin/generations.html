@@ -1,11 +1,12 @@
 {% extends "base.html" %}
-{% block title %}generations &mdash; puna admin{% endblock %}
+{% block title %}generations &mdash; {{+ base.site_name +}} admin{% endblock %}
 {% block content %}
 
 <h1>Generations</h1>
 
-{% if let Some(result) = result %}
-<p class="notice">{{ result }}</p>
+{# One-shot, delivered in a cookie rather than the query string -- see src/flash.rs. #}
+{% if let Some(shown) = result %}
+<p class="{{ shown.class }}">{{ shown.message }}</p>
 {% endif %}
 
 <h2>The tracker&rsquo;s name cache</h2>

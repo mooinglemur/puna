@@ -13,12 +13,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% block title %}puna{% endblock %}</title>
+<title>{% block title %}{{ base.site_name }}{% endblock %}</title>
 <link rel="stylesheet" href="/static/css/puna.css?v={{ base.static_version }}">
 </head>
 <body>
 <header class="topbar">
-<a class="brand" href="/">puna</a>
+{# The deployment's name, from PUNA_SITE_NAME. The footer below keeps the SOFTWARE's name beside
+   its version, deliberately: one says whose site this is, the other says what is running it. #}
+<a class="brand" href="/">{{ base.site_name }}</a>
 <nav>
 {% if base.is_logged_in %}
 <a href="/rooms">your rooms</a>

@@ -1,12 +1,14 @@
 {% extends "base.html" %}
-{% block title %}puna admin &mdash; rooms{% endblock %}
+{% block title %}{{ base.site_name +}} admin &mdash; rooms{% endblock %}
 {% block content %}
 
 <h1>Rooms</h1>
 <p class="hint"><a href="/admin">Back to administration</a></p>
 
-{% if let Some(message) = notice %}
-<p class="notice">{{ message }}</p>
+{# Delivered in a cookie and consumed by the read, so it shows once and a refresh clears it. It is
+   deliberately NOT in the query string -- see src/flash.rs. #}
+{% if let Some(shown) = notice %}
+<p class="{{ shown.class }}">{{ shown.message }}</p>
 {% endif %}
 
 {# The configured image is the thing every row is compared against, so it is stated once at the top
@@ -92,7 +94,14 @@ disconnected a room at a time rather than all at once.
 <p>No rooms in this environment yet.</p>
 {% endif %}
 
-<p class="hint">A restart disconnects the room&rsquo;s players for about ten seconds. The room saves
-on the way down, keeps its port, and clients reconnect on their own.</p>
+<p class="hint">A restart takes about a minute from pressing the button, and the room&rsquo;s players
+are disconnected for most of it. The room saves on the way down, keeps its port, and clients
+reconnect on their own once it is back.</p>
+
+<p class="hint">Almost all of that minute is waiting rather than working. The orchestrator
+reconciles on a fixed interval and a restart crosses two of those boundaries &mdash; one tick
+picks up the request and stops the room, the next one starts it again &mdash; with the pod&rsquo;s
+own scheduling and save restore in between. Restarting several rooms does not make any one of them
+slower; the per-tick cap just spreads them out.</p>
 
 {% endblock %}

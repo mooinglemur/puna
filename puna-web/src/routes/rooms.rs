@@ -877,6 +877,7 @@ mod tests {
                 is_logged_in: true,
                 is_admin: false,
                 username: "troy".into(),
+                site_name: "puna",
                 version: "test",
                 static_version: "test",
             },

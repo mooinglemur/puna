@@ -12,6 +12,7 @@ mod commands;
 mod cookies;
 mod digest;
 mod error;
+mod flash;
 mod gate;
 mod guards;
 mod metrics_listener;
