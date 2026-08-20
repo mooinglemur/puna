@@ -431,6 +431,9 @@ mod tests {
             slots: 4,
             games_cached,
             slots_cached,
+            // Players only. The generation has four slots and one is a spectator, which owns no
+            // locations and therefore no cache row -- so three is COMPLETE, not a shortfall.
+            slots_total: 3,
         }
     }
 
@@ -441,8 +444,8 @@ mod tests {
     #[test]
     fn the_three_cache_states_are_distinguishable() {
         let none = status(&["Yacht Dice Bliss"], 0, 0);
-        let partial = status(&["Yacht Dice Bliss", "Timespinner"], 1, 4);
-        let complete = status(&["Yacht Dice Bliss"], 1, 4);
+        let partial = status(&["Yacht Dice Bliss", "Timespinner"], 1, 3);
+        let complete = status(&["Yacht Dice Bliss"], 1, 3);
 
         assert!(!none.cached() && !none.complete());
         assert!(partial.cached() && !partial.complete());
@@ -461,6 +464,28 @@ mod tests {
         };
 
         let html = page.render().expect("renders");
+
+        // **The regression this fixes.** A one-game, one-slot generation reported "2 games, 1
+        // slots" on this page: the cache legitimately holds the `Archipelago` pseudo-game, and the
+        // spectator legitimately has no location row, so both counts were right and both counted
+        // something other than the columns beside them.
+        let one_game = names::CacheStatus {
+            id: GenerationId::new(),
+            seed_name: "77085767817399703051".into(),
+            games: vec!["Minecraft Dig".into()],
+            slots: 1,
+            games_cached: 1,
+            slots_cached: 1,
+            slots_total: 1,
+        };
+        assert!(
+            one_game.complete(),
+            "a fully cached one-game generation must not read as partial"
+        );
+
+        // And a spectator-only shortfall is not a shortfall.
+        let with_spectator = status(&["Yacht Dice Bliss"], 1, 3);
+        assert!(with_spectator.complete(), "the spectator was counted");
 
         assert!(html.contains("none"), "the uncached state is not labelled");
         assert!(

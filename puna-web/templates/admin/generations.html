@@ -40,12 +40,17 @@ works &mdash; its tracker shows raw ids instead of names.</p>
 {% if !row.cached() %}
 <span class="tag">none</span>
 {% else if row.complete() %}
-{{ row.games_cached }}&nbsp;games,&nbsp;{{ row.slots_cached }}&nbsp;slots
+{# No numbers when everything is there. They were "2 games, 3 slots" beside a GAMES column reading
+   1 and a SLOTS column reading 4 -- both counts were right and both counted something else (the
+   `Archipelago` pseudo-game; the spectator that owns no locations), which read as a contradiction.
+   The counts are scoped properly now, but a bare word is still the clearer answer. #}
+cached
 {% else %}
 {# Some but not all: a half-finished rebuild, or an extraction that changed. Called out rather
    than rounded to "cached", because it is the state that needs a person -- a tracker missing one
-   game's names looks fine until somebody hits an item from that game. #}
-<span class="tag">partial</span>&nbsp;{{ row.games_cached }}/{{ row.games.len() }}&nbsp;games
+   game's names looks fine until somebody hits an item from that game. Both denominators are the
+   columns beside this one, so they can be compared without a footnote. #}
+<span class="tag">partial</span>&nbsp;{{ row.games_cached }}/{{ row.games.len() }}&nbsp;games,&nbsp;{{ row.slots_cached }}/{{ row.slots_total }}&nbsp;slots
 {% endif %}
 </td>
 <td>

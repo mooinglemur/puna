@@ -220,14 +220,32 @@ pub async fn is_cached(
 /// The counts are deliberately counts rather than a boolean. "Some games cached" is a real state — a
 /// rebuild that half-failed, or a seed whose extraction changed — and it looks nothing like "none",
 /// which is the ordinary pre-Stage-A case. Collapsing them would hide the one that needs attention.
+///
+/// **Both counts are scoped to what a player can see**, which is not the same as what the cache
+/// holds, and getting that wrong made the admin page report "2 games, 1 slots" for a one-game,
+/// one-slot generation:
+///
+/// - The merged datapackage always carries the **`Archipelago` pseudo-game** — the game a
+///   spectator's slot is on — so the raw table count is one higher than the number of games anybody
+///   is playing. Counting it made the page contradict its own GAMES column.
+/// - A **spectator owns no locations**, so it has no `generation_slot_locations` row at all. That is
+///   deliberate (an empty array would make "nothing to check" and "not cached" the same shape), but
+///   it means the raw row count is lower than the slot count beside it.
+///
+/// So `games_cached` counts only games the generation says are *played*, and `slots_total` counts
+/// only slots that can own locations. Both denominators are then the ones on screen.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CacheStatus {
     pub id: GenerationId,
     pub seed_name: String,
     pub games: Vec<String>,
     pub slots: i32,
+    /// Played games that have a name table. Excludes `Archipelago`.
     pub games_cached: i64,
+    /// Slots with a location list.
     pub slots_cached: i64,
+    /// Slots that can own one, i.e. players. Spectators are excluded from both sides.
+    pub slots_total: i64,
 }
 
 impl CacheStatus {
@@ -236,10 +254,14 @@ impl CacheStatus {
         self.games_cached > 0
     }
 
-    /// Whether every game being played has names. False here with `cached()` true is the
-    /// half-a-rebuild state worth looking at.
+    /// Whether every played game has names and every player slot has its locations.
+    ///
+    /// False here with `cached()` true is the half-a-rebuild state worth looking at: it renders
+    /// *some* names, so a tracker looks fine until somebody hits an item from the missing game.
     pub fn complete(&self) -> bool {
-        self.games_cached >= self.games.len() as i64 && !self.games.is_empty()
+        !self.games.is_empty()
+            && self.games_cached >= self.games.len() as i64
+            && self.slots_cached >= self.slots_total
     }
 }
 
@@ -265,14 +287,23 @@ pub async fn status(
         games_cached: i64,
         #[diesel(sql_type = BigInt)]
         slots_cached: i64,
+        #[diesel(sql_type = BigInt)]
+        slots_total: i64,
     }
 
     let rows: Vec<Row> = diesel::sql_query(
         "SELECT g.id, g.seed_name, g.games, g.slots,
-                (SELECT count(*) FROM generation_game_names n WHERE n.generation_id = g.id)
-                  AS games_cached,
+                -- Only games somebody is PLAYING. The merged datapackage also carries
+                -- `Archipelago`, the pseudo-game a spectator's slot is on, and counting it made
+                -- this column disagree with the `games` beside it.
+                (SELECT count(*) FROM generation_game_names n
+                  WHERE n.generation_id = g.id AND n.game = ANY(g.games)) AS games_cached,
                 (SELECT count(*) FROM generation_slot_locations l WHERE l.generation_id = g.id)
-                  AS slots_cached
+                  AS slots_cached,
+                -- Only slots that can own locations. A spectator owns none and gets no row, so
+                -- counting every slot here would report a permanent shortfall.
+                (SELECT count(*) FROM generation_slots s
+                  WHERE s.generation_id = g.id AND s.kind = 'player') AS slots_total
            FROM generations g
           ORDER BY g.created_at DESC",
     )
@@ -288,6 +319,7 @@ pub async fn status(
             slots: row.slots,
             games_cached: row.games_cached,
             slots_cached: row.slots_cached,
+            slots_total: row.slots_total,
         })
         .collect())
 }
