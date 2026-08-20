@@ -83,11 +83,19 @@ pub struct Reconciler {
     advertise_host: String,
     pahoa_image: String,
     sweeper: Sweeper,
-    prober: Prober,
+    prober: Arc<Prober>,
 }
 
 impl Reconciler {
-    pub fn new(config: &OrchestratorConfig, pool: Pool, cluster: Arc<dyn ClusterApi>) -> Self {
+    /// The prober is shared with [`crate::dispatch::Dispatcher`] rather than built here: a stop
+    /// and a console command must reach a room the same way, and two `Prober`s would also mean two
+    /// rate-limit backoff tables — so a `429` seen by one would not stop the other walking into it.
+    pub fn new(
+        config: &OrchestratorConfig,
+        pool: Pool,
+        cluster: Arc<dyn ClusterApi>,
+        prober: Arc<Prober>,
+    ) -> Self {
         Self {
             pool,
             layout: Layout::new(&config.common.data_dir),
@@ -103,12 +111,7 @@ impl Reconciler {
             advertise_host: config.common.advertise_host.clone(),
             pahoa_image: config.pahoa_image.clone(),
             sweeper: Sweeper::new(config.trash_retention),
-            prober: Prober::new(
-                config.room_probe.build(),
-                config.room_route.clone(),
-                config.common.advertise_host.clone(),
-                config.room_probe_timeout,
-            ),
+            prober,
         }
     }
 

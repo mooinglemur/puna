@@ -390,3 +390,267 @@ mod tests {
         assert!(terse.affected_slots.is_empty());
     }
 }
+
+// --- the queue ------------------------------------------------------------------------------------
+//
+// Shared because both tiers touch it: the web tier inserts and reads, the orchestrator claims and
+// answers. Neither owns the shape, so neither declares it.
+
+use chrono::{DateTime, Utc};
+use diesel::sql_types::{BigInt, Jsonb, Nullable, Text, Timestamptz, Uuid as SqlUuid};
+use diesel_async::scoped_futures::ScopedFutureExt;
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+
+use crate::ids::{CommandId, RoomId};
+
+/// The channel the orchestrator wakes on, and the one the web tier waits on.
+pub const REQUEST_CHANNEL: &str = "puna_command";
+pub const DONE_CHANNEL: &str = "puna_command_done";
+
+/// One command in flight or finished.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandRow {
+    pub id: CommandId,
+    pub room_id: RoomId,
+    pub requested_by: i64,
+    pub requested_role: RoomRole,
+    pub command: RoomCommand,
+    pub state: String,
+    pub result: Option<CommandOutput>,
+    pub error: Option<String>,
+    pub requested_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+}
+
+impl CommandRow {
+    /// Whether the caller can stop waiting.
+    pub fn is_finished(&self) -> bool {
+        matches!(self.state.as_str(), "ok" | "failed" | "rejected")
+    }
+}
+
+#[derive(diesel::QueryableByName)]
+struct RawRow {
+    #[diesel(sql_type = SqlUuid)]
+    id: CommandId,
+    #[diesel(sql_type = SqlUuid)]
+    room_id: RoomId,
+    #[diesel(sql_type = BigInt)]
+    requested_by: i64,
+    #[diesel(sql_type = Text)]
+    requested_role: String,
+    #[diesel(sql_type = Jsonb)]
+    command: serde_json::Value,
+    #[diesel(sql_type = Text)]
+    state: String,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    result: Option<serde_json::Value>,
+    #[diesel(sql_type = Nullable<Text>)]
+    error: Option<String>,
+    #[diesel(sql_type = Timestamptz)]
+    requested_at: DateTime<Utc>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    finished_at: Option<DateTime<Utc>>,
+}
+
+/// A row this build cannot read is **dropped, not defaulted**.
+///
+/// The command JSON comes from a database that may be newer than this binary — a rollout runs both
+/// for a few minutes. Executing a command this build parsed loosely would be acting on a guess
+/// about what somebody asked for, which is the one thing an audited action must not do.
+fn hydrate(raw: RawRow) -> Option<CommandRow> {
+    Some(CommandRow {
+        id: raw.id,
+        room_id: raw.room_id,
+        requested_by: raw.requested_by,
+        requested_role: RoomRole::parse(&raw.requested_role)?,
+        command: serde_json::from_value(raw.command).ok()?,
+        state: raw.state,
+        result: raw.result.and_then(|r| serde_json::from_value(r).ok()),
+        error: raw.error,
+        requested_at: raw.requested_at,
+        finished_at: raw.finished_at,
+    })
+}
+
+const COLUMNS: &str = "id, room_id, requested_by, requested_role::text AS requested_role, command, \
+                       state::text AS state, result, error, requested_at, finished_at";
+
+/// Queue a command, and wake the dispatcher.
+///
+/// The insert and the `NOTIFY` are one transaction so a notification can never precede the row it
+/// announces — the dispatcher would look, find nothing, and the command would wait for the
+/// backstop poll instead of running now.
+pub async fn enqueue(
+    conn: &mut AsyncPgConnection,
+    room: RoomId,
+    requested_by: i64,
+    requested_role: RoomRole,
+    command: &RoomCommand,
+) -> Result<CommandId, diesel::result::Error> {
+    let id = CommandId::new();
+    let body = serde_json::to_value(command).map_err(|e| {
+        diesel::result::Error::SerializationError(Box::new(std::io::Error::other(e.to_string())))
+    })?;
+
+    conn.transaction::<(), diesel::result::Error, _>(|conn| {
+        async move {
+            diesel::sql_query(
+                "INSERT INTO room_commands
+                    (id, room_id, requested_by, requested_role, command)
+                 VALUES ($1, $2, $3, $4::room_role, $5)",
+            )
+            .bind::<SqlUuid, _>(id)
+            .bind::<SqlUuid, _>(room)
+            .bind::<BigInt, _>(requested_by)
+            .bind::<Text, _>(requested_role.as_sql())
+            .bind::<Jsonb, _>(body)
+            .execute(conn)
+            .await?;
+
+            diesel::sql_query("SELECT pg_notify($1, $2)")
+                .bind::<Text, _>(REQUEST_CHANNEL)
+                .bind::<Text, _>(id.to_string())
+                .execute(conn)
+                .await?;
+
+            Ok(())
+        }
+        .scope_boxed()
+    })
+    .await?;
+
+    Ok(id)
+}
+
+/// Take the oldest pending command, if one is free.
+///
+/// **The conditional `UPDATE` is what makes a double-run safe**: two dispatchers racing one row see
+/// `state = 'pending'` once, so exactly one gets the row and the other gets nothing. That is the
+/// same shape as every other mutation in the orchestrator, and it is why the leader lock is a
+/// simplicity property rather than a correctness one.
+pub async fn claim(
+    conn: &mut AsyncPgConnection,
+) -> Result<Option<CommandRow>, diesel::result::Error> {
+    let rows: Vec<RawRow> = diesel::sql_query(format!(
+        "UPDATE room_commands SET state = 'running', started_at = now()
+          WHERE id = (
+                SELECT id FROM room_commands
+                 WHERE state = 'pending'
+                 ORDER BY requested_at
+                 FOR UPDATE SKIP LOCKED
+                 LIMIT 1)
+        RETURNING {COLUMNS}"
+    ))
+    .load(conn)
+    .await?;
+
+    Ok(rows.into_iter().next().and_then(hydrate))
+}
+
+/// Record the outcome and wake whoever is waiting.
+pub async fn finish(
+    conn: &mut AsyncPgConnection,
+    id: CommandId,
+    state: &str,
+    result: Option<&CommandOutput>,
+    error: Option<&str>,
+) -> Result<(), diesel::result::Error> {
+    let body = result.and_then(|r| serde_json::to_value(r).ok());
+
+    conn.transaction::<(), diesel::result::Error, _>(|conn| {
+        async move {
+            diesel::sql_query(
+                "UPDATE room_commands
+                    SET state = $2::command_state, result = $3, error = $4, finished_at = now()
+                  WHERE id = $1",
+            )
+            .bind::<SqlUuid, _>(id)
+            .bind::<Text, _>(state)
+            .bind::<Nullable<Jsonb>, _>(body)
+            .bind::<Nullable<Text>, _>(error)
+            .execute(conn)
+            .await?;
+
+            // In the same transaction as the write, so a waiter woken by this always finds the
+            // finished row rather than the one it was already looking at.
+            diesel::sql_query("SELECT pg_notify($1, $2)")
+                .bind::<Text, _>(DONE_CHANNEL)
+                .bind::<Text, _>(id.to_string())
+                .execute(conn)
+                .await?;
+
+            Ok(())
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+pub async fn get(
+    conn: &mut AsyncPgConnection,
+    id: CommandId,
+) -> Result<Option<CommandRow>, diesel::result::Error> {
+    let rows: Vec<RawRow> =
+        diesel::sql_query(format!("SELECT {COLUMNS} FROM room_commands WHERE id = $1"))
+            .bind::<SqlUuid, _>(id)
+            .load(conn)
+            .await?;
+
+    Ok(rows.into_iter().next().and_then(hydrate))
+}
+
+/// One room's recent commands, newest first — the console's history pane.
+pub async fn recent(
+    conn: &mut AsyncPgConnection,
+    room: RoomId,
+    limit: i64,
+) -> Result<Vec<CommandRow>, diesel::result::Error> {
+    let rows: Vec<RawRow> = diesel::sql_query(format!(
+        "SELECT {COLUMNS} FROM room_commands
+          WHERE room_id = $1 ORDER BY requested_at DESC LIMIT $2"
+    ))
+    .bind::<SqlUuid, _>(room)
+    .bind::<BigInt, _>(limit)
+    .load(conn)
+    .await?;
+
+    Ok(rows.into_iter().filter_map(hydrate).collect())
+}
+
+/// Fail commands left `running` by a dispatcher that went away.
+///
+/// **A `running` row is nobody's until it is stale**, because the process that claimed it is the
+/// only one that will finish it — so a restart would otherwise leave commands pending forever with
+/// a waiter that times out and no record of why. `older_than` must exceed anything this process
+/// could legitimately still be doing; the probe's own timeout bounds that at a few seconds.
+pub async fn fail_stale(
+    conn: &mut AsyncPgConnection,
+    older_than: std::time::Duration,
+) -> Result<usize, diesel::result::Error> {
+    let seconds = older_than.as_secs_f64();
+    let ids: Vec<RawRow> = diesel::sql_query(format!(
+        "UPDATE room_commands
+            SET state = 'failed',
+                error = 'the orchestrator restarted while this command was running',
+                finished_at = now()
+          WHERE state = 'running'
+            AND started_at < now() - make_interval(secs => $1)
+        RETURNING {COLUMNS}"
+    ))
+    .bind::<diesel::sql_types::Double, _>(seconds)
+    .load(conn)
+    .await?;
+
+    // Woken individually: a waiter is keyed by command id, and there is no "everything changed"
+    // notification it could act on.
+    for row in &ids {
+        diesel::sql_query("SELECT pg_notify($1, $2)")
+            .bind::<Text, _>(DONE_CHANNEL)
+            .bind::<Text, _>(row.id.to_string())
+            .execute(&mut *conn)
+            .await?;
+    }
+
+    Ok(ids.len())
+}
