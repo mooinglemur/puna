@@ -923,7 +923,7 @@ fn retry_delay(failure_count: i32, room: RoomId) -> chrono::TimeDelta {
 /// **The port reservation is deliberately untouched.** A room comes back on the same port, which is
 /// the requirement the whole reservation table exists for -- and the reason idle teardown never
 /// releases anything.
-async fn clear_deployment(
+pub(crate) async fn clear_deployment(
     conn: &mut AsyncPgConnection,
     room: RoomId,
     note: &str,
@@ -934,6 +934,11 @@ async fn clear_deployment(
                 deployment_uid = NULL, spec_hash = NULL,
                 advertised_host = NULL, advertised_port = NULL, advertised_filtered_port = NULL,
                 not_ready_sweeps = 0, started_at = NULL, stopped_at = now(),
+                -- Observed state describes a Deployment that no longer exists. Left behind, the
+                -- admin table would report an image and two ages for a room that is not running --
+                -- stale numbers that read as live ones, which is the failure mode a dashboard is
+                -- worst at showing you.
+                running_image = NULL, deployment_created_at = NULL, process_started_at = NULL,
                 last_error = $2
           WHERE id = $1",
     )

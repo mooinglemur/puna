@@ -71,6 +71,15 @@ pub const LB_POOL: &str = "public";
 /// Where the spec fingerprint rides. Read back off a live Deployment and compared with the row.
 pub const SPEC_HASH_ANNOTATION: &str = "puna.onelemur.com/spec-hash";
 
+/// The room container's name, written by [`deployment`] and read back by the cluster client to
+/// answer *which image is this room actually running*.
+///
+/// A constant rather than a literal at each end because the reader must not settle for
+/// `containers[0]`: a mesh or a logging sidecar injected by a future admission webhook would take
+/// that slot, and the table would then report the sidecar's image as the room's. Matching by name
+/// degrades to `None` -- "cannot tell" -- instead of to a confident wrong answer.
+pub const ROOM_CONTAINER: &str = "pahoa";
+
 /// The room pods' ServiceAccount, which exists to have **no token mounted**. That is the mechanical
 /// half of the tier split: a room cannot reach the Kubernetes API even in principle.
 pub const ROOM_SERVICE_ACCOUNT: &str = "puna-room";

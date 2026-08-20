@@ -163,6 +163,13 @@ pub struct RoomDeployment {
     /// definition — there is no room row it could belong to.
     pub room_id: Option<RoomId>,
     pub spec_hash: Option<String>,
+    /// The image the room container is **actually** running, as the cluster reports it.
+    ///
+    /// Observed rather than remembered, and the distinction is the whole point of surfacing it: the
+    /// row already records what Puna believes it started the room with, and the two disagree
+    /// exactly when something has gone wrong. `None` means the container could not be identified by
+    /// name -- see [`crate::spec::ROOM_CONTAINER`] -- which is "cannot tell", never "no image".
+    pub image: Option<String>,
     pub replicas: i32,
     pub ready_replicas: i32,
     pub created_at: chrono::DateTime<chrono::Utc>,

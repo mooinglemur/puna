@@ -169,7 +169,7 @@ fn container(spec: &RoomSpec) -> Container {
     }
 
     Container {
-        name: "pahoa".to_string(),
+        name: crate::spec::ROOM_CONTAINER.to_string(),
         image: Some(spec.image.clone()),
         // Exec form against a scratch image: there is no shell to expand anything, which is also why
         // nothing here can be a quoted string with a variable in it.

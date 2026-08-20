@@ -247,6 +247,10 @@ fn read_deployment(stored: &StoredDeployment) -> RoomDeployment {
         uid: stored.uid.clone(),
         room_id: Some(stored.spec.room_id),
         spec_hash: Some(stored.spec.spec_hash.clone()),
+        // The fake stores the spec it was created with, so the image it reports is the image it was
+        // asked for -- which is what makes a test that changes the image and expects the observed
+        // value to follow meaningful.
+        image: Some(stored.spec.image.clone()),
         replicas: stored.replicas,
         ready_replicas: stored.ready_replicas,
         created_at: stored.created_at,

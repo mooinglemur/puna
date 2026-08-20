@@ -479,6 +479,7 @@ mod tests {
             uid: format!("uid-{name}"),
             room_id: room,
             spec_hash: Some("hash".into()),
+            image: Some("pahoa:test".into()),
             replicas: 1,
             ready_replicas: 1,
             created_at: Utc::now() - chrono::TimeDelta::from_std(age).expect("an age"),

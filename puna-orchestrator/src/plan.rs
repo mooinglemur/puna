@@ -349,6 +349,7 @@ mod tests {
             uid: "uid-1".into(),
             room_id: Some(room.id),
             spec_hash: Some(hash.to_string()),
+            image: Some("pahoa:test".into()),
             replicas: 1,
             ready_replicas: ready,
             created_at: now(),

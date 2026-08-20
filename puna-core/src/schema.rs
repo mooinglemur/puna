@@ -56,6 +56,17 @@ diesel::table! {
 }
 
 diesel::table! {
+    use diesel::sql_types::*;
+    use super::sql_types::PunaEnvironment;
+
+    fleet (environment) {
+        environment -> PunaEnvironment,
+        pahoa_image -> Text,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     generation_game_names (generation_id, game) {
         generation_id -> Uuid,
         game -> Text,
@@ -251,6 +262,11 @@ diesel::table! {
         probe_kind -> Nullable<Text>,
         last_tracker_doc -> Nullable<Jsonb>,
         last_tracker_at -> Nullable<Timestamptz>,
+        running_image -> Nullable<Text>,
+        deployment_created_at -> Nullable<Timestamptz>,
+        process_started_at -> Nullable<Timestamptz>,
+        desired_spec_hash -> Nullable<Text>,
+        redeploy_requested_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -296,6 +312,7 @@ diesel::joinable!(settings -> users (updated_by));
 
 diesel::allow_tables_to_appear_in_same_query!(
     creator_allowlist,
+    fleet,
     generation_game_names,
     generation_slot_locations,
     generation_slots,

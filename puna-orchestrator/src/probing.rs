@@ -303,7 +303,8 @@ async fn record(
             SET clients_connected = $2,
                 last_activity_at = $3,
                 probed_at = now(),
-                probe_kind = $4
+                probe_kind = $4,
+                process_started_at = $5
           WHERE id = $1",
     )
     .bind::<SqlUuid, _>(room)
@@ -315,6 +316,12 @@ async fn record(
     )
     .bind::<Nullable<Timestamptz>, _>(status.activity.last_client_message_at)
     .bind::<Text, _>(kind)
+    // When *this* pahoa began serving, which is not when its Deployment was created. The pair is
+    // what makes a reschedule or an in-place container restart visible: the spec has been in force
+    // since `deployment_created_at`, but the process only since here, and a gap means the room
+    // reloaded its save and every client reconnected. `None` follows the same rule as everything
+    // else on this row -- cannot tell, never zero.
+    .bind::<Nullable<Timestamptz>, _>(status.started_at)
     .execute(conn)
     .await?;
 
@@ -411,11 +418,13 @@ mod db_tests {
         probed_at: Option<DateTime<Utc>>,
         #[diesel(sql_type = Nullable<Text>)]
         probe_kind: Option<String>,
+        #[diesel(sql_type = Nullable<Timestamptz>)]
+        process_started_at: Option<DateTime<Utc>>,
     }
 
     async fn observed(conn: &mut AsyncPgConnection, room: RoomId) -> Observed {
         diesel::sql_query(
-            "SELECT clients_connected, last_activity_at, probed_at, probe_kind
+            "SELECT clients_connected, last_activity_at, probed_at, probe_kind, process_started_at
                FROM rooms WHERE id = $1",
         )
         .bind::<SqlUuid, _>(room)
@@ -458,6 +467,11 @@ mod db_tests {
             assert_eq!(row.clients_connected, None, "not Some(0)");
             assert_eq!(row.last_activity_at, None, "never, not the epoch");
             assert_eq!(row.probe_kind.as_deref(), Some("tcp"));
+            assert_eq!(
+                row.process_started_at, None,
+                "a probe that cannot say when the process started writes NULL, not `now()` -- a \
+                 defaulted timestamp here would report every room as freshly restarted"
+            );
             assert!(
                 row.probed_at.is_some(),
                 "the attempt is stamped even when it learned nothing -- that is how an operator \
@@ -466,10 +480,12 @@ mod db_tests {
 
             // And a real answer lands as numbers.
             let spoke_at = Utc::now() - chrono::Duration::minutes(5);
+            let serving_since = Utc::now() - chrono::Duration::hours(3);
             record(
                 &mut conn,
                 room,
                 &RoomStatus {
+                    started_at: Some(serving_since),
                     net: NetStatus {
                         clients_connected: Some(3),
                         ..Default::default()
@@ -489,6 +505,12 @@ mod db_tests {
             assert_eq!(row.clients_connected, Some(3));
             assert_eq!(row.probe_kind.as_deref(), Some("https"));
             assert!(row.last_activity_at.is_some());
+            // Within a second: the column carries pahoa's own answer, not the time Puna asked.
+            let recorded = row.process_started_at.expect("a process start time");
+            assert!(
+                (recorded - serving_since).num_seconds().abs() < 1,
+                "the room's own start time, not the probe's clock: {recorded} vs {serving_since}"
+            );
         })
         .await;
     }

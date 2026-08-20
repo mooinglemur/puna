@@ -155,6 +155,17 @@ impl Reconciler {
         attach_desired_spec_hashes(&mut conn, &mut views, &self.pahoa_image).await;
         publish_room_states(&views);
         report.rooms = views.len();
+
+        // Observed state and the fleet's configured image, both for the admin table. Neither can
+        // change a decision this tick makes, so a failure is warned and swallowed: a reconcile loop
+        // that stops provisioning rooms because a reporting column would not write has its
+        // priorities backwards.
+        if let Err(e) = record_observed(&mut conn, &snapshot).await {
+            tracing::warn!(error = ?e, "could not record observed room state");
+        }
+        if let Err(e) = publish_fleet_image(&mut conn, self.environment, &self.pahoa_image).await {
+            tracing::warn!(error = ?e, "could not publish the fleet's pahoa image");
+        }
         drop(conn);
 
         let actions = plan::plan(&views, &snapshot, chrono::Utc::now());
@@ -358,6 +369,94 @@ async fn attach_desired_spec_hashes(
     }
 }
 
+/// Copy what the cluster says each room is running onto its row.
+///
+/// **The web tier cannot see the cluster** -- it holds no ServiceAccount token, which is the point
+/// of the split -- so the admin table's observed columns can only come from here, written by the
+/// process that already lists every Deployment on every tick. No new API call, no new permission,
+/// no new object type.
+///
+/// One statement over `unnest`, guarded by `IS DISTINCT FROM`: a fleet whose images and ages have
+/// not moved costs zero writes, matching the discipline everywhere else in this loop that a healthy
+/// room costs a read and nothing more.
+///
+/// Rooms whose Deployment is *gone* are not cleared here. `clear_deployment` owns that, because it
+/// is the one place that already knows a room stopped running.
+async fn record_observed(
+    conn: &mut diesel_async::AsyncPgConnection,
+    snapshot: &crate::cluster::ClusterSnapshot,
+) -> Result<(), diesel::result::Error> {
+    use diesel::sql_types::{Array, Nullable, Text, Timestamptz, Uuid as SqlUuid};
+    use diesel_async::RunQueryDsl;
+
+    let mut ids = Vec::new();
+    let mut images = Vec::new();
+    let mut created = Vec::new();
+    for deployment in &snapshot.deployments {
+        let Some(room) = deployment.room_id else {
+            continue;
+        };
+        ids.push(room);
+        images.push(deployment.image.clone());
+        created.push(deployment.created_at);
+    }
+    if ids.is_empty() {
+        return Ok(());
+    }
+
+    diesel::sql_query(
+        "UPDATE rooms r
+            SET running_image = v.image,
+                deployment_created_at = v.created_at
+           FROM (SELECT unnest($1::uuid[]) AS id,
+                        unnest($2::text[]) AS image,
+                        unnest($3::timestamptz[]) AS created_at) v
+          WHERE r.id = v.id
+            AND (r.running_image IS DISTINCT FROM v.image
+              OR r.deployment_created_at IS DISTINCT FROM v.created_at)",
+    )
+    .bind::<Array<SqlUuid>, _>(ids)
+    .bind::<Array<Nullable<Text>>, _>(images)
+    .bind::<Array<Timestamptz>, _>(created)
+    .execute(conn)
+    .await?;
+
+    Ok(())
+}
+
+/// Publish the configured pahoa image so the web tier can say what a room *should* be running.
+///
+/// `PUNA_PAHOA_IMAGE` is set on the orchestrator alone. Setting the same variable on `puna-web` was
+/// the obvious alternative and is worse: two copies in git that can drift, and the drift would make
+/// the admin page lie about exactly the thing it exists to report. One writer, one value.
+///
+/// Written every tick rather than once at startup, because the guard makes a no-op free and it
+/// self-heals a restored or truncated database without anyone noticing it was missing.
+async fn publish_fleet_image(
+    conn: &mut diesel_async::AsyncPgConnection,
+    environment: Environment,
+    image: &str,
+) -> Result<(), diesel::result::Error> {
+    use diesel::sql_types::Text;
+    use diesel_async::RunQueryDsl;
+
+    diesel::sql_query(
+        // Bound as text and cast, the way every other environment-scoped statement in this
+        // workspace does it -- `Environment` has no `ToSql` for the enum type.
+        "INSERT INTO fleet (environment, pahoa_image)
+              VALUES ($1::puna_environment, $2)
+         ON CONFLICT (environment) DO UPDATE
+                SET pahoa_image = EXCLUDED.pahoa_image, updated_at = now()
+              WHERE fleet.pahoa_image IS DISTINCT FROM EXCLUDED.pahoa_image",
+    )
+    .bind::<Text, _>(environment.as_str())
+    .bind::<Text, _>(image)
+    .execute(conn)
+    .await?;
+
+    Ok(())
+}
+
 /// `puna_rooms{state}`, from the same read the planner used.
 ///
 /// Every state is reset first, so a state that has just emptied publishes a zero rather than keeping
@@ -484,4 +583,165 @@ async fn detect_integrity_faults(
 
     puna_core::metrics::INTEGRITY_FAULTS.set(faults as i64);
     Ok(faults)
+}
+
+#[cfg(test)]
+mod db_tests {
+    use super::*;
+    use crate::cluster::{ClusterSnapshot, RoomDeployment};
+    use crate::storage::Layout;
+    use crate::testdb::{self, NewRoom};
+    use diesel::sql_types::{Nullable, Text, Timestamptz};
+    use diesel_async::RunQueryDsl;
+
+    #[derive(diesel::QueryableByName)]
+    struct ObservedSpec {
+        #[diesel(sql_type = Nullable<Text>)]
+        running_image: Option<String>,
+        #[diesel(sql_type = Nullable<Timestamptz>)]
+        deployment_created_at: Option<chrono::DateTime<chrono::Utc>>,
+    }
+
+    async fn observed_spec(
+        conn: &mut diesel_async::AsyncPgConnection,
+        room: RoomId,
+    ) -> ObservedSpec {
+        diesel::sql_query("SELECT running_image, deployment_created_at FROM rooms WHERE id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(room)
+            .load::<ObservedSpec>(conn)
+            .await
+            .expect("read the room")
+            .into_iter()
+            .next()
+            .expect("the room")
+    }
+
+    fn snapshot_of(room: RoomId, image: Option<&str>) -> ClusterSnapshot {
+        ClusterSnapshot {
+            deployments: vec![RoomDeployment {
+                name: crate::cluster::object_name(room),
+                uid: "uid-1".into(),
+                room_id: Some(room),
+                spec_hash: Some("hash-1".into()),
+                image: image.map(str::to_string),
+                replicas: 1,
+                ready_replicas: 1,
+                created_at: chrono::Utc::now() - chrono::TimeDelta::days(6),
+            }],
+            services: Vec::new(),
+            secrets: Vec::new(),
+        }
+    }
+
+    /// **The admin table's whole premise: the image comes from the CLUSTER, not from the row.**
+    ///
+    /// The row already records what Puna believes it started a room with. Recording that again
+    /// under a different name would produce a table that agrees with itself and cannot show the one
+    /// state it exists for — a pod running something other than what was asked for.
+    #[tokio::test]
+    async fn the_observed_image_is_what_the_cluster_reports() {
+        testdb::with_db(|pool| async move {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let layout = Layout::new(tmp.path());
+            let mut conn = pool.get().await.expect("connection");
+            let generation = testdb::insert_generation(&mut conn, &layout, 4).await;
+            let room = testdb::insert_room(
+                &mut conn,
+                generation,
+                NewRoom {
+                    state: "running",
+                    desired: "running",
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            record_observed(&mut conn, &snapshot_of(room, Some("pahoa:sha-old")))
+                .await
+                .expect("record");
+
+            let row = observed_spec(&mut conn, room).await;
+            assert_eq!(row.running_image.as_deref(), Some("pahoa:sha-old"));
+            let age = chrono::Utc::now() - row.deployment_created_at.expect("a deployment age");
+            assert!(age.num_days() >= 5, "the Deployment's own creation time");
+
+            // A container the reader could not identify is "cannot tell", not "no image".
+            record_observed(&mut conn, &snapshot_of(room, None))
+                .await
+                .expect("record");
+            assert_eq!(observed_spec(&mut conn, room).await.running_image, None);
+        })
+        .await;
+    }
+
+    /// Observed state describes a Deployment. When there is no Deployment there is nothing to
+    /// describe, and a leftover image would render as a live reading of a room that is not running.
+    #[tokio::test]
+    async fn going_idle_clears_the_observed_columns() {
+        testdb::with_db(|pool| async move {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let layout = Layout::new(tmp.path());
+            let mut conn = pool.get().await.expect("connection");
+            let generation = testdb::insert_generation(&mut conn, &layout, 4).await;
+            let room = testdb::insert_room(
+                &mut conn,
+                generation,
+                NewRoom {
+                    state: "running",
+                    desired: "running",
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            record_observed(&mut conn, &snapshot_of(room, Some("pahoa:sha-old")))
+                .await
+                .expect("record");
+            assert!(observed_spec(&mut conn, room).await.running_image.is_some());
+
+            crate::steps::clear_deployment(&mut conn, room, "gone")
+                .await
+                .expect("clear");
+
+            let row = observed_spec(&mut conn, room).await;
+            assert_eq!(row.running_image, None, "no Deployment, no observed image");
+            assert_eq!(row.deployment_created_at, None);
+        })
+        .await;
+    }
+
+    /// The web tier reads this to know what a room *should* be running; it cannot read the
+    /// orchestrator's environment. A stale value here is an admin page that lies about drift.
+    #[tokio::test]
+    async fn the_fleet_image_is_published_and_kept_current() {
+        testdb::with_db(|pool| async move {
+            let mut conn = pool.get().await.expect("connection");
+
+            #[derive(diesel::QueryableByName)]
+            struct Row {
+                #[diesel(sql_type = Text)]
+                pahoa_image: String,
+            }
+            async fn read(conn: &mut diesel_async::AsyncPgConnection) -> Option<String> {
+                let rows: Vec<Row> =
+                    diesel::sql_query("SELECT pahoa_image FROM fleet WHERE environment = 'dev'")
+                        .load(conn)
+                        .await
+                        .expect("read fleet");
+                rows.into_iter().next().map(|r| r.pahoa_image)
+            }
+
+            publish_fleet_image(&mut conn, Environment::Dev, "pahoa:sha-one")
+                .await
+                .expect("publish");
+            assert_eq!(read(&mut conn).await.as_deref(), Some("pahoa:sha-one"));
+
+            // An image bump moves it, which is what makes drift computable at all.
+            publish_fleet_image(&mut conn, Environment::Dev, "pahoa:sha-two")
+                .await
+                .expect("publish");
+            assert_eq!(read(&mut conn).await.as_deref(), Some("pahoa:sha-two"));
+        })
+        .await;
+    }
 }

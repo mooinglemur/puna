@@ -269,6 +269,18 @@ fn read_deployment(deployment: &Deployment) -> Option<RoomDeployment> {
             .as_ref()
             .and_then(|a| a.get(SPEC_HASH_ANNOTATION))
             .cloned(),
+        // By container NAME, not `containers[0]`: an injected sidecar would take that slot and the
+        // admin table would confidently report the wrong image. No match is `None`.
+        image: deployment
+            .spec
+            .as_ref()
+            .and_then(|s| s.template.spec.as_ref())
+            .and_then(|pod| {
+                pod.containers
+                    .iter()
+                    .find(|c| c.name == spec::ROOM_CONTAINER)
+            })
+            .and_then(|c| c.image.clone()),
         replicas: status.and_then(|s| s.replicas).unwrap_or(0),
         // Absent means zero here, unlike a probe's `None`: the field is omitted until a replica is
         // ready, and "no ready replica" is exactly what that means.
