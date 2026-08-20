@@ -94,12 +94,22 @@ pub struct SlotView {
     pub can_download: bool,
     /// This slot's own tracker id, and **only when the viewer owns the slot**.
     ///
-    /// Not a permission check that happens to be strict -- it is what the id is FOR. A slot's
-    /// tracker id is independent of the multiworld's precisely so a player can share their own
-    /// progress with their own audience without handing over the room's. Handing an organizer every
-    /// player's shareable link would undo that, so staff get the multiworld tracker and nothing
-    /// per-slot. `None` here means the markup has nothing to render, rather than relying on the
-    /// template to remember a condition.
+    /// The reason is capability tiers, not confidentiality. `GET /room/<id>` is a PUBLIC page under
+    /// the default `link` policy -- the unguessable room id is the whole authorization -- so
+    /// rendering every slot's tracker id here would mean holding the room URL yields all of them.
+    /// That collapses two deliberately separate capabilities into one and makes the slot id's
+    /// independence pointless: it exists so a player can share their own progress *without* handing
+    /// over the multiworld's.
+    ///
+    /// **Staff are not a special case, and the narrow choice here is not a strong one.** An
+    /// organizer already sees every slot's progress through the room-level tracker, so withholding
+    /// the per-slot link discloses nothing they cannot reach -- and anyone minded to leak would
+    /// share the room tracker, which shows strictly more. Widening this to staff would cost no
+    /// confidentiality; it is kept to owners because that is the smallest rule that satisfies the
+    /// public-page constraint above, not because staff seeing it would be unsafe.
+    ///
+    /// Also gated on `can_see_tracker` at the template, since `disabled` policy 404s every tracker
+    /// id including a slot's own.
     pub tracker_id: Option<puna_core::ids::TrackerId>,
 }
 

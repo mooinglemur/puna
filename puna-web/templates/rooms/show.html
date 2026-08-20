@@ -91,12 +91,15 @@ unclaimed
 <span class="hint">&mdash;</span>
 {% endif %}
 </td>
-{# Your own slot only. This id is independent of the multiworld's, which is the whole point: it is
-   yours to share with your own audience without handing over the room. Staff deliberately do NOT
-   get every player's link -- see SlotView::tracker_id. #}
+{# Gated on can_see_tracker as well as ownership. `disabled` policy answers 404 for EVERY tracker id
+   including a slot's own, so without this an owner is offered a link the route refuses. #}
 <td>
+{% if can_see_tracker %}
 {% if let Some(tracker) = slot.tracker_id %}
 <a href="/tracker/{{ tracker }}">yours</a>
+{% else %}
+<span class="hint">&mdash;</span>
+{% endif %}
 {% else %}
 <span class="hint">&mdash;</span>
 {% endif %}
