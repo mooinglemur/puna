@@ -134,7 +134,8 @@ impl Reconciler {
         };
 
         let mut conn = self.pool.get().await?;
-        let views = load_views(&mut conn, self.environment).await?;
+        let mut views = load_views(&mut conn, self.environment).await?;
+        attach_desired_spec_hashes(&mut conn, &mut views, &self.pahoa_image).await;
         publish_room_states(&views);
         report.rooms = views.len();
         drop(conn);
@@ -285,12 +286,46 @@ async fn load_views(
                 state,
                 desired,
                 spec_hash: row.spec_hash,
+                // Filled in afterwards, for the few rooms it can change a decision for. See
+                // `attach_desired_spec_hashes`.
+                desired_spec_hash: None,
                 state_changed_at: row.state_changed_at,
                 retry_after: row.retry_after,
                 not_ready_sweeps: row.not_ready_sweeps,
             })
         })
         .collect())
+}
+
+/// Fill in [`RoomView::desired_spec_hash`] for the rooms whose decision it can change.
+///
+/// **Only rooms in `failed` that are still waiting**, and the narrowness is the design rather than
+/// an optimization. Rendering a spec costs a room's row, its secrets, its slot list and its
+/// reservation — four queries — so doing it for every room on every tick would put a per-room cost
+/// on every pass to answer a question exactly one state asks. A room whose backoff has already
+/// expired is skipped too: it is about to be retried regardless, so the answer could not change
+/// anything.
+///
+/// A room this leaves at `None` is a room the planner will decide about on its timer alone, which
+/// is the behavior that predates this and is always safe.
+async fn attach_desired_spec_hashes(
+    conn: &mut diesel_async::AsyncPgConnection,
+    views: &mut [RoomView],
+    pahoa_image: &str,
+) {
+    let now = chrono::Utc::now();
+
+    for view in views.iter_mut() {
+        let waiting = view.state == RoomState::Failed
+            && view.desired == DesiredState::Running
+            // `None` counts as waiting: a failure with no backoff recorded waits for a person, and
+            // an operator changing the image *is* that person.
+            && view.retry_after.is_none_or(|after| after > now);
+
+        if waiting {
+            view.desired_spec_hash = steps::desired_spec_hash(conn, pahoa_image, view.id).await;
+        }
+    }
 }
 
 /// `puna_rooms{state}`, from the same read the planner used.

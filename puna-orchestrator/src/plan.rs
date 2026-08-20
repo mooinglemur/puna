@@ -71,6 +71,16 @@ pub struct RoomView {
     /// What the row says the running spec should hash to. `None` means no Deployment was ever
     /// recorded for this room.
     pub spec_hash: Option<String>,
+    /// What the room's spec would hash to **if it were rendered right now**, where that is known.
+    ///
+    /// Computed by the caller only for rooms whose decision it can change — today that is `failed`
+    /// rooms still inside their backoff, and nothing else. Rendering it costs a room's secrets, its
+    /// slot list and its reservation, so paying it for every room on every tick would buy a
+    /// comparison exactly one state acts on.
+    ///
+    /// **`None` means "not computed", never "unchanged".** That is why it can only ever *cause* a
+    /// retry in the company of a recorded hash to disagree with, and never on its own.
+    pub desired_spec_hash: Option<String>,
     pub state_changed_at: DateTime<Utc>,
     pub retry_after: Option<DateTime<Utc>>,
     pub not_ready_sweeps: i32,
@@ -213,13 +223,34 @@ fn step_for(
         },
 
         RoomState::Failed => match room.desired {
-            DesiredState::Running => match room.retry_after {
-                // No backoff recorded is not a licence to retry immediately: something failed and
-                // did not say when to try again, so wait for an operator rather than spin.
-                None => None,
-                Some(after) if after <= now => Some(Step::Retry),
-                Some(_) => None,
-            },
+            DesiredState::Running => {
+                // **A changed spec interrupts the backoff, and outranks the timer.** The backoff
+                // exists to stop a room broken by its own configuration being retried forever — but
+                // a spec that now renders differently is evidence that the recorded failure no
+                // longer describes this room, because an operator has already changed something:
+                // the image, or the row. Waiting out a timer that measures a problem somebody has
+                // just fixed is the case this arm got wrong, and at `failure_count = 7` it is the
+                // full ten-minute cap.
+                //
+                // Both hashes have to be present, and for different reasons. A `None` desired hash
+                // is "not computed"; a `None` recorded hash is a room that never got far enough to
+                // have one. Neither is a disagreement, so neither retries.
+                if let (Some(want), Some(have)) = (&room.desired_spec_hash, &room.spec_hash)
+                    && want != have
+                {
+                    return Some(Step::Retry);
+                }
+
+                match room.retry_after {
+                    // No backoff recorded is not a licence to retry immediately: something failed
+                    // and did not say when to try again, so wait for an operator rather than spin.
+                    // A spec change above is exactly that operator, which is why it is checked
+                    // first rather than inside this match.
+                    None => None,
+                    Some(after) if after <= now => Some(Step::Retry),
+                    Some(_) => None,
+                }
+            }
             DesiredState::Stopped => None,
             DesiredState::Deleted => unreachable!("handled above"),
         },
@@ -304,6 +335,8 @@ mod tests {
             state,
             desired,
             spec_hash: Some("hash-1".into()),
+            // Not computed, which is the state every room outside `failed` is in.
+            desired_spec_hash: None,
             state_changed_at: now() - Duration::seconds(10),
             retry_after: None,
             not_ready_sweeps: 0,
@@ -523,6 +556,60 @@ mod tests {
         // A room that wants to stay stopped does not retry, however long ago it failed.
         room.desired = DesiredState::Stopped;
         room.retry_after = Some(now() - Duration::days(1));
+        assert_eq!(decide(&room, &snapshot(vec![])), None);
+    }
+
+    /// **The M10c case.** A room pinned at the ten-minute cap keeps waiting after an operator has
+    /// already fixed what broke it — so a spec that renders differently now is what cuts the wait
+    /// short, because that difference *is* the operator having acted.
+    #[test]
+    fn a_changed_spec_interrupts_the_backoff() {
+        let mut room = view(RoomState::Failed, DesiredState::Running);
+        room.retry_after = Some(now() + Duration::minutes(10));
+        room.spec_hash = Some("what-we-tried".into());
+
+        // The timer alone: still waiting.
+        assert_eq!(decide(&room, &snapshot(vec![])), None);
+
+        // The spec would render differently now. Retry, without waiting out a timer that measures
+        // a problem somebody has fixed.
+        room.desired_spec_hash = Some("what-we-would-try-now".into());
+        assert_eq!(decide(&room, &snapshot(vec![])), Some(Step::Retry));
+
+        // Agreement is not a change, and this is the assertion that stops the interrupt from
+        // becoming an unconditional retry -- which would defeat the backoff entirely.
+        room.desired_spec_hash = Some("what-we-tried".into());
+        assert_eq!(decide(&room, &snapshot(vec![])), None);
+    }
+
+    /// A missing hash on either side is not a disagreement, and the two absences mean different
+    /// things: the desired one is "not computed", the recorded one is "never got that far".
+    #[test]
+    fn an_absent_hash_never_interrupts_a_backoff() {
+        let mut room = view(RoomState::Failed, DesiredState::Running);
+        room.retry_after = Some(now() + Duration::minutes(10));
+
+        // Not computed -- which is every room the caller did not render, so this must never be read
+        // as "the spec changed" or every failed room would retry at once.
+        room.spec_hash = Some("what-we-tried".into());
+        room.desired_spec_hash = None;
+        assert_eq!(decide(&room, &snapshot(vec![])), None);
+
+        // Never had a Deployment recorded: there is nothing to have changed *from*.
+        room.spec_hash = None;
+        room.desired_spec_hash = Some("what-we-would-try-now".into());
+        assert_eq!(decide(&room, &snapshot(vec![])), None);
+    }
+
+    /// The interrupt is scoped to `failed`. A room that wants to stay stopped stays stopped, however
+    /// much its spec has moved on -- otherwise a changed image would start rooms nobody asked for.
+    #[test]
+    fn a_changed_spec_does_not_start_a_room_that_wants_to_be_stopped() {
+        let mut room = view(RoomState::Failed, DesiredState::Stopped);
+        room.retry_after = Some(now() - Duration::days(1));
+        room.spec_hash = Some("what-we-tried".into());
+        room.desired_spec_hash = Some("what-we-would-try-now".into());
+
         assert_eq!(decide(&room, &snapshot(vec![])), None);
     }
 

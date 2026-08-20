@@ -234,44 +234,27 @@ async fn start(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
         }
     };
 
-    let Some(room) = room::get(&mut conn, id).await? else {
-        return Ok(Outcome::Done);
-    };
-    let Some(secrets) = room::secrets(&mut conn, id).await? else {
-        return Ok(Outcome::Done);
-    };
-    let slots = slot::list(&mut conn, id).await?;
-    let inputs = start_inputs(&mut conn, id).await?;
-
-    // Fail closed, loudly. An incomplete `PAHOA_SLOT_PASSWORDS` is a room nobody can join, so the
-    // builder refuses and the room lands in `failed` with the slots named -- which is recoverable,
-    // where a room serving with the wrong door open is not.
-    let environment_vars = match spec::secret::build(&room, &secrets, &slots) {
-        Ok(data) => data,
+    let rendered = match render_spec(&mut conn, ctx.pahoa_image, id, base_port).await {
+        Ok(Some(rendered)) => rendered,
+        // The room or its secrets are gone from under the tick. Nothing to start, and nothing worth
+        // recording against a row that may not exist.
+        Ok(None) => return Ok(Outcome::Done),
+        // Fail closed, loudly. An incomplete `PAHOA_SLOT_PASSWORDS` is a room nobody can join, so
+        // the builder refuses and the room lands in `failed` with the slots named -- which is
+        // recoverable, where a room serving with the wrong door open is not.
         Err(e) => {
             fail(ctx, action, &e.to_string()).await?;
             return Ok(Outcome::Done);
         }
     };
 
-    let room_spec = spec::room::Draft {
-        room_id: id,
-        image: ctx.pahoa_image.to_string(),
-        base_port,
-        wants_filtered: room.wants_filtered,
-        slot_count: inputs.slot_count,
-        save_interval_secs: inputs.save_interval_secs,
-        use_embedded_options: inputs.use_embedded_options,
-    }
-    .build(room.slot_auth, &environment_vars);
-
     let outcome = {
         let mut recorder = RowRecorder { conn: &mut conn };
         apply::ensure_room_running(
             ctx.cluster,
             &StartRequest {
-                spec: &room_spec,
-                secret: &environment_vars,
+                spec: &rendered.spec,
+                secret: &rendered.secret,
                 site: ctx.site,
             },
             &mut recorder,
@@ -281,7 +264,10 @@ async fn start(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
 
     match outcome {
         Ok(Started::Converged { .. }) => {
-            let filtered = room.wants_filtered.then(|| i32::from(base_port) + 1);
+            let filtered = rendered
+                .spec
+                .wants_filtered
+                .then(|| i32::from(base_port) + 1);
             diesel::sql_query(
                 "UPDATE rooms
                     SET state = 'starting', state_changed_at = now(),
@@ -404,6 +390,80 @@ async fn note_reclaim(
         serde_json::json!({ "port": base_port, "taken_by": taken_by.to_string() }),
     )
     .await
+}
+
+/// A room's spec and the environment it is fingerprinted against, rendered together.
+///
+/// The two travel as one because the hash covers `slot_auth`, which reaches pahoa through the
+/// Secret — so a spec handed around without the environment that produced it is a spec whose hash
+/// cannot be explained.
+pub(crate) struct RenderedSpec {
+    pub spec: crate::cluster::RoomSpec,
+    pub secret: spec::secret::SecretData,
+}
+
+/// Render a room's spec exactly as a start would, for a pair already reserved.
+///
+/// **One renderer, two callers, on purpose.** [`start`] renders to apply, and [`desired_spec_hash`]
+/// renders to ask whether anything has changed. If those two ever disagreed the backoff interrupt
+/// would either never fire or never stop firing — and both failures are silent, because each looks
+/// exactly like the room being fine. Sharing the rendering makes the drift unrepresentable rather
+/// than merely unlikely.
+///
+/// `Ok(None)` is a room or a secret that is no longer there: nothing to render, and nothing to
+/// record against a row that may already be gone. `Err` is a spec that *cannot* be rendered — today
+/// only the fail-closed Secret builder — which is the room's own configuration being wrong, and is
+/// the one case worth a `failed` row.
+pub(crate) async fn render_spec(
+    conn: &mut AsyncPgConnection,
+    pahoa_image: &str,
+    id: RoomId,
+    base_port: u16,
+) -> anyhow::Result<Option<RenderedSpec>> {
+    let Some(room) = room::get(conn, id).await? else {
+        return Ok(None);
+    };
+    let Some(secrets) = room::secrets(conn, id).await? else {
+        return Ok(None);
+    };
+    let slots = slot::list(conn, id).await?;
+    let inputs = start_inputs(conn, id).await?;
+
+    let secret = spec::secret::build(&room, &secrets, &slots)?;
+    let spec = spec::room::Draft {
+        room_id: id,
+        image: pahoa_image.to_string(),
+        base_port,
+        wants_filtered: room.wants_filtered,
+        slot_count: inputs.slot_count,
+        save_interval_secs: inputs.save_interval_secs,
+        use_embedded_options: inputs.use_embedded_options,
+    }
+    .build(room.slot_auth, &secret);
+
+    Ok(Some(RenderedSpec { spec, secret }))
+}
+
+/// What this room's spec would hash to if it were started right now.
+///
+/// The planner's backoff interrupt compares this against the hash on the row. **Every failure
+/// collapses to `None`, deliberately:** a room whose spec cannot be rendered has not "changed" in
+/// any sense worth acting on — it would fail the same way again — so the honest answer is *no
+/// opinion*, which leaves the backoff to do the job it is good at. `None` must never read as "the
+/// spec changed", or one unrenderable room would retry on every tick forever.
+pub(crate) async fn desired_spec_hash(
+    conn: &mut AsyncPgConnection,
+    pahoa_image: &str,
+    id: RoomId,
+) -> Option<String> {
+    // A failed room keeps its reservation, so the port it would come back on is the port it had.
+    // No reservation means nothing to render against, not a change.
+    let base_port = port::reserved_pair(conn, id).await.ok().flatten()?;
+
+    match render_spec(conn, pahoa_image, id, base_port).await {
+        Ok(Some(rendered)) => Some(rendered.spec.spec_hash),
+        _ => None,
+    }
 }
 
 async fn start_inputs(
@@ -696,8 +756,42 @@ async fn delete(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
     })
 }
 
-/// Record a failure and when to try again.
+/// Record a failure and when to try again — and take the room's Deployment down with it.
+///
+/// **Every path into `failed` comes through here**, which is why the deletion belongs here rather
+/// than beside [`Step::FailStart`]: the progress deadline, a port range with nothing left, and a
+/// Secret that refuses to render all end in the same place, and all three leave a pod that is
+/// either crashlooping or about to.
 async fn fail(ctx: &Context<'_>, action: &Action, error: &str) -> anyhow::Result<Outcome> {
+    // **Delete before recording, not after.** Left alone, a failed room's Deployment crashloops for
+    // the entire backoff against a spec nothing will use -- burning restarts, holding a scheduling
+    // slot, and making `kubectl delete pod` look broken, because the Deployment recreates the pod
+    // from the same unusable spec the moment it goes.
+    //
+    // The order is chosen by what each crash window costs. Deleting first and crashing leaves the
+    // room in `starting` with no Deployment, which the next tick resolves down the ordinary vanish
+    // path for the price of one more start attempt. Recording first and crashing leaves the
+    // crashlooping pod in place for the whole backoff with nothing scheduled to remove it -- which
+    // is precisely the state this exists to end.
+    //
+    // The reservation is a database row and is untouched, so the room comes back on its own port.
+    // The Service and the Secret are owned by the Deployment, so garbage collection takes them.
+    if let Err(e) = ctx
+        .cluster
+        .delete_deployment(&object_name(action.room))
+        .await
+    {
+        // Not fatal, and not propagated: recording *why* the room failed is the more valuable half,
+        // and a Deployment that outlives the record is exactly what happened before this existed.
+        // Warned rather than swallowed, because the next tick will not come back for it.
+        tracing::warn!(
+            room = %action.room,
+            error = %e,
+            "could not delete the Deployment of a room entering `failed`; it will keep restarting \
+             until the room is retried"
+        );
+    }
+
     let mut conn = ctx.pool.get().await?;
 
     #[derive(diesel::QueryableByName)]
@@ -1252,6 +1346,130 @@ mod db_tests {
             assert_eq!(
                 retried.failure_count, 1,
                 "the count survives, so the backoff keeps growing until a start succeeds"
+            );
+        })
+        .await;
+    }
+
+    /// **M10c, half one.** A room entering `failed` takes its Deployment with it. Left in place it
+    /// crashloops for the whole backoff against a spec nothing will use — and it makes the obvious
+    /// operator reflex look broken, because `kubectl delete pod` is answered by the Deployment
+    /// putting the pod straight back.
+    #[tokio::test]
+    async fn entering_failed_deletes_the_rooms_deployment() {
+        testdb::with_db(|pool| async move {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let layout = Layout::new(tmp.path());
+            let cluster = FakeCluster::new();
+            let site = site();
+            let ctx = context(&pool, &cluster, &layout, &site);
+
+            let mut conn = pool.get().await.expect("connection");
+            let generation = testdb::insert_generation(&mut conn, &layout, 4).await;
+            let room = testdb::insert_room(
+                &mut conn,
+                generation,
+                NewRoom {
+                    state: "idle",
+                    desired: "running",
+                    ..Default::default()
+                },
+            )
+            .await;
+            testdb::insert_slot(&mut conn, room, 1, None).await;
+
+            execute(&ctx, &action(&pool, room, Step::Start).await)
+                .await
+                .expect("start");
+            assert!(
+                cluster
+                    .snapshot()
+                    .await
+                    .expect("snapshot")
+                    .deployment(room)
+                    .is_some(),
+                "the room needs a Deployment for this test to be able to lose one"
+            );
+
+            execute(&ctx, &action(&pool, room, Step::FailStart).await)
+                .await
+                .expect("fail");
+
+            assert!(
+                cluster
+                    .snapshot()
+                    .await
+                    .expect("snapshot")
+                    .deployment(room)
+                    .is_none(),
+                "the failed room kept its Deployment, which will crashloop for the whole backoff"
+            );
+
+            // **The reservation survives, and that is what makes the deletion safe**: the room comes
+            // back on the same port, so nothing a player has already downloaded is invalidated.
+            let failed = testdb::observed(&mut conn, room).await.expect("the room");
+            assert_eq!(failed.state, "failed");
+            assert!(
+                testdb::reservation(&mut conn, room).await.is_some(),
+                "the port pair was released along with the Deployment"
+            );
+        })
+        .await;
+    }
+
+    /// **M10c, half two — the drift guard.** The backoff interrupt compares the hash `start`
+    /// recorded against the hash `desired_spec_hash` recomputes, so those two renderings agreeing is
+    /// the entire property. If they ever disagreed for a room nobody had touched, every failed room
+    /// would retry on every tick and the backoff would be gone — silently, because a retrying room
+    /// looks like a room being fixed.
+    #[tokio::test]
+    async fn the_recomputed_spec_hash_matches_the_one_start_recorded() {
+        testdb::with_db(|pool| async move {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let layout = Layout::new(tmp.path());
+            let cluster = FakeCluster::new();
+            let site = site();
+            let ctx = context(&pool, &cluster, &layout, &site);
+
+            let mut conn = pool.get().await.expect("connection");
+            let generation = testdb::insert_generation(&mut conn, &layout, 4).await;
+            let room = testdb::insert_room(
+                &mut conn,
+                generation,
+                NewRoom {
+                    state: "idle",
+                    desired: "running",
+                    ..Default::default()
+                },
+            )
+            .await;
+            testdb::insert_slot(&mut conn, room, 1, None).await;
+
+            execute(&ctx, &action(&pool, room, Step::Start).await)
+                .await
+                .expect("start");
+
+            let recorded = testdb::observed(&mut conn, room)
+                .await
+                .expect("the room")
+                .spec_hash
+                .expect("start records a hash");
+
+            assert_eq!(
+                desired_spec_hash(&mut conn, "pahoa:test", room).await,
+                Some(recorded.clone()),
+                "nothing changed, so the recomputed hash must equal the recorded one"
+            );
+
+            // And it moves when the thing it fingerprints moves. This is the operator changing
+            // `PUNA_PAHOA_IMAGE`, which is exactly the case M10c exists for.
+            let after_a_new_image = desired_spec_hash(&mut conn, "pahoa:newer", room)
+                .await
+                .expect("a hash");
+            assert_ne!(
+                after_a_new_image, recorded,
+                "a changed image left the spec hash alone, so a re-pinned room would sit out its \
+                 backoff for nothing"
             );
         })
         .await;
