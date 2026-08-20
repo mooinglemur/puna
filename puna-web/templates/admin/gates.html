@@ -19,9 +19,9 @@ admin-only with no configuration at all.
 <form method="post" action="/admin/gates" class="inline">
 <input type="hidden" name="key" value="{{ gate.key }}">
 <select name="mode">
-<option value="disabled"{% if gate.mode == puna_core::model::settings::GateMode::Disabled %} selected{% endif %}>disabled &mdash; admins only</option>
-<option value="allowlist"{% if gate.mode == puna_core::model::settings::GateMode::Allowlist %} selected{% endif %}>allowlist &mdash; approved accounts</option>
-<option value="open"{% if gate.mode == puna_core::model::settings::GateMode::Open %} selected{% endif %}>open &mdash; any logged-in user</option>
+<option value="disabled"{% if gate.mode == puna_core::model::settings::GateMode::Disabled +%} selected{% endif %}>disabled &mdash; admins only</option>
+<option value="allowlist"{% if gate.mode == puna_core::model::settings::GateMode::Allowlist +%} selected{% endif %}>allowlist &mdash; approved accounts</option>
+<option value="open"{% if gate.mode == puna_core::model::settings::GateMode::Open +%} selected{% endif %}>open &mdash; any logged-in user</option>
 </select>
 <button type="submit">Save</button>
 </form>

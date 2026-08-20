@@ -139,9 +139,9 @@ unclaimed
 <p>
 <label for="mode">Password mode</label>
 <select id="mode" name="mode">
-<option value="none"{% if room.slot_auth == puna_core::model::room::SlotAuth::None %} selected{% endif %}>none &mdash; anyone with the address</option>
-<option value="room"{% if room.slot_auth == puna_core::model::room::SlotAuth::Room %} selected{% endif %}>one shared room password</option>
-<option value="per_slot"{% if room.slot_auth == puna_core::model::room::SlotAuth::PerSlot %} selected{% endif %}>a password per slot</option>
+<option value="none"{% if room.slot_auth == puna_core::model::room::SlotAuth::None +%} selected{% endif %}>none &mdash; anyone with the address</option>
+<option value="room"{% if room.slot_auth == puna_core::model::room::SlotAuth::Room +%} selected{% endif %}>one shared room password</option>
+<option value="per_slot"{% if room.slot_auth == puna_core::model::room::SlotAuth::PerSlot +%} selected{% endif %}>a password per slot</option>
 </select>
 <button type="submit">Change</button>
 </p>

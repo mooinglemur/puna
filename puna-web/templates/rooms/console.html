@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ room_name }} &mdash; console{% endblock %}
+{% block title %}{{ room_name +}} &mdash; console{% endblock %}
 {% block content %}
 
 <h1>{{ room_name }}</h1>
@@ -20,7 +20,7 @@ appear below when it finishes.</p>
 
 {% if let Some(result) = outcome %}
 <div class="{% if result.succeeded %}notice{% else %}warning{% endif %}">
-<p><strong>{{ result.kind }}</strong> &mdash; {{ result.state }}</p>
+<p><strong>{{ result.kind }}</strong> &mdash; {{+ result.state }}</p>
 {% for line in result.lines %}
 <p>{{ line }}</p>
 {% endfor %}
@@ -54,7 +54,7 @@ appear below when it finishes.</p>
     <select name="slot">
       <option value="">&mdash;</option>
       {% for slot in slots %}
-      <option value="{{ slot.0 }}">{{ slot.0 }} &mdash; {{ slot.1 }}</option>
+      <option value="{{ slot.0 }}">{{ slot.0 +}} &mdash; {{+ slot.1 }}</option>
       {% endfor %}
     </select>
   </label>

@@ -12,8 +12,10 @@
 {# The configured image is the thing every row is compared against, so it is stated once at the top
    rather than repeated down a column. #}
 {% if let Some(image) = desired_image %}
-<p>Rooms should be running
-{% if let Some(tag) = desired_tag %}<code>{{ tag }}</code>{% else %}<code>{{ image }}</code>{% endif %}
+{# Both `+` marks are load-bearing: the space before the `{% if %}` and the one after the
+   `{% endif %}` are each adjacent to a tag, so `suppress` eats them and the line renders as
+   `runningsha-7bc9c967— registry...`. See base.html. #}
+<p>Rooms should be running {%+ if let Some(tag) = desired_tag %}<code>{{ tag }}</code>{% else %}<code>{{ image }}</code>{% endif +%}
 &mdash; <span class="hint">{{ image }}</span></p>
 {% else %}
 <p class="warning">The orchestrator has not published a configured image yet. Drift cannot be
@@ -24,7 +26,7 @@ computed until it completes a tick.</p>
 {# The count and the pace are both in the sentence you click: a control whose blast radius is the
    whole environment should say what it will do before it does it. #}
 <form method="post" action="/admin/rooms/redeploy-drifted" class="inline">
-<p class="warning">{{ drifted }} room(s) are not running the configured spec. Restarting them
+<p class="warning">{{ drifted +}} room(s) are not running the configured spec. Restarting them
 queues each one; the orchestrator restarts one per tick, oldest request first, so players are
 disconnected a room at a time rather than all at once.
 <button type="submit">Restart all drifted rooms</button></p>
@@ -63,7 +65,7 @@ disconnected a room at a time rather than all at once.
      Kubernetes moved the pod or the container restarted in place -- the room reloaded its save and
      every client reconnected. A blank cell is the healthy case. #}
   {% if let Some(age) = row.restarted_ago %}
-  <span class="tag">{{ age }} ago</span>
+  <span class="tag">{{ age +}} ago</span>
   {% else %}
   <span class="hint">&mdash;</span>
   {% endif %}

@@ -273,6 +273,18 @@ mod tests {
 
         let html = page.render().expect("renders");
 
+        // `whitespace = "suppress"` ate both spaces around the configured tag here and shipped
+        // `runningsha-7bc9c967— registry...`. Asserting the rendered words rather than the markup,
+        // because the bug is invisible in the source.
+        assert!(
+            html.contains("should be running <code>sha-new</code>"),
+            "the space before the configured tag survives suppression"
+        );
+        assert!(
+            html.contains("</code>\n&mdash;") || html.contains("</code> &mdash;"),
+            "and so does the one after it"
+        );
+
         assert!(html.contains("sha-old"), "the running tag is shown");
         assert!(html.contains("image drift"), "and flagged as drifted");
         assert!(
