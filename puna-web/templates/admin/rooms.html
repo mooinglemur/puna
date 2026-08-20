@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}puna admin &mdash; rooms{% endblock %}
+{% block content %}
+
+<h1>Rooms</h1>
+<p class="hint"><a href="/admin">Back to administration</a></p>
+
+{% if let Some(message) = notice %}
+<p class="notice">{{ message }}</p>
+{% endif %}
+
+{# The configured image is the thing every row is compared against, so it is stated once at the top
+   rather than repeated down a column. #}
+{% if let Some(image) = desired_image %}
+<p>Rooms should be running
+{% if let Some(tag) = desired_tag %}<code>{{ tag }}</code>{% else %}<code>{{ image }}</code>{% endif %}
+&mdash; <span class="hint">{{ image }}</span></p>
+{% else %}
+<p class="warning">The orchestrator has not published a configured image yet. Drift cannot be
+computed until it completes a tick.</p>
+{% endif %}
+
+{% if drifted > 0 %}
+{# The count and the pace are both in the sentence you click: a control whose blast radius is the
+   whole environment should say what it will do before it does it. #}
+<form method="post" action="/admin/rooms/redeploy-drifted" class="inline">
+<p class="warning">{{ drifted }} room(s) are not running the configured spec. Restarting them
+queues each one; the orchestrator restarts one per tick, oldest request first, so players are
+disconnected a room at a time rather than all at once.
+<button type="submit">Restart all drifted rooms</button></p>
+</form>
+{% endif %}
+
+<table class="rooms">
+<thead>
+<tr>
+  <th>Room</th><th>State</th><th>Running</th><th>Deployed</th><th>Restarted</th>
+  <th>Clients</th><th></th>
+</tr>
+</thead>
+<tbody>
+{% for row in rows %}
+<tr>
+<td>{{ row.name }}</td>
+<td><span class="tag">{{ row.state }}</span></td>
+<td>
+  {% if let Some(tag) = row.running_tag %}
+  <span title="{{ row.running_image.as_deref().unwrap_or_default() }}">{{ tag }}</span>
+  {% else if let Some(image) = row.running_image %}
+  {{ image }}
+  {% else %}
+  {# Not running anything, which is not a fault: an idle room picks up the current spec whenever
+     it next starts. #}
+  <span class="hint">&mdash;</span>
+  {% endif %}
+  {% if let Some(kind) = row.drift %}
+  <span class="tag drift">{{ kind }}</span>
+  {% endif %}
+</td>
+<td>{% if let Some(age) = row.deployed_ago %}{{ age }}{% else %}<span class="hint">&mdash;</span>{% endif %}</td>
+<td>
+  {# Shown only when the process is younger than its Deployment by more than a tick, which means
+     Kubernetes moved the pod or the container restarted in place -- the room reloaded its save and
+     every client reconnected. A blank cell is the healthy case. #}
+  {% if let Some(age) = row.restarted_ago %}
+  <span class="tag">{{ age }} ago</span>
+  {% else %}
+  <span class="hint">&mdash;</span>
+  {% endif %}
+</td>
+<td>{% if let Some(n) = row.clients %}{{ n }}{% else %}<span class="hint">&mdash;</span>{% endif %}</td>
+<td>
+  {% if row.redeploy_pending %}
+  <span class="tag">restart queued</span>
+  {% else if row.running_image.is_some() %}
+  <form method="post" action="/admin/rooms/{{ row.id }}/redeploy" class="inline">
+    <button type="submit">Restart</button>
+  </form>
+  {% else %}
+  {# Nothing to restart. Offering the control here would teach people it does nothing. #}
+  <span class="hint">&mdash;</span>
+  {% endif %}
+</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+
+{% if rows.is_empty() %}
+<p>No rooms in this environment yet.</p>
+{% endif %}
+
+<p class="hint">A restart disconnects the room&rsquo;s players for about ten seconds. The room saves
+on the way down, keeps its port, and clients reconnect on their own.</p>
+
+{% endblock %}

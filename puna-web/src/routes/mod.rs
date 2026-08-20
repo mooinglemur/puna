@@ -2,6 +2,7 @@
 
 pub mod console;
 pub mod downloads;
+pub mod fleet;
 pub mod gates;
 pub mod generations;
 pub mod rooms;

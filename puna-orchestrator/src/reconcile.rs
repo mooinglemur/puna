@@ -82,6 +82,7 @@ pub struct Reconciler {
     environment: Environment,
     advertise_host: String,
     pahoa_image: String,
+    max_recreates_per_tick: usize,
     sweeper: Sweeper,
     prober: Arc<Prober>,
 }
@@ -110,6 +111,7 @@ impl Reconciler {
             environment: config.common.environment,
             advertise_host: config.common.advertise_host.clone(),
             pahoa_image: config.pahoa_image.clone(),
+            max_recreates_per_tick: config.max_recreates_per_tick,
             sweeper: Sweeper::new(config.trash_retention),
             prober,
         }
@@ -168,7 +170,12 @@ impl Reconciler {
         }
         drop(conn);
 
-        let actions = plan::plan(&views, &snapshot, chrono::Utc::now());
+        let actions = plan::plan(
+            &views,
+            &snapshot,
+            chrono::Utc::now(),
+            self.max_recreates_per_tick,
+        );
         report.actions = actions.len();
 
         let context = steps::Context {
@@ -287,11 +294,14 @@ async fn load_views(
         retry_after: Option<chrono::DateTime<chrono::Utc>>,
         #[diesel(sql_type = Integer)]
         not_ready_sweeps: i32,
+        #[diesel(sql_type = Nullable<Timestamptz>)]
+        redeploy_requested_at: Option<chrono::DateTime<chrono::Utc>>,
     }
 
     let rows: Vec<Row> = diesel::sql_query(
         "SELECT id, lock_key, state::text AS state, desired_state::text AS desired_state,
-                spec_hash, state_changed_at, retry_after, not_ready_sweeps
+                spec_hash, state_changed_at, retry_after, not_ready_sweeps,
+                redeploy_requested_at
            FROM rooms
           WHERE environment = $1::puna_environment
           ORDER BY created_at",
@@ -333,6 +343,7 @@ async fn load_views(
                 state_changed_at: row.state_changed_at,
                 retry_after: row.retry_after,
                 not_ready_sweeps: row.not_ready_sweeps,
+                redeploy_requested_at: row.redeploy_requested_at,
             })
         })
         .collect())

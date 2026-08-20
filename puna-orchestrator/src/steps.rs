@@ -302,6 +302,11 @@ async fn start(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
             .execute(&mut conn)
             .await?;
 
+            // A room that has just been started IS running its current spec, so any request that
+            // was waiting on it is satisfied -- including one made while it sat idle, where there
+            // was no Deployment to recreate.
+            clear_redeploy_request(&mut conn, id).await?;
+
             event(
                 &mut conn,
                 id,
@@ -551,7 +556,29 @@ async fn recreate(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome>
         .delete_deployment(&object_name(action.room))
         .await?;
     clear_deployment(&mut conn, action.room, "the room's spec changed").await?;
+    // **Consume the request in the same pass that acts on it.** A redeploy is an instruction, not
+    // a state: left set, the planner would see it again on the next tick and recreate the room
+    // again, forever, with no error anywhere and no way to tell from the outside that anything is
+    // wrong beyond players being disconnected every thirty seconds.
+    clear_redeploy_request(&mut conn, action.room).await?;
     Ok(Outcome::Done)
+}
+
+/// Clear a satisfied redeploy request.
+///
+/// Called from every step that leaves the room running its freshly-rendered spec: the recreate that
+/// a request triggered, and `start`, which covers a request made against a room that was already
+/// idle -- there is nothing to recreate there, and leaving the request set would bounce the room
+/// the moment it came up.
+async fn clear_redeploy_request(
+    conn: &mut AsyncPgConnection,
+    room: RoomId,
+) -> Result<(), diesel::result::Error> {
+    diesel::sql_query("UPDATE rooms SET redeploy_requested_at = NULL WHERE id = $1")
+        .bind::<SqlUuid, _>(room)
+        .execute(conn)
+        .await?;
+    Ok(())
 }
 
 async fn mark_running(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
@@ -1411,6 +1438,105 @@ mod db_tests {
             );
         })
         .await;
+    }
+
+    /// **The one catastrophic-and-silent failure in M17.** A redeploy is a request, so it has to be
+    /// consumed by the step that acts on it. Left set, the planner sees it again on the very next
+    /// tick and recreates the room again — forever, with no error anywhere, presenting only as
+    /// players being disconnected every thirty seconds for reasons nothing in Puna can explain.
+    #[tokio::test]
+    async fn a_redeploy_request_is_consumed_by_the_recreate_it_causes() {
+        testdb::with_db(|pool| async move {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let layout = Layout::new(tmp.path());
+            let cluster = FakeCluster::new();
+            let site = site();
+            let ctx = context(&pool, &cluster, &layout, &site);
+
+            let mut conn = pool.get().await.expect("connection");
+            let generation = testdb::insert_generation(&mut conn, &layout, 4).await;
+            let room = testdb::insert_room(
+                &mut conn,
+                generation,
+                NewRoom {
+                    state: "idle",
+                    desired: "running",
+                    ..Default::default()
+                },
+            )
+            .await;
+            testdb::insert_slot(&mut conn, room, 1, None).await;
+
+            execute(&ctx, &action(&pool, room, Step::Start).await)
+                .await
+                .expect("start");
+
+            // Somebody presses the button.
+            diesel::sql_query("UPDATE rooms SET redeploy_requested_at = now() WHERE id = $1")
+                .bind::<SqlUuid, _>(room)
+                .execute(&mut conn)
+                .await
+                .expect("request a redeploy");
+
+            execute(&ctx, &action(&pool, room, Step::Recreate).await)
+                .await
+                .expect("recreate");
+
+            assert_eq!(
+                pending_redeploy(&mut conn, room).await,
+                None,
+                "the request outlived the recreate it caused, so the room will bounce every tick"
+            );
+            assert!(
+                cluster
+                    .snapshot()
+                    .await
+                    .expect("snapshot")
+                    .deployment(room)
+                    .is_none(),
+                "and the recreate did delete the Deployment"
+            );
+
+            // A request made while the room is idle is satisfied by the start, since a room that
+            // has just started is by definition running its current spec. Without this the room
+            // would come up and be torn straight back down.
+            diesel::sql_query("UPDATE rooms SET redeploy_requested_at = now() WHERE id = $1")
+                .bind::<SqlUuid, _>(room)
+                .execute(&mut conn)
+                .await
+                .expect("request a redeploy");
+
+            execute(&ctx, &action(&pool, room, Step::Start).await)
+                .await
+                .expect("start");
+
+            assert_eq!(
+                pending_redeploy(&mut conn, room).await,
+                None,
+                "a start satisfies a request too -- there was nothing to recreate"
+            );
+        })
+        .await;
+    }
+
+    async fn pending_redeploy(
+        conn: &mut AsyncPgConnection,
+        room: RoomId,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        #[derive(diesel::QueryableByName)]
+        struct Row {
+            #[diesel(sql_type = Nullable<Timestamptz>)]
+            redeploy_requested_at: Option<chrono::DateTime<chrono::Utc>>,
+        }
+        let rows: Vec<Row> =
+            diesel::sql_query("SELECT redeploy_requested_at FROM rooms WHERE id = $1")
+                .bind::<SqlUuid, _>(room)
+                .load(conn)
+                .await
+                .expect("read the room");
+        rows.into_iter()
+            .next()
+            .and_then(|r| r.redeploy_requested_at)
     }
 
     /// **M10c, half one.** A room entering `failed` takes its Deployment with it. Left in place it

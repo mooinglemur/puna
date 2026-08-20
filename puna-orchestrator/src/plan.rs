@@ -84,6 +84,17 @@ pub struct RoomView {
     pub state_changed_at: DateTime<Utc>,
     pub retry_after: Option<DateTime<Utc>>,
     pub not_ready_sweeps: i32,
+    /// When somebody asked for this room to be restarted onto its current spec.
+    ///
+    /// **The only thing that makes a running room bounce for a spec change.** Drift on its own
+    /// never does and must never start to: an image bump lands on the whole environment at once,
+    /// and a room mid-session is not something a `git push` gets to interrupt. Set by an operator
+    /// through the console, or by a `slot_auth` change, which has to reach pahoa now rather than
+    /// whenever the room happens to restart.
+    ///
+    /// A request, so it is **consumed** rather than observed: every step that leaves the room
+    /// running its freshly-rendered spec clears it.
+    pub redeploy_requested_at: Option<DateTime<Utc>>,
 }
 
 /// Why a room is being put back to `idle`.
@@ -172,15 +183,50 @@ pub struct Action {
 /// **At most one action per room per tick.** Not an optimization: it is what makes "apply up to 8
 /// rooms concurrently" safe to say, since two actions against one room could only be serialized by
 /// the caller remembering to.
-pub fn plan(rooms: &[RoomView], cluster: &ClusterSnapshot, now: DateTime<Utc>) -> Vec<Action> {
-    rooms
+pub fn plan(
+    rooms: &[RoomView],
+    cluster: &ClusterSnapshot,
+    now: DateTime<Utc>,
+    max_recreates: usize,
+) -> Vec<Action> {
+    let planned: Vec<(&RoomView, Step)> = rooms
         .iter()
         .filter_map(|room| {
-            step_for(room, cluster.deployment(room.id), now).map(|step| Action {
-                room: room.id,
-                lock_key: room.lock_key,
-                step,
-            })
+            step_for(room, cluster.deployment(room.id), now).map(|step| (room, step))
+        })
+        .collect();
+
+    // **The cap exists because nothing else bounds this.** Applying is a sequential loop with no
+    // throttle, and a foreground delete returns as soon as the API server accepts it rather than
+    // when the pod is gone -- so an uncapped pass would stop every room it planned for inside one
+    // tick and bring them all back together: one simultaneous final save and restore per room, on
+    // one shared CephFS volume. Deferring costs nothing, because the loop is level-triggered and
+    // a room not recreated this tick is recreated on the next.
+    //
+    // Chosen oldest-request-first so a rollout drains in the order people asked for it and a room
+    // cannot be starved by later requests arriving. Everything else keeps the caller's ordering --
+    // the tick reads rooms by `created_at`, and reordering the whole pass to cap one step would
+    // make the sweep's behavior depend on uuids.
+    let mut by_age: Vec<usize> = planned
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, step))| *step == Step::Recreate)
+        .map(|(index, _)| index)
+        .collect();
+    by_age.sort_by_key(|&index| {
+        let room = planned[index].0;
+        (room.redeploy_requested_at, room.id)
+    });
+    let deferred: Vec<usize> = by_age.into_iter().skip(max_recreates).collect();
+
+    planned
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| !deferred.contains(index))
+        .map(|(_, (room, step))| Action {
+            room: room.id,
+            lock_key: room.lock_key,
+            step,
         })
         .collect()
 }
@@ -279,11 +325,21 @@ fn step_for(
                         .then_some(Step::MarkIdle(IdleReason::DeploymentGone))
                 }
 
+                // **Somebody asked.** First among the arms that see a Deployment, because a
+                // redeploy is the one instruction here that a human issued about this room
+                // specifically: it outranks re-affirming `running` and outranks waiting out a
+                // start. It does NOT outrank `Stop` or `Delete`, both handled above -- a room
+                // being torn down has no use for a restart.
+                Some(_) if room.redeploy_requested_at.is_some() => Some(Step::Recreate),
+
                 // The running spec is not the one the row describes -- a new image, a changed
                 // port, or a `slot_auth` change, which reaches pahoa through the Secret and moves
                 // nothing else in the pod. A hash we cannot match at all (`None` on the row) is the
                 // crash window in §7 step 3, and is treated the same way: the row is authoritative
                 // and adoption would mean trusting a label to prove provenance.
+                //
+                // Note what is NOT here: a comparison against `desired_spec_hash`. Drift from the
+                // rendered spec is reported, never acted on -- see `redeploy_requested_at`.
                 Some(cluster) if cluster.spec_hash != room.spec_hash => Some(Step::Recreate),
 
                 Some(cluster) if cluster.ready_replicas >= 1 => {
@@ -340,6 +396,9 @@ mod tests {
             state_changed_at: now() - Duration::seconds(10),
             retry_after: None,
             not_ready_sweeps: 0,
+            // Nobody has asked for a restart, which is the state every room is in until a person
+            // acts. Drift alone must never populate this.
+            redeploy_requested_at: None,
         }
     }
 
@@ -365,7 +424,7 @@ mod tests {
 
     /// What the planner decides for one room, given a cluster.
     fn decide(room: &RoomView, cluster: &ClusterSnapshot) -> Option<Step> {
-        let actions = plan(std::slice::from_ref(room), cluster, now());
+        let actions = plan(std::slice::from_ref(room), cluster, now(), 1);
         assert!(actions.len() <= 1, "one action per room per tick");
         actions.into_iter().next().map(|a| a.step)
     }
@@ -676,6 +735,91 @@ mod tests {
         );
     }
 
+    /// **The invariant M17 exists to protect: drift is reported, never acted on.**
+    ///
+    /// An image bump moves `PUNA_PAHOA_IMAGE` for the whole environment at once. If a rendered-spec
+    /// disagreement were enough to plan a recreate, that one `git push` would restart every room in
+    /// the environment — including rooms with people in them, at whatever hour it merged. The only
+    /// thing that may bounce a running room is somebody asking.
+    #[test]
+    fn drift_alone_plans_nothing() {
+        let mut room = view(RoomState::Running, DesiredState::Running);
+        room.desired_spec_hash = Some("what-it-would-render-to-now".into());
+        let cluster = snapshot(vec![deployment(&room, "hash-1", 1)]);
+
+        assert_eq!(
+            decide(&room, &cluster),
+            None,
+            "a room whose spec would render differently is left alone until asked"
+        );
+    }
+
+    /// The same room, once somebody asks. This is the whole of the mechanism: one nullable column,
+    /// and it outranks re-affirming a healthy room.
+    #[test]
+    fn a_redeploy_request_recreates_from_every_live_state() {
+        for state in [RoomState::Starting, RoomState::Running, RoomState::Degraded] {
+            let mut room = view(state, DesiredState::Running);
+            room.redeploy_requested_at = Some(now());
+            let cluster = snapshot(vec![deployment(&room, "hash-1", 1)]);
+            assert_eq!(decide(&room, &cluster), Some(Step::Recreate), "{state:?}");
+        }
+    }
+
+    /// A room being torn down has no use for a restart, and honoring one would recreate the pod a
+    /// stop had just removed.
+    #[test]
+    fn stopping_and_deleting_outrank_a_redeploy_request() {
+        for desired in [DesiredState::Stopped, DesiredState::Deleted] {
+            let mut room = view(RoomState::Running, desired);
+            room.redeploy_requested_at = Some(now());
+            let cluster = snapshot(vec![deployment(&room, "hash-1", 1)]);
+            assert!(
+                matches!(
+                    decide(&room, &cluster),
+                    Some(Step::Stop) | Some(Step::Delete)
+                ),
+                "{desired:?} wins over a pending redeploy"
+            );
+        }
+    }
+
+    /// **A fleet-wide redeploy is a rolling restart, not a simultaneous one.**
+    ///
+    /// Nothing else bounds this: applying is a sequential loop with no throttle, and a foreground
+    /// delete returns when the API server accepts it rather than when the pod is gone. Uncapped,
+    /// every room asked for would stop inside one tick and come back together.
+    #[test]
+    fn the_recreate_cap_defers_the_rest_and_takes_the_oldest_request_first() {
+        let mut rooms: Vec<RoomView> = (0..4)
+            .map(|_| view(RoomState::Running, DesiredState::Running))
+            .collect();
+        // Requested in a deliberately different order from the list order.
+        for (index, minutes) in [40_i64, 10, 30, 20].into_iter().enumerate() {
+            rooms[index].redeploy_requested_at = Some(now() - Duration::minutes(minutes));
+        }
+        let cluster = snapshot(
+            rooms
+                .iter()
+                .map(|room| deployment(room, "hash-1", 1))
+                .collect(),
+        );
+
+        let actions = plan(&rooms, &cluster, now(), 2);
+        assert_eq!(actions.len(), 2, "the cap holds");
+        let acted: Vec<RoomId> = actions.iter().map(|a| a.room).collect();
+        assert!(
+            acted.contains(&rooms[0].id) && acted.contains(&rooms[2].id),
+            "the two oldest requests go first, so nobody is starved by later arrivals"
+        );
+
+        // The deferred rooms are not lost -- the loop is level-triggered, so the next tick sees
+        // them again and they are now the oldest outstanding requests.
+        let remaining: Vec<RoomView> = vec![rooms[1].clone(), rooms[3].clone()];
+        let actions = plan(&remaining, &cluster, now(), 2);
+        assert_eq!(actions.len(), 2, "deferred, never dropped");
+    }
+
     /// Another room's Deployment is not this room's, and a Deployment with no room label belongs
     /// to nobody. Both would otherwise read as "the room is up".
     #[test]
@@ -708,7 +852,7 @@ mod tests {
         ];
         let cluster = snapshot(vec![deployment(&rooms[2], "hash-1", 1)]);
 
-        let actions = plan(&rooms, &cluster, now());
+        let actions = plan(&rooms, &cluster, now(), 1);
         assert_eq!(actions.len(), 3);
         assert_eq!(
             actions.iter().map(|a| a.step.clone()).collect::<Vec<_>>(),
@@ -723,6 +867,6 @@ mod tests {
         }
 
         // Same inputs, same answer: nothing here reads a clock or a cache.
-        assert_eq!(plan(&rooms, &cluster, now()), actions);
+        assert_eq!(plan(&rooms, &cluster, now(), 1), actions);
     }
 }

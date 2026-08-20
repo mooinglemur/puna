@@ -195,6 +195,15 @@ p.error {
   vertical-align: baseline;
 }
 
+/* A room running something other than its current spec. Deliberately NOT `.tag.warning`: the
+   warning colors belong to the block-level notice and combining them here would inherit its
+   padding and background. Drift is a fact to notice, not a fault -- it is the ordinary state
+   after an image bump, which does not disturb rooms that are already up. */
+.tag.drift {
+  color: var(--warn-fg);
+  border-color: var(--warn-fg);
+}
+
 /* --- tables ------------------------------------------------------------------------------------- */
 
 /* The slot table is the one element that can exceed the measure -- a room can carry a long game

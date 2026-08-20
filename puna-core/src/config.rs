@@ -161,6 +161,19 @@ pub struct OrchestratorConfig {
     /// Short on purpose: a tick reconciles every room, so a room that has wedged must not be able
     /// to hold the sweep open behind it.
     pub room_probe_timeout: Duration,
+    /// How many rooms one tick may restart.
+    ///
+    /// **One by default, because a redeploy is a real outage for the people in that room** and
+    /// nothing else in the apply loop bounds this: it is a sequential pass with no throttle, and a
+    /// foreground delete returns as soon as the API server accepts it rather than when the pod is
+    /// gone. Uncapped, a fleet-wide redeploy stops every room within a single tick and brings them
+    /// all back together — one simultaneous final save and restore per room, onto one shared CephFS
+    /// volume.
+    ///
+    /// Raising it trades that risk for wall-clock. At one per tick a rollout moves at roughly two
+    /// rooms a minute, which is the right default for an environment where a room is a game in
+    /// progress rather than a stateless replica.
+    pub max_recreates_per_tick: usize,
 }
 
 impl OrchestratorConfig {
@@ -186,6 +199,7 @@ impl OrchestratorConfig {
                 },
             },
             room_probe_timeout: parse_duration("PUNA_ROOM_PROBE_TIMEOUT", 5)?,
+            max_recreates_per_tick: parse_count("PUNA_MAX_RECREATES_PER_TICK", 1)?,
         })
     }
 }
@@ -205,6 +219,25 @@ fn parse_env<T: FromStr<Err = String>>(key: &str) -> anyhow::Result<T> {
 
 /// Seconds, as a bare integer. Deliberately not a humantime string: these appear in a Deployment
 /// manifest where `30` is unambiguous and `30s` invites someone to write `30m` and mean it.
+/// A positive whole number, rejecting zero.
+///
+/// Zero is refused rather than treated as "unlimited" because the two readings are opposite and a
+/// typo would pick the dangerous one: a cap of zero that meant unbounded would restart the whole
+/// environment at once, which is the exact failure the cap exists to prevent.
+fn parse_count(key: &str, default: usize) -> anyhow::Result<usize> {
+    match std::env::var(key) {
+        Err(_) => Ok(default),
+        Ok(raw) => {
+            let value: usize = raw
+                .trim()
+                .parse()
+                .map_err(|_| anyhow::anyhow!("{key} must be a whole number, got {raw:?}"))?;
+            anyhow::ensure!(value > 0, "{key} must be greater than zero");
+            Ok(value)
+        }
+    }
+}
+
 fn parse_duration(key: &str, default_secs: u64) -> anyhow::Result<Duration> {
     match std::env::var(key) {
         Err(_) => Ok(Duration::from_secs(default_secs)),

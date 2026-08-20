@@ -691,9 +691,14 @@ struct SlotAuthForm {
 /// Change the room's password mode.
 ///
 /// **Every transition is a restart**, because pahoa reads the mode from the environment at startup
-/// and its live rotation route cannot create a mode that is not already in force. This writes the
-/// new state and asks for the room to come back; M7 is what makes the Secret and the bounce
-/// actually happen.
+/// and its live rotation route cannot create a mode that is not already in force.
+///
+/// **This route requested no restart until M17, and that was a live security hole.** The plan said
+/// a mode change applies immediately, and nothing implemented it: the row changed, the sweep
+/// refreshed the Secret within the hour, and the pod was never bounced — so a room switched *to*
+/// per-slot passwords went on accepting unauthenticated connections until something else happened
+/// to restart it. The person making that change is usually reacting to something, which is exactly
+/// when "it will apply eventually" is the wrong answer.
 #[post("/room/<id>/settings/slot-auth", data = "<form>")]
 async fn set_slot_auth(
     id: RoomParam,
@@ -706,12 +711,15 @@ async fn set_slot_auth(
 
     let mut conn = pool.get().await?;
     room::set_slot_auth(&mut conn, id.0, mode).await?;
+    // The same signal the admin console's restart button uses. One mechanism, because a room that
+    // needs a bounce should not care which half of Puna asked for it.
+    puna_core::model::fleet::request_redeploy(&mut conn, &[id.0]).await?;
 
     tracing::info!(
         room = %id,
         by = access.user_id(),
         mode = mode.as_sql(),
-        "slot_auth changed; the room must restart for it to take effect"
+        "slot_auth changed; a restart is queued so it takes effect now rather than eventually"
     );
     Ok(Redirect::to(format!("/room/{id}")))
 }
