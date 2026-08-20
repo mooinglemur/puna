@@ -9,6 +9,7 @@
 
 mod auth;
 mod cookies;
+mod digest;
 mod error;
 mod gate;
 mod guards;
@@ -212,6 +213,7 @@ fn build(
         .manage(AdvertiseHost(settings.advertise_host))
         .manage(settings.upstream)
         .manage(routes::tracker::Memo::default())
+        .manage(routes::tracker::NameCache::default())
         .manage(routes::tracker::TrackerCacheMax(settings.tracker_cache_max))
         .manage(UploadLimit(wire_limit))
         .register(

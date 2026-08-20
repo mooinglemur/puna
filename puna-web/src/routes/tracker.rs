@@ -24,13 +24,15 @@
 //! The column already existed for the torn-down-room case; using it as the shared cache is reuse
 //! rather than a new mechanism.
 
-use std::collections::HashMap;
-use std::sync::Mutex;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use puna_core::ids::{RoomId, TrackerId};
+use chrono::{DateTime, Utc};
+use puna_core::artifact::names::GameNames;
+use puna_core::ids::{GenerationId, RoomId, TrackerId};
 use puna_core::model::room::{self, Room, TrackerPolicy};
-use puna_core::model::{member, slot, tracker};
+use puna_core::model::{member, names, slot, tracker};
 use rocket::http::{Header, Status};
 use rocket::{Responder, State, get, routes};
 
@@ -38,6 +40,7 @@ use askama::Template;
 use askama_web::WebTemplate;
 
 use crate::auth::Session;
+use crate::digest;
 use crate::error::{Error, Result, forbidden, not_found, unauthorized};
 use crate::params::TrackerParam;
 use crate::tpl::TplContext;
@@ -77,6 +80,67 @@ impl Memo {
 /// The largest document that will be written to the shared cache, in bytes.
 pub struct TrackerCacheMax(pub usize);
 
+/// How long a generation's name tables are held in this process.
+///
+/// They are **static per generation** — the seed cannot change — so this could be forever. It is
+/// not, because an admin rebuild repairs a bad cache and a process that never re-read would ignore
+/// the repair until it restarted. Ten minutes makes the fix land on its own.
+const NAMES_TTL: Duration = Duration::from_secs(600);
+
+/// Every game's names for one generation, shared between the requests that need them.
+type Games = Arc<BTreeMap<String, GameNames>>;
+
+/// Item and location names, per generation, held in this process.
+///
+/// **Worth having rather than querying per request**, and by a wide margin: measured on a real
+/// seed, one generation's tables are ~2.7 MB across 54 games. Reading that from Postgres on every
+/// poll of every tab would put the tracker tier's whole reason for existing — absorbing the most
+/// public, highest-volume surface Puna has — straight onto the database instead.
+#[derive(Default)]
+pub struct NameCache {
+    entries: Mutex<HashMap<GenerationId, (Instant, Games)>>,
+}
+
+impl NameCache {
+    fn get(&self, generation: GenerationId) -> Option<Games> {
+        let entries = self.entries.lock().ok()?;
+        let (at, names) = entries.get(&generation)?;
+        (at.elapsed() < NAMES_TTL).then(|| Arc::clone(names))
+    }
+
+    fn put(&self, generation: GenerationId, names: Games) {
+        if let Ok(mut entries) = self.entries.lock() {
+            entries.insert(generation, (Instant::now(), names));
+        }
+    }
+}
+
+/// This generation's names, from the process cache or the database.
+///
+/// **An empty map is a valid answer**, not an error: a generation ingested before the name cache
+/// existed has no rows, and the digest renders raw ids for it. Failing here would turn a cosmetic
+/// gap into a dead tracker.
+async fn names_for(
+    conn: &mut diesel_async::AsyncPgConnection,
+    cache: &NameCache,
+    generation: GenerationId,
+) -> Result<Games> {
+    if let Some(names) = cache.get(generation) {
+        return Ok(names);
+    }
+
+    let loaded = Arc::new(names::all_games(conn, generation).await?);
+    if loaded.is_empty() {
+        tracing::warn!(
+            %generation,
+            "no cached names for this generation; the tracker will render raw ids. Run \
+             POST /admin/generations/rebuild-names on the web tier."
+        );
+    }
+    cache.put(generation, Arc::clone(&loaded));
+    Ok(loaded)
+}
+
 /// The three pieces of Rocket state every tracker handler needs, as one guard.
 ///
 /// Threading them individually made every handler take eight arguments, which is both unreadable
@@ -85,6 +149,7 @@ pub struct TrackerCacheMax(pub usize);
 pub struct TrackerState<'r> {
     upstream: &'r Upstream,
     memo: &'r Memo,
+    names: &'r NameCache,
     cache_max: usize,
 }
 
@@ -102,9 +167,10 @@ impl<'r> rocket::request::FromRequest<'r> for TrackerState<'r> {
             )
         };
 
-        let (Some(upstream), Some(memo), Some(cache_max)) = (
+        let (Some(upstream), Some(memo), Some(names), Some(cache_max)) = (
             request.guard::<&State<Upstream>>().await.succeeded(),
             request.guard::<&State<Memo>>().await.succeeded(),
+            request.guard::<&State<NameCache>>().await.succeeded(),
             request.guard::<&State<TrackerCacheMax>>().await.succeeded(),
         ) else {
             let e = missing("tracker state");
@@ -114,6 +180,7 @@ impl<'r> rocket::request::FromRequest<'r> for TrackerState<'r> {
         rocket::outcome::Outcome::Success(TrackerState {
             upstream: upstream.inner(),
             memo: memo.inner(),
+            names: names.inner(),
             cache_max: cache_max.0,
         })
     }
@@ -319,6 +386,202 @@ async fn obtain(
     }
 }
 
+// ---- the digested views ------------------------------------------------------------------------
+//
+// Puna's own shape, under its own prefix. The reference owns the whole `/api/tracker/*` subtree --
+// `WebHostLib/api/__init__.py` even sets its CORS policy over the glob -- so putting a
+// Puna-shaped document in there would be a trap for a tool walking that namespace. The two
+// reference-compatible endpoints above are untouched.
+
+/// How current the documents behind a view are.
+///
+/// The **oldest** of the documents used, because a view is only as current as its stalest half.
+/// `as_of` for a fresh document is *now* rather than the exact moment the shared cache was filled:
+/// that is accurate to within the document's own 60-second window, which is the resolution the
+/// client polls at anyway. For a **stale** one it is exact, and that is the case where precision
+/// matters — a room down for three days should say so.
+fn freshness(stale_since: &[Option<DateTime<Utc>>], now: DateTime<Utc>) -> digest::Freshness {
+    let oldest = stale_since.iter().flatten().min().copied();
+    digest::Freshness {
+        as_of: oldest.unwrap_or(now).to_rfc3339(),
+        stale: oldest.is_some(),
+        // The client is told the cadence rather than choosing one: asking faster than the
+        // document's own cache window cannot produce new data, and only the server knows it.
+        next_poll_ms: Document::Live.ttl().as_millis() as u64,
+    }
+}
+
+/// Everything a digested view needs, resolved once.
+struct Digestible {
+    room: Room,
+    roster: Vec<slot::Slot>,
+    scope: Option<i32>,
+}
+
+async fn digestible(
+    conn: &mut diesel_async::AsyncPgConnection,
+    session: &Session,
+    id: TrackerId,
+) -> Result<Digestible> {
+    let access = access(conn, session, id).await?;
+    let roster = slot::list(conn, access.room.id).await?;
+    Ok(Digestible {
+        scope: access.target.slot_number(),
+        room: access.room,
+        roster,
+    })
+}
+
+/// The slot table. Whole multiworld for a room's id, one row for a slot's.
+#[get("/api/puna/tracker/<id>/slots")]
+async fn view_slots(
+    id: TrackerParam,
+    session: Session,
+    conditional: IfNoneMatch,
+    pool: &State<Pool>,
+    state: TrackerState<'_>,
+) -> Result<Json> {
+    let mut conn = pool.get().await?;
+    let it = digestible(&mut conn, &session, id.0).await?;
+
+    // Both documents: progress comes from one, and the location totals from the other.
+    let live = obtain(&mut conn, &state, &it.room, Document::Live).await?;
+    let statics = obtain(&mut conn, &state, &it.room, Document::Static).await?;
+
+    let view = digest::slots(
+        &it.roster,
+        &parsed(&live.body),
+        &parsed(&statics.body),
+        freshness(&[live.stale_since, statics.stale_since], Utc::now()),
+        it.scope,
+        Utc::now(),
+    );
+
+    json(&view, &conditional)
+}
+
+/// The hint table. Every hint for a room's id; the ones a slot is either end of for a slot's.
+#[get("/api/puna/tracker/<id>/hints")]
+async fn view_hints(
+    id: TrackerParam,
+    session: Session,
+    conditional: IfNoneMatch,
+    pool: &State<Pool>,
+    state: TrackerState<'_>,
+) -> Result<Json> {
+    let mut conn = pool.get().await?;
+    let it = digestible(&mut conn, &session, id.0).await?;
+    let live = obtain(&mut conn, &state, &it.room, Document::Live).await?;
+    let names = names_for(&mut conn, state.names, it.room.generation_id).await?;
+
+    let view = digest::hints(
+        &it.roster,
+        &parsed(&live.body),
+        &digest::Names { games: &names },
+        freshness(&[live.stale_since], Utc::now()),
+        it.scope,
+    );
+
+    json(&view, &conditional)
+}
+
+/// One slot's locations, checked and unchecked.
+///
+/// **`404` for a room's tracker id, by construction rather than by a check**: this is a per-slot
+/// question and a multiworld has no single answer to it. That is also what keeps the multiworld
+/// view free of any other slot's raw data — there is no endpoint that would serve it.
+#[get("/api/puna/tracker/<id>/locations")]
+async fn view_locations(
+    id: TrackerParam,
+    session: Session,
+    conditional: IfNoneMatch,
+    pool: &State<Pool>,
+    state: TrackerState<'_>,
+) -> Result<Json> {
+    let mut conn = pool.get().await?;
+    let it = digestible(&mut conn, &session, id.0).await?;
+    let slot = only_slot(&it)?;
+
+    let live = obtain(&mut conn, &state, &it.room, Document::Live).await?;
+    let names = names_for(&mut conn, state.names, it.room.generation_id).await?;
+
+    // Absent means the name cache was never built for this generation. An empty table says
+    // "nothing to show" honestly; inventing rows from the checked set would silently redefine the
+    // view as "checked only", which is the one thing it exists not to be.
+    let all = names::slot_locations(&mut conn, it.room.generation_id, slot.slot_number)
+        .await?
+        .unwrap_or_default();
+
+    let view = digest::locations(
+        slot,
+        &all,
+        &parsed(&live.body),
+        &digest::Names { games: &names },
+        freshness(&[live.stale_since], Utc::now()),
+    );
+
+    json(&view, &conditional)
+}
+
+/// One slot's received items. `404` for a room's id, for the same reason as `locations`.
+#[get("/api/puna/tracker/<id>/items")]
+async fn view_items(
+    id: TrackerParam,
+    session: Session,
+    conditional: IfNoneMatch,
+    pool: &State<Pool>,
+    state: TrackerState<'_>,
+) -> Result<Json> {
+    let mut conn = pool.get().await?;
+    let it = digestible(&mut conn, &session, id.0).await?;
+    let slot = only_slot(&it)?;
+
+    let live = obtain(&mut conn, &state, &it.room, Document::Live).await?;
+    let names = names_for(&mut conn, state.names, it.room.generation_id).await?;
+
+    let view = digest::items(
+        slot,
+        &it.roster,
+        &parsed(&live.body),
+        &digest::Names { games: &names },
+        freshness(&[live.stale_since], Utc::now()),
+    );
+
+    json(&view, &conditional)
+}
+
+/// The scoped slot, or `404`.
+///
+/// A slot in the scope that is not in the roster answers `404` too, rather than an empty view: the
+/// id resolved against `room_slots`, so its absence here would mean the two reads disagree, and
+/// guessing which is right is worse than saying nothing.
+fn only_slot(it: &Digestible) -> Result<&slot::Slot> {
+    let scope = it
+        .scope
+        .ok_or_else(|| not_found("this view is per-slot; use a slot's tracker id"))?;
+
+    it.roster
+        .iter()
+        .find(|s| s.slot_number == scope)
+        .ok_or_else(|| not_found("no such slot"))
+}
+
+/// Unparseable means the cache holds something this build cannot read. `null` digests to a view
+/// with empty tables rather than an error — the same fail-quiet the projection already takes.
+fn parsed(body: &str) -> serde_json::Value {
+    serde_json::from_str(body).unwrap_or_default()
+}
+
+fn json<T: serde::Serialize>(view: &T, conditional: &IfNoneMatch) -> Result<Json> {
+    let body = serde_json::to_string(view).map_err(|e| {
+        Error::new(
+            Status::InternalServerError,
+            anyhow::anyhow!("could not render the tracker view: {e}"),
+        )
+    })?;
+    Ok(respond(body, Document::Live, conditional))
+}
+
 // ---- the page ---------------------------------------------------------------------------------
 
 #[derive(Template, WebTemplate)]
@@ -454,104 +717,46 @@ fn rows(
     live: &serde_json::Value,
     statics: &serde_json::Value,
 ) -> Vec<TrackerRow> {
-    slots
-        .iter()
-        .map(|slot| {
-            let n = i64::from(slot.slot_number);
-            let checks_done = array_for(live, "player_checks_done", n)
-                .and_then(|entry| entry.get("locations").and_then(|l| l.as_array()))
-                .map_or(0, Vec::len);
-            let checks_total = array_for(statics, "player_locations_total", n)
-                .and_then(|entry| {
-                    entry
-                        .get("total_locations")
-                        .and_then(serde_json::Value::as_i64)
-                })
-                .unwrap_or(0);
-            let hints = array_for(live, "hints", n)
-                .and_then(|entry| entry.get("hints").and_then(|h| h.as_array()))
-                .map_or(0, Vec::len);
-
-            TrackerRow {
-                slot_number: slot.slot_number,
-                // From Puna's row, not the document: the document's `alias` is whatever the client
-                // last called itself, and the roster is what the room page shows.
-                player_name: slot.player_name.clone(),
-                game: array_for(statics, "player_game", n)
-                    .and_then(|entry| entry.get("game").and_then(|g| g.as_str()))
-                    .unwrap_or(&slot.game)
-                    .to_string(),
-                is_spectator: slot.kind == puna_core::artifact::SlotKind::Spectator,
-                checks_done,
-                checks_total,
-                percent: if checks_total > 0 {
-                    (checks_done as i64 * 100 / checks_total).clamp(0, 100)
-                } else {
-                    0
-                },
-                status: status_word(
-                    array_for(live, "player_status", n)
-                        .and_then(|entry| entry.get("status").and_then(serde_json::Value::as_i64)),
-                ),
-                last_activity: activity(
-                    array_for(live, "activity_timers", n)
-                        .and_then(|entry| entry.get("time").and_then(|t| t.as_str())),
-                ),
-                hints,
-                claimed: slot.owner_id.is_some(),
-            }
+    // **One derivation, formatted twice.** The JSON views and this page answer the same question --
+    // how far along is each slot -- and computing it separately in each would let a table and the
+    // API it links to tell different stories. Stage C deletes this table and the mapping with it;
+    // until then the numbers come from `digest` and only the words are made here.
+    digest::slot_rows(slots, live, statics, None, chrono::Utc::now())
+        .into_iter()
+        .map(|row| TrackerRow {
+            slot_number: row.slot,
+            player_name: row.name,
+            game: row.game,
+            is_spectator: row.spectator,
+            checks_done: row.checks_done as usize,
+            checks_total: row.checks_total,
+            percent: if row.checks_total > 0 {
+                (row.checks_done * 100 / row.checks_total).clamp(0, 100)
+            } else {
+                0
+            },
+            status: row.status,
+            last_activity: age(row.last_activity_ms_ago),
+            hints: row.hints,
+            claimed: row.claimed,
         })
         .collect()
 }
 
-/// The entry for one slot in one of the document's per-player arrays.
-fn array_for<'a>(
-    document: &'a serde_json::Value,
-    key: &str,
-    slot_number: i64,
-) -> Option<&'a serde_json::Value> {
-    document
-        .get(key)?
-        .as_array()?
-        .iter()
-        .find(|entry| entry.get("player").and_then(serde_json::Value::as_i64) == Some(slot_number))
-}
-
-/// Archipelago's `ClientStatus`, in words.
+/// A server-computed age, in words.
 ///
-/// The numbers are the protocol's and are sparse (0, 5, 10, 20, 30) because the reference leaves
-/// room between them. An unknown value renders as "unknown" rather than as itself: a number in this
-/// column would mean nothing to the person reading it.
-fn status_word(status: Option<i64>) -> &'static str {
-    match status {
-        Some(5) => "connected",
-        Some(10) => "ready",
-        Some(20) => "playing",
-        Some(30) => "goal",
-        _ => "unknown",
-    }
-}
-
-/// An RFC 1123 timestamp, as an age.
-///
-/// **`null` means never, and never is not 1970.** A slot that has genuinely not acted reports null,
-/// which the reference renders as nothing at all — and rendering it as an epoch date is the classic
-/// way to make an untouched slot look like an abandoned one.
-fn activity(time: Option<&str>) -> String {
-    let Some(time) = time else {
+/// **`None` is never, and never is not 1970.** Rendering an epoch date is the classic way to make an
+/// untouched slot look like an abandoned one.
+fn age(ms: Option<i64>) -> String {
+    let Some(ms) = ms else {
         return "never".to_string();
     };
-    let Ok(at) = chrono::DateTime::parse_from_rfc2822(time) else {
-        return "unknown".to_string();
-    };
-
-    let age = chrono::Utc::now().signed_duration_since(at.with_timezone(&chrono::Utc));
-    let minutes = age.num_minutes();
+    let minutes = ms / 60_000;
     match minutes {
         ..1 => "just now".to_string(),
         1..60 => format!("{minutes}m ago"),
-        60..2880 => format!("{}h ago", age.num_hours()),
-        _ => format!("{}d ago", age.num_days()),
+        60..2880 => format!("{}h ago", minutes / 60),
+        _ => format!("{}d ago", minutes / 1440),
     }
 }
 
@@ -749,7 +954,16 @@ impl<'r> rocket::request::FromRequest<'r> for IfNoneMatch {
 }
 
 pub fn routes() -> Vec<rocket::Route> {
-    routes![page, slot_page, live, statics]
+    routes![
+        page,
+        slot_page,
+        live,
+        statics,
+        view_slots,
+        view_hints,
+        view_locations,
+        view_items
+    ]
 }
 
 #[cfg(test)]
@@ -992,24 +1206,19 @@ mod tests {
             .any(|n| (40000..=49999).contains(&n))
     }
 
+    /// The page's one remaining formatting job. The numbers behind it are `digest`'s, and are
+    /// tested there; what is asserted here is that **never is not 1970** -- rendering an epoch date
+    /// is the classic way to make an untouched slot look like an abandoned one.
     #[test]
-    fn statuses_and_activity_read_as_words() {
-        assert_eq!(status_word(Some(30)), "goal");
-        assert_eq!(status_word(Some(20)), "playing");
-        // A value from a newer protocol renders as a word, never as itself: a number in that column
-        // would mean nothing to the person reading it.
-        assert_eq!(status_word(Some(99)), "unknown");
-        assert_eq!(status_word(None), "unknown");
-
-        // `null` is never, and never is not 1970 -- rendering an epoch date would make an untouched
-        // slot look like an abandoned one.
-        assert_eq!(activity(None), "never");
-        assert_eq!(activity(Some("not a date")), "unknown");
-
-        // pahoa emits RFC 1123 with a `GMT` zone, which is what this has to parse.
-        let hour_ago = chrono::Utc::now() - chrono::TimeDelta::hours(1);
-        let stamp = hour_ago.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
-        assert_eq!(activity(Some(&stamp)), "1h ago");
+    fn an_age_reads_as_words_and_never_reads_as_never() {
+        assert_eq!(age(None), "never");
+        assert_eq!(age(Some(0)), "just now");
+        assert_eq!(age(Some(59_000)), "just now");
+        assert_eq!(age(Some(60_000)), "1m ago");
+        assert_eq!(age(Some(59 * 60_000)), "59m ago");
+        assert_eq!(age(Some(60 * 60_000)), "1h ago");
+        assert_eq!(age(Some(47 * 60 * 60_000)), "47h ago");
+        assert_eq!(age(Some(48 * 60 * 60_000)), "2d ago");
     }
 
     /// A caller presenting the current ETag gets a 304 and no body, which is the layer that removes
