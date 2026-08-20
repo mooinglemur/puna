@@ -5,58 +5,113 @@
 {# NOTHING here links to the room or names its address. A tracker link is the one meant for broad
    sharing -- stream chats, spectators -- so the room page's URL and the multiworld's host:port are
    deliberately absent, and there is no start button: this audience is not necessarily authorized to
-   provision a pod. #}
+   provision a pod.
+
+   The TABLES are rendered by the browser from `api_base`. The skeletons below -- headings, column
+   names, search boxes -- are server-rendered so the page has shape before any fetch returns, and so
+   the sortable columns are real markup rather than something JavaScript invents. #}
 <h1>{{ room_name }}</h1>
 {% if let Some(slot) = slot_name %}
 <p class="hint">Showing{{+ slot }}&rsquo;s progress.</p>
 {% endif %}
 
-{% if let Some(at) = as_of %}
-<p class="notice"><strong>As of{{+ at }}</strong> &mdash; this room is not currently running, so
-this is the last state it reported. Members can start it from the room page.</p>
-{% endif %}
+<p id="freshness" class="notice" hidden></p>
 
-<table class="slots">
-<thead><tr>
-<th>#</th><th>Player</th><th>Game</th><th>Checks</th><th>Status</th><th>Hints</th><th>Last seen</th>
-</tr></thead>
-<tbody>
-{% for row in rows %}
-<tr>
-<td>{{ row.slot_number }}</td>
-<td>
-{{ row.player_name }}
-{% if !row.claimed %}<span class="tag">unclaimed</span>{% endif %}
-</td>
-<td>
-{{ row.game }}
-{% if row.is_spectator %}<span class="tag">spectator</span>{% endif %}
-</td>
-<td>
-{% if row.is_spectator %}
-<span class="hint">&mdash;</span>
-{% else %}
-{{ row.checks_done }} / {{ row.checks_total }}
-<span class="hint">({{ row.percent }}%)</span>
-{% endif %}
-</td>
-<td>{{ row.status }}</td>
-<td>{% if row.is_spectator %}<span class="hint">&mdash;</span>{% else %}{{ row.hints }}{% endif %}</td>
-<td>{{ row.last_activity }}</td>
-</tr>
-{% endfor %}
-</tbody>
-</table>
+<noscript>
+<p class="warning">This tracker needs JavaScript. The tables are built in your browser from data
+this page fetches, which is what keeps a large multiworld from sending you megabytes it does not
+need to.</p>
+</noscript>
 
-{% if rows.is_empty() %}
-<p>This room has no slots to show yet.</p>
-{% endif %}
+<div id="tracker"
+     data-api="{{ api_base }}"
+     {% if let Some(n) = slot %}data-slot="{{ n }}"{% endif %}>
+
+  {# --- the slot table. On a slot's page this is one row: the same columns, the same code. --- #}
+  <section class="table-block" data-view="slots">
+    <h2>{% if slot.is_some() %}Slot{% else %}Slots{% endif %}</h2>
+    <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter slots">
+    <div class="table-scroll">
+      <table>
+        <thead><tr>
+          <th data-key="slot" data-type="number">#</th>
+          <th data-key="name">Player</th>
+          <th data-key="game">Game</th>
+          <th data-key="checks_done" data-type="number">Checks</th>
+          <th data-key="status">Status</th>
+          <th data-key="hints" data-type="number">Hints</th>
+          <th data-key="last_activity_ms_ago" data-type="number">Last seen</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p class="empty hint" hidden>No slots to show.</p>
+  </section>
+
+  {% if slot.is_some() %}
+  {# --- one slot's locations, checked AND unchecked. The reference can only show the checked ones,
+         because the live document is all it has; Puna has the seed. --- #}
+  <section class="table-block" data-view="locations">
+    <h2>Locations</h2>
+    <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter locations">
+    <div class="table-scroll">
+      <table>
+        <thead><tr>
+          <th data-key="name">Location</th>
+          <th data-key="checked" data-type="boolean">Checked</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p class="empty hint" hidden>No locations to show. This seed&rsquo;s names may not have been
+    indexed yet.</p>
+  </section>
+
+  <section class="table-block" data-view="items">
+    <h2>Items received</h2>
+    <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter items">
+    <div class="table-scroll">
+      <table>
+        <thead><tr>
+          <th data-key="order" data-type="number">#</th>
+          <th data-key="item">Item</th>
+          <th data-key="from_name">From</th>
+          <th data-key="location">Found at</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p class="empty hint" hidden>Nothing received yet.</p>
+  </section>
+  {% endif %}
+
+  {# --- hints, collapsed. The one table whose size scales with the whole multiworld rather than
+         with one slot, so it is not fetched until it is opened. --- #}
+  <section class="table-block" data-view="hints">
+    <details>
+      <summary><h2>Hints</h2></summary>
+      <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter hints">
+      <div class="table-scroll">
+        <table>
+          <thead><tr>
+            <th data-key="receiving_name">For</th>
+            <th data-key="item">Item</th>
+            <th data-key="finding_name">In</th>
+            <th data-key="location">At</th>
+            <th data-key="entrance">Entrance</th>
+            <th data-key="status">Status</th>
+            <th data-key="found" data-type="boolean">Found</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="empty hint" hidden>No hints yet.</p>
+    </details>
+  </section>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
-{# No JavaScript at all: the document behind this page cannot change faster than its own cache
-   window, so reloading on that window is exactly as live as polling would be, and works with
-   scripting turned off. Pahoa's planned WebSocket delta feed is what replaces this, and replacing a
-   meta refresh with a socket is a smaller change than replacing a poller with one. #}
-<meta http-equiv="refresh" content="{{ refresh_secs }}">
+<script src="/static/tracker.js?v={{ base.static_version }}" defer></script>
 {% endblock %}

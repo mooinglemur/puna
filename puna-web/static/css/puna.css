@@ -230,6 +230,49 @@ th {
 
 tbody tr:hover { background: var(--surface); }
 
+/* --- the tracker's client-rendered tables --------------------------------------------------------- */
+
+/* Each block is a heading, a filter box and a table. The table already scrolls itself (above), so
+   the wrapper exists only to keep the search box from inheriting that scroll. */
+.table-block { margin: 0 0 2rem; }
+.table-block h2 { margin-bottom: 0.4rem; }
+
+/* Inside a <summary> the heading must sit on the marker's line rather than starting a block. */
+summary h2 { display: inline; }
+summary { cursor: pointer; }
+
+.table-search {
+  width: 100%;
+  max-width: 22rem;
+  margin: 0 0 0.6rem;
+}
+
+/* Sortable headers are real buttons to a keyboard: the JS gives them a tabindex and a role, and
+   these are the affordances that say so. The arrow is a pseudo-element so it cannot be caught by
+   the client-side text filter, which matches on rendered cell text. */
+th[data-key] {
+  cursor: pointer;
+  user-select: none;
+}
+th[data-key]:hover { color: var(--text); }
+th[data-key]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+th[data-key]::after {
+  content: "";
+  display: inline-block;
+  width: 1em;
+  color: var(--muted);
+}
+th[data-sort="asc"]::after { content: " ▲"; }
+th[data-sort="desc"]::after { content: " ▼"; }
+
+/* A checked location or a found hint. Dimmed rather than hidden -- the point of the table is that
+   both halves are visible, which is the thing the reference tracker cannot show. */
+.table-block tbody tr.done td:first-child { color: var(--muted); }
+
+/* Location and item names are untrusted text out of an uploaded seed and can be long. */
+.table-block td { white-space: normal; }
+.table-block td:first-child { white-space: nowrap; }
+
 /* --- lists that are really tables of one thing --------------------------------------------------- */
 
 .rooms,

@@ -422,27 +422,48 @@ async fn digestible(
     conn: &mut diesel_async::AsyncPgConnection,
     session: &Session,
     id: TrackerId,
+    requested: Option<i32>,
 ) -> Result<Digestible> {
     let access = access(conn, session, id).await?;
+    let scope = scope_of(&access, requested)?;
     let roster = slot::list(conn, access.room.id).await?;
     Ok(Digestible {
-        scope: access.target.slot_number(),
+        scope,
         room: access.room,
         roster,
     })
 }
 
+/// Which slot, if any, a request is about.
+///
+/// **`?slot=<n>` is honored only for a room's tracker id, and it discloses nothing new.** Holding
+/// that id already grants the whole multiworld's data, and the reference-compatible page
+/// `/tracker/<id>/0/<n>` has always rendered any single slot from it. The parameter exists because
+/// that page needs the per-slot views, and those resolve their scope from the *id* — which for this
+/// URL names the room.
+///
+/// A slot's own id already names its slot, so combining it with a different one is two answers to
+/// one question and answers `404`, the same rule the page applies.
+fn scope_of(access: &Access, requested: Option<i32>) -> Result<Option<i32>> {
+    match (access.target.slot_number(), requested) {
+        (Some(own), Some(asked)) if own != asked => Err(not_found("no such slot")),
+        (Some(own), _) => Ok(Some(own)),
+        (None, asked) => Ok(asked),
+    }
+}
+
 /// The slot table. Whole multiworld for a room's id, one row for a slot's.
-#[get("/api/puna/tracker/<id>/slots")]
+#[get("/api/puna/tracker/<id>/slots?<slot>")]
 async fn view_slots(
     id: TrackerParam,
+    slot: Option<i32>,
     session: Session,
     conditional: IfNoneMatch,
     pool: &State<Pool>,
     state: TrackerState<'_>,
 ) -> Result<Json> {
     let mut conn = pool.get().await?;
-    let it = digestible(&mut conn, &session, id.0).await?;
+    let it = digestible(&mut conn, &session, id.0, slot).await?;
 
     // Both documents: progress comes from one, and the location totals from the other.
     let live = obtain(&mut conn, &state, &it.room, Document::Live).await?;
@@ -461,16 +482,17 @@ async fn view_slots(
 }
 
 /// The hint table. Every hint for a room's id; the ones a slot is either end of for a slot's.
-#[get("/api/puna/tracker/<id>/hints")]
+#[get("/api/puna/tracker/<id>/hints?<slot>")]
 async fn view_hints(
     id: TrackerParam,
+    slot: Option<i32>,
     session: Session,
     conditional: IfNoneMatch,
     pool: &State<Pool>,
     state: TrackerState<'_>,
 ) -> Result<Json> {
     let mut conn = pool.get().await?;
-    let it = digestible(&mut conn, &session, id.0).await?;
+    let it = digestible(&mut conn, &session, id.0, slot).await?;
     let live = obtain(&mut conn, &state, &it.room, Document::Live).await?;
     let names = names_for(&mut conn, state.names, it.room.generation_id).await?;
 
@@ -490,16 +512,17 @@ async fn view_hints(
 /// **`404` for a room's tracker id, by construction rather than by a check**: this is a per-slot
 /// question and a multiworld has no single answer to it. That is also what keeps the multiworld
 /// view free of any other slot's raw data — there is no endpoint that would serve it.
-#[get("/api/puna/tracker/<id>/locations")]
+#[get("/api/puna/tracker/<id>/locations?<slot>")]
 async fn view_locations(
     id: TrackerParam,
+    slot: Option<i32>,
     session: Session,
     conditional: IfNoneMatch,
     pool: &State<Pool>,
     state: TrackerState<'_>,
 ) -> Result<Json> {
     let mut conn = pool.get().await?;
-    let it = digestible(&mut conn, &session, id.0).await?;
+    let it = digestible(&mut conn, &session, id.0, slot).await?;
     let slot = only_slot(&it)?;
 
     let live = obtain(&mut conn, &state, &it.room, Document::Live).await?;
@@ -524,16 +547,17 @@ async fn view_locations(
 }
 
 /// One slot's received items. `404` for a room's id, for the same reason as `locations`.
-#[get("/api/puna/tracker/<id>/items")]
+#[get("/api/puna/tracker/<id>/items?<slot>")]
 async fn view_items(
     id: TrackerParam,
+    slot: Option<i32>,
     session: Session,
     conditional: IfNoneMatch,
     pool: &State<Pool>,
     state: TrackerState<'_>,
 ) -> Result<Json> {
     let mut conn = pool.get().await?;
-    let it = digestible(&mut conn, &session, id.0).await?;
+    let it = digestible(&mut conn, &session, id.0, slot).await?;
     let slot = only_slot(&it)?;
 
     let live = obtain(&mut conn, &state, &it.room, Document::Live).await?;
@@ -594,43 +618,23 @@ pub struct TrackerTemplate {
     /// Set when this is one slot's view, whether reached by the slot's own id or by the
     /// reference-compatible `/<team>/<player>` path.
     slot_name: Option<String>,
-    rows: Vec<TrackerRow>,
-    /// `Some` when the room did not answer and this is the last thing it said.
-    as_of: Option<String>,
-    /// How often the page reloads itself, in seconds. Matched to the document's own cache window:
-    /// refreshing faster than the upstream can change is work that buys nothing.
-    refresh_secs: u64,
-}
-
-/// One row of the slot table.
-pub struct TrackerRow {
-    pub slot_number: i32,
-    pub player_name: String,
-    pub game: String,
-    pub is_spectator: bool,
-    pub checks_done: usize,
-    pub checks_total: i64,
-    pub percent: i64,
-    pub status: &'static str,
-    pub last_activity: String,
-    pub hints: usize,
-    /// Whether somebody has claimed this slot in Puna. **The reference cannot show this**, because
-    /// it does not know who is playing — only that a slot exists.
-    pub claimed: bool,
+    /// Where the client fetches its tables from: `/api/puna/tracker/<the id already in this URL>`.
+    ///
+    /// **Rendered rather than reconstructed in the browser** because the two page URLs carry the id
+    /// in different shapes, and a client parsing `location.pathname` would have to know which. The
+    /// id here is the one the visitor already holds, so this discloses nothing.
+    api_base: String,
+    /// The slot this page is about, if it is about one.
+    slot: Option<i32>,
 }
 
 /// The multiworld's tracker, or one slot's.
 #[get("/tracker/<id>")]
-async fn page(
-    id: TrackerParam,
-    session: Session,
-    pool: &State<Pool>,
-    state: TrackerState<'_>,
-) -> Result<TrackerTemplate> {
+async fn page(id: TrackerParam, session: Session, pool: &State<Pool>) -> Result<TrackerTemplate> {
     let mut conn = pool.get().await?;
     let access = access(&mut conn, &session, id.0).await?;
     let scope = access.target.slot_number();
-    render(&mut conn, &session, &state, access, scope).await
+    render(&mut conn, &session, id.0, access, scope).await
 }
 
 /// The reference implementation's per-slot URL, so tools that construct it keep working.
@@ -645,7 +649,6 @@ async fn slot_page(
     player: i32,
     session: Session,
     pool: &State<Pool>,
-    state: TrackerState<'_>,
 ) -> Result<TrackerTemplate> {
     let mut conn = pool.get().await?;
     let access = access(&mut conn, &session, id.0).await?;
@@ -655,109 +658,42 @@ async fn slot_page(
     if team != 0 {
         return Err(not_found("no such team"));
     }
-    // A slot's own id already names its slot; combining it with a different one would be two
-    // answers to one question.
-    if let Some(own) = access.target.slot_number()
-        && own != player
-    {
-        return Err(not_found("no such slot"));
-    }
+    let scope = scope_of(&access, Some(player))?;
 
-    render(&mut conn, &session, &state, access, Some(player)).await
+    render(&mut conn, &session, id.0, access, scope).await
 }
 
+/// The page is a **shell**, and that is the point of Stage C.
+///
+/// It fetches no tracker document at all: every table is rendered in the browser from
+/// `/api/puna/tracker/**`. So the HTML costs one row read and nothing upstream, and the only work
+/// that touches a room is the JSON the client asks for -- which is also the only thing that has to
+/// be fresh.
 async fn render(
     conn: &mut diesel_async::AsyncPgConnection,
     session: &Session,
-    state: &TrackerState<'_>,
+    id: TrackerId,
     access: Access,
     scope: Option<i32>,
 ) -> Result<TrackerTemplate> {
-    // Both documents, because a slot table needs progress from one and games and totals from the
-    // other. Each goes through the same three cache layers, so the common case costs no upstream
-    // call at all.
-    let live = obtain(conn, state, &access.room, Document::Live).await?;
-    let statics = obtain(conn, state, &access.room, Document::Static).await?;
-
-    let slots = slot::list(conn, access.room.id).await?;
-    let live_doc: serde_json::Value = serde_json::from_str(&live.body).unwrap_or_default();
-    let static_doc: serde_json::Value = serde_json::from_str(&statics.body).unwrap_or_default();
-
-    let mut rows = rows(&slots, &live_doc, &static_doc);
-    let mut slot_name = None;
-    if let Some(slot_number) = scope {
-        rows.retain(|row| row.slot_number == slot_number);
-        slot_name = rows.first().map(|row| row.player_name.clone());
-    }
+    // Only to name the slot in the heading. The roster is Puna's, not the document's, which is why
+    // a spectator -- absent from every per-player array -- still has a name here.
+    let slot_name = match scope {
+        Some(number) => slot::list(conn, access.room.id)
+            .await?
+            .into_iter()
+            .find(|s| s.slot_number == number)
+            .map(|s| s.player_name),
+        None => None,
+    };
 
     Ok(TrackerTemplate {
         base: TplContext::new(session),
         room_name: access.room.name.clone(),
         slot_name,
-        rows,
-        // The older of the two, because a page is only as current as its stalest half.
-        as_of: live
-            .stale_since
-            .into_iter()
-            .chain(statics.stale_since)
-            .min()
-            .map(|at| format!("{}", at.format("%Y-%m-%d %H:%M UTC"))),
-        refresh_secs: Document::Live.ttl().as_secs(),
+        api_base: format!("/api/puna/tracker/{id}"),
+        slot: scope,
     })
-}
-
-/// Merge Puna's slot list with the room's two documents.
-///
-/// **Puna's list leads.** The documents describe only what pahoa knows about — and a spectator has
-/// no progress to report, so it appears in neither per-player array — but a spectator is still a
-/// slot somebody claimed, and a tracker that silently omitted it would be describing a different
-/// room from the one on the room page.
-fn rows(
-    slots: &[puna_core::model::slot::Slot],
-    live: &serde_json::Value,
-    statics: &serde_json::Value,
-) -> Vec<TrackerRow> {
-    // **One derivation, formatted twice.** The JSON views and this page answer the same question --
-    // how far along is each slot -- and computing it separately in each would let a table and the
-    // API it links to tell different stories. Stage C deletes this table and the mapping with it;
-    // until then the numbers come from `digest` and only the words are made here.
-    digest::slot_rows(slots, live, statics, None, chrono::Utc::now())
-        .into_iter()
-        .map(|row| TrackerRow {
-            slot_number: row.slot,
-            player_name: row.name,
-            game: row.game,
-            is_spectator: row.spectator,
-            checks_done: row.checks_done as usize,
-            checks_total: row.checks_total,
-            percent: if row.checks_total > 0 {
-                (row.checks_done * 100 / row.checks_total).clamp(0, 100)
-            } else {
-                0
-            },
-            status: row.status,
-            last_activity: age(row.last_activity_ms_ago),
-            hints: row.hints,
-            claimed: row.claimed,
-        })
-        .collect()
-}
-
-/// A server-computed age, in words.
-///
-/// **`None` is never, and never is not 1970.** Rendering an epoch date is the classic way to make an
-/// untouched slot look like an abandoned one.
-fn age(ms: Option<i64>) -> String {
-    let Some(ms) = ms else {
-        return "never".to_string();
-    };
-    let minutes = ms / 60_000;
-    match minutes {
-        ..1 => "just now".to_string(),
-        1..60 => format!("{minutes}m ago"),
-        60..2880 => format!("{}h ago", minutes / 60),
-        _ => format!("{}d ago", minutes / 1440),
-    }
 }
 
 /// Ask the room, and write what comes back into the shared cache.
@@ -1080,79 +1016,21 @@ mod tests {
         assert_eq!(project("not json".to_string(), None), "not json");
     }
 
-    fn slots() -> Vec<puna_core::model::slot::Slot> {
-        use puna_core::artifact::SlotKind;
-        use puna_core::ids::TrackerId;
-
-        let room_id = RoomId::new();
-        vec![
-            puna_core::model::slot::Slot {
-                room_id,
-                slot_number: 1,
-                player_name: "Troy".into(),
-                game: "A Link to the Past".into(),
-                kind: SlotKind::Player,
-                password: Some("a-secret".into()),
-                owner_id: Some(7),
-                claim_token: Some("a-claim-token".into()),
-                claimed_at: None,
-                tracker_id: TrackerId::new(),
-            },
-            puna_core::model::slot::Slot {
-                room_id,
-                slot_number: 4,
-                player_name: "Watcher".into(),
-                game: "Archipelago".into(),
-                kind: SlotKind::Spectator,
-                password: None,
-                owner_id: None,
-                claim_token: Some("another-token".into()),
-                claimed_at: None,
-                tracker_id: TrackerId::new(),
-            },
-        ]
-    }
-
-    fn statics() -> serde_json::Value {
-        serde_json::json!({
-            "player_game": [{"team": 0, "player": 1, "game": "A Link to the Past"}],
-            "player_locations_total": [{"team": 0, "player": 1, "total_locations": 216}],
-        })
-    }
-
-    #[test]
-    fn a_row_is_built_from_both_documents_and_punas_own_roster() {
-        let rows = rows(&slots(), &multiworld(), &statics());
-
-        assert_eq!(
-            rows.len(),
-            2,
-            "Puna's roster leads, so the spectator is here"
-        );
-
-        let player = &rows[0];
-        assert_eq!(player.player_name, "Troy");
-        assert_eq!((player.checks_done, player.checks_total), (3, 216));
-        assert_eq!(player.percent, 1);
-        assert_eq!(player.hints, 1);
-        assert!(
-            player.claimed,
-            "claim state is what the reference cannot show"
-        );
-
-        // A spectator appears in neither per-player array, and must not therefore read as a player
-        // who has done nothing.
-        let spectator = &rows[1];
-        assert!(spectator.is_spectator);
-        assert_eq!(spectator.checks_total, 0);
-        assert!(!spectator.claimed);
-    }
-
-    /// **The property this whole tier exists for.** A tracker link is the one meant for broad
-    /// sharing, so the page must give away neither the multiworld's address nor the room's URL.
+    /// **The property this whole tier exists for**, asserted on the shell.
+    ///
+    /// Stage C moved the tables into the browser, so the rows this used to check are now covered by
+    /// `digest`'s own leak test over the four JSON views. What is left here is the half that JSON
+    /// cannot cover: the surrounding page must still name no room, no address and no start control.
     #[test]
     fn the_rendered_page_leaks_neither_the_address_nor_the_room() {
         let room_id = RoomId::new();
+        // A fixed, all-letter tracker id. A random uuid can contain a five-digit run that the
+        // port-shaped check below would read as an address, which would make this test flaky for a
+        // reason that has nothing to do with what it is testing.
+        let tracker_id: TrackerId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            .parse()
+            .expect("a valid uuid");
+
         let page = TrackerTemplate {
             base: TplContext {
                 is_logged_in: false,
@@ -1162,10 +1040,9 @@ mod tests {
                 static_version: "test",
             },
             room_name: "Friday async".into(),
-            slot_name: None,
-            rows: rows(&slots(), &multiworld(), &statics()),
-            as_of: Some("2026-08-19 16:00 UTC".into()),
-            refresh_secs: 60,
+            slot_name: Some("Troy".into()),
+            api_base: format!("/api/puna/tracker/{tracker_id}"),
+            slot: Some(1),
         };
 
         let html = page.render().expect("renders");
@@ -1181,21 +1058,51 @@ mod tests {
             !regex_free_port_like(&html),
             "something that reads as an address: {html}"
         );
-
-        // And no credential from the slot rows, which carry a password and a claim token.
-        assert!(!html.contains("a-secret"));
-        assert!(!html.contains("a-claim-token"));
-
-        // What it *does* say.
-        assert!(html.contains("Friday async"));
-        assert!(html.contains("Troy"));
-        assert!(html.contains("2026-08-19 16:00 UTC"), "the as-of banner");
         // No start button, however the room is doing: a tracker's audience is not necessarily
         // authorized to provision a pod, and a widely-shared link that spins up compute is exactly
         // the hazard D8 exists to prevent.
         assert!(
             !html.contains("/start"),
             "a start control reached the tracker"
+        );
+
+        // What it *does* say: the room's name, the slot it is about, and where the client fetches.
+        assert!(html.contains("Friday async"));
+        assert!(html.contains("Troy"));
+        assert!(html.contains(&format!("/api/puna/tracker/{tracker_id}")));
+        assert!(html.contains("<noscript>"), "the no-JavaScript explanation");
+
+        // The per-slot tables exist only on a slot's page; the multiworld one would be sending
+        // every slot's location list to a browser that shows one table.
+        assert!(html.contains("data-view=\"locations\""));
+        assert!(html.contains("data-view=\"items\""));
+    }
+
+    /// The multiworld page carries the slot table and the hints, and **not** the per-slot tables.
+    #[test]
+    fn the_multiworld_page_has_no_per_slot_tables() {
+        let page = TrackerTemplate {
+            base: TplContext {
+                is_logged_in: false,
+                is_admin: false,
+                username: String::new(),
+                version: "test",
+                static_version: "test",
+            },
+            room_name: "Friday async".into(),
+            slot_name: None,
+            api_base: "/api/puna/tracker/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into(),
+            slot: None,
+        };
+
+        let html = page.render().expect("renders");
+        assert!(html.contains("data-view=\"slots\""));
+        assert!(html.contains("data-view=\"hints\""));
+        assert!(!html.contains("data-view=\"locations\""));
+        assert!(!html.contains("data-view=\"items\""));
+        assert!(
+            !html.contains("data-slot="),
+            "no slot scope on the multiworld page"
         );
     }
 
@@ -1204,21 +1111,6 @@ mod tests {
         html.split(|c: char| !c.is_ascii_digit())
             .filter_map(|run| run.parse::<u32>().ok())
             .any(|n| (40000..=49999).contains(&n))
-    }
-
-    /// The page's one remaining formatting job. The numbers behind it are `digest`'s, and are
-    /// tested there; what is asserted here is that **never is not 1970** -- rendering an epoch date
-    /// is the classic way to make an untouched slot look like an abandoned one.
-    #[test]
-    fn an_age_reads_as_words_and_never_reads_as_never() {
-        assert_eq!(age(None), "never");
-        assert_eq!(age(Some(0)), "just now");
-        assert_eq!(age(Some(59_000)), "just now");
-        assert_eq!(age(Some(60_000)), "1m ago");
-        assert_eq!(age(Some(59 * 60_000)), "59m ago");
-        assert_eq!(age(Some(60 * 60_000)), "1h ago");
-        assert_eq!(age(Some(47 * 60 * 60_000)), "47h ago");
-        assert_eq!(age(Some(48 * 60 * 60_000)), "2d ago");
     }
 
     /// A caller presenting the current ETag gets a 304 and no body, which is the layer that removes
