@@ -208,10 +208,10 @@ fn a_glyph_only_control_names_itself_twice() {
         }
     }
 
-    // A source lint is the easiest kind to write vacuously, so say how much it must have seen. Nine
+    // A source lint is the easiest kind to write vacuously, so say how much it must have seen. Eleven
     // glyph controls exist today; a change that leaves none is a change this lint stopped guarding.
     assert!(
-        examined >= 9,
+        examined >= 11,
         "only {examined} glyph-only controls found -- this lint is no longer looking at anything"
     );
     assert!(

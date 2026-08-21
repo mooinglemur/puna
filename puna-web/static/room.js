@@ -365,6 +365,54 @@
       });
   });
 
+  // --- RENAMING THE ROOM ------------------------------------------------------------------------
+  // The swap itself is CSS: `.titlebar:has(.rename[open])` hides the heading, so the field lands
+  // where the title was with nothing running. What is added here is the part a stylesheet cannot
+  // do -- putting the cursor in the field, and getting out without a page load.
+  //
+  // Every piece degrades: unscripted, the pencil still opens the form, Enter still submits it
+  // because it is a form, and the X is a link back to the room, which arrives with the form closed.
+  var rename = document.querySelector("details.rename");
+  if (rename) {
+    var field = rename.querySelector("input[name=\"name\"]");
+    // The name as the SERVER rendered it, so cancelling restores what is on the row rather than
+    // whatever the field happened to hold when it was last closed.
+    var original = field ? field.value : "";
+
+    function closeRename() {
+      if (field) field.value = original;
+      rename.open = false;
+      var summary = rename.querySelector("summary");
+      // Focus goes back to the control that opened it. Without this it lands on <body>, and a
+      // keyboard user who cancels has to tab in from the top of the page again.
+      if (summary) summary.focus();
+    }
+
+    rename.addEventListener("toggle", function () {
+      if (!rename.open || !field) return;
+      field.focus();
+      // Selected, not just focused: the field opens holding the current name, and the common edit
+      // is a new name rather than a tweak to this one.
+      field.select();
+    });
+
+    rename.addEventListener("click", function (event) {
+      if (!event.target.closest(".cancel")) return;
+      // Without this the link navigates to the room page, which is the unscripted cancel and works
+      // -- it is just a round trip to arrive back where we already are.
+      event.preventDefault();
+      closeRename();
+    });
+
+    rename.addEventListener("keydown", function (event) {
+      if (event.key !== "Escape") return;
+      // `<details>` does not close on Escape by itself; only `<dialog>` does. A field somebody is
+      // typing in should, because that is what Escape means everywhere else.
+      event.preventDefault();
+      closeRename();
+    });
+  }
+
   // A page painted mid-transition watches from the moment it loads; one painted at rest waits for
   // somebody to do something.
   if (!settled()) watch();

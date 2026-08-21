@@ -1677,6 +1677,46 @@ mod tests {
         }
     }
 
+    /// **Enter in the name field must SAVE, and what decides that is source order.**
+    ///
+    /// Pressing Enter in a text input activates the form's *first* submit button. The rename form
+    /// holds two controls, and if the cancel one were a `<button>` placed first, Enter would
+    /// silently discard the edit — the worst possible outcome for the key everybody presses, and
+    /// invisible in review because both controls are correct on their own.
+    ///
+    /// Two things keep it right and both are asserted: the save button comes first, and cancel is
+    /// an `<a>` rather than a submit at all, which is also what makes it work unscripted.
+    #[test]
+    fn enter_in_the_rename_field_saves_rather_than_cancels() {
+        let html = page_as(true, true).render().expect("renders");
+
+        let form = html
+            .split_once("/settings/name")
+            .expect("the rename form is rendered")
+            .1
+            .split_once("</form>")
+            .expect("the form closes")
+            .0;
+
+        let save = form
+            .find("<button type=\"submit\"")
+            .expect("a save control");
+        let cancel = form.find("class=\"cancel\"").expect("a cancel control");
+        assert!(
+            save < cancel,
+            "cancel comes first, so Enter would discard the edit instead of saving it"
+        );
+        // The tag `class="cancel"` sits in, rather than anything after it -- an earlier version of
+        // this scanned forward from the attribute and so could not see the opening tag it was
+        // trying to identify, which made it pass against a cancel `<button>`.
+        let tag = form[..cancel].rfind('<').expect("cancel sits inside a tag");
+        assert!(
+            form[tag..].starts_with("<a "),
+            "cancel must be a link, not a button: as a submit it would race Enter, and as a plain \
+             button it could not close the form without scripting"
+        );
+    }
+
     /// And the links follow the guard rather than the other way round: somebody who is not staff is
     /// offered none of them.
     #[test]

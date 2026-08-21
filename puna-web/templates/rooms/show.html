@@ -1,12 +1,18 @@
 {% extends "base.html" %}
 {% block title %}{{ room.name }}{% endblock %}
 {% block content %}
-{# The name, and for staff who may change it, a pencil.
+{# The name, and for staff who may change it, a pencil that swaps it for a field.
 
-   `<details>` rather than a scripted toggle, the same choice the Manage section makes: it opens
-   with no JavaScript, the browser owns the state, and there is nothing to keep in step. The
-   summary IS the pencil -- `list-style: none` in the stylesheet takes the disclosure triangle off,
-   so what is on screen is one glyph beside the heading. #}
+   **`<details>` rather than a scripted toggle**, the same choice the Manage section makes: it opens
+   with no JavaScript, the browser owns the state, and there is nothing to keep in step.
+
+   Editing IN PLACE is the stylesheet's doing, not the script's: `.titlebar:has(.rename[open])`
+   hides the heading and the pencil while the form is open, so the field lands where the title was.
+   Where `:has()` is unsupported the heading simply stays and the field appears beside it -- the
+   older behavior, which is worse and not broken.
+
+   The submit button is FIRST inside the form on purpose: Enter in a text field activates the
+   form's first submit button, so the checkmark has to precede the cancel or Enter would cancel. #}
 <div class="titlebar">
 <h1>{{ room.name }}</h1>
 {% if is_organizer %}
@@ -19,13 +25,29 @@
 </svg>
 </summary>
 <form method="post" action="/room/{{ room.id }}/settings/name">
-<label for="room-name">New name</label>
-<input type="text" id="room-name" name="name" value="{{ room.name }}"
+{# No visible label: the field replaces a heading that says what it is, and a word above it would
+   push the layout the swap exists to keep still. #}
+<input type="text" name="name" value="{{ room.name }}" aria-label="Room name"
        maxlength="{{ puna_core::model::room::MAX_NAME_CHARS }}" required>
-<button type="submit">Rename</button>
-{# Said here because everything else on this page that looks like a setting IS a restart, so the
-   reasonable assumption is that this one is too. #}
-<span class="hint">The room is not restarted and nobody is disconnected.</span>
+{# The "not a restart" note lives on the control now rather than as a line under the form: the whole
+   point of this layout is that it does not push the page around, and everything else on this page
+   that looks like a setting IS a restart, so the reassurance is still worth carrying. #}
+<button type="submit" aria-label="Save the new name"
+        title="Save the new name. The room is not restarted and nobody is disconnected.">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<path d="M2.8 8.4 6.2 11.8 13.2 4.3" fill="none" stroke="currentColor" stroke-linecap="round"
+      stroke-linejoin="round"/>
+</svg>
+</button>
+{# **A link, not a button, and that is what makes cancel work with no scripting**: nothing inside a
+   `<details>` can close it without script, so unscripted this navigates back to the room and the
+   panel is closed because the page is fresh. `room.js` intercepts it and closes the form in place
+   instead, which is the same outcome without the round trip. #}
+<a class="cancel" href="/room/{{ room.id }}" title="Cancel" aria-label="Cancel renaming">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-linecap="round"/>
+</svg>
+</a>
 </form>
 </details>
 {% endif %}

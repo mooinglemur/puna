@@ -743,6 +743,17 @@ mod tests {
     /// down. Two families were declared as gauges with counter names until this test existed.
     #[test]
     fn every_total_is_a_counter_and_no_counter_is_missing_the_suffix() {
+        // **Guarded, because `init` WRITES.** It reseeds every `PROBE_CAPABILITY` child to zero,
+        // and unguarded this ran between the capability test's publish and its assertion --
+        // failing it with "was seeded but never published", which reads as the publisher being
+        // broken rather than as this test having zeroed the gauge underneath it. Intermittent:
+        // reproduced twice in sixty runs of the full lib, and never when the metrics tests were
+        // run alone, because it needs enough other tests in flight to lose the race.
+        //
+        // The rule these statics impose: anything touching the shared registry takes `exclusive`,
+        // reads included -- a read here is a read of state another test is mid-way through writing.
+        let _guard = exclusive();
+
         // Every component, so the invariant covers the whole registry rather than one tier's
         // slice. The registry is cumulative within a test binary, so this is their union.
         for component in [

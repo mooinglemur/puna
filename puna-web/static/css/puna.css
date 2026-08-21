@@ -528,15 +528,58 @@ summary { cursor: pointer; }
 .rename > summary:hover { color: var(--text); }
 .rename > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* Out of the flex row once open, so a wide form does not squeeze the heading beside it. */
-.rename[open] { flex-basis: 100%; }
+/* **Editing happens IN PLACE: the field replaces the heading rather than appearing under it.**
+   Done here rather than in script because `<details>` already carries the open state, and a class
+   toggled by JavaScript would be a second source of truth for the same thing.
+
+   `:has()` is the whole mechanism, and it degrades the right way: where it is unsupported the
+   heading stays put and the form opens beside it, which is the older behavior -- worse, not
+   broken. */
+.titlebar:has(.rename[open]) > h1 { display: none; }
+
+/* The pencil goes too. It said "edit this", the field now says that by existing, and the two
+   controls that matter while editing are the checkmark and the X. */
+.rename[open] > summary { display: none; }
+
 .rename form {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  margin: 0.4rem 0 0;
+  gap: 0.35rem;
 }
+
+/* Sized toward the heading it stands in for, so the swap reads as the title becoming editable
+   rather than as a form appearing. Not the full h1 size: this is a control, and at 1.6rem the
+   glyphs beside it have to grow to match. */
+.rename input[type="text"] {
+  font: inherit;
+  font-size: 1.25rem;
+  padding: 0.15rem 0.4rem;
+  min-width: min(24rem, 60vw);
+  max-width: 100%;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+/* Both confirm and cancel: one is a submit button and the other is a link, and nothing about that
+   difference should be visible. */
+.rename form button,
+.rename .cancel {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3rem;
+  color: var(--muted);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.rename form button:hover { color: var(--accent); }
+.rename .cancel:hover { color: var(--err-fg); }
+.rename form button:focus-visible,
+.rename .cancel:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* Sortable headers are real buttons to a keyboard: the JS gives them a tabindex and a role, and
    these are the affordances that say so. The arrow is a pseudo-element so it cannot be caught by
