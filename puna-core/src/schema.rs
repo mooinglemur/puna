@@ -99,6 +99,14 @@ diesel::table! {
 }
 
 diesel::table! {
+    generation_uploads (generation_id, user_id) {
+        generation_id -> Uuid,
+        user_id -> Int8,
+        uploaded_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     generations (id) {
         id -> Uuid,
         sha256 -> Bytea,
@@ -308,6 +316,8 @@ diesel::joinable!(creator_allowlist -> users (added_by));
 diesel::joinable!(generation_game_names -> generations (generation_id));
 diesel::joinable!(generation_slot_locations -> generations (generation_id));
 diesel::joinable!(generation_slots -> generations (generation_id));
+diesel::joinable!(generation_uploads -> generations (generation_id));
+diesel::joinable!(generation_uploads -> users (user_id));
 diesel::joinable!(generations -> users (first_ingested_by));
 diesel::joinable!(port_reservations -> rooms (room_id));
 diesel::joinable!(room_commands -> rooms (room_id));
@@ -328,6 +338,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     generation_game_names,
     generation_slot_locations,
     generation_slots,
+    generation_uploads,
     generations,
     port_ranges,
     port_reservations,

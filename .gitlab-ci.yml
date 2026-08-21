@@ -192,7 +192,6 @@ schema-drift:
         POSTGRES_PASSWORD: puna
         POSTGRES_DB: puna
   variables:
-    <<: *k8s-resources
     CARGO_HOME: $CI_PROJECT_DIR/.cargo
     DATABASE_URL: postgres://puna:puna@postgres:5432/puna
   script:

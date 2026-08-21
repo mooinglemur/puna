@@ -50,7 +50,9 @@ pub struct ShowTemplate {
 #[template(path = "generations/list.html")]
 pub struct ListTemplate {
     base: TplContext,
-    generations: Vec<generation::Generation>,
+    /// Uploads rather than generations: each carries the reader's OWN upload time, which for a
+    /// generation somebody else uploaded first is not the generation's.
+    generations: Vec<generation::Upload>,
 }
 
 #[derive(FromForm)]
@@ -192,7 +194,11 @@ async fn upload(
         generation = %inserted.id,
         seed = %meta.seed_name,
         slots = meta.slot_count,
+        // Both, and they are worth having side by side: `created=false, first_for_this_user=true`
+        // is the dedup-across-accounts case, which is invisible in the UI by design and therefore
+        // only observable here.
         created = inserted.created,
+        first_for_this_user = inserted.first_for_this_user,
         promotion = ?promotion,
         unmatched = unmatched.len(),
         names_cached,
@@ -200,9 +206,12 @@ async fn upload(
     );
 
     // POST-redirect-GET, so a refresh does not re-upload tens of megabytes.
+    //
+    // `first_for_this_user`, never `created`: the second is a fact about other people's uploads,
+    // and rendering it tells this uploader that another account holds the same seed.
     Ok(Redirect::to(format!(
         "/generations/{}?dedup={}",
-        inserted.id, !inserted.created
+        inserted.id, !inserted.first_for_this_user
     )))
 }
 
@@ -546,5 +555,94 @@ mod tests {
 
         let html = page.render().expect("renders");
         assert!(html.contains("No generations have been uploaded yet."));
+    }
+
+    /// **A source lint: the dedup notice must be built from the PER-USER answer.**
+    ///
+    /// `Insertion::created` is global — were these bytes already indexed, by anyone — and rendering
+    /// it tells a second uploader that another account holds the same seed. `record_upload`'s
+    /// answer is about the caller alone. The two are both plain `bool`s sitting three lines apart,
+    /// so nothing in the type system separates them, and swapping one for the other produces a
+    /// page that works perfectly and leaks.
+    ///
+    /// A lint rather than a route test because the failure is about which of two values was
+    /// written, and reaching the route needs a database, a volume and a real zip.
+    #[test]
+    fn the_dedup_notice_is_never_the_global_answer() {
+        // Only the routes, not this module's own tests -- which necessarily name both values in
+        // order to talk about them, and would otherwise be the thing the lint reports.
+        let source = include_str!("generations.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("the file has a non-test half");
+
+        assert!(
+            source.contains("inserted.id, !inserted.first_for_this_user"),
+            "the redirect no longer carries the per-user answer; if it was reworded, reword this \
+             lint with it rather than deleting it"
+        );
+
+        // Once, in the log line, where BOTH answers are wanted precisely because the case where
+        // they differ is invisible in the UI by design. A second occurrence means it reached
+        // something a user can see.
+        let global_uses = source.matches("inserted.created").count();
+        assert_eq!(
+            global_uses, 1,
+            "`inserted.created` is used {global_uses} times; it belongs only in the log line. \
+             Anything user-visible must use `record_upload`'s answer, or a second uploader is told \
+             that somebody else already has their seed."
+        );
+    }
+
+    /// The listing renders each reader's OWN upload time.
+    ///
+    /// The column is headed "Uploaded", and for anyone who uploaded a seed somebody else uploaded
+    /// first, the generation's `created_at` is a different and older moment. Rendering it would
+    /// both misdate their entry and tell them the seed predates them.
+    #[test]
+    fn the_listing_shows_your_upload_time_not_the_generations() {
+        use chrono::TimeZone;
+
+        let created = chrono::Utc.with_ymd_and_hms(2026, 7, 1, 9, 0, 0).unwrap();
+        let uploaded = chrono::Utc
+            .with_ymd_and_hms(2026, 8, 20, 17, 30, 0)
+            .unwrap();
+
+        let page = ListTemplate {
+            base: TplContext {
+                is_logged_in: true,
+                is_admin: false,
+                username: "bob".into(),
+                site_name: "puna",
+                version: "test",
+                static_version: "test",
+            },
+            generations: vec![generation::Upload {
+                generation: generation::Generation {
+                    id: GenerationId::new(),
+                    sha256: vec![0; 32],
+                    size_bytes: 1,
+                    seed_name: "77085767817399703051".into(),
+                    slots: 4,
+                    locations: 400,
+                    games: vec!["Minecraft Dig".into()],
+                    race_mode: false,
+                    has_spoiler: false,
+                    created_at: created,
+                },
+                uploaded_at: uploaded,
+            }],
+        };
+
+        let html = page.render().expect("renders");
+        assert!(
+            html.contains("2026-08-20 17:30 UTC"),
+            "the reader's own upload time is missing"
+        );
+        assert!(
+            !html.contains("2026-07-01"),
+            "the generation's creation date reached the page: it dates this entry to somebody \
+             else's upload"
+        );
     }
 }

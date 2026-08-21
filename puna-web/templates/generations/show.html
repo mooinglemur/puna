@@ -3,9 +3,12 @@
 {% block content %}
 <h1>Generation {{+ generation.seed_name }}</h1>
 
+{# Says what YOU have already done, never what is on file. The distinction is the whole reason
+   `record_upload` exists: "these contents were already here" shown to a second uploader would
+   disclose that another account holds the same seed. See model::generation. #}
 {% if deduplicated %}
-<p class="notice">These exact contents were already on file, so this upload reused the existing
-generation rather than storing a second copy.</p>
+<p class="notice">You have already uploaded this file, so this is the generation you uploaded
+before rather than a second copy of it.</p>
 {% endif %}
 
 <dl class="facts">

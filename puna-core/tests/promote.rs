@@ -190,6 +190,18 @@ async fn indexing_the_same_generation_twice_yields_one_row() {
         assert!(!second.created, "the second upload must not create a row");
         assert_eq!(first.id, second.id);
 
+        // The same account twice: news once, a duplicate after. This is the value the page renders,
+        // and `insert` producing it is what stops a caller indexing a generation without recording
+        // who uploaded it -- an upload that succeeds and then is missing from its uploader's list.
+        assert!(
+            first.first_for_this_user,
+            "the first upload is theirs to see"
+        );
+        assert!(
+            !second.first_for_this_user,
+            "the second is a duplicate to this uploader"
+        );
+
         // Slots are written once, not twice: the second insert returns before touching them.
         let slots = generation::slots(&mut conn, first.id).await.expect("slots");
         assert_eq!(slots.len(), meta.slots.len());
@@ -216,11 +228,12 @@ async fn indexing_the_same_generation_twice_yields_one_row() {
         // of the connectable list. The two differ on any seed with item links.
         assert_eq!(stored.slots, meta.slot_count);
 
+        // Indexing it put it in the uploader's list, and doing it twice left one entry there.
         let listed = generation::list_for_user(&mut conn, UPLOADER, 10)
             .await
             .expect("list");
         assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].id, first.id);
+        assert_eq!(listed[0].generation.id, first.id);
     })
     .await;
 }
