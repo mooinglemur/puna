@@ -992,13 +992,26 @@ pub(crate) async fn clear_deployment(
                 -- stale numbers that read as live ones, which is the failure mode a dashboard is
                 -- worst at showing you.
                 running_image = NULL, deployment_created_at = NULL, process_started_at = NULL,
-                last_error = $2
+                -- CLEARED, not set to the caller's note. This column used to receive the reason a
+                -- room went idle, and every reason reaching here is benign: a stop finishing, a
+                -- spec changing, a recreate. But the column is named last_error, the room page
+                -- renders it in red, and /status publishes it under that name -- so an ordinary
+                -- stop printed a red line saying the room stopped, underneath a line already
+                -- saying the room is not running, and told every API consumer it had errored.
+                --
+                -- Genuine failures belong to fail(), which writes them here. Why a room went idle
+                -- belongs in room_events, which is where the page's sentence comes from anyway,
+                -- and in the log line below.
+                last_error = NULL
           WHERE id = $1",
     )
     .bind::<SqlUuid, _>(room)
-    .bind::<Nullable<Text>, _>(Some(note))
     .execute(conn)
     .await?;
+    // The note's remaining job. It is the only record of WHY for the recreate paths, which write no
+    // event of their own -- previously it survived only by sitting in a column that made it look
+    // like a failure.
+    tracing::info!(room = %room, "room is idle: {note}");
     Ok(())
 }
 
@@ -1339,6 +1352,16 @@ mod db_tests {
                 testdb::reservation(&mut conn, room).await,
                 Some(port),
                 "the room must come back on the same port"
+            );
+
+            // **Going idle is not an error, and `last_error` is where the page reads one from.**
+            // This used to receive the reason the room went idle, so an ordinary stop rendered a
+            // red line saying the room stopped underneath a line already saying it is not running
+            // -- and told every `/status` consumer the room had errored. The reason lives in
+            // `room_events` and the log; this column is for genuine failures, which `fail()` owns.
+            assert_eq!(
+                observed.last_error, None,
+                "a benign transition left a note in the error column"
             );
         })
         .await;
