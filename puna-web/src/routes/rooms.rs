@@ -330,7 +330,7 @@ async fn show(
     let message = event::latest(&mut conn, room.id)
         .await?
         .and_then(|e| phrase(&e.kind));
-    let elapsed = human_duration(since_ms(room.state_changed_at));
+    let elapsed = human_duration(since_ms(transition_began(&room)));
 
     let is_closed = room.desired_state == DesiredState::Closed.as_sql();
     Ok(RoomTemplate {
@@ -403,6 +403,28 @@ fn is_working(room: &Room) -> bool {
     }
 }
 
+/// When the thing the panel is currently describing began.
+///
+/// **Not `state_changed_at`, which is the clock the page used and the reason a stop said "35
+/// minutes" a second after it was clicked.** That column times the state the room is *leaving*, so
+/// for a room that had been up all afternoon it starts the transition counter at all afternoon.
+///
+/// A requested transition is timed from the request. That also keeps the count **monotonic across
+/// the phases**: `desired_at` does not move when the orchestrator finally acts, so the sentence
+/// changes from "stopping the room" to "shutting the room down" while the number keeps climbing —
+/// where timing each phase separately would reset it to zero mid-transition and read as a stall.
+///
+/// `degraded` is the exception, and it is the only working state that is not something anybody
+/// asked for: the room is falling over on its own while `desired_at` still points at whenever it
+/// was started. Its clock is the state change, which is when it started failing.
+fn transition_began(room: &Room) -> chrono::DateTime<chrono::Utc> {
+    if is_working(room) && room.state != "degraded" {
+        room.desired_at
+    } else {
+        room.state_changed_at
+    }
+}
+
 /// This session's role in a room, with a global admin resolving to the top of the ladder.
 ///
 /// Factored out because `show` and `start` must answer it identically — the page decides whether to
@@ -457,7 +479,7 @@ async fn panel(id: RoomParam, session: Session, pool: &State<Pool>) -> Result<Pa
     let message = event::latest(&mut conn, room.id)
         .await?
         .and_then(|e| phrase(&e.kind));
-    let elapsed = human_duration(since_ms(room.state_changed_at));
+    let elapsed = human_duration(since_ms(transition_began(&room)));
 
     Ok(PanelTemplate {
         is_closed: room.desired_state == DesiredState::Closed.as_sql(),
@@ -490,7 +512,7 @@ async fn status(id: RoomParam, pool: &State<Pool>) -> Result<Json<serde_json::Va
         "port": room.advertised_port,
         "filtered_port": room.advertised_filtered_port,
         "last_error": room.last_error,
-        "since_ms": since_ms(room.state_changed_at),
+        "since_ms": since_ms(transition_began(&room)),
         // What the room is actually doing, in words. A spinner over "starting" for ninety seconds
         // is indistinguishable from a stuck one; "waiting for the pod to be scheduled" is not.
         "message": latest.as_ref().and_then(|e| phrase(&e.kind)),
@@ -530,6 +552,11 @@ fn phrase(kind: &str) -> Option<&'static str> {
         "running" => "the room is up",
         "stopping" => "shutting the room down",
         "stopped" => "the room has stopped",
+        // `requested_stop` was RECORDED and had no phrase, so clicking Stop fell through to the
+        // template's fallback and rendered "This room is running" -- the room's observed state,
+        // stated as though nothing had been asked. An event kind with no sentence is silent in
+        // exactly the moment somebody is watching for one.
+        "requested_stop" => "stopping the room",
         "requested_close" => "closing the room",
         "deployment_gone" => "the room's server went away; it can be started again",
         "retrying" => "trying again after a failure",
@@ -1055,7 +1082,11 @@ mod tests {
             tracker_policy: puna_core::model::room::TrackerPolicy::Link,
             wants_filtered: true,
             state: "running".into(),
-            state_changed_at: chrono::Utc::now(),
+            // A room that has been up for a while, which is the situation the elapsed-time bug
+            // needed: timing a transition from `state_changed_at` starts the counter at however
+            // long the room had been sitting in the state it is leaving.
+            state_changed_at: chrono::Utc::now() - chrono::TimeDelta::minutes(35),
+            desired_at: chrono::Utc::now() - chrono::TimeDelta::minutes(35),
             advertised_host: Some("mw.example".into()),
             advertised_port: Some(40000),
             advertised_filtered_port: Some(40001),
@@ -1359,6 +1390,88 @@ mod tests {
                 "state={state} desired={desired}"
             );
         }
+    }
+
+    /// **The transition is timed from the REQUEST, not from the state it is leaving.**
+    ///
+    /// Reported from the live deployment: clicking Stop on a room that had been up for 35 minutes
+    /// showed "35m" immediately, because `state_changed_at` times the state being left. The whole
+    /// point of the counter is telling "coming up" from "stuck", and a number that starts at 35
+    /// minutes cannot do that.
+    #[test]
+    fn a_transition_is_timed_from_when_it_was_asked_for() {
+        let long_running = chrono::TimeDelta::minutes(35);
+
+        // Just clicked: up for 35 minutes, asked to stop a moment ago.
+        let mut stopping = a_room();
+        stopping.desired_state = "stopped".into();
+        stopping.desired_at = chrono::Utc::now();
+        assert!(
+            since_ms(transition_began(&stopping)) < 1_000,
+            "the counter started at the age of the state being left"
+        );
+
+        // **Monotonic across the phase change.** The orchestrator acts, `state` becomes `stopping`
+        // and `state_changed_at` moves to now -- but the request did not, so the number keeps
+        // climbing while the sentence changes. Timing each phase separately would reset it to zero
+        // mid-transition, which reads as a stall.
+        let mut draining = stopping.clone();
+        draining.state = "stopping".into();
+        draining.state_changed_at = chrono::Utc::now();
+        draining.desired_at = chrono::Utc::now() - chrono::TimeDelta::seconds(20);
+        let carried = since_ms(transition_began(&draining));
+        assert!(
+            (19_000..22_000).contains(&carried),
+            "the count restarted when the orchestrator picked the request up: {carried}ms"
+        );
+
+        // `degraded` is the one working state nobody asked for: the room is failing on its own
+        // while `desired_at` still points at whenever it was started. Its clock is the state
+        // change, or a room that has just started failing would claim to have been failing for as
+        // long as it had been up.
+        let mut degraded = a_room();
+        degraded.state = "degraded".into();
+        degraded.state_changed_at = chrono::Utc::now();
+        assert!(since_ms(transition_began(&degraded)) < 1_000);
+
+        // And a settled room still reports the age of its state, which is what that branch means.
+        let settled = a_room();
+        assert!(since_ms(transition_began(&settled)) >= long_running.num_milliseconds() - 1_000);
+    }
+
+    /// Every event kind a route records has a sentence.
+    ///
+    /// `requested_stop` was recorded from the day the stop button existed and never had one, so
+    /// clicking Stop fell through to the template's fallback and rendered **"This room is
+    /// running"** — the observed state, stated as though nothing had been asked. A kind with no
+    /// phrase is silent in exactly the moment somebody is watching for a message.
+    #[test]
+    fn every_requested_event_has_something_to_say() {
+        // The routes only, not this module's own tests -- which necessarily name the prefix in
+        // order to search for it, and would otherwise be what the lint reports.
+        let source = include_str!("rooms.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("the file has a non-test half");
+        let mut checked = 0;
+
+        // The kinds this file records, read out of the file itself so a new one cannot be added
+        // without either a phrase or a failure here.
+        for reference in source.match_indices("\"requested_") {
+            let kind: String = source[reference.0 + 1..]
+                .chars()
+                .take_while(|c| *c != '"')
+                .collect();
+            assert!(
+                phrase(&kind).is_some(),
+                "the route records {kind:?} and nothing turns it into a sentence"
+            );
+            checked += 1;
+        }
+        assert!(
+            checked >= 3,
+            "the lint found {checked} kinds, so it proves little"
+        );
     }
 
     /// And the panel actually renders that, rather than the display that was just clicked away.

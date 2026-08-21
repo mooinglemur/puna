@@ -384,6 +384,14 @@ pub struct Room {
     /// multi-second visible state, and "starting, 40 seconds" is the difference between waiting and
     /// wondering whether anything is happening.
     pub state_changed_at: chrono::DateTime<chrono::Utc>,
+    /// When the room was last *asked* for something, which is a different clock from
+    /// `state_changed_at` and the one a person watching a transition is actually on.
+    ///
+    /// A request writes this and returns; the observed state does not move until the orchestrator
+    /// reaches the room. Timing a transition from `state_changed_at` therefore starts the counter
+    /// at however long the room had been sitting in the state it is leaving — "stopping, 35
+    /// minutes" one second after somebody clicked Stop.
+    pub desired_at: chrono::DateTime<chrono::Utc>,
     pub advertised_host: Option<String>,
     pub advertised_port: Option<i32>,
     pub advertised_filtered_port: Option<i32>,
@@ -426,6 +434,8 @@ struct RoomRow {
     state: String,
     #[diesel(sql_type = Timestamptz)]
     state_changed_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Timestamptz)]
+    desired_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Nullable<Text>)]
     advertised_host: Option<String>,
     #[diesel(sql_type = Nullable<Integer>)]
@@ -466,6 +476,7 @@ impl From<RoomRow> for Room {
             wants_filtered: row.wants_filtered,
             state: row.state,
             state_changed_at: row.state_changed_at,
+            desired_at: row.desired_at,
             advertised_host: row.advertised_host,
             advertised_port: row.advertised_port,
             advertised_filtered_port: row.advertised_filtered_port,
@@ -479,7 +490,7 @@ const ROOM_COLUMNS: &str = "id, name, environment::text AS environment, generati
                             desired_state::text AS desired_state, slot_auth::text AS slot_auth, \
                             password, spoiler_policy::text AS spoiler_policy, tracker_id, \
                             tracker_policy::text AS tracker_policy, wants_filtered, \
-                            state::text AS state, state_changed_at, advertised_host, \
+                            state::text AS state, state_changed_at, desired_at, advertised_host, \
                             advertised_port, advertised_filtered_port, last_error";
 
 /// Open a room from an already-indexed generation.

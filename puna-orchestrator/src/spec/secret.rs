@@ -160,6 +160,7 @@ mod tests {
             wants_filtered: true,
             state: "idle".into(),
             state_changed_at: chrono::Utc::now(),
+            desired_at: chrono::Utc::now(),
             advertised_host: None,
             advertised_port: None,
             advertised_filtered_port: None,
