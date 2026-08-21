@@ -1,0 +1,32 @@
+-- A room can be CLOSED: torn down, and not restartable by the people who can normally restart it.
+--
+-- ## Why this is a DESIRED state and not an observed one
+--
+-- "Closed" is a wish somebody expressed, not something Puna noticed about the cluster -- and this
+-- schema keeps those in two column families on purpose: `desired_state` is written by the web tier
+-- and read-only to the orchestrator, `state` is written by the orchestrator and read-only to
+-- everyone else. The whole reconciler rests on being able to compare the two.
+--
+-- Putting `closed` in `room_state` would have broken that in both directions at once. The web tier
+-- would be writing an observed column, and -- worse -- the observed state machine would fight it:
+-- `state` moves on its own as pods come and go, so a closed room whose Deployment vanished would be
+-- walked to `idle` by the ordinary vanish path, silently reopening it. A room does not stop being
+-- closed because Kubernetes rescheduled something.
+--
+-- As a desired state it needs no defending: it is mutually exclusive with `running` and `stopped` by
+-- construction, which is exactly right (a room cannot be both closed and wanting to run), and it
+-- costs no second column that could disagree with the first.
+--
+-- ## What it means to each side
+--
+-- To the ORCHESTRATOR, `closed` is `stopped`: tear the room down, keep the port reservation, keep
+-- the state directory. There is no new behavior to implement and nothing about a closed room is
+-- reclaimed differently -- which is the point, because a closed room is one somebody intends to
+-- come back to.
+--
+-- To the WEB TIER it is an authorization boundary: anyone holding the room's URL may start an idle
+-- room (that is the whole design of a room that idles out and comes back), and nobody but an
+-- organizer or an admin may start a closed one. The room page still renders -- players need to see
+-- their patches, their tracker and the roster -- it just does not offer them the door.
+
+ALTER TYPE room_desired_state ADD VALUE 'closed';

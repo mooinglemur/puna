@@ -19,9 +19,23 @@
 </div>
 {% endif %}
 {% else if room.state == "idle" || room.state == "failed" %}
+{# `is_closed` before the ordinary not-running case: a closed room is also idle, and the difference
+   is the whole point of the state. #}
+{% if is_closed %}
+<p>This room is <strong>closed</strong>. It is not running, and only its organizers can reopen it.</p>
+<p class="hint">Everything else here still works &mdash; patches, the tracker and the roster are
+unchanged, and the room keeps its address for when it reopens.</p>
+{% else %}
 <p>This room is not running.</p>
+{% endif %}
 {% if let Some(error) = room.last_error %}<p class="error">{{ error }}</p>{% endif %}
-<form method="post" action="/room/{{ room.id }}/start"><button type="submit">Start the room</button></form>
+{# `may_start` and not `is_staff`: one value, decided beside the route that would honor the POST, so
+   the page cannot offer a control the route refuses. #}
+{% if may_start %}
+<form method="post" action="/room/{{ room.id }}/start"><button type="submit">
+{%- if is_closed %}Reopen the room{% else %}Start the room{% endif -%}
+</button></form>
+{% endif %}
 {% else if room.state == "integrity_fault" %}
 <div class="error">
 <p><strong>This room's saved state is missing.</strong></p>
@@ -133,7 +147,17 @@ unclaimed
 </form>
 
 {% if is_organizer %}
-<form method="post" action="/room/{{ room.id }}/stop"><button type="submit">Stop the room</button></form>
+{# Stop and Close are the same instruction to the orchestrator and differ only in who may undo
+   them, so they sit together and the difference is stated rather than left to be discovered. #}
+<div class="lifecycle">
+<form method="post" action="/room/{{ room.id }}/stop" class="inline"><button type="submit">Stop the room</button></form>
+{% if !is_closed %}
+<form method="post" action="/room/{{ room.id }}/close" class="inline"><button type="submit">Close the room</button></form>
+{% endif %}
+</div>
+<p class="hint">Stopping takes the room down; anyone with the link can start it again, which is how
+an async that goes quiet comes back. <strong>Closing</strong> takes it down and leaves only
+organizers able to reopen it. Either way the room keeps its address, its save and its files.</p>
 
 <form method="post" action="/room/{{ room.id }}/settings/slot-auth">
 <p>

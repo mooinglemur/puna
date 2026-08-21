@@ -213,7 +213,15 @@ async fn reconcile_until_lost(
 
         let report = match reconciler.tick(lock, orchestrator, kind).await {
             Ok(report) => {
-                state.mark_ticked();
+                // **Readiness tracks FULL passes only.** `/readyz` means the whole contract is
+                // being met, and a convergence pass meets part of it -- so counting one would let a
+                // loop that had somehow stopped doing full passes report itself healthy while the
+                // sweep, the probe and the hourly lane were all silently stopped. It cannot
+                // false-fail: the scheduler caps the next wake at the full pass's own deadline, so
+                // a full pass always lands inside the interval readiness measures in.
+                if kind == plan::TickKind::Reconcile {
+                    state.mark_ticked();
+                }
                 // A pass over a stable namespace reports only its room count, which is not news.
                 // Anything actually happening is -- and a convergence pass that plans nothing is
                 // the quiet case this cadence exists to produce, so it stays quiet.

@@ -70,6 +70,16 @@ pub struct RoomTemplate {
     /// Already formatted, because a template is not where a duration should be turned into English
     /// -- and because the same string is what `room.js` overwrites on its first poll.
     elapsed: String,
+    /// Whether this room is closed, and therefore whether the page offers a start control at all.
+    ///
+    /// Computed here rather than compared in markup, for the same reason `is_staff` is: this is an
+    /// authorization decision, and the route that would refuse the start has to be answering the
+    /// same question the page answers. A page offering a button the route rejects is worse than one
+    /// that hides it.
+    is_closed: bool,
+    /// Whether the viewer may start this room *right now* -- which is everybody for an idle room,
+    /// and staff only for a closed one.
+    may_start: bool,
 }
 
 /// One row of the room page's slot table.
@@ -145,6 +155,41 @@ fn slot_views(
             owner_id: s.owner_id,
         })
         .collect()
+}
+
+/// Take the room down **and stop anyone but staff bringing it back.**
+///
+/// Organizer-guarded like [`stop`], and it is the same instruction to the orchestrator: the room
+/// comes down keeping its port reservation and its state directory, so reopening it returns it on
+/// the address its players have bookmarked. What differs is only who may ask for it to run.
+///
+/// Reopening is [`start`], which is why there is no separate route for it: a closed room that an
+/// organizer starts is simply a room somebody wants running again, and giving that its own verb
+/// would mean two ways to spell one transition.
+#[post("/room/<id>/close")]
+async fn close(
+    id: RoomParam,
+    access: RoomAccess<Organizer>,
+    pool: &State<Pool>,
+) -> Result<Redirect> {
+    let mut conn = pool.get().await?;
+    if room::request_state(&mut conn, id.0, DesiredState::Closed).await? {
+        event::record(
+            &mut conn,
+            id.0,
+            event::Actor::User(access.user_id()),
+            "requested_close",
+            serde_json::json!({}),
+        )
+        .await?;
+    }
+    tracing::info!(
+        room = %id,
+        user_id = access.user_id(),
+        role = access.role().as_sql(),
+        "close requested"
+    );
+    Ok(Redirect::to(format!("/room/{id}")))
 }
 
 #[derive(FromForm)]
@@ -231,7 +276,14 @@ async fn show(
     // first is friction for the common case. A link preview is not a person, which is what
     // `Navigation` sorts out -- and the write is idempotent either way, so a room already coming up
     // is untouched.
-    let room = if navigation.0 && room.state == "idle" && room.desired_state != "running" {
+    // A closed room is never started by arriving at it, whoever arrives. Staff get a button; the
+    // implicit trigger is for the case where wanting the page IS wanting the room, and a closed
+    // room is precisely where that stops being true.
+    let room = if navigation.0
+        && room.state == "idle"
+        && room.desired_state != "running"
+        && room.desired_state != DesiredState::Closed.as_sql()
+    {
         room::request_state(&mut conn, room.id, DesiredState::Running).await?;
         event::record(
             &mut conn,
@@ -251,13 +303,7 @@ async fn show(
         room
     };
 
-    let role = if session.is_admin {
-        Some(RoomRole::Organizer)
-    } else if let Some(user_id) = session.user_id {
-        member::role_of(&mut conn, room.id, user_id).await?
-    } else {
-        None
-    };
+    let role = resolve_role(&mut conn, &session, room.id).await?;
 
     // Which slots have a patch is a property of the *generation*, not of the room's copy: the room
     // owns who holds a slot, the generation owns what a slot's file is.
@@ -282,8 +328,12 @@ async fn show(
         .and_then(|e| phrase(&e.kind));
     let elapsed = human_duration(since_ms(room.state_changed_at));
 
+    let is_closed = room.desired_state == DesiredState::Closed.as_sql();
     Ok(RoomTemplate {
         base: TplContext::new(&session),
+        // Both from `may_start`, so the page and the route cannot disagree about who gets a door.
+        is_closed,
+        may_start: may_start(&room, role),
         room,
         slots,
         is_staff: role.is_some(),
@@ -294,6 +344,41 @@ async fn show(
         message,
         elapsed,
     })
+}
+
+/// **The one place that decides who may bring a room up**, used by the page, the explicit start
+/// route and D8's implicit start alike.
+///
+/// An ordinary room is startable by anyone holding its URL, and that is the design rather than an
+/// oversight: a room that idles out and comes back when somebody visits it is the whole point of
+/// the sticky port reservation, and requiring membership would strand every player whose async went
+/// quiet. A **closed** room inverts exactly that one rule and nothing else — the page still renders
+/// for everybody, with their patches, their tracker and the roster.
+///
+/// `role` is `Some(Organizer)` for a global admin, resolved by the caller.
+fn may_start(room: &Room, role: Option<RoomRole>) -> bool {
+    if room.desired_state != DesiredState::Closed.as_sql() {
+        return true;
+    }
+    role.is_some_and(|r| r >= RoomRole::Organizer)
+}
+
+/// This session's role in a room, with a global admin resolving to the top of the ladder.
+///
+/// Factored out because `show` and `start` must answer it identically — the page decides whether to
+/// render a control from this, and the route decides whether to honor one.
+async fn resolve_role(
+    conn: &mut diesel_async::AsyncPgConnection,
+    session: &Session,
+    room: puna_core::ids::RoomId,
+) -> Result<Option<RoomRole>> {
+    if session.is_admin {
+        return Ok(Some(RoomRole::Organizer));
+    }
+    match session.user_id {
+        Some(user_id) => Ok(member::role_of(conn, room, user_id).await?),
+        None => Ok(None),
+    }
 }
 
 /// The poll target behind the starting spinner. Two row reads, no template.
@@ -357,6 +442,7 @@ fn phrase(kind: &str) -> Option<&'static str> {
         "running" => "the room is up",
         "stopping" => "shutting the room down",
         "stopped" => "the room has stopped",
+        "requested_close" => "closing the room",
         "deployment_gone" => "the room's server went away; it can be started again",
         "retrying" => "trying again after a failure",
         "degraded" => "the room is not answering; it may be restarting",
@@ -375,6 +461,22 @@ fn phrase(kind: &str) -> Option<&'static str> {
 #[post("/room/<id>/start")]
 async fn start(id: RoomParam, session: Session, pool: &State<Pool>) -> Result<Redirect> {
     let mut conn = pool.get().await?;
+
+    // **Re-checked here, not trusted from the page.** The page hides the control for a closed room,
+    // and hiding a control is a courtesy rather than a boundary -- this route is reachable by anyone
+    // who can construct a POST, which for a room whose URL is its only credential is anyone at all.
+    let room = room::get(&mut conn, id.0)
+        .await?
+        .ok_or_else(|| not_found("no such room"))?;
+    if !may_start(&room, resolve_role(&mut conn, &session, room.id).await?) {
+        // 403 rather than 404: the room's existence is not the secret here -- the page renders it
+        // to everybody -- so pretending it is gone would be a worse answer to a real question.
+        return Err(Error::new(
+            Status::Forbidden,
+            anyhow::anyhow!("this room is closed; an organizer can reopen it"),
+        ));
+    }
+
     let changed = room::request_state(&mut conn, id.0, DesiredState::Running).await?;
     // Only when something changed: a second click on a room that is already coming up is not an
     // event, and recording it would fill a room's history with the sound of somebody being impatient.
@@ -732,6 +834,7 @@ pub fn routes() -> Vec<rocket::Route> {
         status,
         start,
         stop,
+        close,
         clone_room,
         members,
         add_member,
@@ -890,6 +993,8 @@ mod tests {
             can_see_tracker: true,
             message: None,
             elapsed: "1m".into(),
+            is_closed: false,
+            may_start: true,
         }
     }
 
@@ -924,5 +1029,80 @@ mod tests {
         );
         assert!(!html.contains("/members"));
         assert!(!html.contains("/clone"));
+    }
+
+    /// A closed room, seen by somebody holding the link.
+    ///
+    /// **The page still works** — that is the whole shape of the state. Patches, tracker and roster
+    /// are unchanged; what is gone is the door. Rendering the room as though it were merely idle
+    /// would offer a button the route now refuses, which teaches people the site is broken.
+    #[test]
+    fn a_closed_room_renders_for_a_visitor_but_offers_no_way_in() {
+        let mut closed = page(false);
+        closed.room.state = "idle".into();
+        closed.room.desired_state = "closed".into();
+        closed.is_closed = true;
+        closed.may_start = false;
+
+        let html = closed.render().expect("renders");
+
+        assert!(html.contains("closed"), "the state is not named");
+        assert!(
+            !html.contains("/start"),
+            "a visitor was offered a start control the route would refuse"
+        );
+        // The page is not a dead end: the tracker is exactly what a player wants from a room that
+        // is down, and closing must not take it away.
+        assert!(html.contains("/tracker/"), "the tracker link was hidden");
+    }
+
+    /// The same room, seen by an organizer: the one door, labelled for what it does.
+    #[test]
+    fn an_organizer_can_reopen_a_closed_room() {
+        let mut closed = page(true);
+        closed.room.state = "idle".into();
+        closed.room.desired_state = "closed".into();
+        closed.is_closed = true;
+        closed.may_start = true;
+
+        let html = closed.render().expect("renders");
+        assert!(
+            html.contains("/start"),
+            "staff were offered no way to reopen"
+        );
+        assert!(
+            html.contains("Reopen"),
+            "reopening a closed room reads as reopening, not as starting"
+        );
+        // Closing again is not offered, because it is already closed.
+        assert!(
+            !html.contains("/close"),
+            "a closed room offered Close again"
+        );
+    }
+
+    /// `may_start` is the single decision the page and the route share.
+    ///
+    /// Asserted directly rather than only through markup, because the route calls it with a role it
+    /// resolves itself — a page that agreed with a route by coincidence would drift the first time
+    /// either changed.
+    #[test]
+    fn only_staff_may_start_a_closed_room() {
+        let open = a_room();
+        for role in [None, Some(RoomRole::Helper), Some(RoomRole::Organizer)] {
+            assert!(
+                may_start(&open, role),
+                "anyone holding the link may start an ordinary room ({role:?})"
+            );
+        }
+
+        let mut closed = a_room();
+        closed.desired_state = "closed".into();
+        assert!(!may_start(&closed, None), "a visitor must be refused");
+        assert!(
+            !may_start(&closed, Some(RoomRole::Helper)),
+            "a helper is not an organizer -- closing is an organizer's decision to undo"
+        );
+        assert!(may_start(&closed, Some(RoomRole::Organizer)));
     }
 }

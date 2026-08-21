@@ -165,6 +165,28 @@ impl TrackerPolicy {
 pub enum DesiredState {
     Running,
     Stopped,
+    /// Torn down **and not restartable by whoever holds the URL**.
+    ///
+    /// To the orchestrator this is [`Self::Stopped`] exactly: the room comes down, keeps its port
+    /// reservation and keeps its state directory. Nothing about a closed room is reclaimed
+    /// differently, which is the point — closing is what an organizer does to a room they intend to
+    /// come back to.
+    ///
+    /// The whole difference is an authorization one, and it lives in the web tier. Any visitor may
+    /// start an `idle` room, because a room that idles out and returns on a URL hit is the design;
+    /// only an organizer or an admin may start a closed one. The page still renders for everybody —
+    /// patches, tracker, roster — it just does not offer them the door.
+    ///
+    /// **A closed room is never a running room, and that invariant is why this is a variant here
+    /// rather than a flag beside `desired_state`.** A separate column would allow "closed and
+    /// running", which sounds harmless and is not: Puna gates *starting* a room, not connecting to
+    /// one, so a running room is reachable at its address by anyone who has it. The page would be
+    /// saying "closed" about a room people were playing in. Making it a wish, mutually exclusive
+    /// with `Running` by construction, means that state cannot be spelled.
+    ///
+    /// The cost is that reopening clears it — an organizer who starts a closed room has reopened
+    /// it, and it stays open until closed again. That is what the button says it does.
+    Closed,
     Deleted,
 }
 
@@ -173,6 +195,7 @@ impl DesiredState {
         match self {
             Self::Running => "running",
             Self::Stopped => "stopped",
+            Self::Closed => "closed",
             Self::Deleted => "deleted",
         }
     }
@@ -181,12 +204,23 @@ impl DesiredState {
         match raw {
             "running" => Some(Self::Running),
             "stopped" => Some(Self::Stopped),
+            "closed" => Some(Self::Closed),
             "deleted" => Some(Self::Deleted),
             _ => None,
         }
     }
 
-    pub const ALL: [DesiredState; 3] = [Self::Running, Self::Stopped, Self::Deleted];
+    /// Whether this wish means "the room should not be running".
+    ///
+    /// The orchestrator's question, and the reason it needs no `Closed` handling of its own: a
+    /// closed room and a stopped room are the same instruction to the reconciler. Written as one
+    /// predicate rather than repeated `matches!` so a fourth resting state could not be added to
+    /// the enum and quietly missed by half the planner.
+    pub fn is_at_rest(self) -> bool {
+        matches!(self, Self::Stopped | Self::Closed)
+    }
+
+    pub const ALL: [DesiredState; 4] = [Self::Running, Self::Stopped, Self::Closed, Self::Deleted];
 }
 
 /// Where a room actually is. The **observed** half: the orchestrator writes it, everyone else

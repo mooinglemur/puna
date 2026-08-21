@@ -393,7 +393,11 @@ fn step_for(
             DesiredState::Running => Some(Step::Start),
             // Resting, holding its port. Nothing to do, and specifically nothing to clean up:
             // idle teardown never touches the directory or the reservation.
-            DesiredState::Stopped => None,
+            // At rest, holding its port. Nothing to do, and specifically nothing to clean up:
+            // idle teardown never touches the directory or the reservation. `closed` rests here
+            // too -- it differs from `stopped` only in who may ask for it to run again, which is
+            // the web tier's question and not this one's.
+            DesiredState::Stopped | DesiredState::Closed => None,
             DesiredState::Deleted => unreachable!("handled above"),
         },
 
@@ -426,7 +430,9 @@ fn step_for(
                     Some(_) => None,
                 }
             }
-            DesiredState::Stopped => None,
+            // Nobody wants it up, so the backoff has nothing to count down to. A closed room that
+            // last failed stays failed and stays closed; reopening it is what asks again.
+            DesiredState::Stopped | DesiredState::Closed => None,
             DesiredState::Deleted => unreachable!("handled above"),
         },
 
@@ -442,7 +448,12 @@ fn step_for(
         RoomState::Starting | RoomState::Running | RoomState::Degraded => {
             // A stop request outranks everything below: there is no point converging a spec on a
             // room that is being taken down.
-            if room.desired == DesiredState::Stopped {
+            //
+            // **`is_at_rest`, not `== Stopped`.** `closed` is the same instruction to the
+            // reconciler and this is the arm that carries it out — an equality check here is the
+            // one the compiler cannot catch, and getting it wrong leaves a closed room running
+            // forever while its page says it is closed.
+            if room.desired.is_at_rest() {
                 return Some(Step::Stop);
             }
 
@@ -820,6 +831,41 @@ mod tests {
             2,
             "a seeded label with no kind to produce it is a series that stays zero forever"
         );
+    }
+
+    /// **To the reconciler, `closed` IS `stopped`** — and the arm that carries that out is an
+    /// equality check the compiler cannot make exhaustive.
+    ///
+    /// Adding a variant to `DesiredState` produced two errors in this file and left the third
+    /// site — `if room.desired == DesiredState::Stopped` in the live-states arm — compiling
+    /// perfectly and silently wrong. That is the one that matters: a running room asked to close
+    /// would have kept running indefinitely while its page said closed, with nothing logged and
+    /// nothing to look at.
+    #[test]
+    fn closing_a_live_room_stops_it_and_a_closed_room_stays_down() {
+        for state in [RoomState::Starting, RoomState::Running, RoomState::Degraded] {
+            let room = view(state, DesiredState::Closed);
+            let cluster = snapshot(vec![deployment(&room, "hash-1", 1)]);
+            assert_eq!(
+                decide(&room, &cluster),
+                Some(Step::Stop),
+                "a {state:?} room asked to close must come down"
+            );
+        }
+
+        // And once down it rests exactly as a stopped room does — holding its reservation, holding
+        // its directory. The gate on starting it again is the web tier's, not the planner's.
+        let closed = view(RoomState::Idle, DesiredState::Closed);
+        assert_eq!(
+            decide(&closed, &snapshot(Vec::new())),
+            None,
+            "a closed room must never be started by the reconciler"
+        );
+
+        // A failed room that was closed stops retrying: there is nothing to retry toward.
+        let mut failed = view(RoomState::Failed, DesiredState::Closed);
+        failed.retry_after = Some(now() - Duration::seconds(1));
+        assert_eq!(decide(&failed, &snapshot(Vec::new())), None);
     }
 
     /// Deletion is reachable from every state, because a room nobody can fix is exactly the room
