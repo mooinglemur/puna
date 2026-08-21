@@ -307,7 +307,12 @@
     if (!button) return;
     event.preventDefault();
 
+    // A value beginning with `/` is a path this page rendered, and what somebody wants on their
+    // clipboard is the whole link -- a claim URL is a thing you send to a person, not something
+    // they retype. Anything else is copied verbatim: an address is `host:port` and must not be
+    // mangled into a URL.
     var text = button.dataset.copy;
+    if (text.charAt(0) === "/") text = new URL(text, location.origin).href;
     navigator.clipboard.writeText(text).then(
       function () {
         confirmCopy(button, "Copied to clipboard");

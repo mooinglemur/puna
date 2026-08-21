@@ -90,16 +90,25 @@
     });
 
     var search = document.querySelector('[data-filters="' + table.id + '"]');
-    if (search) {
-      search.addEventListener("input", function () {
-        var needle = search.value.trim().toLowerCase();
-        original.forEach(function (row) {
-          // Matched against the RENDERED text, so what you can see is what you can search --
-          // and a value the table does not show cannot match invisibly.
-          row.hidden = needle !== "" && !row.textContent.toLowerCase().includes(needle);
-        });
+    var onlyMine = document.querySelector('[data-only="mine"][data-table="' + table.id + '"]');
+
+    // **One place decides whether a row is visible.** Two independent controls each setting
+    // `hidden` would fight: clearing the search box would reveal rows the toggle is hiding, and
+    // whichever ran last would win. A row shows when it passes BOTH.
+    function refilter() {
+      var needle = search ? search.value.trim().toLowerCase() : "";
+      var mineOnly = !!(onlyMine && onlyMine.checked);
+      original.forEach(function (row) {
+        // Matched against the RENDERED text, so what you can see is what you can search -- and a
+        // value the table does not show cannot match invisibly.
+        var matches = needle === "" || row.textContent.toLowerCase().includes(needle);
+        var mine = !mineOnly || row.dataset.mine !== undefined;
+        row.hidden = !(matches && mine);
       });
     }
+
+    if (search) search.addEventListener("input", refilter);
+    if (onlyMine) onlyMine.addEventListener("change", refilter);
   }
 
   tables.forEach(attach);

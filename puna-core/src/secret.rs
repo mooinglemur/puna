@@ -51,8 +51,21 @@ pub fn url_token() -> String {
 }
 
 /// One slot's password, in dash-separated groups of five.
+///
+/// **Ten symbols, not fifteen**, decided 2026-08-21. The alphabet is 32 characters, so each symbol
+/// is exactly five bits: ten of them is 2^50, a little over a quadrillion combinations, against an
+/// endpoint that rate-limits authentication failures to ten a minute per room. Guessing one at that
+/// rate is not a threat model, and a slot password is not protecting much anyway -- it keeps a
+/// stranger out of somebody's slot in a game, it is not a credential for the platform.
+///
+/// What the five symbols bought was length in a field a player types by hand, having read it off a
+/// web page, often on a phone. That is the cost this removes.
+///
+/// **Nice-to-have, not built:** a deployment-configurable pattern -- `PUNA_SLOT_PASSWORD_PATTERN`
+/// or similar, defaulting to what this generates -- so an operator running a race can ask for more
+/// without a code change. Recorded in the plan.
 pub fn slot_password() -> String {
-    grouped(15, 5)
+    grouped(10, 5)
 }
 
 /// A room-wide password. Same shape as a slot's -- one person types either.
@@ -128,8 +141,17 @@ mod tests {
     fn passwords_are_grouped_and_url_tokens_are_not() {
         let password = slot_password();
         assert_eq!(password, password.to_lowercase());
-        assert_eq!(password.len(), 15 + 2, "15 symbols plus two dashes");
-        assert_eq!(password.matches('-').count(), 2);
+        assert_eq!(password.len(), 10 + 1, "10 symbols plus one dash");
+        assert_eq!(password.matches('-').count(), 1);
+
+        // The entropy claim, asserted rather than left in a comment: 32 symbols is five bits each,
+        // so ten symbols is 2^50 and the shape above is what carries it.
+        let symbols = password.replace('-', "").len() as u32;
+        assert_eq!(ALPHABET.len(), 32);
+        assert!(
+            2f64.powi((symbols * 5) as i32) > 1e15,
+            "a slot password fell below a quadrillion combinations"
+        );
         for group in password.split('-') {
             assert_eq!(group.len(), 5);
         }

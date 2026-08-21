@@ -417,7 +417,36 @@ summary { cursor: pointer; }
 .table-search {
   width: 100%;
   max-width: 22rem;
+  margin: 0;
+}
+
+/* The search box and any toggles beside it, on one line until the viewport says otherwise. */
+.table-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
   margin: 0 0 0.6rem;
+}
+
+.only-mine {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* The staff half of the room page, folded away. `<details>` styles its own marker; this stops the
+   heading inside the summary from forcing a line break beside it. */
+.manage > summary {
+  cursor: pointer;
+  list-style-position: outside;
+}
+
+.manage > summary > h2 {
+  display: inline-block;
+  margin: 2rem 0 0.6rem;
 }
 
 /* Sortable headers are real buttons to a keyboard: the JS gives them a tabindex and a role, and

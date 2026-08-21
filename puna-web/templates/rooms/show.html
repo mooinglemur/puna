@@ -18,8 +18,15 @@
 {# Filter and sort come from `table.js`, which reorders the rows the server already sent rather than
    rendering any. Without scripting the box and the arrows are simply absent and the table is the
    order the server chose. #}
+<div class="table-controls">
 <input type="search" class="table-search" data-filters="slots"
        placeholder="Filter slots" aria-label="Filter slots">
+{# Only where there is something to narrow to. A toggle that hides every row is a control that
+   looks broken, and somebody holding no slot in this room has exactly that. #}
+{% if owns_a_slot %}
+<label class="only-mine"><input type="checkbox" data-only="mine" data-table="slots"> only my slots</label>
+{% endif %}
+</div>
 <table class="slots" id="slots" data-sortable>
 <thead><tr>
 {# The slot number carries the per-slot tracker link, so the row's identity and the way into it are
@@ -31,7 +38,7 @@
 </tr></thead>
 <tbody>
 {% for slot in slots %}
-<tr>
+<tr{% if slot.is_mine +%} data-mine{% endif %}>
 {# The number IS the link to this slot's tracker, where the viewer is allowed one -- and it sorts as
    a number regardless, from `data-value`. #}
 <td data-value="{{ slot.slot_number }}">
@@ -49,20 +56,49 @@
 <td>
 {% if slot.is_mine %}
 <strong>you</strong>
+{% else if slot.owner_never_logged_in %}
+{# A row exists -- the lobby push assigned the slot -- but nobody has signed in under it yet, so the
+   only thing stored is a stand-in. Showing that would show a raw Discord id to people with no use
+   for one, and read as a bug. #}
+<span class="hint">never logged in</span>
+{% else if let Some(name) = slot.owner_name %}
+{{ name }}
 {% else if slot.owner_id.is_some() %}
+{# Held, by somebody this viewer is not entitled to know. The roster is for the people in the room;
+   this page is public. #}
 claimed
 {% else if let Some(token) = slot.claim_token %}
-{# Staff only: this link IS the claim, so it is not shown to ordinary visitors. #}
-<a href="/claim/{{ token }}">claim link</a>
+{# Staff only: this link IS the claim, so it is not shown to ordinary visitors. The copy control
+   takes the whole URL -- a claim link is a thing you send somebody, not a thing you read out. #}
+<a href="/claim/{{ token }}">claim</a>
+<button type="button" class="copy" data-copy="/claim/{{ token }}"
+        title="Copy this claim link" aria-label="Copy the claim link for slot {{+ slot.slot_number }}">
+<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+<rect x="5.5" y="1.5" width="9" height="11" rx="1.5" fill="none" stroke="currentColor"/>
+<path d="M10.5 14.5h-8a1 1 0 0 1-1-1v-9" fill="none" stroke="currentColor" stroke-linecap="round"/>
+</svg>
+</button>
 {% else %}
 unclaimed
 {% endif %}
 {# Unbinding the slot, for organizers. A roster action, not a kick: whoever is connected right now
-   stays connected, and the console's `kick` is the separate decision that says so. #}
+   stays connected, and the console's `kick` is the separate decision that says so.
+
+   A person-minus rather than a trash can, a reload or a red X. The column shows a person and this
+   removes them; the other three say destroy, retry and error, and it is none of those -- the slot
+   survives, keeps its password and its progress, and comes back with a fresh claim link. #}
 {% if slot.can_release %}
 <form method="post" action="/room/{{ room.id }}/slot/{{ slot.slot_number }}/release" class="inline">
-<button type="submit" class="linklike"
-        title="Unbind this slot and mint a fresh claim link">release</button>
+<button type="submit" class="cycle"
+        title="Release this slot: unbind its holder and mint a fresh claim link"
+        aria-label="Release slot {{+ slot.slot_number +}} from its holder">
+<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+<circle cx="6" cy="4.5" r="2.5" fill="none" stroke="currentColor"/>
+<path d="M1.5 13.5c0-2.5 2-4 4.5-4 1 0 1.9.2 2.6.7" fill="none" stroke="currentColor"
+      stroke-linecap="round"/>
+<path d="M10.5 11.5h4" fill="none" stroke="currentColor" stroke-linecap="round"/>
+</svg>
+</button>
 </form>
 {% endif %}
 </td>
@@ -74,6 +110,7 @@ unclaimed
 {% if let Some(password) = slot.password %}
 <code>{{ password }}</code>
 <button type="button" class="copy" data-copy="{{ password }}"
+        title="Copy this password"
         aria-label="Copy the password for slot {{+ slot.slot_number }}">
 <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
 <rect x="5.5" y="1.5" width="9" height="11" rx="1.5" fill="none" stroke="currentColor"/>
@@ -127,7 +164,11 @@ unclaimed
 {% endif %}
 
 {% if is_staff %}
-<h2>Manage</h2>
+{# Collapsed by default: this is the half of the page a player never needs, and it is longer than
+   everything above it. `<details>` rather than a scripted toggle -- it works with scripting off and
+   the browser remembers nothing, which is right for a section whose contents change a room. #}
+<details class="manage">
+<summary><h2>Manage</h2></summary>
 <ul>
 {# `is_staff` is the helper floor, which is exactly the console's own guard -- so this link is
    never offered to somebody the route would refuse. The console itself shows only the commands
@@ -173,6 +214,7 @@ starts, so the change cannot take effect on a running room. Switching away from 
 discards them and they cannot be recovered.</p>
 </form>
 {% endif %}
+</details>
 {% endif %}
 
 {% if !siblings.is_empty() %}

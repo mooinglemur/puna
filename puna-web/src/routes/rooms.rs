@@ -85,6 +85,10 @@ pub struct RoomTemplate {
     /// yet. See [`is_working`] -- rendering from `state` alone is what made a click bounce back to
     /// the display it had just replaced.
     is_working: bool,
+    /// Whether this viewer holds a slot here, which decides two things: the roster's usernames are
+    /// visible to them, and the "only my slots" toggle is worth offering. Somebody holding none
+    /// would get a control that hides every row.
+    owns_a_slot: bool,
 }
 
 /// One row of the room page's slot table.
@@ -135,6 +139,19 @@ pub struct SlotView {
     pub password: Option<String>,
     /// Whether this viewer is offered a control to unbind the slot from its owner.
     pub can_release: bool,
+    /// Who holds this slot, by Discord username, and **only for a viewer entitled to the roster**:
+    /// the room's staff, or somebody who holds a slot in it themselves.
+    ///
+    /// `Some("")` never happens; a person with a row but no login yet is `Some(placeholder)` and the
+    /// template says "never logged in" rather than showing a Discord ID, which is what the stored
+    /// stand-in actually contains. See `user::is_placeholder`.
+    ///
+    /// The gate is the same shape as `may_see_spoiler`'s `players` tier, and it exists because
+    /// `GET /room/<id>` is public: without it, holding a room link would list everybody playing.
+    pub owner_name: Option<String>,
+    /// True when the holder exists but has never signed in — the lobby-push case, where a slot is
+    /// assigned to a Discord id that has no account here yet.
+    pub owner_never_logged_in: bool,
 }
 
 fn slot_views(
@@ -143,10 +160,22 @@ fn slot_views(
     role: Option<RoomRole>,
     patched: &std::collections::HashSet<i32>,
     per_slot_passwords: bool,
+    owner_names: &std::collections::HashMap<i64, String>,
+    may_see_roster: bool,
 ) -> Vec<SlotView> {
     slots
         .into_iter()
         .map(|s| SlotView {
+            owner_name: match (may_see_roster, s.owner_id) {
+                (true, Some(owner)) => owner_names.get(&owner).cloned(),
+                _ => None,
+            },
+            owner_never_logged_in: match (may_see_roster, s.owner_id) {
+                (true, Some(owner)) => owner_names
+                    .get(&owner)
+                    .is_some_and(|name| puna_core::model::user::is_placeholder(name)),
+                _ => false,
+            },
             is_mine: matches!((viewer, s.owner_id), (Some(v), Some(o)) if v == o),
             has_patch: patched.contains(&s.slot_number),
             // **The one field this struct's own note warns about**, so it is gated here and the
@@ -472,12 +501,24 @@ async fn show(
     let can_see_spoiler = room::may_see_spoiler(room.spoiler_policy, role.is_some(), owns_a_slot);
     let can_see_tracker = room::may_see_tracker(room.tracker_policy, role.is_some(), owns_a_slot);
 
+    // Who is playing, for anybody entitled to the roster. Same tier as the `players` spoiler
+    // policy: the room's staff, or somebody who holds a slot in it -- the people the roster is
+    // *for*. `GET /room/<id>` is public, so without a gate a shared link would list everybody.
+    let may_see_roster = role.is_some() || owns_a_slot;
+    let owner_names = if may_see_roster {
+        slot::owner_names(&mut conn, room.id).await?
+    } else {
+        Default::default()
+    };
+
     let slots = slot_views(
         room_slots,
         session.user_id,
         role,
         &patched,
         room.slot_auth == SlotAuth::PerSlot,
+        &owner_names,
+        may_see_roster,
     );
     let siblings = room::siblings(&mut conn, room.id, room.generation_id).await?;
     let message = event::latest(&mut conn, room.id)
@@ -492,6 +533,7 @@ async fn show(
         is_closed,
         may_start: may_start(&room, role),
         is_working: is_working(&room),
+        owns_a_slot,
         room,
         slots,
         is_staff: role.is_some(),
@@ -1154,7 +1196,15 @@ mod tests {
 
         // A player: their own, and nothing else. Not the unclaimed slot either -- an unclaimed slot
         // still has a password, and it is not a free credential for whoever asks first.
-        let views = slot_views(slots.clone(), Some(mine), None, &Default::default(), true);
+        let views = slot_views(
+            slots.clone(),
+            Some(mine),
+            None,
+            &Default::default(),
+            true,
+            &Default::default(),
+            false,
+        );
         assert!(views[0].password.is_some(), "own slot: password expected");
         assert!(
             views[1].password.is_none(),
@@ -1166,7 +1216,15 @@ mod tests {
         );
 
         // A visitor holding the room link and nothing else: none of them.
-        let views = slot_views(slots.clone(), None, None, &Default::default(), true);
+        let views = slot_views(
+            slots.clone(),
+            None,
+            None,
+            &Default::default(),
+            true,
+            &Default::default(),
+            false,
+        );
         assert!(
             views.iter().all(|v| v.password.is_none()),
             "the public page handed a visitor the room's credentials"
@@ -1179,6 +1237,8 @@ mod tests {
             Some(RoomRole::Organizer),
             &Default::default(),
             true,
+            &Default::default(),
+            false,
         );
         assert!(views.iter().all(|v| v.password.is_some()));
 
@@ -1190,11 +1250,72 @@ mod tests {
             Some(RoomRole::Organizer),
             &Default::default(),
             false,
+            &Default::default(),
+            false,
         );
         assert!(
             views.iter().all(|v| v.password.is_none()),
             "a password was carried in a mode that has none"
         );
+    }
+
+    /// **Who is playing is roster information, and this page is public.**
+    ///
+    /// The tier is the same as `may_see_spoiler`'s `players`: the room's staff, or somebody who
+    /// holds a slot here — the people the roster is *for*. Without the gate, holding a room link
+    /// would list everybody in it by Discord username.
+    #[test]
+    fn usernames_reach_the_room_and_nobody_else() {
+        let slots = vec![slot(1, Some(100)), slot(2, Some(200)), slot(3, None)];
+        let names: std::collections::HashMap<i64, String> = [
+            (100, "alice".to_string()),
+            // The lobby-push case: a row exists so the slot can be owned, but nobody has ever
+            // signed in under it, so the stored name is the stand-in `ensure_exists` writes.
+            (200, puna_core::model::user::placeholder_username(200)),
+        ]
+        .into_iter()
+        .collect();
+
+        // Entitled: a participant, holding no role.
+        let views = slot_views(
+            slots.clone(),
+            Some(100),
+            None,
+            &Default::default(),
+            false,
+            &names,
+            true,
+        );
+        assert_eq!(views[0].owner_name.as_deref(), Some("alice"));
+        assert!(
+            views[1].owner_never_logged_in,
+            "a placeholder must be reported as such, not rendered"
+        );
+        assert!(
+            views[2].owner_name.is_none(),
+            "an unclaimed slot has no holder"
+        );
+
+        // Not entitled: somebody holding the link and nothing else.
+        let views = slot_views(slots, None, None, &Default::default(), false, &names, false);
+        assert!(
+            views
+                .iter()
+                .all(|v| v.owner_name.is_none() && !v.owner_never_logged_in),
+            "a visitor was handed the roster"
+        );
+    }
+
+    /// A placeholder is told apart by its shape, and a real username never wears it.
+    #[test]
+    fn a_stand_in_username_is_recognisable() {
+        use puna_core::model::user::{is_placeholder, placeholder_username};
+
+        assert!(is_placeholder(&placeholder_username(4931)));
+        // Discord names cannot contain angle brackets, which is what makes the shape unambiguous.
+        for real in ["alice", "Bob_99", "троя", "a<b"] {
+            assert!(!is_placeholder(real), "{real} read as a stand-in");
+        }
     }
 
     /// Releasing is an organizer's, and only where there is somebody to release.
@@ -1203,7 +1324,15 @@ mod tests {
         let slots = vec![slot(1, Some(100)), slot(2, None)];
 
         for role in [None, Some(RoomRole::Helper)] {
-            let views = slot_views(slots.clone(), None, role, &Default::default(), false);
+            let views = slot_views(
+                slots.clone(),
+                None,
+                role,
+                &Default::default(),
+                false,
+                &Default::default(),
+                false,
+            );
             assert!(
                 views.iter().all(|v| !v.can_release),
                 "{role:?} was offered a roster action"
@@ -1214,6 +1343,8 @@ mod tests {
             slots,
             Some(999),
             Some(RoomRole::Organizer),
+            &Default::default(),
+            false,
             &Default::default(),
             false,
         );
@@ -1237,7 +1368,15 @@ mod tests {
         let slots = vec![slot(1, Some(mine)), slot(2, Some(theirs)), slot(3, None)];
 
         // The owner, holding no role at all.
-        let views = slot_views(slots.clone(), Some(mine), None, &Default::default(), true);
+        let views = slot_views(
+            slots.clone(),
+            Some(mine),
+            None,
+            &Default::default(),
+            true,
+            &Default::default(),
+            false,
+        );
         assert!(views[0].tracker_id.is_some(), "own slot: link expected");
         assert!(
             views[1].tracker_id.is_none(),
@@ -1253,6 +1392,8 @@ mod tests {
             Some(RoomRole::Organizer),
             &Default::default(),
             true,
+            &Default::default(),
+            false,
         );
         assert!(
             views.iter().all(|v| v.tracker_id.is_none()),
@@ -1260,7 +1401,15 @@ mod tests {
         );
 
         // Anonymous.
-        let views = slot_views(slots, None, None, &Default::default(), true);
+        let views = slot_views(
+            slots,
+            None,
+            None,
+            &Default::default(),
+            true,
+            &Default::default(),
+            false,
+        );
         assert!(views.iter().all(|v| v.tracker_id.is_none()));
     }
 
@@ -1358,6 +1507,7 @@ mod tests {
             is_closed: false,
             may_start: true,
             is_working: false,
+            owns_a_slot: false,
         }
     }
 

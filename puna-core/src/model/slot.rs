@@ -123,6 +123,40 @@ pub async fn list(
     Ok(rows.into_iter().map(Slot::from).collect())
 }
 
+/// The Discord usernames of everyone holding a slot in this room.
+///
+/// A separate query rather than a join onto [`list`], deliberately: [`Slot`] is what the Secret
+/// builder and the room page both take, and a display-only column on it would travel everywhere a
+/// slot goes for the benefit of one table.
+///
+/// Placeholder names are returned as they are stored. [`crate::model::user::is_placeholder`] is
+/// what tells them apart, and the caller decides what to render -- which is not this module's
+/// business and is different in different places.
+pub async fn owner_names(
+    conn: &mut AsyncPgConnection,
+    room: RoomId,
+) -> Result<std::collections::HashMap<i64, String>, diesel::result::Error> {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = BigInt)]
+        id: i64,
+        #[diesel(sql_type = Text)]
+        username: String,
+    }
+
+    let rows: Vec<Row> = diesel::sql_query(
+        "SELECT DISTINCT u.id, u.username
+           FROM room_slots s
+           JOIN users u ON u.id = s.owner_id
+          WHERE s.room_id = $1",
+    )
+    .bind::<SqlUuid, _>(room)
+    .load(conn)
+    .await?;
+
+    Ok(rows.into_iter().map(|r| (r.id, r.username)).collect())
+}
+
 /// One slot by number.
 pub async fn get(
     conn: &mut AsyncPgConnection,
