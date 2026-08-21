@@ -23,11 +23,15 @@
 //!
 //! ## What is deliberately not here
 //!
-//! **`rotate_password` is not a command**, though §6's table lists it beside these. It is
-//! `POST /admin/v1/slots/<n>/password`, a different endpoint with different semantics — it `404`s
-//! outside per-slot mode, and it changes only the running room while the Secret stays authoritative.
-//! Modelling it as a ninth variant here would put a credential in the audit trail and imply it goes
-//! through the same dispatcher.
+//! **`rotate_password` IS a command here, and §6 says it should not be.** That section was written
+//! before the tier boundary existed: it assumed rotation would be `POST /admin/v1/slots/<n>/password`
+//! called directly, and the web tier has **no egress to room pods at all**. Only the orchestrator can
+//! reach a room, so asking it through this queue is the only shape available.
+//!
+//! Its stated objection is answered rather than ignored — the variant carries **no password**, only
+//! a slot number, so the audit trail records what was rotated and by whom without holding the value.
+//! What remains true is that it is *not a pahoa command*: the dispatcher handles it before the
+//! passthrough, because pahoa's own set is the eight others and it would answer `400`.
 //!
 //! **There is no room-wide password setter and there will not be one** (P18, settled): pahoa
 //! declined it because a change it cannot persist reverts at the next restart in every deployment.
@@ -68,6 +72,25 @@ pub enum RoomCommand {
         #[serde(default)]
         force: bool,
     },
+    /// Push a slot's **already-rotated** password to the Secret and then to the running room.
+    ///
+    /// **The one variant that is not a pahoa command**, and the departure from §6 is deliberate.
+    /// That section says rotation is `POST /admin/v1/slots/<n>/password` called directly rather than
+    /// a ninth command — written before the tier boundary was drawn. The web tier has **no egress to
+    /// room pods at all** (its NetworkPolicy says so, and calls it the point rather than an
+    /// omission), so the only process that can reach a room is the orchestrator. This queue is how
+    /// you ask it to.
+    ///
+    /// §6's stated objection was that a command variant "would put a credential in the audit
+    /// trail". It carries **no password** for exactly that reason: the new value is already in
+    /// `room_slots` and the orchestrator reads it there. This row records that slot 3 was rotated,
+    /// by whom, and when — which is what an audit trail is for.
+    ///
+    /// The dispatcher must handle it **before** the generic passthrough. Serialized into a pahoa
+    /// `/admin/v1/command` body it would be a `400`, since pahoa's command set is the eight above.
+    RotatePassword {
+        slot: i32,
+    },
     Kick {
         slot: i32,
         /// Optional on the wire; kicking without a stated reason is allowed and the client is
@@ -89,6 +112,7 @@ impl RoomCommand {
             Self::SendItem { .. } => "send_item",
             Self::Hint { .. } => "hint",
             Self::Kick { .. } => "kick",
+            Self::RotatePassword { .. } => "rotate_password",
         }
     }
 
@@ -108,7 +132,9 @@ impl RoomCommand {
             Self::Release { .. }
             | Self::Collect { .. }
             | Self::SendItem { .. }
-            | Self::Kick { .. } => RoomRole::Organizer,
+            | Self::Kick { .. }
+            // Rotation is a credential change: an organizer's, like every other one.
+            | Self::RotatePassword { .. } => RoomRole::Organizer,
         }
     }
 
@@ -125,7 +151,8 @@ impl RoomCommand {
             | Self::Collect { slot }
             | Self::SendItem { slot, .. }
             | Self::Hint { slot, .. }
-            | Self::Kick { slot, .. } => Some(*slot),
+            | Self::Kick { slot, .. }
+            | Self::RotatePassword { slot } => Some(*slot),
         }
     }
 }
@@ -209,6 +236,40 @@ mod tests {
                 reason: Some("afk".into()),
             },
         ]
+    }
+
+    /// **`RotatePassword` is not one of pahoa's, and `every_command` above is the pahoa set.**
+    ///
+    /// The wire-shape test walks that list against pahoa's parser; this variant would fail it,
+    /// because pahoa has no such command and would answer `400`. It is a Puna instruction that
+    /// happens to travel on the same queue, and the dispatcher must intercept it before the
+    /// passthrough — a source lint over `dispatch.rs` asserts that ordering, since getting it wrong
+    /// is a `400` logged as "Puna generated a body the room could not read", which is true and
+    /// unhelpful.
+    ///
+    /// It still round-trips through the row, because it is stored there like any other.
+    #[test]
+    fn the_rotation_command_is_not_part_of_pahoas_set_but_still_round_trips() {
+        let rotate = RoomCommand::RotatePassword { slot: 3 };
+        assert!(
+            !every_command().contains(&rotate),
+            "the rotation command reached the list this crate walks against pahoa's wire format"
+        );
+
+        let stored = serde_json::to_value(&rotate).expect("serializes");
+        assert_eq!(
+            serde_json::from_value::<RoomCommand>(stored).expect("parses"),
+            rotate
+        );
+
+        // And it carries a slot and NO password: the value is in `room_slots`, and this row is read
+        // by anybody who can read the room's command history.
+        assert_eq!(rotate.target_slot(), Some(3));
+        let body = serde_json::to_string(&rotate).expect("serializes");
+        assert!(
+            !body.contains("\"password\":"),
+            "a credential reached the audit trail: {body}"
+        );
     }
 
     /// **The wire format is pahoa's, and a mismatch is a `400` nothing on this side can anticipate.**
@@ -299,6 +360,7 @@ mod tests {
                 },
                 Helper,
             ),
+            (RoomCommand::RotatePassword { slot: 1 }, Organizer),
             (RoomCommand::Release { slot: 1 }, Organizer),
             (RoomCommand::Collect { slot: 1 }, Organizer),
             (

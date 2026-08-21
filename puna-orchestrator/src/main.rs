@@ -110,9 +110,13 @@ async fn main() -> anyhow::Result<()> {
         config.room_probe_timeout,
     ));
 
-    let reconciler =
-        reconcile::Reconciler::new(&config, pool.clone(), cluster, Arc::clone(&prober));
-    let result = run(&config, &pool, &reconciler, &prober, &state).await;
+    let reconciler = reconcile::Reconciler::new(
+        &config,
+        pool.clone(),
+        Arc::clone(&cluster),
+        Arc::clone(&prober),
+    );
+    let result = run(&config, &pool, &reconciler, &prober, &cluster, &state).await;
 
     health_server.abort();
     result
@@ -124,6 +128,7 @@ async fn run(
     pool: &puna_core::db::Pool,
     reconciler: &reconcile::Reconciler,
     prober: &Arc<probing::Prober>,
+    cluster: &Arc<dyn cluster::ClusterApi>,
     state: &Arc<health::State>,
 ) -> anyhow::Result<()> {
     loop {
@@ -158,7 +163,8 @@ async fn run(
         // already safe. Running it only here keeps one process answering a console, so an operator
         // cannot watch two dispatchers race for their button press.
         let dispatcher = tokio::spawn({
-            let dispatcher = dispatch::Dispatcher::new(pool.clone(), Arc::clone(prober));
+            let dispatcher =
+                dispatch::Dispatcher::new(pool.clone(), Arc::clone(prober), Arc::clone(cluster));
             let url = config.common.database_url.clone();
             async move { dispatcher.run(url).await }
         });

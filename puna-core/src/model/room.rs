@@ -786,6 +786,26 @@ pub async fn request_state(
     Ok(changed > 0)
 }
 
+/// Mark this room's Secret as needing a re-apply.
+///
+/// **The producer for a contract that has had none.** `secret_synced_at IS NULL` has meant "this
+/// room's Secret no longer matches the database" since the sweep was written, and the sweep has
+/// been reading it and re-applying on that basis — but nothing ever set it, so the hourly interval
+/// was doing all the work and the contract was documentation.
+///
+/// Set it whenever a credential changes and the room is not being restarted anyway. A restart does
+/// not need it: the start path renders the Secret from scratch.
+pub async fn mark_secret_stale(
+    conn: &mut AsyncPgConnection,
+    id: RoomId,
+) -> Result<(), diesel::result::Error> {
+    diesel::sql_query("UPDATE rooms SET secret_synced_at = NULL WHERE id = $1")
+        .bind::<SqlUuid, _>(id)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
 /// Change a room's password mode.
 ///
 /// **Every transition is a restart**, because pahoa reads the mode from the environment at startup

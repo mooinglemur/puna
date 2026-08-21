@@ -322,6 +322,44 @@
     );
   });
 
+  // --- ROTATING A SLOT PASSWORD -----------------------------------------------------------------
+  // The value on screen is stale the instant this succeeds, so it is struck through. Deliberately
+  // NOT replaced with the new one: this page would have to be told the new credential over a second
+  // channel to display it, and a reload already has it. Struck-through says "this is no longer the
+  // password" without pretending to know what is.
+  //
+  // The form still POSTs normally without this -- the redirect reloads the page and shows the new
+  // value, which is the same destination by a slower road.
+  document.addEventListener("submit", function (event) {
+    var form = event.target.closest("form[data-rotates]");
+    if (!form) return;
+    event.preventDefault();
+
+    var cell = form.closest("td");
+    fetch(form.action, {
+      method: "POST",
+      headers: { Accept: "text/html" },
+      credentials: "same-origin",
+      // Same reasoning as the lifecycle forms: the 303 goes to the room page, and following it
+      // renders the whole thing to throw it away.
+      redirect: "manual",
+    })
+      .then(function (response) {
+        if (response.type !== "opaqueredirect" && !response.ok) throw new Error(response.status);
+        var shown = cell && cell.querySelector("code");
+        if (shown) shown.classList.add("stale");
+        var copy = cell && cell.querySelector(".copy");
+        // The copy control goes with it. Copying a password that is already superseded is the one
+        // outcome here worse than no button at all.
+        if (copy) copy.remove();
+      })
+      // Fall back to the ordinary POST rather than leaving the row looking untouched: the request
+      // may well have landed, and the server-rendered page is the truth.
+      .catch(function () {
+        form.submit();
+      });
+  });
+
   // A page painted mid-transition watches from the moment it loads; one painted at rest waits for
   // somebody to do something.
   if (!settled()) watch();

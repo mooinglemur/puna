@@ -186,6 +186,31 @@ code {
 
 .linklike:hover { text-decoration: none; }
 
+/* Rotate a slot's password. Same shape as `.copy` -- a glyph beside the value it acts on -- and
+   unlike `.copy` it needs no scripting, so it is not hidden behind `js-copy`. */
+.cycle {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.25rem;
+  padding: 0.2rem;
+  vertical-align: middle;
+  color: var(--muted);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.cycle:hover { color: var(--text); border-color: var(--border); }
+.cycle:focus-visible { color: var(--text); border-color: var(--accent); }
+
+/* A password that has just been rotated. The value is no longer current and the new one is one
+   reload away; striking it through says that without pretending to know the replacement. */
+code.stale {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
 .js-copy .copy:hover { color: var(--text); border-color: var(--border); }
 .js-copy .copy:focus-visible { color: var(--text); border-color: var(--accent); }
 

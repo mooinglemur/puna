@@ -21,6 +21,8 @@ pub struct HttpsProbe;
 const STATUS: &str = "/admin/v1/status";
 const SHUTDOWN: &str = "/admin/v1/shutdown";
 const COMMAND: &str = "/admin/v1/command";
+/// Formatted with the slot number; pahoa spells this one per slot rather than taking it in a body.
+const SLOT_PASSWORD: &str = "/admin/v1/slots/{slot}/password";
 
 #[async_trait::async_trait]
 impl RoomProbe for HttpsProbe {
@@ -105,6 +107,33 @@ impl RoomProbe for HttpsProbe {
             .json()
             .await
             .map_err(|e| ProbeError::Malformed(e.to_string()))
+    }
+
+    async fn rotate_password(
+        &self,
+        endpoint: &RoomEndpoint,
+        admin_token: &str,
+        slot: i32,
+        password: &str,
+    ) -> Result<(), ProbeError> {
+        let path = SLOT_PASSWORD.replace("{slot}", &slot.to_string());
+        let response = endpoint
+            .client()
+            .await?
+            .post(endpoint.url(&path))
+            .bearer_auth(admin_token)
+            .json(&serde_json::json!({ "password": password }))
+            .send()
+            .await
+            .map_err(crate::room::RoomError::from)?;
+
+        // A `404` here is its own answer and not merely "missing": pahoa refuses this route outside
+        // per-slot mode. The caller checks the mode before queueing, so reaching it means the mode
+        // changed underneath -- which `classify` reports as a status error rather than hiding.
+        if let Some(e) = classify(&response) {
+            return Err(e.into());
+        }
+        Ok(())
     }
 
     fn capabilities(&self) -> ProbeCapabilities {

@@ -83,6 +83,24 @@ unclaimed
 {% else %}
 <span class="hint">&mdash;</span>
 {% endif %}
+{# Organizers only, on every slot: rotation is a credential change, which is an organizer's the way
+   every other one is. A running room gets it live -- the orchestrator writes the Secret and then
+   tells the room -- and a stopped one simply has it stored. `data-rotates` marks the row's password
+   cell for the strike-through, since the value on screen is stale the moment this succeeds. #}
+{% if is_organizer %}
+<form method="post" action="/room/{{ room.id }}/slot/{{ slot.slot_number }}/rotate-password"
+      class="inline" data-rotates>
+<button type="submit" class="cycle"
+        aria-label="Give slot {{+ slot.slot_number +}} a new password"
+        title="New password. Takes effect immediately on a running room.">
+<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+<path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" fill="none" stroke="currentColor" stroke-linecap="round"/>
+<path d="M12.4 1.6v3h-3" fill="none" stroke="currentColor" stroke-linecap="round"
+      stroke-linejoin="round"/>
+</svg>
+</button>
+</form>
+{% endif %}
 </td>
 {% endif %}
 {# The patch already carries this room's address, so it is ready to open rather than something to

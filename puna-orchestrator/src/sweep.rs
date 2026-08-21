@@ -238,35 +238,12 @@ impl Sweeper {
                 continue;
             };
 
-            // The same fail-closed builder the start path uses. A room whose slot passwords have
-            // gone incomplete keeps the Secret it has rather than being handed one that locks a
-            // player out.
-            let data = match spec::secret::build(&room, &secrets, &slots) {
-                Ok(data) => data,
-                Err(e) => {
-                    tracing::error!(
-                        room = %room_id,
-                        error = %e,
-                        "refusing to refresh this room's Secret; the old one is left in place"
-                    );
-                    continue;
-                }
+            let owner = OwnerRef {
+                name: deployment.name.clone(),
+                uid: deployment.uid.clone(),
             };
-
-            let spec = SecretSpec {
-                room_id,
-                data,
-                owner: Some(OwnerRef {
-                    name: deployment.name.clone(),
-                    uid: deployment.uid.clone(),
-                }),
-            };
-            match cluster.apply_secret(&spec).await {
-                Ok(()) => {
-                    if mark_secret_synced(conn, room_id).await.is_ok() {
-                        refreshed += 1;
-                    }
-                }
+            match apply_room_secret(conn, cluster, room_id, &room, &secrets, &slots, owner).await {
+                Ok(()) => refreshed += 1,
                 Err(e) => tracing::warn!(room = %room_id, error = ?e, "could not refresh a Secret"),
             }
         }
@@ -435,6 +412,40 @@ async fn room_ids(conn: &mut AsyncPgConnection) -> Result<HashSet<RoomId>, diese
 
 /// Rooms whose Secret is stale: never synced, or synced long enough ago to be worth refreshing.
 ///
+/// Render a room's Secret and apply it, marking the row synced.
+///
+/// **Shared with the dispatcher's password rotation**, which needs exactly this and needs it to
+/// happen *before* it touches the running room: the Secret is what survives a restart, and a
+/// rotation pushed only to the room reverts to the environment's value the next time it starts.
+/// Two implementations of this would be two chances to get that ordering right.
+///
+/// Uses the same fail-closed builder the start path does. A room whose slot passwords have gone
+/// incomplete keeps the Secret it has rather than being handed one that locks a player out --
+/// under pahoa's rule a map with a hole in it refuses the missing slot, and an empty one refuses
+/// everybody.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn apply_room_secret(
+    conn: &mut AsyncPgConnection,
+    cluster: &dyn ClusterApi,
+    room_id: RoomId,
+    room: &puna_core::model::room::Room,
+    secrets: &puna_core::model::room::RoomSecrets,
+    slots: &[puna_core::model::slot::Slot],
+    owner: OwnerRef,
+) -> anyhow::Result<()> {
+    let data = spec::secret::build(room, secrets, slots)
+        .map_err(|e| anyhow::anyhow!("refusing to render this room's Secret: {e}"))?;
+    cluster
+        .apply_secret(&SecretSpec {
+            room_id,
+            data,
+            owner: Some(owner),
+        })
+        .await?;
+    mark_secret_synced(conn, room_id).await?;
+    Ok(())
+}
+
 /// `secret_synced_at IS NULL` is the **contract**, not an initial state: whatever changes a
 /// credential nulls it, and this picks the room up on the next tick.
 async fn stale_secret_rooms(

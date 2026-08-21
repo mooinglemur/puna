@@ -219,6 +219,26 @@ pub trait RoomProbe: Send + Sync {
         command: &RoomCommand,
     ) -> Result<CommandOutput, ProbeError>;
 
+    /// Set one slot's password on the **running** room, without a restart.
+    ///
+    /// Separate from [`Self::execute`] because it is not one of pahoa's eight typed commands: it is
+    /// its own endpoint, and it `404`s outside per-slot mode.
+    ///
+    /// **The caller must have written the Secret first.** This changes the live room and persists
+    /// nothing — deliberately, since that is what stops a stale on-disk value shadowing the
+    /// configured one — so a rotation done only here reverts to the environment's value the next
+    /// time the room starts. See §4.
+    ///
+    /// The password is a parameter rather than something this reads, for the same reason
+    /// `admin_token` is: it must not be reachable from a `Debug` of anything that gets logged.
+    async fn rotate_password(
+        &self,
+        endpoint: &RoomEndpoint,
+        admin_token: &str,
+        slot: i32,
+        password: &str,
+    ) -> Result<(), ProbeError>;
+
     fn capabilities(&self) -> ProbeCapabilities;
 }
 

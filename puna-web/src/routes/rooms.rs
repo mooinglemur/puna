@@ -8,6 +8,7 @@
 //! unguessable id is the authorization, exactly as the reference implementation does it. What that
 //! page shows varies by who is looking -- credentials only ever through `SlotAccess`.
 
+use puna_core::model::command::{self, RoomCommand};
 use puna_core::model::event;
 use puna_core::model::generation;
 use puna_core::model::member::{self, MemberError, RoomRole};
@@ -234,6 +235,75 @@ async fn release_slot(
         previous_owner = ?previous.owner_id,
         user_id = access.user_id(),
         "slot released"
+    );
+    Ok(Redirect::to(format!("/room/{id}")))
+}
+
+/// Give a slot a new password, now.
+///
+/// **Three writes, and the order is the point.** The value lands in `room_slots` first so the page
+/// can show it on the next load; the Secret is marked stale so the hourly sweep is a backstop even
+/// if everything after this fails; and a command is queued so the orchestrator makes it durable and
+/// then live.
+///
+/// **The web tier cannot do the last part itself, and that is structural rather than an oversight.**
+/// It has no egress to room pods at all — its NetworkPolicy says so and calls that the point — so
+/// the only process that can reach a running room is the orchestrator. §6 says rotation is a direct
+/// call rather than a command; it was written before that boundary was drawn. See
+/// [`RoomCommand::RotatePassword`](puna_core::model::command::RoomCommand::RotatePassword).
+///
+/// A stopped room needs no command at all, and queueing one would be a rejection an organizer has
+/// to read past: §4 is explicit that for a room that is not running, writing the Secret alone is
+/// sufficient and correct.
+#[post("/room/<id>/slot/<n>/rotate-password")]
+async fn rotate_slot_password(
+    id: RoomParam,
+    n: i32,
+    access: RoomAccess<Organizer>,
+    pool: &State<Pool>,
+) -> Result<Redirect> {
+    if access.room.slot_auth != SlotAuth::PerSlot {
+        // 404 rather than 400, matching the JSON route and pahoa itself: outside per-slot mode
+        // there is no such thing as this slot's password, so there is nothing to rotate.
+        return Err(not_found("this room does not use per-slot passwords"));
+    }
+
+    let mut conn = pool.get().await?;
+    slot::get(&mut conn, id.0, n)
+        .await?
+        .ok_or_else(|| not_found("no such slot"))?;
+    slot::rotate_password(&mut conn, id.0, n).await?;
+    room::mark_secret_stale(&mut conn, id.0).await?;
+
+    // Only for a room that could be told. The command would otherwise land `rejected` with "this
+    // room is not running", which is true and is not something the organizer needs to act on.
+    if access.room.state == "running" {
+        command::enqueue(
+            &mut conn,
+            id.0,
+            access.user_id(),
+            access.role(),
+            &RoomCommand::RotatePassword { slot: n },
+        )
+        .await?;
+    }
+
+    event::record(
+        &mut conn,
+        id.0,
+        event::Actor::User(access.user_id()),
+        "slot_password_rotated",
+        // The slot, never the value. This row is read by anyone who can read the room's history.
+        serde_json::json!({ "slot": n }),
+    )
+    .await?;
+
+    tracing::info!(
+        room = %id,
+        slot = n,
+        by = access.user_id(),
+        live = access.room.state == "running",
+        "slot password rotated"
     );
     Ok(Redirect::to(format!("/room/{id}")))
 }
@@ -648,6 +718,7 @@ fn phrase(kind: &str) -> Option<&'static str> {
         "failed" => "the last attempt to start this room failed",
         "port_reclaimed" => "this room's port was reassigned while it was idle",
         "slot_released" => "a slot was released back to the pool",
+        "slot_password_rotated" => "a slot password was changed",
         _ => return None,
     })
 }
@@ -1044,6 +1115,7 @@ pub fn routes() -> Vec<rocket::Route> {
         redeem_invite,
         claim_slot,
         release_slot,
+        rotate_slot_password,
         slot_password,
         set_slot_auth,
     ]
