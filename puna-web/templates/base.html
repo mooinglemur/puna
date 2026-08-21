@@ -22,7 +22,12 @@
    would also work and would need `unsafe-inline` the day a CSP is added. See static/theme.js. #}
 <script src="/static/theme.js?v={{ base.static_version }}"></script>
 </head>
-<body>
+{# **The measure is opt-out, and admin pages take it.** `main` is 62rem because that is a readable
+   line length for prose, which is what most of this site is. The admin tables are not prose: they
+   are eight columns of dense facts, and holding them to a prose measure means scrolling a table
+   sideways on a 1600px screen with a third of the page empty beside it. A page says
+   `{% block layout %}wide{% endblock %}` to opt out. #}
+<body class="{% block layout %}{% endblock %}">
 <header class="topbar">
 {# The deployment's name, from PUNA_SITE_NAME. The footer below keeps the SOFTWARE's name beside
    its version, deliberately: one says whose site this is, the other says what is running it. #}

@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ base.site_name +}} admin &mdash; users{% endblock %}
+{% block layout %}wide{% endblock %}
 {% block content %}
 
 <h1>Users</h1>
@@ -71,45 +72,114 @@ theirs to lose.</p>
 {% if let Some(note) = row.note %}
 <div class="hint">{{ note }}</div>
 {% endif %}
+{# The verb matters: `changed_by` is only ever set by a standing change, so on an ACTIVE account it
+   means somebody restored it -- and a bare "by mooinglemur" under the word "active" reads as though
+   they had done something unexplained. #}
 {% if let Some(who) = row.changed_by %}
-<div class="hint">by {{+ who }}</div>
+<div class="hint">{% if row.is_active %}restored{% else %}set{% endif +%} by {{+ who }}</div>
 {% endif %}
 </td>
 <td data-value="{{ row.joined_secs }}">{{ row.joined }}</td>
 <td data-value="{{ row.last_seen_secs }}">{{ row.last_seen }}</td>
 <td data-value="{{ row.rooms_created }}">{{ row.rooms_created +}} / {{+ row.slots_held }}</td>
 <td class="actions">
-{# Only the transitions that mean something from here: an active account is not offered "restore",
-   and a banned one is not offered "ban". A control that is visible and does nothing teaches people
-   the tool is broken. #}
+{# Four glyphs, and the two that need a reason open an **overlay** rather than carrying a text field
+   in the cell. Three inline reason inputs per row is what made this table unusable: each one is
+   wider than the column, they wrapped, and the row grew to three lines of half-visible boxes.
+
+   `popover` rather than a scripted dialog or a `<details>`, and it earns its keep four ways with no
+   JavaScript at all: the browser puts it in the **top layer**, so it neither reflows the table nor
+   is clipped by the `overflow-x: auto` that makes the table a scroll container; Escape closes it;
+   clicking away closes it; and opening one **closes any other**, so two half-filled sanctions can
+   never be open at once. `popovertarget` is the whole mechanism -- there is no script on this page
+   beyond the clipboard and the sort.
+
+   Only the transitions that mean something are offered: an active account gets no "restore", a
+   banned one gets no "ban". A control that is visible and does nothing teaches people the tool is
+   broken. #}
 {% if row.status != "active" %}
+{# Restoring needs no reason -- it CLEARS the note, because the note explained a sanction that no
+   longer applies -- so it is a direct submit rather than an overlay with an empty field in it. #}
 <form method="post" action="/admin/users/status" class="inline">
 <input type="hidden" name="user_id" value="{{ row.id }}">
 <input type="hidden" name="status" value="active">
-<button type="submit">Restore</button>
+<button type="submit" class="act restore" title="Restore this account to full standing"
+        aria-label="Restore {{+ row.username }}">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<path d="M2.6 8a5.4 5.4 0 1 0 1.6-3.8" fill="none" stroke="currentColor" stroke-linecap="round"/>
+<path d="M1.8 1.9v3h3" fill="none" stroke="currentColor" stroke-linecap="round"
+      stroke-linejoin="round"/>
+</svg>
+</button>
 </form>
 {% endif %}
+
 {% if row.status != "restricted" %}
-<form method="post" action="/admin/users/status" class="inline">
+<button type="button" class="act" popovertarget="restrict-{{ row.id }}"
+        title="Restrict: keep their slots and rooms, withhold new ones"
+        aria-label="Restrict {{+ row.username }}">
+{# A padlock: shut, but the account is still there. #}
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<rect x="3.2" y="7" width="9.6" height="7" rx="1.4" fill="none" stroke="currentColor"/>
+<path d="M5.4 7V4.9a2.6 2.6 0 0 1 5.2 0V7" fill="none" stroke="currentColor" stroke-linecap="round"/>
+</svg>
+</button>
+<div popover id="restrict-{{ row.id }}" class="sheet">
+<form method="post" action="/admin/users/status">
+<h2>Restrict {{+ row.username }}</h2>
+<p class="hint">They keep every slot, room and membership they have, and lose the ability to open
+new rooms or upload generations. Nothing is deleted.</p>
 <input type="hidden" name="user_id" value="{{ row.id }}">
 <input type="hidden" name="status" value="restricted">
-<input type="text" name="note" placeholder="reason (shown to them)">
+<label for="restrict-note-{{ row.id }}">Reason &mdash; shown to them</label>
+<input type="text" id="restrict-note-{{ row.id }}" name="note" autocomplete="off">
+<p class="buttons">
 <button type="submit">Restrict</button>
+<button type="button" popovertarget="restrict-{{ row.id }}" popovertargetaction="hide">Cancel</button>
+</p>
 </form>
+</div>
 {% endif %}
+
 {% if row.status != "banned" %}
-<form method="post" action="/admin/users/status" class="inline">
+<button type="button" class="act danger" popovertarget="ban-{{ row.id }}"
+        title="Ban: refuse sign-in and stop existing sessions"
+        aria-label="Ban {{+ row.username }}">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<circle cx="8" cy="8" r="6.1" fill="none" stroke="currentColor"/>
+<path d="M3.7 3.7l8.6 8.6" fill="none" stroke="currentColor" stroke-linecap="round"/>
+</svg>
+</button>
+<div popover id="ban-{{ row.id }}" class="sheet">
+<form method="post" action="/admin/users/status">
+<h2>Ban {{+ row.username }}</h2>
+<p class="hint">They cannot sign in, and any session they already hold stops working within a few
+seconds. Their rooms, slots and memberships survive &mdash; a room somebody else is playing in is
+not theirs to lose.</p>
 <input type="hidden" name="user_id" value="{{ row.id }}">
 <input type="hidden" name="status" value="banned">
-<input type="text" name="note" placeholder="reason (shown to them)">
+<label for="ban-note-{{ row.id }}">Reason &mdash; shown to them</label>
+<input type="text" id="ban-note-{{ row.id }}" name="note" autocomplete="off">
+<p class="buttons">
 <button type="submit">Ban</button>
+<button type="button" popovertarget="ban-{{ row.id }}" popovertargetaction="hide">Cancel</button>
+</p>
 </form>
+</div>
 {% endif %}
+
 {% if row.can_view_as %}
 {# Read-only, and the banner says so on every page until it is stopped. See routes/users.rs. #}
 <form method="post" action="/admin/users/view-as" class="inline">
 <input type="hidden" name="user_id" value="{{ row.id }}">
-<button type="submit">View as</button>
+<button type="submit" class="act" title="See the site as this user. Read-only."
+        aria-label="View the site as {{+ row.username }}">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<path d="M.9 8S3.5 3.4 8 3.4 15.1 8 15.1 8 12.5 12.6 8 12.6.9 8 .9 8z" fill="none"
+      stroke="currentColor" stroke-linejoin="round"/>
+<circle cx="8" cy="8" r="2.1" fill="none" stroke="currentColor"/>
+</svg>
+</button>
 </form>
 {% endif %}
 </td>

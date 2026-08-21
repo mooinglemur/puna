@@ -577,6 +577,16 @@ mod tests {
             html.contains("/admin/rooms/resting\">"),
             "with a plain link for scripting-off"
         );
+
+        // **The page opts out of the prose measure.** `main` is 62rem because that is a readable
+        // line length for prose; this page is eight columns of dense facts, and held to it the
+        // table scrolls sideways on a wide screen with a third of the page empty beside it. The
+        // opt-in is one line in the template, so losing it is silent -- the page still renders, it
+        // just goes back to scrolling.
+        assert!(
+            html.contains("<body class=\"wide\">"),
+            "the rooms table is back inside the prose measure and will scroll sideways"
+        );
     }
 
     /// Sorting reads `data-value` where the cell's text does not compare in the order it means.

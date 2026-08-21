@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ base.site_name +}} admin &mdash; rooms{% endblock %}
+{% block layout %}wide{% endblock %}
 {% block content %}
 
 <h1>Rooms</h1>
@@ -131,9 +132,36 @@ disconnected a room at a time rather than all at once.
   <span class="hint">&mdash;</span>
   {% endif %}
   {# Offered on every row, running or not: pinning a room that is currently down is how you keep it
-     up after somebody starts it, which is a thing an operator wants to do BEFORE the event. #}
+     up after somebody starts it, which is a thing an operator wants to do BEFORE the event.
+
+     A glyph rather than a word, and the pairing is deliberate: Redeploy disconnects everybody and
+     says so in a word, while this only changes whether a timer applies. One heavy control and one
+     light one reads as a hierarchy, and it stops the actions column being the widest thing in the
+     table. The pinned state is already stated in the Idle column, so the icon does not have to
+     carry it. #}
   <form method="post" action="/admin/rooms/{{ row.id }}/pin?pinned={% if row.pinned %}false{% else %}true{% endif %}" class="inline">
-    <button type="submit">{% if row.pinned %}Unpin{% else %}Pin{% endif %}</button>
+    {# `{%+` or the attributes run together as `class="pin"title="Unpin..."` -- suppression eats the
+       newline before the tag, and nothing on screen would ever show it. #}
+    <button type="submit" class="pin"
+            {%+ if row.pinned %}title="Unpin: let the idle reaper take this room down again"
+            aria-label="Unpin {{+ row.name }}"{% else %}title="Pin: exempt this room from the idle reaper"
+            aria-label="Pin {{+ row.name }}"{% endif %}>
+{%- if row.pinned %}
+{# A pin struck through: the state it moves TO. #}
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<path d="M9.6 1.7 14.3 6.4l-2.2.6-1.1 3.4-4.8-4.8 3.4-1.1z" fill="none" stroke="currentColor"
+      stroke-linejoin="round"/>
+<path d="M6.2 9.8 2.4 13.6" fill="none" stroke="currentColor" stroke-linecap="round"/>
+<path d="M2 2l12 12" fill="none" stroke="currentColor" stroke-linecap="round"/>
+</svg>
+{% else %}
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<path d="M9.6 1.7 14.3 6.4l-2.2.6-1.1 3.4-4.8-4.8 3.4-1.1z" fill="none" stroke="currentColor"
+      stroke-linejoin="round"/>
+<path d="M6.2 9.8 2.4 13.6" fill="none" stroke="currentColor" stroke-linecap="round"/>
+</svg>
+{% endif -%}
+    </button>
   </form>
 </td>
 </tr>

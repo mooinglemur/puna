@@ -208,10 +208,10 @@ fn a_glyph_only_control_names_itself_twice() {
         }
     }
 
-    // A source lint is the easiest kind to write vacuously, so say how much it must have seen. Eleven
+    // A source lint is the easiest kind to write vacuously, so say how much it must have seen. Seventeen
     // glyph controls exist today; a change that leaves none is a change this lint stopped guarding.
     assert!(
-        examined >= 11,
+        examined >= 17,
         "only {examined} glyph-only controls found -- this lint is no longer looking at anything"
     );
     assert!(
@@ -571,4 +571,74 @@ fn code_only(source: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// **Every `popovertarget` names an `id` that exists in the same template.**
+///
+/// A mismatched pair is the quietest possible failure: the button renders, it is focusable, it has
+/// a tooltip, and clicking it does *nothing at all*. No console error, no network request, no
+/// visual change — an operator would reasonably conclude the sanction had been applied and moved
+/// on. The browser gives no feedback because a `popovertarget` pointing at nothing is not an error,
+/// it is just a reference to an element that is not there.
+///
+/// These ids are **templated** (`ban-{{ row.id }}`), so the check is a string comparison of the
+/// expressions rather than of rendered output — which is what makes it a source lint. Rendering
+/// would work too, but only for the rows a test happened to build.
+#[test]
+fn every_popover_button_points_at_a_popover_that_exists() {
+    let mut offenders = Vec::new();
+    let mut pairs = 0;
+
+    for path in templates() {
+        let source = blank_comments(
+            &std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("could not read {path:?}: {e}")),
+        );
+        let name = label(&path);
+
+        let ids: Vec<&str> = attribute_values(&source, "id=\"").collect();
+        for target in attribute_values(&source, "popovertarget=\"") {
+            pairs += 1;
+            if !ids.contains(&target) {
+                offenders.push(format!(
+                    "{name}: popovertarget=\"{target}\" names no element in this template"
+                ));
+            }
+        }
+
+        // The other half: a popover nothing can open is dead markup, and on a page where the
+        // overlay carries the form, it is a control the operator cannot reach at all.
+        let targets: Vec<&str> = attribute_values(&source, "popovertarget=\"").collect();
+        for (at, _) in source.match_indices("<div popover id=\"") {
+            let id = source[at + "<div popover id=\"".len()..]
+                .split('"')
+                .next()
+                .unwrap_or_default();
+            if !targets.contains(&id) {
+                offenders.push(format!(
+                    "{name}: popover id=\"{id}\" has no button that opens it"
+                ));
+            }
+        }
+    }
+
+    assert!(
+        pairs >= 4,
+        "only {pairs} popover buttons found -- this lint is no longer looking at anything"
+    );
+    assert!(
+        offenders.is_empty(),
+        "a popover button that names nothing renders, focuses, and silently does nothing:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+/// Every value of `<attr>="..."` in the source, as borrowed slices.
+fn attribute_values<'a>(source: &'a str, attribute: &'a str) -> impl Iterator<Item = &'a str> {
+    source.match_indices(attribute).map(move |(at, _)| {
+        source[at + attribute.len()..]
+            .split('"')
+            .next()
+            .unwrap_or_default()
+    })
 }

@@ -891,6 +891,23 @@ async fn the_user_listing_reports_standing_and_what_it_would_touch() {
                 .is_some_and(|n| !n.is_empty()),
             "the listing does not say who applied the sanction"
         );
+
+        // And after a restore the actor survives while the reason does not: "restored by X" is
+        // worth keeping, the reason for a sanction that no longer applies is not.
+        user::set_status(&mut conn, PLAYER, UserStatus::Active, None, OWNER)
+            .await
+            .expect("restore");
+        let listed = user::list(&mut conn).await.expect("list");
+        let player = listed.iter().find(|u| u.id == PLAYER).expect("the player");
+        assert_eq!(player.status(), UserStatus::Active);
+        assert_eq!(
+            player.status_note, None,
+            "a restored account still shows a reason"
+        );
+        assert!(
+            player.changed_by_name.is_some(),
+            "a restored account no longer says who restored it"
+        );
         assert_eq!(player.rooms_created, 0);
     })
     .await;

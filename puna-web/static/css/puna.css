@@ -122,17 +122,89 @@ a:hover { text-decoration: none; }
   flex-wrap: wrap;
 }
 
-/* The actions column on /admin/users: several small forms that must not each claim a line. */
+/* The pin toggle on /admin/rooms: a glyph beside a text button, so the pair reads as one heavy
+   control and one light one rather than two equal ones. Same treatment as the room page's rotate
+   and release controls. */
+.pin {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3rem;
+  color: var(--muted);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.pin:hover { color: var(--text); }
+.pin:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* The actions column on /admin/users: a row of glyphs, and nothing that needs typing into.
+   The reason fields live in the overlays below, which is what stopped this cell being three
+   wrapped lines of half-visible text boxes. */
 td.actions {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  flex-wrap: wrap;
+  gap: 0.25rem;
 }
 
-td.actions input[type="text"] {
-  width: 11rem;
-  min-width: 0;
+.act {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3rem;
+  color: var(--muted);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.act:hover { color: var(--text); }
+.act:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The two that are worth a moment's hesitation say so on hover, rather than being drawn in alarm
+   colors permanently -- a row of red glyphs beside every account reads as a page full of problems. */
+.act.danger:hover { color: var(--err-fg); }
+.act.restore:hover { color: var(--accent); }
+
+/* --- the sanction overlays -------------------------------------------------------------------
+   A `popover`, which the browser puts in the TOP LAYER: it does not reflow the table it was opened
+   from, and it is not clipped by the `overflow-x: auto` that makes every table here a scroll
+   container -- the same trap the copy confirmation hit, solved by the platform this time rather
+   than by hand. Escape and click-away close it, and opening one closes any other, all without a
+   line of script. */
+[popover].sheet {
+  width: min(30rem, calc(100vw - 2rem));
+  padding: 1rem 1.15rem 1.15rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 30px var(--float-shadow);
+}
+
+[popover].sheet::backdrop {
+  /* Dimmed rather than clear, so it reads as "answer this first" -- which it is: the form behind it
+     is a list of other people's accounts. */
+  background: rgb(0 0 0 / 0.45);
+}
+
+.sheet h2 { margin: 0 0 0.4rem; font-size: 1.1rem; }
+.sheet .hint { margin: 0 0 0.9rem; }
+.sheet label { display: block; margin-bottom: 0.3rem; }
+.sheet input[type="text"] { width: 100%; box-sizing: border-box; }
+.sheet .buttons {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.9rem 0 0;
+}
+
+/* **Where `popover` is not supported the overlays would render inline and always open** -- an
+   unknown attribute is simply ignored, so every reason form on the page would be visible at once
+   and the table would be unreadable. Hidden outright there instead: the glyphs then do nothing,
+   which is a dead control rather than a broken page, and the operator can still act from a browser
+   released this decade. */
+@supports not selector(:popover-open) {
+  [popover].sheet { display: none; }
 }
 
 /* --- the theme selector --------------------------------------------------------------------------
@@ -178,11 +250,22 @@ td.actions input[type="text"] {
 }
 
 main {
-  /* A measure, not a full-bleed page: the slot table is the only wide thing here and it scrolls on
-     its own. */
+  /* A measure, not a full-bleed page: on a room page the slot table is the only wide thing and it
+     scrolls on its own, which is the right trade when everything around it is prose. */
   max-width: 62rem;
   margin: 0 auto;
   padding: 1.5rem 1rem 4rem;
+}
+
+/* Pages that are mostly TABLE rather than mostly prose opt out of the measure -- see base.html.
+   Still bounded, because a table stretched across a 2560px monitor is its own readability problem:
+   the eye loses the row between the first column and the last. `max-width` simply stops binding on
+   a narrower screen, so this changes nothing on a laptop or a phone and the table scrolls there
+   exactly as it did. The footer follows, or the version line sits under a left edge that no longer
+   exists. */
+.wide main,
+.wide footer {
+  max-width: 96rem;
 }
 
 footer {
