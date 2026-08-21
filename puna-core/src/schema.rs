@@ -44,6 +44,10 @@ pub mod sql_types {
     #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "tracker_policy"))]
     pub struct TrackerPolicy;
+
+    #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
+    #[diesel(postgres_type(name = "user_status"))]
+    pub struct UserStatus;
 }
 
 diesel::table! {
@@ -304,11 +308,18 @@ diesel::table! {
 }
 
 diesel::table! {
+    use diesel::sql_types::*;
+    use super::sql_types::UserStatus;
+
     users (id) {
         id -> Int8,
         username -> Text,
         first_seen_at -> Timestamptz,
         last_seen_at -> Timestamptz,
+        status -> UserStatus,
+        status_note -> Nullable<Text>,
+        status_changed_at -> Nullable<Timestamptz>,
+        status_changed_by -> Nullable<Int8>,
     }
 }
 

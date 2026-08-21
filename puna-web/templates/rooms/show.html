@@ -280,6 +280,10 @@ discards them and they cannot be recovered.</p>
 {% endblock %}
 
 {% block scripts %}
+{# `copy.js` first: it is what reveals the copy controls, and it is shared with `/admin/users`.
+   `room.js` used to own this and returns early on a page with no room panel, which made it the
+   wrong home for something two pages need. #}
+<script src="/static/copy.js?v={{ base.static_version }}" defer></script>
 <script src="/static/room.js?v={{ base.static_version }}" defer></script>
 <script src="/static/table.js?v={{ base.static_version }}" defer></script>
 {% endblock %}

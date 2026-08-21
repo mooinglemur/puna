@@ -40,6 +40,14 @@ pub struct TplContext {
     pub site_name: &'static str,
     pub version: &'static str,
     pub static_version: &'static str,
+    /// Whose eyes this page is being seen through, when an administrator is viewing as somebody
+    /// else. `None` in every ordinary request.
+    ///
+    /// On [`TplContext`] rather than on the one page that offers the control, because the banner
+    /// has to be on **every** page: the whole state is that the site looks like somebody else's,
+    /// and a reminder that appears only where you started would be missing exactly where it is
+    /// needed. `username` beside it is already the person being viewed, not the viewer.
+    pub view_as: Option<String>,
 }
 
 impl TplContext {
@@ -51,6 +59,7 @@ impl TplContext {
             site_name: site_name(),
             version: puna_core::VERSION,
             static_version: STATIC_VERSION,
+            view_as: session.view_as.as_ref().map(|v| v.admin_username.clone()),
         }
     }
 }

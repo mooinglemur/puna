@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}{{ base.site_name +}} admin &mdash; users{% endblock %}
+{% block content %}
+
+<h1>Users</h1>
+<p class="hint"><a href="/admin">Back to administration</a></p>
+
+{% if let Some(shown) = notice %}
+<p class="{{ shown.class }}">{{ shown.message }}</p>
+{% endif %}
+
+{# Stated once at the top rather than left to be counted down a column, because "is anybody under a
+   sanction right now" is the question somebody opens this page with. #}
+{% if restricted > 0 || banned > 0 %}
+<p class="warning">{{ restricted +}} restricted, {{+ banned +}} banned.</p>
+{% endif %}
+
+<p class="hint"><strong>Restricted</strong> accounts keep everything they are part of &mdash; their
+slots, their rooms, their memberships &mdash; and lose only the ability to open new rooms and upload
+generations. <strong>Banned</strong> accounts cannot sign in and their existing sessions stop
+working within a few seconds. Neither deletes anything: a room somebody else is playing in is not
+theirs to lose.</p>
+
+<p class="table-controls">
+<input type="search" class="table-search" data-filters="users"
+       placeholder="Filter users" aria-label="Filter users">
+</p>
+
+<table class="users" id="users" data-sortable>
+<thead>
+<tr>
+  <th data-key="user">User</th>
+  <th data-key="id">Discord id</th>
+  <th data-key="status">Standing</th>
+  <th data-key="joined" title="How long ago this account first signed in.">Account age</th>
+  <th data-key="seen" title="Their last login. Puna refreshes this on each sign-in, not on each page view.">Last seen</th>
+  <th data-key="rooms" title="Rooms opened, and slots held right now. What a sanction would touch.">Rooms / slots</th>
+  <th></th>
+</tr>
+</thead>
+<tbody>
+{% for row in rows %}
+<tr>
+<td>
+{% if row.never_logged_in %}
+<span class="hint">never logged in</span>
+{% else %}
+{{ row.username }}
+{% endif %}
+</td>
+{# Monospace and copyable, the same treatment the room address gets: this is the value somebody
+   pastes into Discord to find out who they are looking at. #}
+<td>
+<code>{{ row.id }}</code>
+<button type="button" class="copy" data-copy="{{ row.id }}"
+        title="Copy this Discord id" aria-label="Copy the Discord id for {{+ row.username }}">
+<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+<rect x="5.5" y="1.5" width="9" height="11" rx="1.5" fill="none" stroke="currentColor"/>
+<path d="M10.5 14.5h-8a1 1 0 0 1-1-1v-9" fill="none" stroke="currentColor" stroke-linecap="round"/>
+</svg>
+</button>
+</td>
+<td>
+{% if row.is_active %}
+<span class="hint">active</span>
+{% else %}
+<span class="tag drift">{{ row.status }}</span>
+{% endif %}
+{# The reason, where there is one. A sanction with no stated cause is one nobody can appeal, and the
+   person who applied it will not remember in three months either. #}
+{% if let Some(note) = row.note %}
+<div class="hint">{{ note }}</div>
+{% endif %}
+{% if let Some(who) = row.changed_by %}
+<div class="hint">by {{+ who }}</div>
+{% endif %}
+</td>
+<td data-value="{{ row.joined_secs }}">{{ row.joined }}</td>
+<td data-value="{{ row.last_seen_secs }}">{{ row.last_seen }}</td>
+<td data-value="{{ row.rooms_created }}">{{ row.rooms_created +}} / {{+ row.slots_held }}</td>
+<td class="actions">
+{# Only the transitions that mean something from here: an active account is not offered "restore",
+   and a banned one is not offered "ban". A control that is visible and does nothing teaches people
+   the tool is broken. #}
+{% if row.status != "active" %}
+<form method="post" action="/admin/users/status" class="inline">
+<input type="hidden" name="user_id" value="{{ row.id }}">
+<input type="hidden" name="status" value="active">
+<button type="submit">Restore</button>
+</form>
+{% endif %}
+{% if row.status != "restricted" %}
+<form method="post" action="/admin/users/status" class="inline">
+<input type="hidden" name="user_id" value="{{ row.id }}">
+<input type="hidden" name="status" value="restricted">
+<input type="text" name="note" placeholder="reason (shown to them)">
+<button type="submit">Restrict</button>
+</form>
+{% endif %}
+{% if row.status != "banned" %}
+<form method="post" action="/admin/users/status" class="inline">
+<input type="hidden" name="user_id" value="{{ row.id }}">
+<input type="hidden" name="status" value="banned">
+<input type="text" name="note" placeholder="reason (shown to them)">
+<button type="submit">Ban</button>
+</form>
+{% endif %}
+{% if row.can_view_as %}
+{# Read-only, and the banner says so on every page until it is stopped. See routes/users.rs. #}
+<form method="post" action="/admin/users/view-as" class="inline">
+<input type="hidden" name="user_id" value="{{ row.id }}">
+<button type="submit">View as</button>
+</form>
+{% endif %}
+</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+
+{% if rows.is_empty() %}
+<p>Nobody has signed in yet.</p>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/table.js?v={{ base.static_version }}" defer></script>
+<script src="/static/copy.js?v={{ base.static_version }}" defer></script>
+{% endblock %}

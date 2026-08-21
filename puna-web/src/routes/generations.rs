@@ -481,6 +481,7 @@ mod tests {
                 site_name: "puna",
                 version: "test",
                 static_version: "test",
+                view_as: None,
             },
             generations: vec![none.clone(), partial.clone(), complete.clone()],
             result: Some(Notice {
@@ -548,6 +549,7 @@ mod tests {
                 site_name: "puna",
                 version: "test",
                 static_version: "test",
+                view_as: None,
             },
             generations: Vec::new(),
             result: None,
@@ -616,6 +618,7 @@ mod tests {
                 site_name: "puna",
                 version: "test",
                 static_version: "test",
+                view_as: None,
             },
             generations: vec![generation::Upload {
                 generation: generation::Generation {

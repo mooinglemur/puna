@@ -101,6 +101,40 @@ a:hover { text-decoration: none; }
 
 .who { color: var(--muted); }
 
+/* --- viewing the site as somebody else -------------------------------------------------------
+   Deliberately loud and full-bleed, unlike `.notice` and friends, which sit inside the measure and
+   read as page content. This is not about the page: it is a statement that everything below is
+   somebody else's view, and it stays until the reader ends it. Warning colors rather than error --
+   nothing is wrong, but nothing here is quite what it appears to be either. */
+.viewing-as {
+  padding: 0.6rem 1rem;
+  color: var(--warn-fg);
+  background: var(--warn-bg);
+  border-bottom: 1px solid var(--warn-fg);
+}
+
+.viewing-as p {
+  max-width: 62rem;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+/* The actions column on /admin/users: several small forms that must not each claim a line. */
+td.actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+td.actions input[type="text"] {
+  width: 11rem;
+  min-width: 0;
+}
+
 /* --- the theme selector --------------------------------------------------------------------------
    Hidden until `theme.js` reveals it: without scripting it cannot store a choice or apply one, and
    a control that does nothing is worse than none. Same shape as `js-copy` for the clipboard

@@ -291,9 +291,36 @@ mod tests {
 
     const CONFIGURED: &str = "registry.example.com/g/pahoa:sha-new";
 
+    /// Fixture room ids: fixed, distinct, and **all hex letters with no digits**.
+    ///
+    /// A random uuid contains random digits, and the assertions below check that a Discord id is
+    /// *absent* from the page -- so a uuid happening to contain that digit run fails a correct
+    /// build, at random, roughly never on the run you are watching. It did, once, immediately.
+    /// `tracker/show.html`'s leak test already carries the same note for the same reason.
+    const IDS: [&str; 4] = [
+        "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+        "cccccccc-dddd-eeee-ffff-aaaaaaaaaaaa",
+        "dddddddd-eeee-ffff-aaaa-bbbbbbbbbbbb",
+    ];
+
+    /// **Ids are fixed and all-hex-letters, never `RoomId::new()`.**
+    ///
+    /// A random uuid contains random digits, and the assertions below check that a Discord id is
+    /// *absent* from the page -- so a uuid happening to contain that digit run fails a correct
+    /// build, at random, roughly never on the run you are watching. It did. `tracker/show.html`'s
+    /// leak test already carries the same note for the same reason: an all-letter id cannot collide
+    /// with a number the page is asserted not to contain.
+    fn id(n: usize) -> RoomId {
+        IDS[n].parse().expect("a fixed id")
+    }
+
     fn room(running: Option<&str>) -> FleetRoom {
         FleetRoom {
-            id: RoomId::new(),
+            // One id by default. A test that compares ids assigns its own from `IDS` -- a shared
+            // counter would hand out different ids depending on which other tests ran first, which
+            // is a race dressed up as determinism.
+            id: id(0),
             name: "midweek-async".into(),
             state: if running.is_some() { "running" } else { "idle" }.into(),
             desired_state: "running".into(),
@@ -365,14 +392,20 @@ mod tests {
     /// twice.
     #[test]
     fn the_table_shows_drift_and_offers_a_redeploy() {
-        let drifted = room(Some("registry.example.com/g/pahoa:sha-old"));
-        let current = room(Some(CONFIGURED));
-        let idle = room(None);
+        // Distinct ids, because this test asserts which rows do and do not carry a control keyed
+        // by id -- with one shared id every such assertion is about all four rows at once.
+        let mut drifted = room(Some("registry.example.com/g/pahoa:sha-old"));
+        drifted.id = id(0);
+        let mut current = room(Some(CONFIGURED));
+        current.id = id(1);
+        let mut idle = room(None);
+        idle.id = id(2);
         // A room with a request already in flight, so the "redeploy queued" cell actually renders.
         // Without one that branch is never taken and every assertion about its wording passes
         // against markup nothing produced -- which is exactly what happened until a mutation of
         // the tag failed to fail.
         let mut queued = room(Some(CONFIGURED));
+        queued.id = id(3);
         queued.redeploy_requested_at = Some(Utc::now());
         let overview = Overview {
             pahoa_image: Some(CONFIGURED.into()),
@@ -391,6 +424,7 @@ mod tests {
                 site_name: "Example Multiworld",
                 version: "test",
                 static_version: "test",
+                view_as: None,
             },
             desired_tag: Some("sha-new".into()),
             desired_image: Some(CONFIGURED.into()),
@@ -566,6 +600,7 @@ mod tests {
                 site_name: "puna",
                 version: "test",
                 static_version: "test",
+                view_as: None,
             },
             desired_tag: None,
             desired_image: None,

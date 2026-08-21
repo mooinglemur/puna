@@ -771,3 +771,127 @@ async fn the_fleet_overview_scopes_on_what_was_asked_for() {
     })
     .await;
 }
+
+/// Account standing: what each rung withholds, and that nothing is destroyed by any of them.
+///
+/// **The second half is the load-bearing one.** A ban is a statement about a person; the rooms they
+/// opened and the slots they hold are other people's games. A sanction that quietly emptied those
+/// would punish everybody in the room, and it would do it silently — nothing about a missing slot
+/// owner says *why*.
+#[tokio::test]
+async fn a_sanction_withholds_and_never_deletes() {
+    use puna_core::model::user::{self, UserStatus};
+
+    with_db(|pool| async move {
+        let mut conn = pool.get().await.expect("connection");
+        users(&mut conn).await;
+        let generation = seed_generation(&mut conn, false).await;
+
+        let id = room::create(
+            &mut conn,
+            &NewRoom::direct(Environment::Dev, "theirs", generation, OWNER),
+        )
+        .await
+        .expect("create");
+
+        // They hold a slot in it, as somebody sanctioned mid-async normally would.
+        let token = slot::list(&mut conn, id).await.expect("slots")[0]
+            .claim_token
+            .clone()
+            .expect("claimable");
+        slot::claim(&mut conn, &token, OWNER).await.expect("claim");
+
+        // The ladder, and each rung is strictly more than the last.
+        assert!(UserStatus::Active.may_create() && UserStatus::Active.may_act());
+        assert!(!UserStatus::Restricted.may_create());
+        assert!(
+            UserStatus::Restricted.may_act(),
+            "restricted still plays -- that is the entire point of the middle rung"
+        );
+        assert!(!UserStatus::Banned.may_create() && !UserStatus::Banned.may_act());
+
+        for status in [UserStatus::Restricted, UserStatus::Banned] {
+            user::set_status(&mut conn, OWNER, status, Some("spam"), HELPER)
+                .await
+                .expect("set status");
+
+            let (read, note) = user::status_of(&mut conn, OWNER)
+                .await
+                .expect("read")
+                .expect("the user exists");
+            assert_eq!(read, status);
+            assert_eq!(note.as_deref(), Some("spam"));
+
+            // Nothing of theirs moved.
+            assert!(
+                room::get(&mut conn, id).await.expect("read").is_some(),
+                "{status:?} deleted a room"
+            );
+            assert_eq!(
+                slot::list(&mut conn, id).await.expect("slots")[0].owner_id,
+                Some(OWNER),
+                "{status:?} took a slot away from its holder"
+            );
+            assert_eq!(
+                member::role_of(&mut conn, id, OWNER).await.expect("role"),
+                Some(RoomRole::Organizer),
+                "{status:?} removed them from their own room's roster"
+            );
+        }
+
+        // Restoring clears the note: it explained a sanction that no longer applies, and leaving it
+        // would show a reason beside an account that is fine.
+        user::set_status(&mut conn, OWNER, UserStatus::Active, None, HELPER)
+            .await
+            .expect("restore");
+        let (read, note) = user::status_of(&mut conn, OWNER)
+            .await
+            .expect("read")
+            .expect("exists");
+        assert_eq!(read, UserStatus::Active);
+        assert_eq!(note, None, "a restored account still showed a reason");
+    })
+    .await;
+}
+
+/// The admin listing names everybody, with the numbers a sanction decision needs.
+#[tokio::test]
+async fn the_user_listing_reports_standing_and_what_it_would_touch() {
+    use puna_core::model::user::{self, UserStatus};
+
+    with_db(|pool| async move {
+        let mut conn = pool.get().await.expect("connection");
+        users(&mut conn).await;
+        let generation = seed_generation(&mut conn, false).await;
+        room::create(
+            &mut conn,
+            &NewRoom::direct(Environment::Dev, "one", generation, OWNER),
+        )
+        .await
+        .expect("create");
+
+        user::set_status(&mut conn, PLAYER, UserStatus::Banned, Some("why"), OWNER)
+            .await
+            .expect("ban");
+
+        let listed = user::list(&mut conn).await.expect("list");
+        let owner = listed.iter().find(|u| u.id == OWNER).expect("the owner");
+        let player = listed.iter().find(|u| u.id == PLAYER).expect("the player");
+
+        assert_eq!(owner.status(), UserStatus::Active);
+        assert_eq!(owner.rooms_created, 1, "rooms they opened");
+
+        assert_eq!(player.status(), UserStatus::Banned);
+        assert_eq!(player.status_note.as_deref(), Some("why"));
+        // Who did it, resolved through the self-join rather than left as a bare id.
+        assert!(
+            player
+                .changed_by_name
+                .as_deref()
+                .is_some_and(|n| !n.is_empty()),
+            "the listing does not say who applied the sanction"
+        );
+        assert_eq!(player.rooms_created, 0);
+    })
+    .await;
+}

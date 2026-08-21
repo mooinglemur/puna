@@ -104,6 +104,36 @@ impl<'r, S: GateSource> FromRequest<'r> for CanCreateRoom<S> {
             }
         };
 
+        // **A restricted account is refused here and nowhere else**, because this guard is already
+        // the only door onto both things `restricted` withholds -- opening a room and uploading a
+        // generation. Checked BEFORE the gate so the answer does not depend on whether creation
+        // happens to be open, and **before the admin bypass**, which is the point that matters: an
+        // administrator who has been restricted is restricted, or the sanction means nothing the
+        // moment it is applied to somebody who can turn it off.
+        match puna_core::model::user::status_of(&mut conn, session.user_id()).await {
+            Ok(Some((status, note))) if !status.may_create() => {
+                let message = match note {
+                    Some(why) => {
+                        format!("This account cannot create rooms or upload generations. {why}")
+                    }
+                    None => "This account cannot create rooms or upload generations.".to_string(),
+                };
+                return Outcome::Error((
+                    Status::Forbidden,
+                    Error::new(Status::Forbidden, anyhow::anyhow!(message)),
+                ));
+            }
+            Ok(_) => {}
+            // Unreadable standing is not permission to create. The gate below fails closed for the
+            // same reason and this must not be the softer of the two.
+            Err(e) => {
+                return Outcome::Error((
+                    Status::ServiceUnavailable,
+                    Error::new(Status::ServiceUnavailable, e.into()),
+                ));
+            }
+        }
+
         let decision =
             match settings::evaluate(&mut conn, S::SOURCE, session.user_id(), session.is_admin())
                 .await

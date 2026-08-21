@@ -1581,6 +1581,7 @@ mod tests {
                 site_name: "puna",
                 version: "test",
                 static_version: "test",
+                view_as: None,
             },
             room: a_room(),
             slots: Vec::new(),
@@ -1847,8 +1848,8 @@ mod tests {
 
         // The filtered port is described rather than left as a second address with no explanation:
         // it is the same room, and somebody has to be able to tell which one to take.
-        assert!(html.contains("standard room"));
-        assert!(html.contains("feed-filtered room"));
+        assert!(html.contains("standard view"));
+        assert!(html.contains("feed-filtered view"));
 
         // The label is what a screen reader announces, and suppression eats the space before an
         // expression even inside an attribute -- where nothing on screen would reveal it.

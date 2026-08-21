@@ -74,10 +74,10 @@
 <thead><tr><th>Host:port</th><th>Description</th></tr></thead>
 <tbody>
 {% if let Some(port) = room.advertised_port %}
-{% call address_row(host, port, "standard room", "most clients should use this one") %}{% endcall %}
+{% call address_row(host, port, "standard view", "most clients should use this one") %}{% endcall %}
 {% endif %}
 {% if let Some(filtered) = room.advertised_filtered_port %}
-{% call address_row(host, filtered, "feed-filtered room", "filters out other slots' item traffic") %}{% endcall %}
+{% call address_row(host, filtered, "feed-filtered view", "same room, filters out other slots' item traffic") %}{% endcall %}
 {% endif %}
 </tbody>
 </table>

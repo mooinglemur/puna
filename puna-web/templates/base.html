@@ -73,6 +73,23 @@
 </div>
 </nav>
 </header>
+{# **On every page, because the whole state is that the site looks like somebody else's.** A notice
+   only where the control lives would be missing exactly where it matters -- three clicks deep,
+   wondering why an organizer cannot see their own console.
+
+   It says READ-ONLY because that is enforced rather than promised: `Session`'s request guard
+   refuses every non-GET while this is set. See auth.rs. #}
+{% if let Some(admin) = base.view_as %}
+<div class="viewing-as">
+<p>Viewing the site as <strong>{{ base.username }}</strong>. This is read-only &mdash; nothing you
+do here can change anything.
+<form method="post" action="/admin/users/stop-view-as" class="inline">
+<button type="submit">Stop, and be {{+ admin +}} again</button>
+</form>
+</p>
+</div>
+{% endif %}
+
 <main>
 {% block content %}{% endblock %}
 </main>

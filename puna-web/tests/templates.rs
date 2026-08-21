@@ -470,3 +470,105 @@ fn the_theme_selector_agrees_across_markup_script_and_stylesheet() {
 fn source(relative: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
 }
+
+/// **Viewing the site as somebody else must be read-only, and this asserts WHERE that is decided.**
+///
+/// The rule lives in the `Session` request guard rather than in `LoggedInSession`, and that is not
+/// a stylistic choice: `POST /room/<id>/start` takes a plain `Session`, because D8 lets an
+/// anonymous visitor start an idle room. A check one rung up would leave exactly that route open,
+/// and the symptom would be a room started by somebody who did not start it — invisible in the
+/// audit trail, which would name the person being viewed.
+///
+/// Asserted over the source because there is no way to assert "no route was forgotten" from a
+/// test that exercises routes: the property is about the guard every other guard composes on.
+#[test]
+fn viewing_as_somebody_is_read_only_at_the_base_guard() {
+    // **Comments stripped first.** Prose about a rule contains the rule's own identifiers -- the
+    // `LoggedInSession` guard's comment explains why it does not call `from_request_sync`, and
+    // naming it there was enough to trip the negative assertion below. Third time in this codebase
+    // that a source lint has matched its own explanation; see `puna-silent-breakage`.
+    let auth = code_only(&std::fs::read_to_string(source("src/auth.rs")).expect("auth.rs"));
+
+    // The refusal, inside the `Session` impl rather than any other. Split there so a copy of this
+    // check living only in `LoggedInSession` cannot satisfy it.
+    let base = auth
+        .split_once("impl<'r> FromRequest<'r> for Session {")
+        .expect("the Session guard exists")
+        .1
+        .split_once("\n}")
+        .expect("it ends")
+        .0;
+
+    assert!(
+        base.contains("view_as.is_some()") && base.contains("Method::Get"),
+        "the base session guard no longer refuses writes while viewing as somebody: a write route \
+         taking a plain `Session` -- POST /room/<id>/start does -- would be reachable"
+    );
+
+    // `LoggedInSession` must go THROUGH that guard rather than around it. Calling the sync
+    // constructor here instead would quietly exempt every authenticated write route from the rule
+    // above, and nothing else would look different.
+    let logged_in = auth
+        .split_once("impl<'r> FromRequest<'r> for LoggedInSession {")
+        .expect("the LoggedInSession guard exists")
+        .1
+        .split_once("\n}")
+        .expect("it ends")
+        .0;
+    assert!(
+        logged_in.contains("request.guard::<Session>()"),
+        "LoggedInSession bypasses the Session guard, so the read-only rule does not reach it"
+    );
+    assert!(
+        !logged_in.contains("from_request_sync"),
+        "LoggedInSession reads the cookie directly, which skips the read-only refusal"
+    );
+
+    // Exactly one route may write while impersonating, and it is the way out. It takes no session
+    // guard at all -- it could not be reached through one -- so the thing to assert is that it
+    // remains the ONLY caller of the bypass.
+    let users = code_only(
+        &std::fs::read_to_string(source("src/routes/users.rs")).expect("routes/users.rs"),
+    );
+    assert!(
+        users.contains("Session::from_cookies(cookies)"),
+        "stop-view-as no longer reads the cookie directly, so it cannot work while impersonating"
+    );
+
+    let bypass: usize = ["src/auth.rs", "src/routes/users.rs", "src/routes/rooms.rs"]
+        .iter()
+        .map(|f| {
+            code_only(&std::fs::read_to_string(source(f)).unwrap_or_default())
+                .matches("from_cookies(")
+                .count()
+        })
+        .sum();
+    assert!(
+        bypass <= 3,
+        "`Session::from_cookies` has grown callers: it skips the read-only refusal, and every use \
+         outside stop-view-as needs justifying ({bypass} found)"
+    );
+
+    // And an impersonated session must not carry admin rights: seeing admin-only affordances
+    // through somebody else's eyes is the opposite of what the feature answers.
+    assert!(
+        users.contains("is_admin: false"),
+        "the impersonated session keeps its admin flag, so it does not show what that user sees"
+    );
+}
+
+/// Rust source with `//` line comments removed, keeping newlines so the shape is unchanged.
+///
+/// For lints that assert something about *code*: a comment explaining a rule names the identifiers
+/// the rule is about, so an assertion over raw source reads the explanation as though it were the
+/// thing explained. That has produced a vacuous pass twice here and a false failure once.
+fn code_only(source: &str) -> String {
+    source
+        .lines()
+        .map(|line| match line.find("//") {
+            Some(at) => &line[..at],
+            None => line,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
