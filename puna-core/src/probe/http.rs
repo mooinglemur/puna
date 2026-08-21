@@ -127,9 +127,14 @@ impl RoomProbe for HttpsProbe {
             .await
             .map_err(crate::room::RoomError::from)?;
 
-        // A `404` here is its own answer and not merely "missing": pahoa refuses this route outside
-        // per-slot mode. The caller checks the mode before queueing, so reaching it means the mode
-        // changed underneath -- which `classify` reports as a status error rather than hiding.
+        // **A `404` here has two causes and pahoa's message names only one of them.** Its handler
+        // answers `there is no slot <n> in this seed` both when the slot genuinely does not exist
+        // and when the room is not in per-slot mode at all -- the actor collapses the second into
+        // the first (`None => known = false`). So a rotation that arrives after somebody switched
+        // the mode reports a missing slot, and sends whoever reads it to look at the seed.
+        //
+        // The caller checks the mode before queueing, which is what keeps this rare; it is recorded
+        // because the message would otherwise be actively misleading in the one case it appears.
         if let Some(e) = classify(&response) {
             return Err(e.into());
         }
