@@ -381,6 +381,52 @@ async fn resolve_role(
     }
 }
 
+/// The lifecycle panel on its own, for the poller to swap in.
+///
+/// **The same template file `show.html` includes**, which is the whole point: the page has one set
+/// of branches deciding what a room's state looks like and who is offered a control, and a second
+/// set written in JavaScript would be two things to keep in step — with the drifting one being the
+/// half nobody reviews. The page would go on working while telling somebody the wrong thing about
+/// their room.
+///
+/// Public, like the page it is part of, and it re-resolves the viewer's role rather than trusting
+/// anything the client sends: this fragment decides whether to render a start control, so it is
+/// making the same authorization decision `show` does and must make it the same way.
+#[derive(Template, WebTemplate)]
+#[template(path = "rooms/panel.html")]
+pub struct PanelTemplate {
+    room: Room,
+    is_closed: bool,
+    may_start: bool,
+    message: Option<&'static str>,
+    elapsed: String,
+}
+
+#[get("/room/<id>/panel")]
+async fn panel(id: RoomParam, session: Session, pool: &State<Pool>) -> Result<PanelTemplate> {
+    let mut conn = pool.get().await?;
+    let room = room::get(&mut conn, id.0)
+        .await?
+        .ok_or_else(|| not_found("no such room"))?;
+
+    // Deliberately NO implicit start here, unlike `show`. D8's trigger is about a person arriving
+    // at a room, and this is a poll -- firing it would mean a page left open on a stopped room
+    // restarted it every few seconds, which is the link-unfurl hazard with a worse cadence.
+    let role = resolve_role(&mut conn, &session, room.id).await?;
+    let message = event::latest(&mut conn, room.id)
+        .await?
+        .and_then(|e| phrase(&e.kind));
+    let elapsed = human_duration(since_ms(room.state_changed_at));
+
+    Ok(PanelTemplate {
+        is_closed: room.desired_state == DesiredState::Closed.as_sql(),
+        may_start: may_start(&room, role),
+        room,
+        message,
+        elapsed,
+    })
+}
+
 /// The poll target behind the starting spinner. Two row reads, no template.
 ///
 /// `since_ms` is a **server-computed duration** rather than a timestamp, deliberately: a client
@@ -832,6 +878,7 @@ pub fn routes() -> Vec<rocket::Route> {
         my_rooms,
         show,
         status,
+        panel,
         start,
         stop,
         close,
@@ -1078,6 +1125,144 @@ mod tests {
         assert!(
             !html.contains("/close"),
             "a closed room offered Close again"
+        );
+    }
+
+    fn a_panel() -> PanelTemplate {
+        PanelTemplate {
+            room: a_room(),
+            is_closed: false,
+            may_start: true,
+            message: None,
+            elapsed: "12s".into(),
+        }
+    }
+
+    /// **The poller's contract with the template, which nothing else checks.**
+    ///
+    /// `room.js` decides whether anything moved by comparing `panel.dataset.state` and
+    /// `panel.dataset.desired` against the status JSON. If the wrapper stopped emitting either,
+    /// every comparison would be `undefined !== undefined` — false, forever — and the page would
+    /// poll happily and never update. Nothing would error and nothing would look wrong.
+    ///
+    /// Asserted from the script's own text so the two cannot drift: a renamed attribute has to be
+    /// renamed in both places or this fails.
+    #[test]
+    fn the_panel_carries_every_attribute_the_poller_reads() {
+        let script = include_str!("../../static/room.js");
+        let html = a_panel().render().expect("renders");
+
+        let mut found = 0;
+        for reference in script.match_indices("panel.dataset.") {
+            let key: String = script[reference.0 + "panel.dataset.".len()..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect();
+            assert!(
+                html.contains(&format!("data-{key}=")),
+                "room.js reads panel.dataset.{key}, which the panel does not render"
+            );
+            found += 1;
+        }
+        assert!(
+            found >= 3,
+            "the lint found {found} references, so it proves little"
+        );
+    }
+
+    /// The running panel is a table of both spellings of the room, each copyable.
+    ///
+    /// The `data-copy` value is what actually lands in somebody's clipboard and then in a game
+    /// client, so it is asserted to be the whole `host:port` — a copy control that takes half the
+    /// address is worse than none, because it looks like it worked.
+    #[test]
+    fn a_running_panel_offers_both_ports_and_copies_them_whole() {
+        let html = a_panel().render().expect("renders");
+
+        for port in [40000, 40001] {
+            let address = format!("mw.example:{port}");
+            assert!(
+                html.contains(&format!("<code>{address}</code>")),
+                "{address} is not shown"
+            );
+            assert!(
+                html.contains(&format!("data-copy=\"{address}\"")),
+                "{address} has no copy control, or copies something other than the whole address"
+            );
+        }
+
+        // The filtered port is described rather than left as a second address with no explanation:
+        // it is the same room, and somebody has to be able to tell which one to take.
+        assert!(html.contains("standard room"));
+        assert!(html.contains("feed-filtered room"));
+
+        // The label is what a screen reader announces, and suppression eats the space before an
+        // expression even inside an attribute -- where nothing on screen would reveal it.
+        assert!(
+            html.contains("aria-label=\"Copy mw.example:40000\""),
+            "the copy control's label is missing or ran together"
+        );
+    }
+
+    /// A room with no filtered port renders one row, not an empty second one.
+    #[test]
+    fn a_room_without_a_filtered_port_shows_one_address() {
+        let mut single = a_panel();
+        single.room.advertised_filtered_port = None;
+
+        let html = single.render().expect("renders");
+        assert!(html.contains("mw.example:40000"));
+        assert!(!html.contains("feed-filtered"));
+    }
+
+    /// A transient panel carries the two things the poller updates in place between swaps, plus the
+    /// spinner. Losing either hook is silent: the panel would freeze at the elapsed time it was
+    /// rendered with while continuing to poll.
+    #[test]
+    fn a_transient_panel_has_the_hooks_the_poller_writes_into() {
+        let mut starting = a_panel();
+        starting.room.state = "starting".into();
+        starting.message = Some("shutting the room down");
+
+        let html = starting.render().expect("renders");
+        assert!(html.contains("data-room-message"), "no message hook");
+        assert!(html.contains("data-room-elapsed"), "no elapsed hook");
+        assert!(html.contains("swirl"), "no spinner");
+        // The words are the message; the spinner is beside them. A panel that had only the
+        // animation could not tell "coming up" from "stuck".
+        assert!(html.contains("shutting the room down"));
+        assert!(html.contains("12s"));
+
+        // And the message is escaped on the way in. `phrase()` returns a fixed table today, but
+        // this element is the one the poller also writes into from JSON -- so it is worth pinning
+        // that the server side escapes rather than relying on the table staying literal.
+        //
+        // Asserted as absence rather than against a particular entity spelling: which of `&#39;`
+        // and `&#x27;` askama emits is its business, and pinning it would make this test fail on an
+        // upgrade that changed nothing that matters.
+        starting.message = Some("the room's server <b>");
+        let escaped = starting.render().expect("renders");
+        assert!(
+            !escaped.contains("room's"),
+            "an apostrophe reached the markup raw"
+        );
+        assert!(!escaped.contains("<b>"), "a tag reached the markup raw");
+        // And the no-JS path still advances.
+        assert!(html.contains("http-equiv=\"refresh\""));
+    }
+
+    /// A settled panel does NOT carry the meta refresh.
+    ///
+    /// It used to be unconditional in `show.html`'s transient branch, which was correct there and
+    /// would not be here: a resting room has nothing to refresh toward, and a page reloading itself
+    /// every five seconds forever is one that never stops asking.
+    #[test]
+    fn a_resting_panel_does_not_refresh_itself() {
+        let html = a_panel().render().expect("renders");
+        assert!(!html.contains("http-equiv=\"refresh\""));
+        assert!(
+            !html.contains("swirl"),
+            "a resting room is not working on anything"
         );
     }
 

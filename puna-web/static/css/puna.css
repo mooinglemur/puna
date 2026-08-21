@@ -111,23 +111,24 @@ code {
 
 /* --- THE ADDRESS, which is the thing players came for ------------------------------------------- */
 
-/* Deliberately the loudest element on the page. It is what someone copies out and pastes into a
-   game client, so it is large, monospaced and selectable as a unit -- `user-select: all` means one
-   click takes the whole `host:port` rather than a double-click taking half of it at the colon. */
-.address {
-  margin: 0 0 1.25rem;
-  padding: 0.9rem 1rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-left: 4px solid var(--accent);
-  border-radius: var(--radius);
-}
+/* Deliberately the loudest element on the page: it is what someone pastes into a game client.
+   Two rows, because the plain and feed-filtered ports are two spellings of one room and a table is
+   what shows that at a glance.
 
-.address p { margin: 0.25rem 0; }
+   --- `user-select: all` WAS HERE AND IS GONE, deliberately ---------------------------------------
+   The intent was one click taking the whole `host:port` rather than a double-click stopping at the
+   colon. What it actually produces is a selection that behaves like nothing else on the page:
+   press to the left of a character and drag, and the selection vanishes; press to the right and it
+   survives only until the pointer crosses back. That is the property doing it, not a bug in the
+   browser -- `all` makes the element an atom, so an anchor inside it has nowhere to anchor.
+
+   Copying is now an explicit control, which is better than a selection trick on its own terms: it
+   takes one click instead of a click-drag-copy, it cannot take half the string, and it says it
+   worked. The text is ordinary selectable text again for anyone who wants to select it. */
+.address { margin: 0 0 1.25rem; }
 
 .address code {
-  user-select: all;
-  font-size: 1.25rem;
+  font-size: 1.15rem;
   font-weight: 600;
   padding: 0.1rem 0.3rem;
   background: var(--bg);
@@ -135,6 +136,58 @@ code {
   border-radius: 4px;
   /* The address is one token and must not wrap mid-hostname; if it cannot fit, scroll it. */
   white-space: nowrap;
+}
+
+/* The description column is prose and is the one column here allowed to wrap; the address column
+   must not. */
+.address td.purpose { white-space: normal; }
+
+/* --- copy to clipboard ---------------------------------------------------------------------------
+   Hidden until `room.js` has confirmed the clipboard is actually reachable. `navigator.clipboard`
+   needs a secure context, so on plain HTTP the API is simply absent -- and a copy button that
+   silently does nothing is worse than no button, because the address looks copied. The script adds
+   `js-copy` to <html> only when it can really copy.
+
+   Revealed by a class on the ROOT rather than by unhiding each button, because the panel is
+   replaced wholesale on every state change: anything the script had to reapply per swap is
+   something it would eventually be asked to reapply somewhere it does not run. */
+.copy { display: none; }
+
+.js-copy .copy {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.4rem;
+  padding: 0.2rem;
+  vertical-align: middle;
+  color: var(--muted);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.js-copy .copy:hover { color: var(--text); border-color: var(--border); }
+.js-copy .copy:focus-visible { color: var(--text); border-color: var(--accent); }
+
+/* The confirmation. Small, adjacent to the button that caused it, and gone on its own -- a message
+   that has to be dismissed would be more ceremony than the action it is confirming. */
+.copied {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.1rem 0.4rem;
+  font-size: 0.8rem;
+  color: var(--accent);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  opacity: 1;
+  transition: opacity 250ms ease-out;
+}
+
+.copied.fading { opacity: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .copied { transition: none; }
 }
 
 .tracker { margin: 0 0 1.25rem; }
@@ -160,6 +213,51 @@ code {
   border-left-color: var(--warn-fg);
   background: var(--warn-bg);
   color: var(--warn-fg);
+}
+
+/* --- THE SPINNER, and what it is allowed to mean ------------------------------------------------
+   Decoration beside the sentence, never instead of it. A spinner alone cannot tell "coming up" from
+   "stuck", which is exactly the distinction somebody watching a cold start needs -- so the panel
+   always carries the room's own words and an elapsed count, and this sits in front of them.
+
+   `aria-hidden` in the markup: it says nothing a screen reader cannot get from the text beside it,
+   and an unlabelled spinning element announces itself as noise. */
+.swirl {
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  margin-right: 0.4em;
+  vertical-align: -0.1em;
+  border: 2px solid var(--border);
+  /* One segment in the accent color is what makes the rotation legible; a uniform ring spinning
+     looks identical at every angle. */
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: swirl 0.8s linear infinite;
+}
+
+@keyframes swirl {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Vestibular disorders are a real reason somebody turns this off, and the panel loses nothing by
+   obeying: the words and the counter carry the whole message. The ring stays as a static mark so
+   the layout does not shift when it stops. */
+@media (prefers-reduced-motion: reduce) {
+  .swirl {
+    animation: none;
+  }
+}
+
+/* Stop and Close sit side by side: the same instruction to the orchestrator, differing only in who
+   may undo it. */
+.lifecycle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0 0 0.5rem;
 }
 
 .error {

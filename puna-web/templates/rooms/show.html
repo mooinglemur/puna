@@ -3,58 +3,9 @@
 {% block content %}
 <h1>{{ room.name }}</h1>
 
-{# The address is the thing players came for, so it leads. Both ports are shown: the filtered one
-   is the same server with the PrintJSON firehose dropped, for clients that struggle with a large
-   multiworld. #}
-{% if room.state == "running" %}
-{% if let Some(host) = room.advertised_host %}
-<div class="address">
-{% if let Some(port) = room.advertised_port %}
-<p><strong>Connect to</strong> <code>{{ host }}:{{ port }}</code></p>
-{% endif %}
-{% if let Some(filtered) = room.advertised_filtered_port %}
-<p class="hint">If your client struggles with a large multiworld, use
-<code>{{ host }}:{{ filtered }}</code> &mdash; the same room, without other players' item traffic.</p>
-{% endif %}
-</div>
-{% endif %}
-{% else if room.state == "idle" || room.state == "failed" %}
-{# `is_closed` before the ordinary not-running case: a closed room is also idle, and the difference
-   is the whole point of the state. #}
-{% if is_closed %}
-<p>This room is <strong>closed</strong>. It is not running, and only its organizers can reopen it.</p>
-<p class="hint">Everything else here still works &mdash; patches, the tracker and the roster are
-unchanged, and the room keeps its address for when it reopens.</p>
-{% else %}
-<p>This room is not running.</p>
-{% endif %}
-{% if let Some(error) = room.last_error %}<p class="error">{{ error }}</p>{% endif %}
-{# `may_start` and not `is_staff`: one value, decided beside the route that would honor the POST, so
-   the page cannot offer a control the route refuses. #}
-{% if may_start %}
-<form method="post" action="/room/{{ room.id }}/start"><button type="submit">
-{%- if is_closed %}Reopen the room{% else %}Start the room{% endif -%}
-</button></form>
-{% endif %}
-{% else if room.state == "integrity_fault" %}
-<div class="error">
-<p><strong>This room's saved state is missing.</strong></p>
-<p>This is a fault, not a normal condition. An administrator has been alerted. Nothing here will
-start an empty room in its place.</p>
-</div>
-{% else %}
-{# A transient state. The elapsed time and the plain-language line are what separate "coming up"
-   from "stuck", which a spinner alone cannot say. #}
-<div class="notice" data-room="{{ room.id }}" data-state="{{ room.state }}">
-<p><span data-room-message>
-{% if let Some(message) = message %}{{ message }}{% else %}This room is {{+ room.state }}{% endif %}
-</span>
-&mdash; <span data-room-elapsed>{{ elapsed }}</span></p>
-<p class="hint">This page updates on its own.</p>
-</div>
-{# Without JavaScript the page still moves, just less smoothly. #}
-<noscript><meta http-equiv="refresh" content="5"></noscript>
-{% endif %}
+{# The lifecycle panel. One template, two entry points: this include paints it, and
+   `GET /room/<id>/panel` re-renders the same file for the poller. See rooms/panel.html. #}
+{% include "rooms/panel.html" %}
 
 {# OUTSIDE the state branch on purpose. The tracker serves its last cached document with an "as of"
    banner while the room is down, which for an async is most of the time -- so this is exactly when
@@ -150,9 +101,9 @@ unclaimed
 {# Stop and Close are the same instruction to the orchestrator and differ only in who may undo
    them, so they sit together and the difference is stated rather than left to be discovered. #}
 <div class="lifecycle">
-<form method="post" action="/room/{{ room.id }}/stop" class="inline"><button type="submit">Stop the room</button></form>
+<form method="post" action="/room/{{ room.id }}/stop" class="inline" data-lifecycle><button type="submit">Stop the room</button></form>
 {% if !is_closed %}
-<form method="post" action="/room/{{ room.id }}/close" class="inline"><button type="submit">Close the room</button></form>
+<form method="post" action="/room/{{ room.id }}/close" class="inline" data-lifecycle><button type="submit">Close the room</button></form>
 {% endif %}
 </div>
 <p class="hint">Stopping takes the room down; anyone with the link can start it again, which is how

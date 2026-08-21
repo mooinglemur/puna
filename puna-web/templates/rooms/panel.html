@@ -1,0 +1,100 @@
+{# The room's lifecycle panel: what it is doing, and the one control that changes it.
+
+   **Rendered here and nowhere else.** `show.html` includes it for the first paint, and
+   `GET /room/<id>/panel` renders the same file for every subsequent one -- so `room.js` swaps
+   server-rendered markup rather than building its own. A second renderer in JavaScript would be a
+   second set of branches to keep in step with these, and the one that drifts is the one nobody
+   looks at: the page would keep working while telling somebody the wrong thing about their room.
+
+   The wrapper carries the state it was rendered from, which is what lets the poller tell a changed
+   panel from an unchanged one without parsing any of it. #}
+<div class="panel" data-room="{{ room.id }}" data-state="{{ room.state }}"
+     data-desired="{{ room.desired_state }}">
+
+{# One row of the address table: the thing to paste, a control that copies it, and what it is for.
+
+   A macro so the icon and the button exist once. The two rows differ only in their port and their
+   sentence, and an SVG written out twice is two things to keep in step for no reason. #}
+{% macro address_row(host, port, summary, detail) %}
+<tr>
+<td><code>{{ host }}:{{ port }}</code>
+{# Rendered by the server but INERT until `room.js` proves the clipboard is actually reachable --
+   it needs a secure context, so a button shown unconditionally would be a dead control on plain
+   HTTP. The script adds a class to <html> and the stylesheet reveals these; see `.copy`. #}
+<button type="button" class="copy" data-copy="{{ host }}:{{ port }}"
+        {# `{{+` or the label reads "Copymw.example:40000" -- suppression eats the space even inside
+           an attribute, where nothing on screen would ever show it. #}
+        aria-label="Copy {{+ host }}:{{ port }}">
+<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+<rect x="5.5" y="1.5" width="9" height="11" rx="1.5" fill="none" stroke="currentColor"/>
+<path d="M10.5 14.5h-8a1 1 0 0 1-1-1v-9" fill="none" stroke="currentColor" stroke-linecap="round"/>
+</svg>
+</button>
+</td>
+<td class="purpose"><strong>{{ summary }}</strong> &mdash; {{+ detail }}</td>
+</tr>
+{% endmacro %}
+
+{# The address is the thing players came for, so it leads. Both ports are shown as rows of one
+   table rather than a sentence apiece: they are two spellings of the same room, and a table is
+   what lets somebody see that at a glance and take the one they want. #}
+{% if room.state == "running" %}
+{% if let Some(host) = room.advertised_host %}
+<table class="address">
+<thead><tr><th>Host:port</th><th>Description</th></tr></thead>
+<tbody>
+{% if let Some(port) = room.advertised_port %}
+{% call address_row(host, port, "standard room", "most clients should use this one") %}{% endcall %}
+{% endif %}
+{% if let Some(filtered) = room.advertised_filtered_port %}
+{% call address_row(host, filtered, "feed-filtered room", "filters out other slots' item traffic") %}{% endcall %}
+{% endif %}
+</tbody>
+</table>
+{% endif %}
+
+{% else if room.state == "idle" || room.state == "failed" %}
+{# `is_closed` before the ordinary not-running case: a closed room is also idle, and the difference
+   is the whole point of the state. #}
+{% if is_closed %}
+<p>This room is <strong>closed</strong>. It is not running, and only its organizers can reopen it.</p>
+<p class="hint">Everything else here still works &mdash; patches, the tracker and the roster are
+unchanged, and the room keeps its address for when it reopens.</p>
+{% else %}
+<p>This room is not running.</p>
+{% endif %}
+{% if let Some(error) = room.last_error %}<p class="error">{{ error }}</p>{% endif %}
+{# `may_start` and not `is_staff`: one value, decided beside the route that would honor the POST, so
+   the page cannot offer a control the route refuses. #}
+{% if may_start %}
+<form method="post" action="/room/{{ room.id }}/start" data-lifecycle><button type="submit">
+{%- if is_closed %}Reopen the room{% else %}Start the room{% endif -%}
+</button></form>
+{% endif %}
+
+{% else if room.state == "integrity_fault" %}
+<div class="error">
+<p><strong>This room's saved state is missing.</strong></p>
+<p>This is a fault, not a normal condition. An administrator has been alerted. Nothing here will
+start an empty room in its place.</p>
+</div>
+
+{% else %}
+{# A transient state. The elapsed time and the plain-language line are what separate "coming up"
+   from "stuck", which a spinner alone cannot say -- so the spinner is decoration beside them and
+   never the whole message. #}
+<div class="notice working">
+<p><span class="swirl" aria-hidden="true"></span>
+<span data-room-message>
+{% if let Some(message) = message %}{{ message }}{% else %}This room is {{+ room.state }}{% endif %}
+</span>
+&mdash; <span data-room-elapsed>{{ elapsed }}</span></p>
+<p class="hint">This page updates on its own.</p>
+</div>
+{# Without JavaScript the page still moves, just less smoothly. Inside the transient branch only:
+   a settled page has nothing to refresh toward, and refreshing it every five seconds forever
+   would be a page that never stops asking. #}
+<noscript><meta http-equiv="refresh" content="5"></noscript>
+{% endif %}
+
+</div>
