@@ -41,6 +41,11 @@
   --err-fg: light-dark(#a01b1b, #f29090);
   --err-bg: light-dark(#fdeaea, #3a1d1d);
 
+  /* The one thing on this page that floats above the rest, so the one shadow. Heavier in dark mode
+     because a shadow is separation from the surface behind it, and there is less contrast to
+     borrow there. */
+  --float-shadow: light-dark(rgb(0 0 0 / 0.18), rgb(0 0 0 / 0.5));
+
   --radius: 6px;
 }
 
@@ -169,20 +174,41 @@ code {
 .js-copy .copy:hover { color: var(--text); border-color: var(--border); }
 .js-copy .copy:focus-visible { color: var(--text); border-color: var(--accent); }
 
-/* The confirmation. Small, adjacent to the button that caused it, and gone on its own -- a message
-   that has to be dismissed would be more ceremony than the action it is confirming. */
+/* The confirmation. Small, anchored to the button that caused it, and gone on its own -- a message
+   that has to be dismissed would be more ceremony than the action it is confirming.
+
+   --- IT FLOATS, AND IT HAS TO ---------------------------------------------------------------------
+   Rendered in the flow first, which was wrong twice over: it took layout space, so the cell and the
+   whole table jumped wider for a second and back -- and the global `table` rule sets
+   `overflow-x: auto`, which makes the table a scroll container that CLIPS any absolutely positioned
+   descendant. So this is `fixed`, appended to <body>, and positioned from the button's rect by
+   `room.js`. That also sidesteps every question about which ancestor happens to be a containing
+   block.
+
+   `pointer-events: none` because it is an announcement, not a control: it appears under the pointer
+   that just clicked, and swallowing the next click there would be its own small mystery. */
 .copied {
-  display: inline-block;
-  margin-left: 0.4rem;
-  padding: 0.1rem 0.4rem;
+  position: fixed;
+  z-index: 50;
+  pointer-events: none;
+  /* Anchored by its bottom-center to a point just above the button; `.below` flips it when the
+     button is too near the top of the viewport to have room. */
+  transform: translate(-50%, -100%);
+  padding: 0.15rem 0.45rem;
   font-size: 0.8rem;
+  white-space: nowrap;
   color: var(--accent);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 4px;
+  box-shadow: 0 2px 6px var(--float-shadow);
   opacity: 1;
   transition: opacity 250ms ease-out;
 }
+
+.copied.below { transform: translate(-50%, 0); }
+
+.copied.error { color: var(--err-fg); border-color: var(--err-fg); }
 
 .copied.fading { opacity: 0; }
 

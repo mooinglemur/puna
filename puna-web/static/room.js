@@ -37,28 +37,18 @@
     SLOW_AFTER_MS = 30000,
     GIVE_UP_MS = 300000;
 
-  // The states the room is on its way out of. Anything else is somewhere it rests, and a resting
-  // page stops asking -- a public room link left open in a tab should not poll for a week.
-  var TRANSIENT = {
-    provisioning: 1,
-    starting: 1,
-    stopping: 1,
-    deleting: 1,
-    degraded: 1,
-  };
-
   var timer = null;
   var watchingSince = 0;
 
-  function state() {
-    return panel.dataset.state;
-  }
-
-  // Both halves, because they move independently. Closing a room that is already `idle` changes
-  // only what is WANTED -- the observed state never moves -- so a comparison on `state` alone would
-  // watch an organizer close a room and show them nothing at all.
+  // Asked of the PANEL, which was rendered by the server, rather than decided here from a list of
+  // state names. That list already exists in the planner and in `is_working`, and a third copy in a
+  // file nobody type-checks is the one that drifts.
+  //
+  // It is also not the same question as "is `state` transient": a room asked to stop is still
+  // observed `running` until the orchestrator reaches it, which can be a whole reconcile interval.
+  // Deciding here would have meant this file knowing that too.
   function settled() {
-    return !TRANSIENT[state()];
+    return panel.dataset.working !== "1";
   }
 
   function human(ms) {
@@ -256,10 +246,23 @@
   var confirmation = null;
   var confirmationTimers = [];
 
-  function confirmCopy(button, message, failed) {
+  function dismissConfirmation() {
     confirmationTimers.forEach(clearTimeout);
     confirmationTimers = [];
     if (confirmation) confirmation.remove();
+    confirmation = null;
+    window.removeEventListener("scroll", dismissConfirmation);
+  }
+
+  // A floating tooltip, appended to <body> and positioned from the button's rect.
+  //
+  // NOT inserted beside the button, which is where this started: an element in the flow takes
+  // layout space, so the cell and the whole table jumped wider for a second and back. And it could
+  // not simply be made `absolute` either -- the global `table` rule sets `overflow-x: auto`, so the
+  // table is a scroll container and would clip it. `fixed` off <body> avoids both, and avoids
+  // having to know which ancestor is a containing block.
+  function confirmCopy(button, message, failed) {
+    dismissConfirmation();
 
     confirmation = document.createElement("span");
     confirmation.className = failed ? "copied error" : "copied";
@@ -267,18 +270,34 @@
     // that something invisible happened.
     confirmation.setAttribute("role", "status");
     confirmation.textContent = message;
-    button.after(confirmation);
+    document.body.appendChild(confirmation);
 
-    // Long enough to read, short enough not to be something you wait out. Removed after the fade
-    // rather than left transparent: an empty element in the flow still occupies its space.
+    var rect = button.getBoundingClientRect();
+    confirmation.style.left = rect.left + rect.width / 2 + "px";
+    // Above by default. Flipped below when the button sits too near the top of the viewport for the
+    // tooltip to fit -- a confirmation rendered off-screen is the same as none, and this is the one
+    // case where somebody would go on to paste something they never copied.
+    if (rect.top < 44) {
+      confirmation.classList.add("below");
+      confirmation.style.top = rect.bottom + 8 + "px";
+    } else {
+      confirmation.style.top = rect.top - 8 + "px";
+    }
+
+    // Positioned once rather than tracked. Over a second and a bit that is right for everything
+    // except scrolling, where the anchor moves and the tooltip would not -- so scrolling takes it
+    // away instead of leaving it floating over nothing.
+    window.addEventListener("scroll", dismissConfirmation, { passive: true });
+
+    // Long enough to read, short enough not to be something you wait out.
     var target = confirmation;
     confirmationTimers.push(
       setTimeout(function () {
         target.classList.add("fading");
       }, 900),
       setTimeout(function () {
-        target.remove();
-        if (confirmation === target) confirmation = null;
+        if (confirmation === target) dismissConfirmation();
+        else target.remove();
       }, 1200),
     );
   }

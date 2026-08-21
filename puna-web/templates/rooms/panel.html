@@ -8,8 +8,12 @@
 
    The wrapper carries the state it was rendered from, which is what lets the poller tell a changed
    panel from an unchanged one without parsing any of it. #}
+{# `data-working` is the poller's whole stop condition. It is published from here rather than
+   recomputed in JavaScript from a list of state names, because that list already exists twice --
+   in the planner and in `is_working` -- and a third copy in a file nobody type-checks is the one
+   that would drift. #}
 <div class="panel" data-room="{{ room.id }}" data-state="{{ room.state }}"
-     data-desired="{{ room.desired_state }}">
+     data-desired="{{ room.desired_state }}" data-working="{% if is_working %}1{% else %}0{% endif %}">
 
 {# One row of the address table: the thing to paste, a control that copies it, and what it is for.
 
@@ -35,10 +39,32 @@
 </tr>
 {% endmacro %}
 
+{# **`is_working` FIRST, before any steady state.** It covers a request the orchestrator has not
+   reached yet as well as one it is carrying out -- so the panel shows the transition from the
+   moment somebody asks for it, rather than handing back the display they just clicked away from
+   and changing it again seconds later when the observed state finally moves. See `is_working`.
+
+   The elapsed time and the plain-language line are what separate "coming up" from "stuck", which a
+   spinner alone cannot say -- so the spinner is decoration beside them and never the whole
+   message. #}
+{% if is_working %}
+<div class="notice working">
+<p><span class="swirl" aria-hidden="true"></span>
+<span data-room-message>
+{% if let Some(message) = message %}{{ message }}{% else %}This room is {{+ room.state }}{% endif %}
+</span>
+&mdash; <span data-room-elapsed>{{ elapsed }}</span></p>
+<p class="hint">This page updates on its own.</p>
+</div>
+{# Without JavaScript the page still moves, just less smoothly. Inside this branch only: a settled
+   room has nothing to refresh toward, and refreshing every five seconds forever would be a page
+   that never stops asking. #}
+<noscript><meta http-equiv="refresh" content="5"></noscript>
+
 {# The address is the thing players came for, so it leads. Both ports are shown as rows of one
    table rather than a sentence apiece: they are two spellings of the same room, and a table is
    what lets somebody see that at a glance and take the one they want. #}
-{% if room.state == "running" %}
+{% else if room.state == "running" %}
 {% if let Some(host) = room.advertised_host %}
 <table class="address">
 <thead><tr><th>Host:port</th><th>Description</th></tr></thead>
@@ -80,21 +106,10 @@ start an empty room in its place.</p>
 </div>
 
 {% else %}
-{# A transient state. The elapsed time and the plain-language line are what separate "coming up"
-   from "stuck", which a spinner alone cannot say -- so the spinner is decoration beside them and
-   never the whole message. #}
-<div class="notice working">
-<p><span class="swirl" aria-hidden="true"></span>
-<span data-room-message>
-{% if let Some(message) = message %}{{ message }}{% else %}This room is {{+ room.state }}{% endif %}
-</span>
-&mdash; <span data-room-elapsed>{{ elapsed }}</span></p>
-<p class="hint">This page updates on its own.</p>
-</div>
-{# Without JavaScript the page still moves, just less smoothly. Inside the transient branch only:
-   a settled page has nothing to refresh toward, and refreshing it every five seconds forever
-   would be a page that never stops asking. #}
-<noscript><meta http-equiv="refresh" content="5"></noscript>
+{# Anything `is_working` does not claim and no branch above names: today only a room in a state this
+   build does not understand, which a newer orchestrator could legitimately write. Saying so beats
+   rendering nothing at all. #}
+<p>This room is {{+ room.state }}.</p>
 {% endif %}
 
 </div>

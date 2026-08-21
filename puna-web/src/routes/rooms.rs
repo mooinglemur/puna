@@ -80,6 +80,10 @@ pub struct RoomTemplate {
     /// Whether the viewer may start this room *right now* -- which is everybody for an idle room,
     /// and staff only for a closed one.
     may_start: bool,
+    /// Whether the room is mid-transition, INCLUDING a request the orchestrator has not reached
+    /// yet. See [`is_working`] -- rendering from `state` alone is what made a click bounce back to
+    /// the display it had just replaced.
+    is_working: bool,
 }
 
 /// One row of the room page's slot table.
@@ -334,6 +338,7 @@ async fn show(
         // Both from `may_start`, so the page and the route cannot disagree about who gets a door.
         is_closed,
         may_start: may_start(&room, role),
+        is_working: is_working(&room),
         room,
         slots,
         is_staff: role.is_some(),
@@ -361,6 +366,41 @@ fn may_start(room: &Room, role: Option<RoomRole>) -> bool {
         return true;
     }
     role.is_some_and(|r| r >= RoomRole::Organizer)
+}
+
+/// Whether the room is between states **as the person looking at it experiences that**.
+///
+/// Not the same question as "is `state` a transient value", and the difference is a window that can
+/// last a full reconcile interval: a request writes `desired_state` and returns, and the observed
+/// state does not move until the orchestrator reaches the room. A panel rendered from `state` alone
+/// during that window shows the room exactly as it was — so somebody clicks Stop on a running room
+/// and is handed back the address table, then watches it change on its own some seconds later.
+///
+/// That is a server-side fault rather than a scripting one: without JavaScript the same click
+/// redirects to a page that says "This room is not running" **with a Start button**, having just
+/// been asked to start it.
+///
+/// So a room is working when the orchestrator is acting **or** when it has been asked to and has
+/// not got there yet.
+///
+/// Two deliberate exclusions:
+///
+///   * **`failed`** is at rest with an error and a retry time, even though its `desired_state` is
+///     usually still `running`. A spinner there would hide the one thing worth reading — why it
+///     failed — behind an animation, for up to the ten-minute backoff cap.
+///   * **An idle room asked to close** is already where it is going. Nothing has to happen, so
+///     showing it as in-flight would be waiting for an event that is never coming.
+fn is_working(room: &Room) -> bool {
+    match room.state.as_str() {
+        // The orchestrator is mid-flight. `degraded` belongs here rather than with the settled
+        // states: it is a room that is not answering, which is unsettled by definition.
+        "provisioning" | "starting" | "stopping" | "deleting" | "degraded" => true,
+        // Down and asked to come up.
+        "idle" => room.desired_state == DesiredState::Running.as_sql(),
+        // Up and asked to come down -- stopped or closed, which are the same instruction.
+        "running" => room.desired_state != DesiredState::Running.as_sql(),
+        _ => false,
+    }
 }
 
 /// This session's role in a room, with a global admin resolving to the top of the ladder.
@@ -398,6 +438,7 @@ pub struct PanelTemplate {
     room: Room,
     is_closed: bool,
     may_start: bool,
+    is_working: bool,
     message: Option<&'static str>,
     elapsed: String,
 }
@@ -421,6 +462,7 @@ async fn panel(id: RoomParam, session: Session, pool: &State<Pool>) -> Result<Pa
     Ok(PanelTemplate {
         is_closed: room.desired_state == DesiredState::Closed.as_sql(),
         may_start: may_start(&room, role),
+        is_working: is_working(&room),
         room,
         message,
         elapsed,
@@ -1042,6 +1084,7 @@ mod tests {
             elapsed: "1m".into(),
             is_closed: false,
             may_start: true,
+            is_working: false,
         }
     }
 
@@ -1133,6 +1176,7 @@ mod tests {
             room: a_room(),
             is_closed: false,
             may_start: true,
+            is_working: false,
             message: None,
             elapsed: "12s".into(),
         }
@@ -1222,6 +1266,7 @@ mod tests {
     fn a_transient_panel_has_the_hooks_the_poller_writes_into() {
         let mut starting = a_panel();
         starting.room.state = "starting".into();
+        starting.is_working = true;
         starting.message = Some("shutting the room down");
 
         let html = starting.render().expect("renders");
@@ -1264,6 +1309,81 @@ mod tests {
             !html.contains("swirl"),
             "a resting room is not working on anything"
         );
+    }
+
+    /// **The bug this exists to prevent, stated as a table.**
+    ///
+    /// A request writes `desired_state` and returns; the observed state does not move until the
+    /// orchestrator reaches the room, which can be a full reconcile interval. A panel rendered from
+    /// `state` alone shows the room exactly as it was — so clicking Stop on a running room hands
+    /// back the address table, and it changes on its own some seconds later. Reported from the live
+    /// deployment as "it flickers and returns to the existing display".
+    ///
+    /// Not a scripting fault: without JavaScript the same click redirects to a page saying "This
+    /// room is not running" with a Start button, having just been asked to start it.
+    #[test]
+    fn a_requested_transition_reads_as_working_before_the_orchestrator_moves() {
+        // (observed, desired, working?)
+        let cases = [
+            // Asked, and not yet acted on. These are the ones that were wrong.
+            ("running", "stopped", true),
+            ("running", "closed", true),
+            ("idle", "running", true),
+            // Being acted on.
+            ("starting", "running", true),
+            ("stopping", "stopped", true),
+            ("provisioning", "running", true),
+            ("deleting", "deleted", true),
+            // Not answering is not settled either.
+            ("degraded", "running", true),
+            // At rest, agreeing with what is wanted.
+            ("running", "running", false),
+            ("idle", "stopped", false),
+            // **An idle room asked to close is already where it is going.** Showing it as in-flight
+            // would be waiting for an event that never comes.
+            ("idle", "closed", false),
+            // `failed` is at rest with an error and a retry time, though its desired state is
+            // usually still `running`. A spinner would hide the reason it failed for up to the
+            // ten-minute backoff cap.
+            ("failed", "running", false),
+            ("integrity_fault", "running", false),
+        ];
+
+        for (state, desired, expected) in cases {
+            let mut room = a_room();
+            room.state = state.into();
+            room.desired_state = desired.into();
+            assert_eq!(
+                is_working(&room),
+                expected,
+                "state={state} desired={desired}"
+            );
+        }
+    }
+
+    /// And the panel actually renders that, rather than the display that was just clicked away.
+    #[test]
+    fn stopping_a_running_room_replaces_the_address_immediately() {
+        let mut stopping = a_panel();
+        stopping.room.desired_state = "stopped".into();
+        stopping.is_working = is_working(&stopping.room);
+        assert!(stopping.is_working, "the fixture does not reach the case");
+
+        let html = stopping.render().expect("renders");
+        assert!(
+            !html.contains("mw.example:40000"),
+            "the address survived a stop request, which is the flicker being fixed"
+        );
+        assert!(html.contains("swirl"), "no transition is shown");
+        // And the poller keeps watching, which it decides from this attribute alone.
+        assert!(html.contains("data-working=\"1\""));
+    }
+
+    /// A settled panel says so, or the poller never stops.
+    #[test]
+    fn a_settled_panel_tells_the_poller_to_stop() {
+        let html = a_panel().render().expect("renders");
+        assert!(html.contains("data-working=\"0\""));
     }
 
     /// `may_start` is the single decision the page and the route share.
