@@ -90,7 +90,7 @@ unclaimed
 {% if slot.can_release %}
 <form method="post" action="/room/{{ room.id }}/slot/{{ slot.slot_number }}/release" class="inline">
 <button type="submit" class="cycle"
-        title="Release this slot: unbind its holder and mint a fresh claim link"
+        title="Release this slot's claim and mint a fresh claim link"
         aria-label="Release slot {{+ slot.slot_number +}} from its holder">
 <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
 <circle cx="6" cy="4.5" r="2.5" fill="none" stroke="currentColor"/>

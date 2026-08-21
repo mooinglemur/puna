@@ -26,6 +26,10 @@
    it needs a secure context, so a button shown unconditionally would be a dead control on plain
    HTTP. The script adds a class to <html> and the stylesheet reveals these; see `.copy`. #}
 <button type="button" class="copy" data-copy="{{ host }}:{{ port }}"
+        {# BOTH, and they are different audiences rather than alternatives: `title` is the hover
+           tooltip a pointer user gets, `aria-label` is the name a screen reader announces. A glyph
+           with no text needs each one, and `aria-label` alone renders nothing on hover at all. #}
+        title="Copy this address"
         {# `{{+` or the label reads "Copymw.example:40000" -- suppression eats the space even inside
            an attribute, where nothing on screen would ever show it. #}
         aria-label="Copy {{+ host }}:{{ port }}">

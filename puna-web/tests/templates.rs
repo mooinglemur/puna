@@ -165,6 +165,120 @@ fn whitespace_between_text_and_a_tag_is_preserved_explicitly() {
     );
 }
 
+/// A control with no words carries **both** `title` and `aria-label`, which are not alternatives.
+///
+/// `aria-label` names the control for assistive technology and renders nothing on screen; `title`
+/// is the hover tooltip a pointer user gets. A button whose entire content is an `<svg>` shows no
+/// words at all, so with only the first it is a picture nobody can identify by pointing at it.
+///
+/// **This was reported twice.** M19b gave the four glyph controls in `rooms/show.html` a `title`
+/// after the gap was noticed there; `rooms/panel.html`'s address copy button was missed and was
+/// reported the same way the next day. Neither was visible to anything else here — the markup is
+/// valid, the attribute that *is* present is spelled correctly, and the control works.
+#[test]
+fn a_glyph_only_control_names_itself_twice() {
+    let mut offenders = Vec::new();
+    let mut examined = 0;
+
+    for path in templates() {
+        let source = blank_comments(
+            &std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("could not read {path:?}: {e}")),
+        );
+        let name = label(&path);
+
+        for element in ["button", "a"] {
+            for (at, open, content) in elements(&source, element) {
+                if renders_text(content) {
+                    continue;
+                }
+                examined += 1;
+                for attribute in ["title=", "aria-label="] {
+                    if !open.contains(attribute) {
+                        let line = line_of(&source, at).unwrap_or_default();
+                        offenders.push(format!(
+                            "{name}:{line}: <{element}> renders no words and has no `{attribute}`"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // A source lint is the easiest kind to write vacuously, so say how much it must have seen. Five
+    // glyph controls exist today; a change that leaves none is a change this lint stopped guarding.
+    assert!(
+        examined >= 5,
+        "only {examined} glyph-only controls found -- this lint is no longer looking at anything"
+    );
+    assert!(
+        offenders.is_empty(),
+        "a control with no words needs a hover tooltip AND an accessible name:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+/// Every `<name ...>...</name>` in the source, as its offset, its opening tag and its content.
+///
+/// No element here nests inside another of its own kind, so matching the next closing tag is the
+/// whole job.
+fn elements<'a>(source: &'a str, name: &str) -> Vec<(usize, &'a str, &'a str)> {
+    let (open, close) = (format!("<{name}"), format!("</{name}>"));
+    let mut found = Vec::new();
+    let mut i = 0;
+
+    while let Some(offset) = source[i..].find(&open) {
+        let at = i + offset;
+        i = at + open.len();
+        // `<a` must not match `<abbr`, so the name has to end where the tag says it does.
+        if !matches!(source[i..].chars().next(), Some(c) if c.is_whitespace() || c == '>') {
+            continue;
+        }
+        let Some(tag_end) = source[at..].find('>').map(|n| at + n + 1) else {
+            break;
+        };
+        let Some(end) = source[tag_end..].find(&close).map(|n| tag_end + n) else {
+            break;
+        };
+        found.push((at, &source[at..tag_end], &source[tag_end..end]));
+        i = end + close.len();
+    }
+
+    found
+}
+
+/// Whether an element's content puts any words on screen.
+///
+/// An `<svg>` is dropped whole — it *is* the glyph, not a label for it — as are markup tags and
+/// control-flow tags, which render nothing themselves. An expression `{{ ... }}` counts as text,
+/// because whatever it interpolates is something the reader can see and read the control by.
+fn renders_text(content: &str) -> bool {
+    let mut rendered = String::new();
+    let mut i = 0;
+
+    while i < content.len() {
+        let rest = &content[i..];
+        if rest.starts_with("<svg") {
+            i += rest
+                .find("</svg>")
+                .map_or(rest.len(), |n| n + "</svg>".len());
+        } else if rest.starts_with("{%") {
+            i += rest.find("%}").map_or(rest.len(), |n| n + 2);
+        } else if rest.starts_with("{{") {
+            rendered.push('x');
+            i += rest.find("}}").map_or(rest.len(), |n| n + 2);
+        } else if rest.starts_with('<') {
+            i += rest.find('>').map_or(rest.len(), |n| n + 1);
+        } else {
+            let c = rest.chars().next().expect("a character");
+            rendered.push(c);
+            i += c.len_utf8();
+        }
+    }
+
+    !rendered.trim().is_empty()
+}
+
 /// Content that actually renders, as opposed to markup or another tag.
 ///
 /// `>` and `<` are excluded because HTML collapses whitespace around a tag boundary anyway, and
