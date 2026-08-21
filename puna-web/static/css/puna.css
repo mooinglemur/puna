@@ -155,6 +155,17 @@ td .actions {
   gap: 0.25rem;
 }
 
+/* **The forms flex too, or the glyphs inside them sit higher than the ones beside them.**
+   A `<form>` here is a block, so its height is a LINE BOX -- font line-height plus space for
+   descenders -- while a bare `.act` button is a flex item sized to itself. `align-items: center`
+   then centers two boxes of different heights, and the button inside the taller one rides its text
+   baseline instead of its centre. Flexing the form collapses it onto the button it contains, so
+   every glyph in the row is measured the same way. */
+td .actions form {
+  display: flex;
+  align-items: center;
+}
+
 .act {
   display: inline-flex;
   align-items: center;
@@ -570,7 +581,20 @@ p.error {
  * only scroll container is one element in one axis. */
 .scroll-x {
   overflow-x: auto;
-  margin: 0 0 1.25rem;
+  /* **`hidden`, and it has to be stated.** Leaving `overflow-y` alone does NOT leave it `visible`:
+     the spec computes `visible` to `auto` whenever the other axis scrolls, which is the whole bug
+     this wrapper was introduced to fix -- reintroduced one element outwards if it is not said here.
+     A table never wants to scroll vertically; the page does that.
+     The height is `auto` and therefore already fits, so this only ever suppresses the scrollbar
+     sub-pixel rounding produces: row heights land on fractions of a pixel with collapsed borders and
+     0.45rem padding, `scrollHeight` rounds up, `clientHeight` rounds down, and one pixel of phantom
+     overflow draws a bar down the side of the page. */
+  overflow-y: hidden;
+  /* Room for a focus ring, which `:focus-visible` draws 2px OUTSIDE the control -- on a link in the
+     first or last row `hidden` would clip it, and this file does not remove focus rings anywhere.
+     Cancelled by the negative margin, so nothing on the page moves. */
+  padding-block: 4px;
+  margin: -4px 0 calc(1.25rem - 4px);
 }
 
 table {

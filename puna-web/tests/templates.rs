@@ -693,3 +693,64 @@ fn every_table_scrolls_inside_a_wrapper() {
         offenders.join("\n  ")
     );
 }
+
+/// **Any rule that scrolls one axis states the other explicitly.**
+///
+/// `overflow-x: auto` does not leave `overflow-y` alone. The spec computes `visible` to `auto`
+/// whenever the other axis is a scrolling value, so a rule that mentions only `overflow-x` has
+/// quietly made its element a scroll container in **both** directions — and a box whose content
+/// exceeds it by a fraction of a pixel then draws a scrollbar nobody asked for.
+///
+/// This has been written wrong twice in this file: once on `table` itself, and then again on the
+/// `.scroll-x` wrapper introduced to fix it, one element outwards. Neither was visible in review;
+/// both were visible on the page as a bar down the side of a table that fitted perfectly well.
+#[test]
+fn a_rule_that_scrolls_one_axis_names_the_other() {
+    let css = std::fs::read_to_string(source("static/css/puna.css")).expect("puna.css");
+    let mut offenders = Vec::new();
+    let mut scrollers = 0;
+
+    // Declaration blocks, crudely: everything between `{` and the next `}`. Good enough for a
+    // hand-written stylesheet with no nesting, and the comments are stripped first so prose about
+    // overflow does not count as a declaration.
+    for block in code_only_css(&css).split('}') {
+        let Some((selector, body)) = block.split_once('{') else {
+            continue;
+        };
+        if !body.contains("overflow-x:") {
+            continue;
+        }
+        scrollers += 1;
+        if !body.contains("overflow-y:") {
+            offenders.push(format!(
+                "{}: sets overflow-x without overflow-y, so it scrolls vertically too",
+                selector.trim().replace('\n', " ")
+            ));
+        }
+    }
+
+    assert!(
+        scrollers >= 1,
+        "no overflow-x rules found -- this lint is no longer looking at anything"
+    );
+    assert!(
+        offenders.is_empty(),
+        "overflow-x alone makes an element scroll in BOTH axes:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+/// CSS with `/* ... */` comments removed, so prose about a property is not read as setting it.
+fn code_only_css(css: &str) -> String {
+    let mut out = String::with_capacity(css.len());
+    let mut rest = css;
+    while let Some(start) = rest.find("/*") {
+        out.push_str(&rest[..start]);
+        match rest[start..].find("*/") {
+            Some(end) => rest = &rest[start + end + 2..],
+            None => return out,
+        }
+    }
+    out.push_str(rest);
+    out
+}
