@@ -88,12 +88,14 @@
 {% else if room.state == "running" %}
 {% if let Some(host) = room.advertised_host %}
 {% if let Some(port) = room.advertised_port %}
+<div class="scroll-x">
 <table class="address">
 {% call address_head() %}{% endcall %}
 <tbody>
 {% call address_row(host, port, "standard view", "most clients should use this one") %}{% endcall %}
 </tbody>
 </table>
+</div>
 {% endif %}
 
 {% if let Some(filtered) = room.advertised_filtered_port %}
@@ -107,12 +109,14 @@
 traffic, which is what floods a client in a large multiworld. You still get your own items, chat and
 announcements. <strong>Use the address above unless you are having trouble</strong>: on this one you
 will not see other people&rsquo;s finds go by.</p>
+<div class="scroll-x">
 <table class="address">
 {% call address_head() %}{% endcall %}
 <tbody>
 {% call address_row(host, filtered, "feed-filtered view", "same room, filters out other slots' item traffic") %}{% endcall %}
 </tbody>
 </table>
+</div>
 </details>
 {% endif %}
 {% endif %}

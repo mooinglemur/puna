@@ -642,3 +642,54 @@ fn attribute_values<'a>(source: &'a str, attribute: &'a str) -> impl Iterator<It
             .unwrap_or_default()
     })
 }
+
+/// **Every `<table>` sits inside a `.scroll-x` wrapper.**
+///
+/// The wrapper is what scrolls. It used to be the table itself — `display: block; overflow-x: auto`
+/// — and that carried two bugs worth not reintroducing. `overflow-x: auto` on an element whose
+/// `overflow-y` is `visible` forces the other axis to `auto` too, which is the overflow spec rather
+/// than a quirk, so every table was a vertical scroll container and any content exceeding its box by
+/// a fraction drew a bar down the page. And blockifying a table shrinks the table box inside it to
+/// its content, so `width: 100%` sized the wrapper and left the table hugging the left edge.
+///
+/// Now that the scrolling lives on a wrapper, a table added without one does not degrade gracefully
+/// — it overflows `main` and gives the whole page a horizontal scrollbar, which is the thing all of
+/// this exists to avoid. The convention is invisible in the stylesheet, so it is asserted here.
+#[test]
+fn every_table_scrolls_inside_a_wrapper() {
+    let mut offenders = Vec::new();
+    let mut tables = 0;
+
+    for path in templates() {
+        let source = blank_comments(
+            &std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("could not read {path:?}: {e}")),
+        );
+        let name = label(&path);
+
+        for (at, _) in source.match_indices("<table") {
+            tables += 1;
+            // The wrapper is the element immediately before it, so look at the preceding markup
+            // rather than anywhere in the file -- a page with one wrapped table and one bare one
+            // would otherwise pass.
+            let before = source[..at].trim_end();
+            if !before.ends_with("<div class=\"scroll-x\">") {
+                let line = line_of(&source, at).unwrap_or_default();
+                offenders.push(format!(
+                    "{name}:{line}: <table> is not wrapped in <div class=\"scroll-x\">, so it will \
+                     overflow the page instead of scrolling itself"
+                ));
+            }
+        }
+    }
+
+    assert!(
+        tables >= 19,
+        "only {tables} tables found -- this lint is no longer looking at anything"
+    );
+    assert!(
+        offenders.is_empty(),
+        "a table outside a scroll wrapper widens the whole page:\n  {}",
+        offenders.join("\n  ")
+    );
+}

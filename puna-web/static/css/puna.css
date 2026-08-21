@@ -142,7 +142,14 @@ a:hover { text-decoration: none; }
 /* The actions column on /admin/users: a row of glyphs, and nothing that needs typing into.
    The reason fields live in the overlays below, which is what stopped this cell being three
    wrapped lines of half-visible text boxes. */
-td.actions {
+/* **On a wrapper INSIDE the cell, never on the `<td>` itself.**
+ *
+ * `display: flex` on a table cell takes it out of table layout: the browser wraps it in an
+ * ANONYMOUS table-cell, which the `th, td` padding rule above cannot reach. The visible result was
+ * the actions sitting a dozen pixels off the baseline of every real cell beside them -- the eye
+ * glyph most obviously, because it is the tallest -- and a row whose height the table no longer
+ * accounted for, which is what clipped the last line of the standing column. */
+td .actions {
   display: flex;
   align-items: center;
   gap: 0.25rem;
@@ -174,6 +181,13 @@ td.actions {
    line of script. */
 [popover].sheet {
   width: min(30rem, calc(100vw - 2rem));
+  /* **`white-space: normal`, because the top layer does not escape INHERITANCE.** The overlay is
+     painted above the page and is positioned by the viewport, so it is easy to read it as detached
+     from the table -- but it is still a DOM descendant of the `<td>` it is declared in, and
+     `th, td { white-space: nowrap }` therefore reaches it. Its paragraph refused to wrap, and the
+     UA stylesheet's `overflow: auto` on `[popover]` turned that into a horizontal scrollbar inside
+     the overlay with the explanation cut off mid-sentence. */
+  white-space: normal;
   padding: 1rem 1.15rem 1.15rem;
   color: var(--text);
   background: var(--surface);
@@ -542,12 +556,26 @@ p.error {
 
 /* The slot table is the one element that can exceed the measure -- a room can carry a long game
    name and six columns. It scrolls itself rather than widening the page. */
+/* **The wrapper scrolls, not the table**, and that is a correction rather than a preference.
+ *
+ * This rule used to say `display: block; overflow-x: auto` on the `<table>` itself. Two bugs came
+ * out of it. First, `overflow-x: auto` on an element whose `overflow-y` is `visible` forces the
+ * other axis to `auto` as well -- that is the overflow spec, not a browser quirk -- so every table
+ * here was a VERTICAL scroll container nobody asked for, and any content exceeding its box by a
+ * fraction of a pixel drew a scrollbar down the side of the page. Second, blockifying a table makes
+ * the table box inside it shrink to its content, so `width: 100%` sized the wrapper and left the
+ * table hugging the left edge: widening the admin pages to 96rem gained them nothing.
+ *
+ * A wrapper fixes both. The table is a real table again, so `width: 100%` fills the measure, and the
+ * only scroll container is one element in one axis. */
+.scroll-x {
+  overflow-x: auto;
+  margin: 0 0 1.25rem;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
-  margin: 0 0 1.25rem;
-  display: block;
-  overflow-x: auto;
 }
 
 th, td {

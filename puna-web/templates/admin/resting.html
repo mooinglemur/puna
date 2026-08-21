@@ -8,6 +8,7 @@
    Deliberately fewer columns than the active table: an image, a deployment age and a client count
    are all facts about a running pod, and none of these rooms has one. What is left is what still
    answers a question -- who made it, and how it came to be down. #}
+<div class="scroll-x">
 <table class="rooms" id="resting-rooms" data-sortable>
 <thead>
 <tr>
@@ -36,6 +37,7 @@
 {% endfor %}
 </tbody>
 </table>
+</div>
 
 {% if rows.is_empty() %}
 <p>Nothing is stopped or closed in this environment.</p>

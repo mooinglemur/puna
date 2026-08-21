@@ -24,6 +24,7 @@ works &mdash; its tracker shows raw ids instead of names.</p>
   <button type="submit">Rebuild every generation with nothing cached</button>
 </form>
 
+<div class="scroll-x">
 <table class="generations">
 <thead><tr>
 <th>Seed</th><th>Games</th><th>Slots</th><th>Names</th><th></th>
@@ -63,6 +64,7 @@ cached
 {% endfor %}
 </tbody>
 </table>
+</div>
 
 {% if generations.is_empty() %}
 <p>No generations have been uploaded yet.</p>

@@ -27,6 +27,7 @@ theirs to lose.</p>
        placeholder="Filter users" aria-label="Filter users">
 </p>
 
+<div class="scroll-x">
 <table class="users" id="users" data-sortable>
 <thead>
 <tr>
@@ -82,7 +83,11 @@ theirs to lose.</p>
 <td data-value="{{ row.joined_secs }}">{{ row.joined }}</td>
 <td data-value="{{ row.last_seen_secs }}">{{ row.last_seen }}</td>
 <td data-value="{{ row.rooms_created }}">{{ row.rooms_created +}} / {{+ row.slots_held }}</td>
-<td class="actions">
+<td>
+{# The flex row goes on a DIV inside the cell, not on the cell. `display: flex` on a `<td>` removes
+   it from table layout and the browser wraps it in an anonymous cell that the table's own padding
+   rule cannot reach -- which misaligned every glyph here against the columns beside them. #}
+<div class="actions">
 {# Four glyphs, and the two that need a reason open an **overlay** rather than carrying a text field
    in the cell. Three inline reason inputs per row is what made this table unusable: each one is
    wider than the column, they wrapped, and the row grew to three lines of half-visible boxes.
@@ -182,11 +187,13 @@ not theirs to lose.</p>
 </button>
 </form>
 {% endif %}
+</div>
 </td>
 </tr>
 {% endfor %}
 </tbody>
 </table>
+</div>
 
 {% if rows.is_empty() %}
 <p>Nobody has signed in yet.</p>

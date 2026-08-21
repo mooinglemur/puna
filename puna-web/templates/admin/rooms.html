@@ -44,6 +44,7 @@ disconnected a room at a time rather than all at once.
        placeholder="Filter rooms" aria-label="Filter rooms">
 </p>
 
+<div class="scroll-x">
 <table class="rooms" id="active-rooms" data-sortable>
 <thead>
 <tr>
@@ -168,6 +169,7 @@ disconnected a room at a time rather than all at once.
 {% endfor %}
 </tbody>
 </table>
+</div>
 
 {% if rows.is_empty() %}
 <p>No rooms are meant to be running in this environment.</p>

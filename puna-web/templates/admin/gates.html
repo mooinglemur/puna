@@ -9,6 +9,7 @@ Two independent switches, so disabling direct uploads does not disable the lobby
 admin-only with no configuration at all.
 </p>
 
+<div class="scroll-x">
 <table class="gates">
 <thead><tr><th>Gate</th><th>Mode</th><th>Changed</th><th>By</th></tr></thead>
 <tbody>
@@ -32,6 +33,7 @@ admin-only with no configuration at all.
 {% endfor %}
 </tbody>
 </table>
+</div>
 
 <h2>Creator allowlist</h2>
 <p class="hint">Only consulted while a gate is in <code>allowlist</code> mode. A Discord id can be
@@ -50,6 +52,7 @@ added before its owner has ever logged in.</p>
 {% if allowlist.is_empty() %}
 <p>Nobody is on the allowlist.</p>
 {% else %}
+<div class="scroll-x">
 <table class="allowlist">
 <thead><tr><th>Discord id</th><th>Note</th><th>Added</th><th>By</th><th></th></tr></thead>
 <tbody>
@@ -69,5 +72,6 @@ added before its owner has ever logged in.</p>
 {% endfor %}
 </tbody>
 </table>
+</div>
 {% endif %}
 {% endblock %}

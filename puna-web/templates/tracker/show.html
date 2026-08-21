@@ -32,6 +32,7 @@ need to.</p>
     <h2>{% if slot.is_some() %}Slot{% else %}Slots{% endif %}</h2>
     <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter slots">
     <div class="table-scroll">
+      <div class="scroll-x">
       <table>
         <thead><tr>
           <th data-key="slot" data-type="number">#</th>
@@ -44,6 +45,7 @@ need to.</p>
         </tr></thead>
         <tbody></tbody>
       </table>
+      </div>
     </div>
     <p class="empty hint" hidden>No slots to show.</p>
   </section>
@@ -55,6 +57,7 @@ need to.</p>
     <h2>Locations</h2>
     <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter locations">
     <div class="table-scroll">
+      <div class="scroll-x">
       <table>
         <thead><tr>
           <th data-key="name">Location</th>
@@ -62,6 +65,7 @@ need to.</p>
         </tr></thead>
         <tbody></tbody>
       </table>
+      </div>
     </div>
     <p class="empty hint" hidden>No locations to show. This seed&rsquo;s names may not have been
     indexed yet.</p>
@@ -71,6 +75,7 @@ need to.</p>
     <h2>Items received</h2>
     <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter items">
     <div class="table-scroll">
+      <div class="scroll-x">
       <table>
         <thead><tr>
           <th data-key="order" data-type="number">#</th>
@@ -80,6 +85,7 @@ need to.</p>
         </tr></thead>
         <tbody></tbody>
       </table>
+      </div>
     </div>
     <p class="empty hint" hidden>Nothing received yet.</p>
   </section>
@@ -92,6 +98,7 @@ need to.</p>
       <summary><h2>Hints</h2></summary>
       <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter hints">
       <div class="table-scroll">
+        <div class="scroll-x">
         <table>
           <thead><tr>
             <th data-key="receiving_name">For</th>
@@ -104,6 +111,7 @@ need to.</p>
           </tr></thead>
           <tbody></tbody>
         </table>
+        </div>
       </div>
       <p class="empty hint" hidden>No hints yet.</p>
     </details>

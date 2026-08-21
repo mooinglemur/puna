@@ -76,6 +76,7 @@ appear below when it finishes.</p>
 {% if history.is_empty() %}
 <p>Nothing has been run in this room yet.</p>
 {% else %}
+<div class="scroll-x">
 <table class="commands">
 <thead><tr><th>When</th><th>Command</th><th>Result</th></tr></thead>
 <tbody>
@@ -103,6 +104,7 @@ appear below when it finishes.</p>
 {% endfor %}
 </tbody>
 </table>
+</div>
 {% endif %}
 
 {% endblock %}
