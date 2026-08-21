@@ -4,8 +4,10 @@
 <h1>{{ room.name +}} &mdash; members</h1>
 <p><a href="/room/{{ room.id }}">back to the room</a></p>
 
+{# Helpers see this table and nothing else on the page: who the staff are is ordinary context for
+   somebody who is staff, and everything below changes who they are. #}
 <table class="members">
-<thead><tr><th>Discord id</th><th>Name</th><th>Role</th><th>Added</th><th></th></tr></thead>
+<thead><tr><th>Discord id</th><th>Name</th><th>Role</th><th>Added</th>{% if may_manage %}<th></th>{% endif %}</tr></thead>
 <tbody>
 {% for entry in members %}
 <tr>
@@ -13,16 +15,25 @@
 <td>{% if let Some(name) = entry.username %}{{ name }}{% else %}&mdash;{% endif %}</td>
 <td>{{ entry.role.as_sql() }}</td>
 <td>{{ entry.added_at.format("%Y-%m-%d") }}</td>
+{% if may_manage %}
 <td>
 <form method="post" action="/room/{{ room.id }}/members/remove" class="inline">
 <input type="hidden" name="user_id" value="{{ entry.user_id }}">
 <button type="submit">Remove</button>
 </form>
 </td>
+{% endif %}
 </tr>
 {% endfor %}
 </tbody>
 </table>
+
+{% if !may_manage %}
+{# Said plainly rather than left as an absence, so a helper knows the page is complete and does not
+   go looking for controls that were never theirs. #}
+<p class="hint">You are a helper here. Changing who is staff &mdash; and the invite links that do
+it &mdash; is an organizer&rsquo;s.</p>
+{% else %}
 <p class="hint">A room must always keep at least one organizer. Promote somebody else before
 removing or demoting the last one.</p>
 
@@ -66,5 +77,6 @@ it never lowers a role somebody already holds.</p>
 {% endfor %}
 </tbody>
 </table>
+{% endif %}
 {% endif %}
 {% endblock %}

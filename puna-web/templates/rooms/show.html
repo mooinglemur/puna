@@ -1,7 +1,35 @@
 {% extends "base.html" %}
 {% block title %}{{ room.name }}{% endblock %}
 {% block content %}
+{# The name, and for staff who may change it, a pencil.
+
+   `<details>` rather than a scripted toggle, the same choice the Manage section makes: it opens
+   with no JavaScript, the browser owns the state, and there is nothing to keep in step. The
+   summary IS the pencil -- `list-style: none` in the stylesheet takes the disclosure triangle off,
+   so what is on screen is one glyph beside the heading. #}
+<div class="titlebar">
 <h1>{{ room.name }}</h1>
+{% if is_organizer %}
+<details class="rename">
+<summary title="Rename this room" aria-label="Rename this room">
+<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+<path d="M11.5 1.9 14.1 4.5 5.4 13.2 2 14l.8-3.4z" fill="none" stroke="currentColor"
+      stroke-linejoin="round"/>
+<path d="M10.2 3.2l2.6 2.6" fill="none" stroke="currentColor" stroke-linecap="round"/>
+</svg>
+</summary>
+<form method="post" action="/room/{{ room.id }}/settings/name">
+<label for="room-name">New name</label>
+<input type="text" id="room-name" name="name" value="{{ room.name }}"
+       maxlength="{{ puna_core::model::room::MAX_NAME_CHARS }}" required>
+<button type="submit">Rename</button>
+{# Said here because everything else on this page that looks like a setting IS a restart, so the
+   reasonable assumption is that this one is too. #}
+<span class="hint">The room is not restarted and nobody is disconnected.</span>
+</form>
+</details>
+{% endif %}
+</div>
 
 {# The lifecycle panel. One template, two entry points: this include paints it, and
    `GET /room/<id>/panel` re-renders the same file for the poller. See rooms/panel.html. #}
@@ -120,11 +148,13 @@ unclaimed
 {% else %}
 <span class="hint">&mdash;</span>
 {% endif %}
-{# Organizers only, on every slot: rotation is a credential change, which is an organizer's the way
-   every other one is. A running room gets it live -- the orchestrator writes the Secret and then
-   tells the room -- and a stopped one simply has it stored. `data-rotates` marks the row's password
-   cell for the strike-through, since the value on screen is stale the moment this succeeds. #}
-{% if is_organizer %}
+{# Staff, on every slot: rotating one slot's password is a credential change WITHIN a mode, which is
+   running the room rather than configuring it -- a password pasted into the wrong channel should
+   not have to wait for an organizer. Changing the MODE is a room restart and stays below.
+   A running room gets it live -- the orchestrator writes the Secret and then tells the room -- and
+   a stopped one simply has it stored. `data-rotates` marks the row's password cell for the
+   strike-through, since the value on screen is stale the moment this succeeds. #}
+{% if is_staff %}
 <form method="post" action="/room/{{ room.id }}/slot/{{ slot.slot_number }}/rotate-password"
       class="inline" data-rotates>
 <button type="submit" class="cycle"

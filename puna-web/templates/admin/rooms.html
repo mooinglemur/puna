@@ -35,18 +35,33 @@ disconnected a room at a time rather than all at once.
 </form>
 {% endif %}
 
-<table class="rooms">
+{# Sorting and filtering come from `table.js`, the same file the room page's slot table uses -- the
+   conventions are `th[data-key]`, `[data-filters="<table id>"]` and a `data-value` where the sort
+   key is not the rendered text. #}
+<p class="table-controls">
+<input type="search" class="table-search" data-filters="active-rooms"
+       placeholder="Filter rooms" aria-label="Filter rooms">
+</p>
+
+<table class="rooms" id="active-rooms" data-sortable>
 <thead>
 <tr>
-  <th>Room</th><th>State</th><th>Running</th><th>Deployed</th><th>Restarted</th>
-  <th>Clients</th><th></th>
+  <th data-key="name">Room</th><th data-key="state">State</th><th data-key="created">Created by</th>
+  <th data-key="running">Running</th><th data-key="deployed">Deployed</th>
+  <th data-key="restarted">Restarted</th>
+  <th data-key="clients">Clients</th><th></th>
 </tr>
 </thead>
 <tbody>
 {% for row in rows %}
 <tr>
-<td>{{ row.name }}</td>
+{# The name is the link. An admin looking at a drifted room almost always wants the room itself
+   next, and copying a uuid out of a table to build the URL by hand is the alternative. #}
+<td><a href="/room/{{ row.id }}">{{ row.name }}</a></td>
 <td><span class="tag">{{ row.state }}</span></td>
+<td>
+{% if let Some(who) = row.created_by %}{{ who }}{% else %}<span class="hint">&mdash;</span>{% endif %}
+</td>
 <td>
   {% if let Some(tag) = row.running_tag %}
   <span title="{{ row.running_image.as_deref().unwrap_or_default() }}">{{ tag }}</span>
@@ -61,15 +76,18 @@ disconnected a room at a time rather than all at once.
   <span class="tag drift">{{ kind }}</span>
   {% endif %}
 </td>
-<td>{% if let Some(age) = row.deployed_ago %}{{ age }}{% else %}<span class="hint">&mdash;</span>{% endif %}</td>
-<td>
+{# `data-value` because "6d 2h" and "40m" do not compare as text in the order they mean. #}
+<td{% if let Some(secs) = row.deployed_secs +%} data-value="{{ secs }}"{% endif %}>
+{%- if let Some(age) = row.deployed_ago %}{{ age }}{% else %}<span class="hint">&mdash;</span>{% endif -%}
+</td>
+<td{% if let Some(secs) = row.restarted_secs +%} data-value="{{ secs }}"{% endif %}>
   {# Shown only when the process is younger than its Deployment by more than a tick, which means
      Kubernetes moved the pod or the container restarted in place -- the room reloaded its save and
-     every client reconnected. A blank cell is the healthy case. #}
+     every client reconnected. Never is the healthy case. #}
   {% if let Some(age) = row.restarted_ago %}
   <span class="tag">{{ age +}} ago</span>
   {% else %}
-  <span class="hint">&mdash;</span>
+  <span class="hint">Never</span>
   {% endif %}
 </td>
 <td>{% if let Some(n) = row.clients %}{{ n }}{% else %}<span class="hint">&mdash;</span>{% endif %}</td>
@@ -91,17 +109,39 @@ disconnected a room at a time rather than all at once.
 </table>
 
 {% if rows.is_empty() %}
-<p>No rooms in this environment yet.</p>
+<p>No rooms are meant to be running in this environment.</p>
 {% endif %}
 
-<p class="hint">A restart takes about a minute from pressing the button, and the room&rsquo;s players
-are disconnected for most of it. The room saves on the way down, keeps its port, and clients
+{# **Loaded on demand, because this list only grows.** Every room anybody ever stopped stays in the
+   database, so putting them in the table above would mean the page an operator opens during an
+   incident gets slower every week -- while answering a question about the rooms that are supposed
+   to be up.
+
+   Split on `desired_state`, not on `state`: a room whose pod vanished reads `idle` for a few
+   seconds while the orchestrator puts it back, and a section that a room drops into and out of
+   while somebody is reading it is worse than no section. See `fleet::Scope`. #}
+{% if resting > 0 %}
+<details class="manage" data-loads="/admin/rooms/resting?fragment=true">
+<summary><h2>Stopped and closed rooms ({{ resting }})</h2></summary>
+{# Replaced wholesale by the fetched table. It says what it is doing rather than sitting blank,
+   because on a slow query the alternative is a section that looks broken. #}
+<p class="hint" data-placeholder>Loading&hellip;</p>
+<noscript>
+{# The same table, as a page, since the section above fills itself with a fetch. #}
+<p><a href="/admin/rooms/resting">Open the stopped and closed rooms</a></p>
+</noscript>
+</details>
+{% endif %}
+
+<p class="hint">A restart typically takes less than a minute from pressing the button, and the room&rsquo;s players
+are typically disconnected for about 15-20 seconds. The room saves on the way down, keeps its port, and clients
 reconnect on their own once it is back.</p>
 
-<p class="hint">Almost all of that minute is waiting rather than working. The orchestrator
-reconciles on a fixed interval and a restart crosses two of those boundaries &mdash; one tick
-picks up the request and stops the room, the next one starts it again &mdash; with the pod&rsquo;s
-own scheduling and save restore in between. Restarting several rooms does not make any one of them
-slower; the per-tick cap just spreads them out.</p>
+{% endblock %}
 
+{% block scripts %}
+{# `table.js` first: `ondemand.js` calls into it after injecting a table, and both are `defer`, so
+   they execute in document order and the API exists by then. #}
+<script src="/static/table.js?v={{ base.static_version }}" defer></script>
+<script src="/static/ondemand.js?v={{ base.static_version }}" defer></script>
 {% endblock %}

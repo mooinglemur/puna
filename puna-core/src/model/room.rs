@@ -806,6 +806,62 @@ pub async fn mark_secret_stale(
     Ok(())
 }
 
+/// Why a proposed room name is not one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum NameError {
+    #[error("a room needs a name")]
+    Empty,
+    #[error("that name is too long; keep it under {} characters", MAX_NAME_CHARS)]
+    TooLong,
+}
+
+/// The cap, in **characters rather than bytes**, so the limit does not depend on the alphabet
+/// somebody names their room in.
+///
+/// Generous on purpose: this is not a security control, it is what stops a name that breaks the
+/// admin table's layout and the `<title>` of every page the room appears on.
+pub const MAX_NAME_CHARS: usize = 120;
+
+/// Trim a proposed room name and decide whether it is usable.
+///
+/// **One definition, three callers** — create, clone and rename. They had two between them (an
+/// `is_empty` check written twice, no length rule anywhere), and three answers to "is this a valid
+/// room name" is how a name that one path accepts becomes one another path cannot store.
+pub fn validate_name(raw: &str) -> Result<String, NameError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(NameError::Empty);
+    }
+    if trimmed.chars().count() > MAX_NAME_CHARS {
+        return Err(NameError::TooLong);
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Give a room a different name.
+///
+/// **Nothing but the label changes, and that is worth stating because everything else on the room
+/// page that looks like a setting is a restart.** Kubernetes object names are `mw-<room id>` and
+/// the room's own labels carry the id, so `rooms.name` reaches no manifest, no spec hash and no
+/// pahoa argument. A rename is a `UPDATE` and nobody is disconnected.
+///
+/// The caller records the previous name in the event row, and already holds it: `RoomAccess` loaded
+/// the whole `Room` to authorize the request. Returning it from here would mean either a second
+/// read or a `RETURNING` clause, and `RETURNING` sees the row it just wrote — the old value is not
+/// available on this side of the statement at all.
+pub async fn rename(
+    conn: &mut AsyncPgConnection,
+    id: RoomId,
+    name: &str,
+) -> Result<(), diesel::result::Error> {
+    diesel::sql_query("UPDATE rooms SET name = $2 WHERE id = $1")
+        .bind::<SqlUuid, _>(id)
+        .bind::<Text, _>(name)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
 /// Change a room's password mode.
 ///
 /// **Every transition is a restart**, because pahoa reads the mode from the environment at startup

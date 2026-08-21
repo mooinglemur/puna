@@ -34,9 +34,16 @@ use crate::ids::RoomId;
 /// `Ord`, deliberately: `Helper < Organizer`, and every check is `>=`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RoomRole {
-    /// Hints, chat, countdowns, status. Everything that does not change the room or its roster.
+    /// **Runs the room.** The whole console — hints, chat, countdowns, releases, collects, kicks,
+    /// item sends — plus the roster of *players*: releasing a slot, handing out a fresh claim
+    /// link, rotating one slot's password.
     Helper,
-    /// Everything a helper may do, plus releases, kicks, membership, settings and deletion.
+    /// Everything a helper may do, plus the three things a helper may not: whether the room runs
+    /// at all (start, stop, close), how it is configured (the password mode, which is a restart),
+    /// and **who is staff** — adding a member, demoting an organizer, minting an invite.
+    ///
+    /// The split is *the room versus the game inside it*. A helper is trusted with the multiworld
+    /// and cannot change who is trusted with it.
     Organizer,
 }
 

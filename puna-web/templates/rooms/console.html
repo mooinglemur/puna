@@ -34,10 +34,10 @@ appear below when it finishes.</p>
       <option value="say">say &mdash; announce to everyone</option>
       <option value="countdown">countdown</option>
       <option value="hint">hint &mdash; for a slot</option>
-      {% if is_organizer %}
-      {# Organizer-only, and hidden rather than disabled: a control that is visible and refuses
-         teaches people the tool is broken. The route checks the tier again regardless -- this is
-         the affordance, not the enforcement. #}
+      {# **Every command here is a helper's**, so nothing on this menu is conditional. It was, and
+         the branch is gone rather than left rendering `true` -- a condition that is always taken is
+         a condition nobody re-reads. If a command ever becomes an organizer's again it needs a gate
+         back, and `a_helper_may_run_the_whole_command_set` in `model::command` is what says so. #}
       <option value="release">release &mdash; send a slot&rsquo;s remaining items</option>
       <option value="collect">collect &mdash; gather a slot&rsquo;s own items</option>
       <option value="send_item">send item &mdash; give a slot an item</option>
@@ -46,7 +46,6 @@ appear below when it finishes.</p>
          Measured: a kick here took the room from 4 connections to 5. The label says so because the
          alternative is somebody pressing it twice and concluding the console is broken. #}
       <option value="kick">kick &mdash; disconnect a slot (they can reconnect at once)</option>
-      {% endif %}
     </select>
   </label>
 

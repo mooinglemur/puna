@@ -118,23 +118,40 @@ impl RoomCommand {
 
     /// **The capability table.** The one authority on who may run what.
     ///
-    /// The split is "does this change the room or another player's game". A helper may talk, hint
-    /// and count down; moving somebody else's items, kicking them, or acting on their behalf is an
-    /// organizer's.
+    /// **Every command is a helper's**, and the split that decides it is *the room versus the
+    /// game inside it*. A helper is somebody an organizer trusts to run the multiworld day to
+    /// day — answering a stuck player, releasing a world whose owner has gone quiet, rotating a
+    /// password somebody pasted in the wrong channel. Making them fetch an organizer for each of
+    /// those makes the tier useless and the organizer a bottleneck.
+    ///
+    /// What a helper may *not* do is not expressible here at all, which is why this table reads
+    /// uniform rather than empty: starting, stopping and closing the room, changing its password
+    /// mode, and touching the roster are ordinary routes guarded by
+    /// [`crate::model::member::RoomRole::Organizer`], not commands. The boundary is that a helper
+    /// runs the room and cannot change who runs it or whether it runs at all.
+    ///
+    /// It stays a table rather than collapsing into a constant deliberately: a new pahoa command
+    /// should have to be *given* a tier, and the day one wants `Organizer` this is where that is
+    /// said. See `the_capability_table_matches_the_design`, which pins the current answer.
     pub fn required_role(&self) -> RoomRole {
         match self {
             // Reads and speech. Nothing here changes a player's game.
             Self::Status | Self::Say { .. } | Self::Countdown { .. } => RoomRole::Helper,
-            // `hint` is a helper's despite costing points, because that is the support action the
-            // tier exists for: a player stuck on a lost item asks, and a helper answers.
+            // `hint` costs the slot's points, and is still a helper's: that is the support action
+            // the tier exists for -- a player stuck on a lost item asks, and a helper answers.
             Self::Hint { .. } => RoomRole::Helper,
-            // Each of these reaches into somebody's game or ends their session.
+            // These reach into somebody's game or end their session, and they are a helper's too:
+            // each is a thing a player asks staff for, and none of them changes the room itself.
+            // `kick` in particular is a disconnect rather than a ban -- the player may reconnect
+            // immediately -- so it is moderation, which is the work this tier is for.
             Self::Release { .. }
             | Self::Collect { .. }
             | Self::SendItem { .. }
             | Self::Kick { .. }
-            // Rotation is a credential change: an organizer's, like every other one.
-            | Self::RotatePassword { .. } => RoomRole::Organizer,
+            // Rotating one slot's password is a credential change WITHIN a mode. Changing the
+            // mode is the organizer's decision, and it is a room restart, so it is a settings
+            // route rather than a command.
+            | Self::RotatePassword { .. } => RoomRole::Helper,
         }
     }
 
@@ -360,22 +377,22 @@ mod tests {
                 },
                 Helper,
             ),
-            (RoomCommand::RotatePassword { slot: 1 }, Organizer),
-            (RoomCommand::Release { slot: 1 }, Organizer),
-            (RoomCommand::Collect { slot: 1 }, Organizer),
+            (RoomCommand::RotatePassword { slot: 1 }, Helper),
+            (RoomCommand::Release { slot: 1 }, Helper),
+            (RoomCommand::Collect { slot: 1 }, Helper),
             (
                 RoomCommand::SendItem {
                     slot: 1,
                     item: String::new(),
                 },
-                Organizer,
+                Helper,
             ),
             (
                 RoomCommand::Kick {
                     slot: 1,
                     reason: None,
                 },
-                Organizer,
+                Helper,
             ),
         ] {
             assert_eq!(
@@ -393,6 +410,32 @@ mod tests {
             every_command()
                 .iter()
                 .all(|c| Organizer >= c.required_role())
+        );
+    }
+
+    /// **A helper may run every command, and that is the decision — not an accident of the table
+    /// being empty.**
+    ///
+    /// Asserted as its own property because the loop above would keep passing if somebody quietly
+    /// raised one command back to `Organizer` *and* updated the expectation beside it in the same
+    /// edit, which is the shape a "just this one is dangerous" change takes. The console hides
+    /// nothing from a helper today, so a command that becomes an organizer's needs the console's
+    /// rendering revisited at the same time.
+    ///
+    /// The boundary a helper actually hits is elsewhere and is not expressible here: start, stop,
+    /// close, the password mode, and the roster are ordinary organizer-guarded routes.
+    #[test]
+    fn a_helper_may_run_the_whole_command_set() {
+        let withheld: Vec<&str> = every_command()
+            .iter()
+            .filter(|c| c.required_role() > RoomRole::Helper)
+            .map(|c| c.name())
+            .collect();
+
+        assert!(
+            withheld.is_empty(),
+            "these are no longer a helper's, so the console must stop offering them unconditionally: \
+             {withheld:?}"
         );
     }
 

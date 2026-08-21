@@ -1,0 +1,42 @@
+{# The rooms somebody stopped or closed.
+
+   **Rendered here and nowhere else.** `GET /admin/rooms/resting?fragment=true` returns this bare
+   for the collapsed section on `/admin/rooms`, and `resting_page.html` wraps it in the site chrome
+   for the `<noscript>` link. Building this table in JavaScript instead would be a second set of
+   columns to keep in step with the first, and the copy that drifts is the one nobody reviews.
+
+   Deliberately fewer columns than the active table: an image, a deployment age and a client count
+   are all facts about a running pod, and none of these rooms has one. What is left is what still
+   answers a question -- who made it, and how it came to be down. #}
+<table class="rooms" id="resting-rooms" data-sortable>
+<thead>
+<tr>
+  <th data-key="name">Room</th><th data-key="state">State</th>
+  <th data-key="desired">Down because</th><th data-key="created">Created by</th>
+</tr>
+</thead>
+<tbody>
+{% for row in rows %}
+<tr>
+<td><a href="/room/{{ row.id }}">{{ row.name }}</a></td>
+<td><span class="tag">{{ row.state }}</span></td>
+<td>
+{# Stopped and closed are the same instruction to the orchestrator and differ only in who may undo
+   them, which is exactly the distinction an admin looking at this list wants. #}
+{% if row.desired_state == "closed" %}
+<span class="tag">closed</span>
+{% else %}
+<span class="hint">stopped</span>
+{% endif %}
+</td>
+<td>
+{% if let Some(who) = row.created_by %}{{ who }}{% else %}<span class="hint">&mdash;</span>{% endif %}
+</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+
+{% if rows.is_empty() %}
+<p>Nothing is stopped or closed in this environment.</p>
+{% endif %}

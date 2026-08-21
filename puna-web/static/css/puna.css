@@ -449,6 +449,42 @@ summary { cursor: pointer; }
   margin: 2rem 0 0.6rem;
 }
 
+/* The room's name and the control that changes it, on one line. `align-items: baseline` rather
+   than `center` so the pencil sits on the heading's baseline instead of floating in the middle of
+   its line box, which at h1 size is a visible drift. */
+.titlebar {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.titlebar > h1 { margin-bottom: 0; }
+
+/* The disclosure triangle is off because the pencil IS the affordance -- a triangle beside it
+   would be two controls drawn for one. `display: inline-flex` restores a marker box that
+   `list-style: none` alone leaves behind in WebKit, which is what `::-webkit-details-marker` is
+   for. */
+.rename > summary {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  color: var(--muted);
+  list-style: none;
+}
+.rename > summary::-webkit-details-marker { display: none; }
+.rename > summary:hover { color: var(--text); }
+.rename > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Out of the flex row once open, so a wide form does not squeeze the heading beside it. */
+.rename[open] { flex-basis: 100%; }
+.rename form {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin: 0.4rem 0 0;
+}
+
 /* Sortable headers are real buttons to a keyboard: the JS gives them a tabindex and a role, and
    these are the affordances that say so. The arrow is a pseudo-element so it cannot be caught by
    the client-side text filter, which matches on rendered cell text. */

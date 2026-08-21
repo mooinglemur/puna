@@ -8,13 +8,15 @@
 use puna_core::Environment;
 use puna_core::db::Pool;
 use puna_core::ids::RoomId;
-use puna_core::model::fleet::{self, FleetRoom, Overview};
+use puna_core::model::fleet::{self, FleetRoom, Overview, Scope};
+use rocket::http::Status;
 use rocket::request::FlashMessage;
+use rocket::response::content::RawHtml;
 use rocket::response::{Flash, Redirect};
 use rocket::{State, get, post, routes, uri};
 
 use crate::auth::AdminSession;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::flash::Notice;
 use crate::params::RoomParam;
 use crate::tpl::TplContext;
@@ -30,6 +32,13 @@ pub struct Row {
     pub id: RoomId,
     pub name: String,
     pub state: String,
+    /// `running`, `stopped` or `closed` -- what somebody ASKED for, which is what the resting table
+    /// reports and what it is split on. See `fleet::Scope`.
+    pub desired_state: String,
+    /// Who opened it, already resolved to something printable: a username, `"never logged in"` for
+    /// an id with no login yet, or `None` where there is nobody to name. The raw Discord id is
+    /// deliberately not rendered — it identifies a person and reads as noise in a column.
+    pub created_by: Option<String>,
     pub running_image: Option<String>,
     /// Just the tag, where the image has one. A full registry path repeated down a column is noise
     /// that hides the one part that differs between rows.
@@ -39,6 +48,14 @@ pub struct Row {
     /// Present only when the process is meaningfully younger than its Deployment -- i.e. the room
     /// restarted under Puna without its spec changing.
     pub restarted_ago: Option<String>,
+    /// The two ages again as seconds, for `data-value`.
+    ///
+    /// **The column cannot sort on what it displays.** "6d 2h" and "40m" compare as text with the
+    /// 4 before the 6, so the oldest room in the fleet sorts into the middle -- and a sort that is
+    /// subtly wrong is worse than no sort, because it looks like it worked. `table.js` reads
+    /// `data-value` in preference to the cell's text for exactly this.
+    pub deployed_secs: Option<i64>,
+    pub restarted_secs: Option<i64>,
     pub clients: Option<i32>,
     pub redeploy_pending: bool,
 }
@@ -52,8 +69,30 @@ pub struct RoomsTemplate {
     desired_image: Option<String>,
     rows: Vec<Row>,
     drifted: usize,
+    /// How many stopped or closed rooms exist, for the collapsed heading. They are **not** loaded
+    /// with this page — see [`resting`].
+    resting: i64,
     /// The sentence the last POST left behind, shown once. See [`crate::flash`].
     notice: Option<Notice>,
+}
+
+/// The stopped-and-closed table, which the main page does not carry.
+///
+/// **One template, two entry points**, the same shape `rooms/panel.html` uses: [`resting`] renders
+/// it bare for the `fetch` that fills the collapsed section, and [`RestingPageTemplate`] wraps it
+/// in the site chrome for the `<noscript>` link. A second copy of this table in JavaScript would be
+/// a second set of columns to keep in step with the first.
+#[derive(Template, WebTemplate)]
+#[template(path = "admin/resting.html")]
+pub struct RestingTemplate {
+    rows: Vec<Row>,
+}
+
+#[derive(Template, WebTemplate)]
+#[template(path = "admin/resting_page.html")]
+pub struct RestingPageTemplate {
+    base: TplContext,
+    rows: Vec<Row>,
 }
 
 /// `registry/host/image:tag` -> `tag`, leaving anything without one alone.
@@ -63,6 +102,11 @@ pub struct RoomsTemplate {
 fn tag_of(image: &str) -> Option<String> {
     let after_host = image.rsplit('/').next()?;
     after_host.rsplit_once(':').map(|(_, tag)| tag.to_string())
+}
+
+/// The same span `ago` renders, as a number a column can be ordered by.
+fn elapsed_secs(at: chrono::DateTime<chrono::Utc>) -> i64 {
+    (chrono::Utc::now() - at).num_seconds().max(0)
 }
 
 fn ago(at: chrono::DateTime<chrono::Utc>) -> String {
@@ -81,6 +125,22 @@ fn ago(at: chrono::DateTime<chrono::Utc>) -> String {
     }
 }
 
+/// Who opened a room, in words.
+///
+/// Three cases and they are genuinely different: nobody recorded (an early row, or an account that
+/// is gone), somebody with a row but no login yet — the lobby-push case, where a slot is assigned
+/// to a Discord id that has never been here — and an ordinary username. The stand-in is spelled
+/// out rather than shown raw, for the same reason the room page does it: a bare snowflake in a
+/// column is not an answer to "who made this".
+fn creator(room: &FleetRoom) -> Option<String> {
+    let name = room.created_by_name.as_deref()?;
+    Some(if puna_core::model::user::is_placeholder(name) {
+        "never logged in".to_string()
+    } else {
+        name.to_string()
+    })
+}
+
 fn rows_of(overview: &Overview) -> Vec<Row> {
     let fleet_image = overview.pahoa_image.as_deref();
     overview
@@ -90,11 +150,15 @@ fn rows_of(overview: &Overview) -> Vec<Row> {
             id: room.id,
             name: room.name.clone(),
             state: room.state.clone(),
+            desired_state: room.desired_state.clone(),
+            created_by: creator(room),
             running_image: room.running_image.clone(),
             running_tag: room.running_image.as_deref().and_then(tag_of),
             drift: room.drift(fleet_image).map(|d| d.label()),
             deployed_ago: room.deployment_created_at.map(ago),
             restarted_ago: room.restarted_since_deploy().map(ago),
+            deployed_secs: room.deployment_created_at.map(elapsed_secs),
+            restarted_secs: room.restarted_since_deploy().map(elapsed_secs),
             clients: room.clients_connected,
             redeploy_pending: room.redeploy_requested_at.is_some(),
         })
@@ -108,13 +172,17 @@ async fn render(
     notice: Option<Notice>,
 ) -> Result<RoomsTemplate> {
     let mut conn = pool.get().await?;
-    let overview = fleet::overview(&mut conn, environment).await?;
+    // `Active` only. Every room anybody stopped stays in the database forever, so this table would
+    // otherwise grow without bound while answering a question about the ones that are supposed to
+    // be up.
+    let overview = fleet::overview(&mut conn, environment, Scope::Active).await?;
     Ok(RoomsTemplate {
         base: TplContext::new(session.session()),
         desired_tag: overview.pahoa_image.as_deref().and_then(tag_of),
         desired_image: overview.pahoa_image.clone(),
         drifted: overview.drifted().count(),
         rows: rows_of(&overview),
+        resting: overview.resting,
         notice,
     })
 }
@@ -127,6 +195,35 @@ async fn show(
     flash: Option<FlashMessage<'_>>,
 ) -> Result<RoomsTemplate> {
     render(session, pool, **environment, Notice::take(flash)).await
+}
+
+/// The rooms somebody stopped or closed, fetched when the section is opened.
+///
+/// `fragment` selects the bare table over the full page. Both render the same partial, so the
+/// scripted path and the `<noscript>` link cannot show different columns.
+#[get("/admin/rooms/resting?<fragment>")]
+async fn resting(
+    session: AdminSession,
+    pool: &State<Pool>,
+    environment: &State<Environment>,
+    fragment: Option<bool>,
+) -> Result<RawHtml<String>> {
+    let mut conn = pool.get().await?;
+    let overview = fleet::overview(&mut conn, **environment, Scope::Resting).await?;
+    let rows = rows_of(&overview);
+
+    let html = if fragment.unwrap_or(false) {
+        RestingTemplate { rows }.render()
+    } else {
+        RestingPageTemplate {
+            base: TplContext::new(session.session()),
+            rows,
+        }
+        .render()
+    }
+    .map_err(|e| Error::new(Status::InternalServerError, e.into()))?;
+
+    Ok(RawHtml(html))
 }
 
 #[post("/admin/rooms/<id>/redeploy")]
@@ -156,7 +253,10 @@ async fn redeploy_drifted(
     environment: &State<Environment>,
 ) -> Result<Flash<Redirect>> {
     let mut conn = pool.get().await?;
-    let overview = fleet::overview(&mut conn, **environment).await?;
+    // `All`, deliberately, even though a resting room can never drift -- `drift()` returns `None`
+    // without a running image. Scanning the narrower set would give the same answer today and make
+    // the bulk action's reach depend on an invariant stated somewhere else.
+    let overview = fleet::overview(&mut conn, **environment, Scope::All).await?;
 
     // Filtered in Rust against the same `drift()` the table rendered, deliberately, rather than
     // re-expressed as a `WHERE` clause. Two definitions would eventually disagree, and the failure
@@ -173,7 +273,7 @@ async fn redeploy_drifted(
 }
 
 pub fn routes() -> Vec<rocket::Route> {
-    routes![show, redeploy, redeploy_drifted]
+    routes![show, resting, redeploy, redeploy_drifted]
 }
 
 #[cfg(test)]
@@ -189,6 +289,9 @@ mod tests {
             id: RoomId::new(),
             name: "midweek-async".into(),
             state: if running.is_some() { "running" } else { "idle" }.into(),
+            desired_state: "running".into(),
+            created_by: Some(4931),
+            created_by_name: Some("troy".into()),
             running_image: running.map(str::to_string),
             deployment_created_at: running.map(|_| Utc::now() - TimeDelta::days(6)),
             process_started_at: running.map(|_| Utc::now() - TimeDelta::days(6)),
@@ -261,6 +364,7 @@ mod tests {
         let overview = Overview {
             pahoa_image: Some(CONFIGURED.into()),
             rooms: vec![drifted.clone(), current, idle.clone()],
+            resting: 2,
         };
         assert_eq!(overview.drifted().count(), 1);
 
@@ -279,6 +383,7 @@ mod tests {
             desired_image: Some(CONFIGURED.into()),
             drifted: overview.drifted().count(),
             rows: rows_of(&overview),
+            resting: overview.resting,
             notice: None,
         };
 
@@ -322,6 +427,94 @@ mod tests {
             html.contains("<title>Example Multiworld admin"),
             "and so is the tab: {html:.400}"
         );
+
+        // The name is a link to the room. An admin reading this table almost always wants the room
+        // next, and the alternative is copying a uuid out of a cell to build the URL by hand.
+        assert!(
+            html.contains(&format!(
+                "<a href=\"/room/{}\">midweek-async</a>",
+                drifted.id
+            )),
+            "the room name links to the room"
+        );
+
+        // Who opened it, by name -- never the raw snowflake, which identifies a person and answers
+        // nobody's question.
+        assert!(html.contains("<th data-key=\"created\">Created by</th>"));
+        assert!(html.contains(">troy<"), "the creator's username is shown");
+        assert!(!html.contains("4931"), "and their Discord id is not");
+
+        // The section is present, labelled with its count, and EMPTY -- the rooms behind it were
+        // never loaded. A page that quietly rendered them would defeat the whole point.
+        assert!(
+            html.contains("Stopped and closed rooms (2)"),
+            "the deferred section names how much is behind it"
+        );
+        assert!(
+            html.contains("data-loads=\"/admin/rooms/resting?fragment=true\""),
+            "and says where to get it"
+        );
+        assert!(
+            html.contains("/admin/rooms/resting\">"),
+            "with a plain link for scripting-off"
+        );
+    }
+
+    /// Sorting reads `data-value` where the cell's text does not compare in the order it means.
+    ///
+    /// **This is the assertion that catches a silently wrong sort.** "6d 2h" against "40m" compares
+    /// as text with the `4` before the `6`, so the oldest room in the fleet lands in the middle of
+    /// an age-sorted column — and nothing about that looks broken.
+    #[test]
+    fn the_age_columns_carry_a_numeric_sort_key() {
+        let overview = Overview {
+            pahoa_image: Some(CONFIGURED.into()),
+            rooms: vec![room(Some(CONFIGURED))],
+            resting: 0,
+        };
+        let rows = rows_of(&overview);
+
+        let secs = rows[0].deployed_secs.expect("a running room has an age");
+        assert!(
+            (secs - 6 * 86_400).abs() < 60,
+            "the sort key is the age in seconds, got {secs}"
+        );
+        assert!(
+            rows[0]
+                .deployed_ago
+                .as_deref()
+                .is_some_and(|a| a.ends_with('h')),
+            "while the cell still reads as a human duration: {:?}",
+            rows[0].deployed_ago
+        );
+
+        // An idle room has neither, and a missing sort key must be missing rather than zero -- a
+        // zero would sort as "just deployed", which is the opposite of the truth.
+        let none = rows_of(&Overview {
+            pahoa_image: None,
+            rooms: vec![room(None)],
+            resting: 0,
+        });
+        assert_eq!(none[0].deployed_secs, None);
+    }
+
+    /// A creator who has a row but has never logged in reads as words, not as a Discord id.
+    ///
+    /// The lobby push (M14) is what produces these: a slot assigned to somebody who has never been
+    /// here. `ensure_exists` writes a stand-in username, and rendering it raw would put a bare
+    /// snowflake in a column headed "Created by".
+    #[test]
+    fn a_creator_who_never_logged_in_is_named_as_such() {
+        use puna_core::model::user::placeholder_username;
+
+        let mut it = room(None);
+        assert_eq!(creator(&it).as_deref(), Some("troy"));
+
+        it.created_by_name = Some(placeholder_username(4931));
+        assert_eq!(creator(&it).as_deref(), Some("never logged in"));
+
+        it.created_by_name = None;
+        assert_eq!(creator(&it), None, "nobody to name is not a name");
     }
 
     /// The notice is delivered out of band and rendered with its own severity class, so a failure
@@ -341,6 +534,7 @@ mod tests {
             desired_image: None,
             drifted: 0,
             rows: Vec::new(),
+            resting: 0,
             notice,
         };
 

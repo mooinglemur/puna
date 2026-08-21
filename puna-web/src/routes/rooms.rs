@@ -192,9 +192,10 @@ fn slot_views(
                 (true, _, Some(v), Some(o)) if v == o => s.password.clone(),
                 _ => None,
             },
-            // Unbinding a slot is an organizer's, matching every other roster action. A helper runs
-            // the room; who holds a slot is who is playing it.
-            can_release: role.is_some_and(|r| r >= RoomRole::Organizer) && s.owner_id.is_some(),
+            // Staff, helpers included: unbinding a slot and handing out a fresh claim link is
+            // running the room rather than deciding who runs it. The roster action a helper may
+            // NOT take is on `room_members` -- adding staff, or promoting themselves.
+            can_release: role.is_some_and(|r| r >= RoomRole::Helper) && s.owner_id.is_some(),
             // Owner only, and NOT widened to staff -- see the field's note. Computed from the same
             // comparison as `is_mine` rather than from it, so the two cannot drift apart.
             tracker_id: match (viewer, s.owner_id) {
@@ -220,8 +221,10 @@ fn slot_views(
 
 /// Unbind a slot from whoever holds it, and mint a fresh claim link.
 ///
-/// The roster half of the same job `claim` does, and organizer-guarded like every other roster
-/// action: a helper runs the room, an organizer decides who is in it.
+/// The roster half of the same job `claim` does, and **helper-guarded**: a player dropping out
+/// mid-async is the ordinary case this exists for, and making a helper fetch an organizer to hand
+/// the slot to somebody else is the bottleneck the tier exists to remove. The roster a helper may
+/// not touch is `room_members` — who is staff — which is a different table and a different route.
 ///
 /// **A new claim token, not merely a cleared owner.** The old link was single-use and is already
 /// spent, so leaving the slot unclaimed with no token would produce a slot nobody can take — the
@@ -237,7 +240,7 @@ fn slot_views(
 async fn release_slot(
     id: RoomParam,
     n: i32,
-    access: RoomAccess<Organizer>,
+    access: RoomAccess<Helper>,
     pool: &State<Pool>,
 ) -> Result<Redirect> {
     let mut conn = pool.get().await?;
@@ -288,7 +291,7 @@ async fn release_slot(
 async fn rotate_slot_password(
     id: RoomParam,
     n: i32,
-    access: RoomAccess<Organizer>,
+    access: RoomAccess<Helper>,
     pool: &State<Pool>,
 ) -> Result<Redirect> {
     if access.room.slot_auth != SlotAuth::PerSlot {
@@ -395,13 +398,8 @@ async fn create(
         .generation_id
         .parse()
         .map_err(|_| Error::new(Status::BadRequest, anyhow::anyhow!("not a generation id")))?;
-    let name = form.name.trim();
-    if name.is_empty() {
-        return Err(Error::new(
-            Status::BadRequest,
-            anyhow::anyhow!("a room needs a name"),
-        ));
-    }
+    let name = room::validate_name(&form.name)
+        .map_err(|e| Error::new(Status::BadRequest, anyhow::anyhow!(e)))?;
     let slot_auth = SlotAuth::parse(&form.slot_auth)
         .ok_or_else(|| Error::new(Status::BadRequest, anyhow::anyhow!("unknown password mode")))?;
 
@@ -851,13 +849,8 @@ async fn clone_room(
     form: Form<CloneForm>,
     pool: &State<Pool>,
 ) -> Result<Redirect> {
-    let name = form.name.trim();
-    if name.is_empty() {
-        return Err(Error::new(
-            Status::BadRequest,
-            anyhow::anyhow!("a room needs a name"),
-        ));
-    }
+    let name = room::validate_name(&form.name)
+        .map_err(|e| Error::new(Status::BadRequest, anyhow::anyhow!(e)))?;
 
     let mut conn = pool.get().await?;
     let clone = room::clone_room(
@@ -889,20 +882,41 @@ pub struct MembersTemplate {
     base: TplContext,
     room: Room,
     members: Vec<member::Member>,
+    /// **Empty for a helper, and that is a credential decision rather than a tidier page.**
+    ///
+    /// An invite token *is* the grant — following the link confers the role — so an organizer
+    /// invite sitting in this list would let any helper who can read the page promote themselves,
+    /// which is precisely what their tier withholds. Withheld at the query rather than hidden in
+    /// markup, because a template cannot prove it did not render something.
     invites: Vec<member::Invite>,
+    /// Whether the viewer may change any of this. A helper sees who the staff are and no controls.
+    may_manage: bool,
 }
 
+/// Who is staff here, and — for an organizer — the controls that change it.
+///
+/// **Helper-guarded for the read, organizer for every write.** Knowing who else is staff is
+/// ordinary context for somebody who is staff: it is who to escalate to, and it is already
+/// inferable from the console's audit trail. What a helper must not gain is any way to add a
+/// member, demote an organizer, or elevate themselves — so the five write routes below stay
+/// `Organizer`, and the invite list is not loaded at all (see the field's note).
 #[get("/room/<id>/members")]
 async fn members(
     id: RoomParam,
-    access: RoomAccess<Organizer>,
+    access: RoomAccess<Helper>,
     pool: &State<Pool>,
 ) -> Result<MembersTemplate> {
+    let may_manage = access.role() >= RoomRole::Organizer;
     let mut conn = pool.get().await?;
     Ok(MembersTemplate {
         base: TplContext::new(access.session.session()),
         members: member::list(&mut conn, id.0).await?,
-        invites: member::list_invites(&mut conn, id.0).await?,
+        invites: if may_manage {
+            member::list_invites(&mut conn, id.0).await?
+        } else {
+            Vec::new()
+        },
+        may_manage,
         room: access.room,
     })
 }
@@ -1138,6 +1152,54 @@ async fn set_slot_auth(
     Ok(Redirect::to(format!("/room/{id}")))
 }
 
+#[derive(FromForm)]
+struct RenameForm {
+    name: String,
+}
+
+/// Give the room a different name.
+///
+/// **The one setting on this page that is not a restart**, and the confirm copy says so: object
+/// names are `mw-<room id>` and every label carries the id, so `rooms.name` reaches no manifest and
+/// no spec hash. Nobody is disconnected and nothing is queued.
+///
+/// Organizer-guarded rather than helper: a room's name is how everybody refers to it, in Discord
+/// and in every link already shared, so changing it is a decision about the room rather than a way
+/// of running it. That puts it on the same side of the line as stop, close and the password mode.
+#[post("/room/<id>/settings/name", data = "<form>")]
+async fn rename_room(
+    id: RoomParam,
+    access: RoomAccess<Organizer>,
+    form: Form<RenameForm>,
+    pool: &State<Pool>,
+) -> Result<Redirect> {
+    let name = room::validate_name(&form.name)
+        .map_err(|e| Error::new(Status::BadRequest, anyhow::anyhow!(e)))?;
+
+    // Nothing changed, so record nothing. An audit trail with a row saying a name became itself is
+    // one more line between somebody and the change they are looking for.
+    if name == access.room.name {
+        return Ok(Redirect::to(format!("/room/{id}")));
+    }
+
+    let mut conn = pool.get().await?;
+    room::rename(&mut conn, id.0, &name).await?;
+
+    // Both names, because the new one is on the row already and the old one is the half that is
+    // otherwise gone -- "what was this room called before" is the question a rename raises.
+    event::record(
+        &mut conn,
+        id.0,
+        event::Actor::User(access.user_id()),
+        "renamed",
+        serde_json::json!({ "from": access.room.name, "to": name }),
+    )
+    .await?;
+
+    tracing::info!(room = %id, by = access.user_id(), from = %access.room.name, to = %name, "room renamed");
+    Ok(Redirect::to(format!("/room/{id}")))
+}
+
 pub fn routes() -> Vec<rocket::Route> {
     routes![
         create,
@@ -1160,6 +1222,7 @@ pub fn routes() -> Vec<rocket::Route> {
         rotate_slot_password,
         slot_password,
         set_slot_auth,
+        rename_room,
     ]
 }
 
@@ -1318,16 +1381,22 @@ mod tests {
         }
     }
 
-    /// Releasing is an organizer's, and only where there is somebody to release.
+    /// Releasing is **staff's**, helpers included, and only where there is somebody to release.
+    ///
+    /// A player going quiet mid-async is the case this exists for, so a helper handing the slot to
+    /// somebody else is the tier working rather than a gap in it. The line a helper does not cross
+    /// is `room_members`, which is a different table and an organizer-guarded route.
     #[test]
-    fn only_an_organizer_is_offered_release_and_only_on_a_claimed_slot() {
+    fn staff_are_offered_release_and_only_on_a_claimed_slot() {
         let slots = vec![slot(1, Some(100)), slot(2, None)];
 
-        for role in [None, Some(RoomRole::Helper)] {
+        // A visitor, and somebody who merely holds a slot here: neither is staff, and owning slot 1
+        // must not confer a roster action over it.
+        for viewer in [None, Some(100)] {
             let views = slot_views(
                 slots.clone(),
+                viewer,
                 None,
-                role,
                 &Default::default(),
                 false,
                 &Default::default(),
@@ -1335,8 +1404,22 @@ mod tests {
             );
             assert!(
                 views.iter().all(|v| !v.can_release),
-                "{role:?} was offered a roster action"
+                "viewer {viewer:?} is not staff and was offered a roster action"
             );
+        }
+
+        for role in [RoomRole::Helper, RoomRole::Organizer] {
+            let views = slot_views(
+                slots.clone(),
+                None,
+                Some(role),
+                &Default::default(),
+                false,
+                &Default::default(),
+                false,
+            );
+            assert!(views[0].can_release, "{role:?} may release a claimed slot");
+            assert!(!views[1].can_release, "nobody holds slot 2");
         }
 
         let views = slot_views(
@@ -1486,6 +1569,10 @@ mod tests {
     }
 
     fn page(is_staff: bool) -> RoomTemplate {
+        page_as(is_staff, is_staff)
+    }
+
+    fn page_as(is_staff: bool, is_organizer: bool) -> RoomTemplate {
         RoomTemplate {
             base: crate::tpl::TplContext {
                 is_logged_in: true,
@@ -1498,7 +1585,7 @@ mod tests {
             room: a_room(),
             slots: Vec::new(),
             is_staff,
-            is_organizer: is_staff,
+            is_organizer,
             siblings: Vec::new(),
             can_see_spoiler: false,
             can_see_tracker: true,
@@ -1527,6 +1614,66 @@ mod tests {
                 html.contains(path),
                 "the room page offers no way to reach {what}"
             );
+        }
+    }
+
+    /// **The helper boundary, as the page draws it.**
+    ///
+    /// A helper runs the room and cannot change whether it runs or who runs it. Every control on
+    /// this page falls on one side or the other, and the split is only visible in markup — the
+    /// routes enforce it, but a page offering a control the route refuses is how people learn the
+    /// site is broken, and a page hiding one they may use is how a tier becomes useless.
+    ///
+    /// Asserted from one render rather than as separate tests, because the point is the *line*: a
+    /// control moving from one list to the other should fail here whichever way it moves.
+    #[test]
+    fn a_helper_runs_the_room_and_an_organizer_owns_it() {
+        let mut helper = page_as(true, false);
+        helper.room.slot_auth = SlotAuth::PerSlot;
+        helper.slots = vec![SlotView {
+            slot_number: 1,
+            player_name: "Kai".into(),
+            game: "A Link to the Past".into(),
+            is_spectator: false,
+            owner_id: Some(77),
+            is_mine: false,
+            claim_token: None,
+            has_patch: true,
+            can_download: true,
+            password: Some("abcde-fghij".into()),
+            can_release: true,
+            tracker_id: None,
+            owner_name: Some("kai".into()),
+            owner_never_logged_in: false,
+        }];
+        let html = helper.render().expect("renders");
+
+        // A helper's: running the multiworld and the roster of players.
+        for (fragment, what) in [
+            ("/console", "the console"),
+            ("/slot/1/rotate-password", "rotating a slot's password"),
+            ("/slot/1/release", "releasing a claimed slot"),
+            ("/members", "seeing who else is staff"),
+        ] {
+            assert!(html.contains(fragment), "a helper is not offered {what}");
+        }
+
+        // An organizer's: whether the room runs, how it is configured, what it is called.
+        for (fragment, what) in [
+            ("/stop", "stopping the room"),
+            ("/close", "closing the room"),
+            ("/settings/slot-auth", "changing the password mode"),
+            ("/settings/name", "renaming the room"),
+        ] {
+            assert!(!html.contains(fragment), "a helper was offered {what}");
+        }
+
+        // And an organizer gets both halves, so nothing above is hidden from everybody.
+        let mut organizer = page_as(true, true);
+        organizer.room.slot_auth = SlotAuth::PerSlot;
+        let html = organizer.render().expect("renders");
+        for fragment in ["/stop", "/close", "/settings/slot-auth", "/settings/name"] {
+            assert!(html.contains(fragment), "an organizer lost {fragment}");
         }
     }
 

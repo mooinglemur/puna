@@ -13,6 +13,7 @@ mod common;
 use std::collections::HashSet;
 
 use common::with_db;
+use diesel_async::RunQueryDsl;
 use puna_core::Environment;
 use puna_core::artifact::SlotKind;
 use puna_core::ids::{GenerationId, RoomId};
@@ -567,6 +568,206 @@ async fn a_spectator_is_a_first_class_slot() {
         // And it is subject to the same access rule as any other slot.
         assert!(slot::may_access(&claimed, Some(PLAYER), None, false));
         assert!(!slot::may_access(&claimed, Some(STRANGER), None, false));
+    })
+    .await;
+}
+
+/// A rename changes the label and nothing else.
+///
+/// **The point of the test is the second half.** Every other control on the room page that looks
+/// like a setting is a restart, and this one is not — object names are `mw-<room id>`, so
+/// `rooms.name` reaches no manifest and no spec hash. A rename that moved `spec_hash` would bounce
+/// the room and disconnect everybody for a cosmetic edit, and nothing at the time would say why.
+#[tokio::test]
+async fn renaming_a_room_touches_nothing_but_the_name() {
+    with_db(|pool| async move {
+        let mut conn = pool.get().await.expect("connection");
+        users(&mut conn).await;
+        let generation = seed_generation(&mut conn, false).await;
+
+        let new = NewRoom::direct(Environment::Dev, "friday night", generation, OWNER);
+        let id = room::create(&mut conn, &new).await.expect("create");
+        let before = room::get(&mut conn, id)
+            .await
+            .expect("read")
+            .expect("exists");
+
+        // Pretend the room has started, so there is a hash for a rename to disturb. `Room` does not
+        // project `spec_hash` -- it is orchestrator-owned -- so this reads the column itself, which
+        // is what the planner compares and therefore the thing that must not move.
+        diesel::sql_query(
+            "UPDATE rooms SET spec_hash = 'hash-1', redeploy_requested_at = NULL WHERE id = $1",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .execute(&mut conn)
+        .await
+        .expect("seed a spec hash");
+
+        room::rename(&mut conn, id, "saturday morning")
+            .await
+            .expect("rename");
+        let after = room::get(&mut conn, id)
+            .await
+            .expect("read")
+            .expect("exists");
+
+        assert_eq!(after.name, "saturday morning");
+        assert_eq!(
+            after.desired_state, before.desired_state,
+            "and must not change what the room is meant to be doing"
+        );
+        assert_eq!(after.slot_auth, before.slot_auth);
+
+        #[derive(diesel::QueryableByName)]
+        struct Spec {
+            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+            spec_hash: Option<String>,
+            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>)]
+            redeploy_requested_at: Option<chrono::DateTime<chrono::Utc>>,
+        }
+        let spec: Vec<Spec> =
+            diesel::sql_query("SELECT spec_hash, redeploy_requested_at FROM rooms WHERE id = $1")
+                .bind::<diesel::sql_types::Uuid, _>(id)
+                .load(&mut conn)
+                .await
+                .expect("read the spec columns");
+        let spec = spec.into_iter().next().expect("the room is still there");
+
+        assert_eq!(
+            spec.spec_hash.as_deref(),
+            Some("hash-1"),
+            "a rename must not move the spec hash -- that would restart the room"
+        );
+        assert_eq!(
+            spec.redeploy_requested_at, None,
+            "and must not queue a restart either"
+        );
+    })
+    .await;
+}
+
+/// One definition of a usable room name, for create, clone and rename alike.
+///
+/// Three callers had two answers between them and no length rule at all, which is how a name one
+/// path accepts becomes one another path cannot store.
+#[test]
+fn a_room_name_is_trimmed_and_bounded() {
+    use puna_core::model::room::{MAX_NAME_CHARS, NameError, validate_name};
+
+    assert_eq!(
+        validate_name("  friday night  ").as_deref(),
+        Ok("friday night")
+    );
+    assert_eq!(validate_name(""), Err(NameError::Empty));
+    assert_eq!(validate_name("   \t\n "), Err(NameError::Empty));
+
+    // Counted in CHARACTERS, so the limit does not depend on the alphabet somebody names their
+    // room in: this is well under the cap in chars and well over it in bytes.
+    let cyrillic = "я".repeat(MAX_NAME_CHARS);
+    assert!(
+        cyrillic.len() > MAX_NAME_CHARS,
+        "the byte length would fail a byte-based cap"
+    );
+    assert!(validate_name(&cyrillic).is_ok());
+
+    assert_eq!(
+        validate_name(&"x".repeat(MAX_NAME_CHARS + 1)),
+        Err(NameError::TooLong)
+    );
+    // Trimmed BEFORE measuring, or padding a name to the cap would refuse it.
+    assert!(validate_name(&format!("   {}   ", "x".repeat(MAX_NAME_CHARS))).is_ok());
+}
+
+/// `/admin/rooms` splits the fleet on `desired_state`, and this is the query that does it.
+///
+/// **The predicate is interpolated SQL**, which nothing else here is — a scope that silently
+/// matched everything would put every stopped room back on a page built to keep them off it, and
+/// the page would look completely normal. So each scope is asserted for what it returns *and* for
+/// what it leaves out.
+#[tokio::test]
+async fn the_fleet_overview_scopes_on_what_was_asked_for() {
+    use puna_core::model::fleet::{self, Scope};
+
+    with_db(|pool| async move {
+        let mut conn = pool.get().await.expect("connection");
+        users(&mut conn).await;
+        let generation = seed_generation(&mut conn, false).await;
+
+        let mut ids = Vec::new();
+        for (name, desired) in [
+            ("up", "running"),
+            ("stopped", "stopped"),
+            ("closed", "closed"),
+        ] {
+            let id = room::create(
+                &mut conn,
+                &NewRoom::direct(Environment::Dev, name, generation, OWNER),
+            )
+            .await
+            .expect("create");
+            diesel::sql_query(
+                "UPDATE rooms SET desired_state = $2::room_desired_state WHERE id = $1",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .bind::<diesel::sql_types::Text, _>(desired)
+            .execute(&mut conn)
+            .await
+            .expect("set desired state");
+            ids.push((name, id));
+        }
+
+        let names = |o: &fleet::Overview| {
+            let mut seen: Vec<String> = o.rooms.iter().map(|r| r.name.clone()).collect();
+            seen.sort();
+            seen
+        };
+
+        let active = fleet::overview(&mut conn, Environment::Dev, Scope::Active)
+            .await
+            .expect("active");
+        assert_eq!(names(&active), vec!["up".to_string()]);
+
+        let resting = fleet::overview(&mut conn, Environment::Dev, Scope::Resting)
+            .await
+            .expect("resting");
+        assert_eq!(
+            names(&resting),
+            vec!["closed".to_string(), "stopped".into()]
+        );
+
+        let all = fleet::overview(&mut conn, Environment::Dev, Scope::All)
+            .await
+            .expect("all");
+        assert_eq!(names(&all).len(), 3);
+
+        // The count is what the collapsed heading reports, so it must be right whichever scope
+        // was loaded -- including the one that deliberately loaded none of them.
+        for overview in [&active, &resting, &all] {
+            assert_eq!(
+                overview.resting, 2,
+                "the resting count is scope-independent"
+            );
+        }
+
+        // The creator comes back through the LEFT JOIN. An inner join would have dropped every row
+        // with no `created_by`, which on an admin page reads as the room not existing.
+        assert_eq!(active.rooms[0].created_by, Some(OWNER));
+        assert!(active.rooms[0].created_by_name.is_some());
+
+        diesel::sql_query("UPDATE rooms SET created_by = NULL WHERE id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(ids[0].1)
+            .execute(&mut conn)
+            .await
+            .expect("orphan the room");
+        let orphaned = fleet::overview(&mut conn, Environment::Dev, Scope::Active)
+            .await
+            .expect("active");
+        assert_eq!(
+            names(&orphaned),
+            vec!["up".to_string()],
+            "a room with no creator is still a room"
+        );
+        assert_eq!(orphaned.rooms[0].created_by, None);
     })
     .await;
 }

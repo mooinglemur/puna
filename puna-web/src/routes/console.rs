@@ -20,7 +20,6 @@
 use puna_core::db::Pool;
 use puna_core::ids::CommandId;
 use puna_core::model::command::{self, CommandRow, RoomCommand};
-use puna_core::model::member::RoomRole;
 use rocket::form::Form;
 use rocket::http::Status;
 use rocket::response::Redirect;
@@ -42,9 +41,6 @@ pub struct ConsoleTemplate {
     room_id: String,
     room_name: String,
     room_state: String,
-    /// What the caller may do, so the form offers only what they can run rather than letting them
-    /// press a button that answers 403.
-    is_organizer: bool,
     /// The room's slots, for the target picker. A dropdown rather than a number field: a mistyped
     /// slot number is a release into somebody else's game.
     slots: Vec<(i32, String)>,
@@ -122,7 +118,6 @@ async fn show(
         room_id: room.id.to_string(),
         room_name: room.name.clone(),
         room_state: room.state.clone(),
-        is_organizer: access.role() >= RoomRole::Organizer,
         slots,
         history: history.iter().map(HistoryEntry::from_row).collect(),
         outcome,
@@ -286,6 +281,7 @@ pub fn routes() -> Vec<rocket::Route> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use puna_core::model::member::RoomRole;
 
     fn form(kind: &str) -> CommandForm {
         CommandForm {
@@ -370,11 +366,26 @@ mod tests {
         assert!(build(&form("drop_database")).is_err());
     }
 
-    /// The tier split, asserted through the form so the route's check has something to check.
+    /// **Every command this form can build is a helper's**, asserted through the form rather than
+    /// against the enum, so the route's check and the menu's contents are covered together.
+    ///
+    /// The console offers its whole menu unconditionally now, which is only correct while this
+    /// holds. A command raised back to `Organizer` needs its `{% if %}` restored in
+    /// `console.html`, and this is the test that says so.
     #[test]
-    fn helper_commands_and_organizer_commands_are_separated() {
-        let helper_only = ["status", "say", "countdown", "hint"];
-        for kind in helper_only {
+    fn every_command_the_console_offers_is_a_helpers() {
+        // Exactly the `<option>` values in `console.html`, in order. Read together they are the
+        // menu; a command added there and not here is one nobody checked the tier of.
+        for kind in [
+            "status",
+            "say",
+            "countdown",
+            "hint",
+            "release",
+            "collect",
+            "send_item",
+            "kick",
+        ] {
             let mut f = form(kind);
             f.slot = Some(1);
             f.text = Some("x".into());
@@ -383,18 +394,7 @@ mod tests {
             assert_eq!(
                 build(&f).unwrap().required_role(),
                 RoomRole::Helper,
-                "{kind} moved tier"
-            );
-        }
-
-        for kind in ["release", "collect", "send_item", "kick"] {
-            let mut f = form(kind);
-            f.slot = Some(1);
-            f.item = Some("x".into());
-            assert_eq!(
-                build(&f).unwrap().required_role(),
-                RoomRole::Organizer,
-                "{kind} moved tier"
+                "{kind} is no longer a helper's -- console.html must gate it again"
             );
         }
     }

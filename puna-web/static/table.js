@@ -16,9 +16,6 @@
 (function () {
   "use strict";
 
-  var tables = document.querySelectorAll("table[data-sortable]");
-  if (!tables.length) return;
-
   // Numeric when every value on both sides parses, textual otherwise. Decided per comparison rather
   // than per column so a column of numbers with one "—" in it still sorts as numbers.
   function compare(a, b) {
@@ -111,5 +108,21 @@
     if (onlyMine) onlyMine.addEventListener("change", refilter);
   }
 
-  tables.forEach(attach);
+  // Wire every sortable table under `root` that is not wired already.
+  //
+  // Exposed because not every table is in the document at load: `/admin/rooms` fetches its
+  // stopped-and-closed table when the section is opened, and a table that arrived late would
+  // otherwise render its sort arrows over headers that do nothing -- an affordance that lies,
+  // which is worse than no affordance. `data-wired` is the idempotence: scanning twice would
+  // attach two click handlers to each header and make every sort a double-toggle.
+  function scan(root) {
+    (root || document).querySelectorAll("table[data-sortable]").forEach(function (table) {
+      if (table.dataset.wired) return;
+      table.dataset.wired = "1";
+      attach(table);
+    });
+  }
+
+  window.PunaTables = { scan: scan };
+  scan(document);
 })();

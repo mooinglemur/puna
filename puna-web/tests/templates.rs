@@ -187,7 +187,10 @@ fn a_glyph_only_control_names_itself_twice() {
         );
         let name = label(&path);
 
-        for element in ["button", "a"] {
+        // `summary` belongs here with the other two: `<details>` is this codebase's default toggle
+        // because it needs no script, so a glyph-only summary is an ordinary control rather than an
+        // exotic one -- the room page's rename pencil is exactly that.
+        for element in ["button", "a", "summary"] {
             for (at, open, content) in elements(&source, element) {
                 if renders_text(content) {
                     continue;
@@ -205,10 +208,10 @@ fn a_glyph_only_control_names_itself_twice() {
         }
     }
 
-    // A source lint is the easiest kind to write vacuously, so say how much it must have seen. Five
+    // A source lint is the easiest kind to write vacuously, so say how much it must have seen. Six
     // glyph controls exist today; a change that leaves none is a change this lint stopped guarding.
     assert!(
-        examined >= 5,
+        examined >= 6,
         "only {examined} glyph-only controls found -- this lint is no longer looking at anything"
     );
     assert!(
