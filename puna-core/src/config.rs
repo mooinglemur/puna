@@ -130,6 +130,18 @@ pub struct OrchestratorConfig {
     /// hundreds of claims would be hundreds of quotas to manage, and CephFS subvolumes are not free.
     pub data_pvc: String,
     pub reconcile_interval: Duration,
+    /// How often the loop looks again **while a room is mid-transition**, as opposed to the full
+    /// pass above.
+    ///
+    /// It exists because a restart crosses two passes — one stops the room, one starts it — and at
+    /// the full interval that gap is most of a room's downtime. A convergence pass reads the
+    /// cluster, plans and applies, and skips everything that is about the fleet rather than about a
+    /// room in flight: the probe, the sweep, the filesystem checks.
+    ///
+    /// **It deliberately does not accelerate a redeploy.** Recreates are emitted only on full
+    /// passes, so their pace stays one per [`Self::reconcile_interval`] no matter how often this
+    /// fires — a fleet-wide restart rolls at the same speed either way. See `plan::plan`.
+    pub converge_interval: Duration,
     pub command_timeout: Duration,
     pub trash_retention: Duration,
     /// Which probe reaches rooms. `https` is the default because pahoa has shipped the whole admin
@@ -207,6 +219,7 @@ impl OrchestratorConfig {
             room_tls_secret: optional("PUNA_ROOM_TLS_SECRET", "puna-room-tls"),
             data_pvc: optional("PUNA_DATA_PVC", "puna-data"),
             reconcile_interval: parse_duration("PUNA_RECONCILE_INTERVAL", 30)?,
+            converge_interval: parse_duration("PUNA_CONVERGE_INTERVAL", 3)?,
             command_timeout: parse_duration("PUNA_COMMAND_TIMEOUT", 15)?,
             trash_retention: parse_duration("PUNA_TRASH_RETENTION", 7 * 24 * 3600)?,
             room_probe: optional("PUNA_ROOM_PROBE", "https")

@@ -45,8 +45,17 @@ use crate::storage::{self, Layout};
 use crate::sweep::Sweeper;
 
 /// What one tick did, for the log line and the metrics.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TickReport {
+    /// Which kind of pass this was. In the report rather than inferred from what it did, so a log
+    /// line reads unambiguously and a converge pass that happens to do nothing is still legible.
+    pub kind: plan::TickKind,
+    /// Rooms mid-transition, which is what decides whether the loop stays on the short cadence.
+    pub converging: usize,
+    /// Whether anything this pass did leaves work for the next one. Separate from `converging`
+    /// because the room views were read before the actions ran: a pass that recreates a room read
+    /// it as `running`, so only the steps taken know it is now mid-restart.
+    pub left_work_pending: bool,
     /// Rooms the planner considered.
     pub rooms: usize,
     pub actions: usize,
@@ -68,6 +77,34 @@ pub struct TickReport {
     /// Rooms skipped because they asked to be left alone. Worth reporting rather than hiding: a
     /// number that stays above zero means something is exhausting a room's auth rate limit.
     pub probe_rate_limited: usize,
+}
+
+impl TickReport {
+    fn new(kind: plan::TickKind) -> Self {
+        Self {
+            kind,
+            converging: 0,
+            left_work_pending: false,
+            rooms: 0,
+            actions: 0,
+            skipped_locked: 0,
+            errors: 0,
+            orphan_dirs: 0,
+            integrity_faults: 0,
+            orphans_deleted: 0,
+            orphans_pending: 0,
+            secrets_refreshed: 0,
+            trash_removed: 0,
+            probed: 0,
+            probe_answers: 0,
+            probe_rate_limited: 0,
+        }
+    }
+
+    /// Whether the loop should look again on the short cadence.
+    pub fn wants_convergence(&self) -> bool {
+        self.converging > 0 || self.left_work_pending
+    }
 }
 
 /// Abandoned provisioning attempts older than this are swept.
@@ -132,9 +169,17 @@ impl Reconciler {
         &self,
         lock: &crate::leader::LeaderLock,
         orchestrator: Orchestrator,
+        kind: plan::TickKind,
     ) -> anyhow::Result<TickReport> {
-        let _timer = puna_core::metrics::RECONCILE_SECONDS.start_timer();
-        let mut report = TickReport::default();
+        let full = kind == plan::TickKind::Reconcile;
+        // **Full passes only.** A convergence pass is a strict subset of the work, so folding both
+        // into one histogram would drag the distribution toward the cheap case and make "is a tick
+        // slow" unanswerable -- which is the only question this metric exists to answer.
+        let _timer = full.then(|| puna_core::metrics::RECONCILE_SECONDS.start_timer());
+        puna_core::metrics::RECONCILE_TICKS
+            .with_label_values(&[kind.as_str()])
+            .inc();
+        let mut report = TickReport::new(kind);
 
         // A leader whose session died must stop rather than finish the pass: another process may
         // already have taken the lock, and the second half of this tick would be a second actor.
@@ -160,29 +205,43 @@ impl Reconciler {
 
         let mut conn = self.pool.get().await?;
         let mut views = load_views(&mut conn, self.environment).await?;
-        attach_desired_spec_hashes(&mut conn, &mut views, &self.pahoa_image).await;
-        publish_room_states(&views);
         report.rooms = views.len();
 
-        // Observed state and the fleet's configured image, both for the admin table. Neither can
-        // change a decision this tick makes, so a failure is warned and swallowed: a reconcile loop
-        // that stops provisioning rooms because a reporting column would not write has its
-        // priorities backwards.
-        if let Err(e) = record_observed(&mut conn, &snapshot).await {
-            tracing::warn!(error = ?e, "could not record observed room state");
-        }
-        if let Err(e) = publish_fleet_image(&mut conn, self.environment, &self.pahoa_image).await {
-            tracing::warn!(error = ?e, "could not publish the fleet's pahoa image");
+        // --- FULL PASSES ONLY, and each for its own reason -----------------------------------
+        // The spec hashes are four queries per failed room; the two publishes are reporting writes
+        // for the admin table. None of them can change what a room in flight needs, and running
+        // them every few seconds would put fleet-wide work on a path that exists to watch one room.
+        if full {
+            attach_desired_spec_hashes(&mut conn, &mut views, &self.pahoa_image).await;
+            publish_room_states(&views);
+
+            // Observed state and the fleet's configured image, both for the admin table. Neither
+            // can change a decision this tick makes, so a failure is warned and swallowed: a
+            // reconcile loop that stops provisioning rooms because a reporting column would not
+            // write has its priorities backwards.
+            if let Err(e) = record_observed(&mut conn, &snapshot).await {
+                tracing::warn!(error = ?e, "could not record observed room state");
+            }
+            if let Err(e) =
+                publish_fleet_image(&mut conn, self.environment, &self.pahoa_image).await
+            {
+                tracing::warn!(error = ?e, "could not publish the fleet's pahoa image");
+            }
         }
         drop(conn);
+
+        report.converging = plan::converging(&views, &snapshot);
+        puna_core::metrics::ROOMS_CONVERGING.set(report.converging as i64);
 
         let actions = plan::plan(
             &views,
             &snapshot,
             chrono::Utc::now(),
             self.max_recreates_per_tick,
+            kind,
         );
         report.actions = actions.len();
+        report.left_work_pending = actions.iter().any(|a| a.step.leaves_work_pending());
 
         let context = steps::Context {
             pool: &self.pool,
@@ -223,6 +282,23 @@ impl Reconciler {
                     );
                 }
             }
+        }
+
+        // --- EVERYTHING BELOW IS THE FULL PASS ------------------------------------------------
+        // All of it is about the fleet rather than about a room in flight: filesystem scans, the
+        // orphan rules, stale Secrets, the LRU touch, the trash, and the probe.
+        //
+        // **The probe is the one that must not slip through**, and not merely on cost: pahoa rate
+        // limits per room, and the whole poll-cache-re-export design exists so that watching a room
+        // never adds load to it. Asking every live room how it is every three seconds would be that
+        // mistake at a smaller timescale.
+        //
+        // The orphan rule is the other: it takes two consecutive *passes* plus 120 seconds, so
+        // counting convergence passes would let a two-strike rule fire inside six seconds. It is
+        // safe here only because the sweeper never runs on a convergence pass -- the same hazard
+        // `plan` bars `NotReady` for.
+        if !full {
+            return Ok(report);
         }
 
         let mut conn = self.pool.get().await?;

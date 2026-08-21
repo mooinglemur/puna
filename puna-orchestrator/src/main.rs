@@ -180,41 +180,81 @@ async fn reconcile_until_lost(
     config: &OrchestratorConfig,
     wake: &Arc<Notify>,
 ) -> anyhow::Result<()> {
-    let mut interval = tokio::time::interval(config.reconcile_interval);
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
     // Constructed once, here, immediately after taking the lock -- which is the only place it is
     // legitimate. Replacing `assume_leader` with a constructor taking `&LeaderLock` is the last
     // step that turns this token from an assertion into proof; see `puna_core::model`.
     let orchestrator = Orchestrator::assume_leader();
 
+    // --- TWO CADENCES, ONE LOOP -----------------------------------------------------------------
+    // A full pass every `reconcile_interval`, and a short convergence pass in between **while a
+    // room is mid-transition**. A restart crosses two passes -- one stops the room, one starts it --
+    // so at the full interval alone that gap is most of a room's downtime, and none of it is the
+    // pod. The convergence pass plans and applies exactly as the full one does; what it skips is
+    // everything about the fleet rather than about the room in flight.
+    //
+    // **`last_reconcile`, NOT the last tick of any kind.** Stamping every pass would let a run of
+    // convergence passes push the deadline forward indefinitely, so a fleet-wide restart -- which
+    // converges continuously for as long as it takes -- would starve the sweep, the probe and the
+    // hourly lane for the whole rollout. Only a full pass moves this.
+    let mut last_reconcile = tokio::time::Instant::now() - config.reconcile_interval;
+
     loop {
-        tokio::select! {
-            _ = interval.tick() => {}
-            _ = wake.notified() => {
-                // Debounce, so a burst of desired-state writes costs one pass rather than one each.
-                tokio::time::sleep(NOTIFY_DEBOUNCE).await;
-            }
-            _ = lock.lost() => return Ok(()),
-        }
+        let now = tokio::time::Instant::now();
+        let due = last_reconcile + config.reconcile_interval;
+        let kind = if now >= due {
+            plan::TickKind::Reconcile
+        } else {
+            plan::TickKind::Converge
+        };
 
         if !lock.is_held() {
             return Ok(());
         }
 
-        match reconciler.tick(lock, orchestrator).await {
+        let report = match reconciler.tick(lock, orchestrator, kind).await {
             Ok(report) => {
                 state.mark_ticked();
-                // A tick over a stable namespace reports only its room count, which is not news
-                // every thirty seconds. Anything actually happening is.
+                // A pass over a stable namespace reports only its room count, which is not news.
+                // Anything actually happening is -- and a convergence pass that plans nothing is
+                // the quiet case this cadence exists to produce, so it stays quiet.
                 if report.actions > 0 || report.errors > 0 || report.integrity_faults > 0 {
                     tracing::info!(?report, "reconciled");
                 }
+                Some(report)
             }
             // A failed tick is not fatal. The loop is level-triggered, so the next pass sees the
             // same world and tries again -- and dropping the lock here would hand leadership to a
             // process that would hit the same error, turning one bad tick into a rolling outage.
-            Err(e) => tracing::error!(error = ?e, "reconcile tick failed"),
+            Err(e) => {
+                tracing::error!(error = ?e, "reconcile tick failed");
+                None
+            }
+        };
+
+        if kind == plan::TickKind::Reconcile {
+            last_reconcile = now;
+        }
+
+        // A failed pass tells us nothing about the world, so it neither claims convergence is
+        // needed nor claims it is finished: fall back to the ordinary cadence and read again.
+        let converging = report.is_some_and(|r| r.wants_convergence());
+        let next_full = last_reconcile + config.reconcile_interval;
+        let next = if converging {
+            // `min`, so a long run of convergence cannot push the full pass past its interval --
+            // the same starvation `last_reconcile` prevents, arriving through the scheduler
+            // instead of through the stamp.
+            next_full.min(tokio::time::Instant::now() + config.converge_interval)
+        } else {
+            next_full
+        };
+
+        tokio::select! {
+            _ = tokio::time::sleep_until(next) => {}
+            _ = wake.notified() => {
+                // Debounce, so a burst of desired-state writes costs one pass rather than one each.
+                tokio::time::sleep(NOTIFY_DEBOUNCE).await;
+            }
+            _ = lock.lost() => return Ok(()),
         }
     }
 }

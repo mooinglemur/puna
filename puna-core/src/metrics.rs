@@ -234,6 +234,40 @@ pub static RECONCILE_SECONDS: LazyLock<Histogram> = LazyLock::new(|| {
     )
 });
 
+/// Ticks by kind, which is how the loop's cadence becomes observable.
+///
+/// **A counter rather than a "current mode" gauge**, and the reason is sampling: convergence runs in
+/// bursts a few seconds long, so a gauge read every scrape interval would miss almost all of them
+/// and report whatever happened to be true at the instant of the scrape. A counter loses nothing —
+/// `rate(...{kind="converge"}[5m])` is exactly "how much convergence are we doing", and
+/// `rate(...{kind="reconcile"}[5m])` should sit at `1/PUNA_RECONCILE_INTERVAL` whenever the loop is
+/// healthy, which makes the starvation failure visible as a number rather than as an absence.
+pub static RECONCILE_TICKS: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register!(
+        IntCounterVec::new(
+            Opts::new("puna_reconcile_ticks_total", "Reconcile passes by kind"),
+            &["kind"],
+        )
+        .unwrap()
+    )
+});
+
+/// Rooms the loop is waiting on, which is what decides the cadence.
+///
+/// The instant-state gauge worth having, in place of a tick-mode one: it is meaningful at any
+/// sample point, and it shows a case `puna_rooms{state}` structurally cannot — **a room sitting in
+/// `idle` while its previous Deployment drains**. That room's state says `idle`, which reads as
+/// resting, when it is in the middle of a restart.
+pub static ROOMS_CONVERGING: LazyLock<IntGauge> = LazyLock::new(|| {
+    register!(
+        IntGauge::new(
+            "puna_rooms_converging",
+            "Rooms mid-transition, which is what keeps the loop on its short cadence",
+        )
+        .unwrap()
+    )
+});
+
 pub static RECONCILE_ERRORS: LazyLock<IntCounterVec> = LazyLock::new(|| {
     register!(
         IntCounterVec::new(
@@ -465,6 +499,17 @@ pub const ROOM_STATES: &[&str] = &[
 /// Outcomes of a start attempt.
 pub const START_RESULTS: &[&str] = &["ok", "failed", "port_exhausted", "ip_mismatch"];
 
+/// The two cadences the reconcile loop runs at, for [`RECONCILE_TICKS`].
+///
+/// **Seeded to zero, so "no convergence is happening" is a reading rather than an absence** — which
+/// matters more here than for most families, because a converge series that is simply missing looks
+/// identical to a loop that has stopped converging when it should be.
+///
+/// The orchestrator's `plan::TickKind::as_str` must produce exactly these, and a test over there
+/// asserts it. A publisher writing a label this list does not seed is the mistake
+/// [`PROBE_CAPABILITY`] was built to stop repeating.
+pub const TICK_KINDS: &[&str] = &["reconcile", "converge"];
+
 /// Capabilities a room probe may or may not have, depending on the pahoa build it is talking to.
 /// Publish what the room probe can do.
 ///
@@ -524,6 +569,8 @@ pub const ORCHESTRATOR_FAMILIES: &[&str] = &[
     "puna_integrity_faults",
     "puna_orphan_directories",
     "puna_reconcile_seconds",
+    "puna_reconcile_ticks_total",
+    "puna_rooms_converging",
     "puna_reconcile_errors_total",
     "puna_k8s_requests_total",
     "puna_commands_total",
@@ -645,6 +692,8 @@ fn init_orchestrator() {
     LazyLock::force(&GENERATION_BYTES);
     LazyLock::force(&SLOTS_UNCLAIMED);
     LazyLock::force(&RECONCILE_SECONDS);
+    LazyLock::force(&RECONCILE_TICKS);
+    LazyLock::force(&ROOMS_CONVERGING);
     LazyLock::force(&RECONCILE_ERRORS);
     LazyLock::force(&K8S_REQUESTS);
     LazyLock::force(&COMMANDS);
@@ -655,6 +704,9 @@ fn init_orchestrator() {
     }
     for result in START_RESULTS {
         ROOM_STARTS.with_label_values(&[result]).reset();
+    }
+    for kind in TICK_KINDS {
+        RECONCILE_TICKS.with_label_values(&[kind]).reset();
     }
     // Seeded to zero so a cold orchestrator renders every capability rather than none, and from
     // the SAME vocabulary the publisher uses -- the two diverging is exactly what went wrong.

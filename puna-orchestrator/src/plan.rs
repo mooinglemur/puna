@@ -170,12 +170,110 @@ pub enum Step {
     FailStart,
 }
 
+impl Step {
+    /// Whether taking this step leaves the room somewhere it still has to move on from.
+    ///
+    /// This is what tells the loop to look again in seconds rather than at the next full pass, and
+    /// it is asked of the steps just *applied* — because the room views were read before they ran.
+    /// A pass that recreates a room read it as `running`; by the time the pass ends it is `idle`
+    /// with a Deployment draining, and nothing in the views says so.
+    ///
+    /// Answering `false` where it should be `true` costs the latency this whole mechanism exists to
+    /// remove. Answering `true` where it should be `false` costs cheap passes that plan nothing —
+    /// so the doubtful cases go to `true`.
+    pub fn leaves_work_pending(&self) -> bool {
+        match self {
+            // Each of these hands the room to a later pass: provisioned rooms start, started rooms
+            // wait on a pod, recreated rooms wait on a drain, stopping rooms wait on an exit, and a
+            // delete walks a sequence.
+            Step::Provision
+            | Step::Start
+            | Step::Recreate
+            | Step::Retry
+            | Step::Stop
+            | Step::Delete => true,
+            // `MarkIdle` settles the room only if nobody wants it running — and if somebody does,
+            // the next pass plans a Start. Cheaper to look again than to encode that here.
+            Step::MarkIdle(_) => true,
+            // Terminal for this transition. `NotReady` and `MarkDegraded` describe a room waiting on
+            // something outside Puna — an image pull, a scheduler — on a timescale where a
+            // three-second pass is noise; `FailStart` is a backoff, which is a wall clock.
+            Step::MarkRunning | Step::MarkDegraded | Step::NotReady | Step::FailStart => false,
+        }
+    }
+}
+
+/// Rooms the loop is waiting on, as the views describe them.
+///
+/// Deliberately a property of the world rather than of the last pass, so a restarted orchestrator
+/// picks the short cadence back up without having to remember anything. The one thing it cannot see
+/// is a transition this pass just caused — [`Step::leaves_work_pending`] covers that.
+pub fn converging(rooms: &[RoomView], cluster: &ClusterSnapshot) -> usize {
+    rooms
+        .iter()
+        .filter(|room| {
+            // Somebody asked for this room to go, and a delete crosses several passes.
+            if room.desired == DesiredState::Deleted {
+                return true;
+            }
+            match room.state {
+                // Mid-flight by definition.
+                RoomState::Provisioning | RoomState::Starting | RoomState::Stopping => true,
+                // **The case `puna_rooms{state}` cannot show.** A room that is restarting reads as
+                // `idle` for the whole time its previous pod is draining, which is indistinguishable
+                // from resting — and is exactly the window worth looking at often. Also covers a
+                // plain start request, where there is no Deployment and the work is immediate.
+                RoomState::Idle => room.desired == DesiredState::Running,
+                // Settled, or waiting on a clock. A `running` room wanting a redeploy is settled:
+                // the recreate is paced, so looking sooner would not start it sooner.
+                _ => false,
+            }
+        })
+        .count()
+        .max(
+            // A Deployment still draining for a room that is otherwise settled would be missed
+            // above; count it here rather than trusting the row alone.
+            cluster
+                .deployments
+                .iter()
+                .filter(|d| d.deleting && d.room_id.is_some())
+                .count(),
+        )
+}
+
 /// One action, addressed to one room.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Action {
     pub room: RoomId,
     pub lock_key: i32,
     pub step: Step,
+}
+
+/// Which kind of pass this is.
+///
+/// The loop runs a short **convergence** pass while a room is mid-transition, so a restart does not
+/// spend most of its downtime waiting for the next full pass. Everything a convergence pass does is
+/// a subset of a full one — same planner, same applier, same idempotence — but two steps are barred
+/// from it, and both bars are statements about the state machine rather than about scheduling,
+/// which is why they live here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TickKind {
+    /// The whole pass, on `PUNA_RECONCILE_INTERVAL`.
+    Reconcile,
+    /// A short look at rooms in flight, on `PUNA_CONVERGE_INTERVAL`.
+    Converge,
+}
+
+impl TickKind {
+    /// The metric label. Must match `puna_core::metrics::TICK_KINDS`, which is what `init` seeds to
+    /// zero — a label written here and absent there renders as missing data rather than as a zero,
+    /// and "the loop has stopped converging" would look exactly like "nothing has scraped yet".
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TickKind::Reconcile => "reconcile",
+            TickKind::Converge => "converge",
+        }
+    }
 }
 
 /// Decide what to do, for every room, from the world as it is.
@@ -188,11 +286,29 @@ pub fn plan(
     cluster: &ClusterSnapshot,
     now: DateTime<Utc>,
     max_recreates: usize,
+    kind: TickKind,
 ) -> Vec<Action> {
     let planned: Vec<(&RoomView, Step)> = rooms
         .iter()
         .filter_map(|room| {
             step_for(room, cluster.deployment(room.id), now).map(|step| (room, step))
+        })
+        // **Two steps a convergence pass must not take.** Both would otherwise change behavior
+        // simply because the loop looked more often, which is the trap in a variable cadence.
+        //
+        //   * `Recreate` is PACED, and its pace is expressed as a per-pass cap. Allowing it here
+        //     would turn "one room per reconcile interval" into "one room every few seconds" and
+        //     tear through a fleet-wide restart queue -- the exact stampede the cap exists to
+        //     prevent, reintroduced by the mechanism meant to make one restart quicker.
+        //   * `NotReady` COUNTS PASSES. `not_ready_sweeps` reaching DEGRADED_SWEEPS is what calls a
+        //     room degraded, so counting convergence passes would declare a room degraded roughly
+        //     ten times sooner -- a threshold silently redefined by a scheduling change.
+        //
+        // Nothing is lost by deferring either: the next full pass sees the same world. The rule for
+        // anything added later is the one these two fail -- **a step whose meaning depends on how
+        // often it is taken belongs to the full pass.**
+        .filter(|(_, step)| {
+            kind == TickKind::Reconcile || !matches!(step, Step::Recreate | Step::NotReady)
         })
         .collect();
 
@@ -438,7 +554,13 @@ mod tests {
 
     /// What the planner decides for one room, given a cluster.
     fn decide(room: &RoomView, cluster: &ClusterSnapshot) -> Option<Step> {
-        let actions = plan(std::slice::from_ref(room), cluster, now(), 1);
+        let actions = plan(
+            std::slice::from_ref(room),
+            cluster,
+            now(),
+            1,
+            TickKind::Reconcile,
+        );
         assert!(actions.len() <= 1, "one action per room per tick");
         actions.into_iter().next().map(|a| a.step)
     }
@@ -568,6 +690,135 @@ mod tests {
             decide(&room, &snapshot(Vec::new())),
             Some(Step::Start),
             "the object's disappearance is the signal"
+        );
+    }
+
+    /// **A convergence pass may not recreate, and may not count a sweep.**
+    ///
+    /// Both would change behavior purely because the loop looked more often, which is the trap in
+    /// running two cadences. A recreate is paced *per pass*, so allowing it at the short cadence
+    /// turns "one room per reconcile interval" into one every few seconds and tears through a
+    /// fleet-wide restart queue. `NotReady` increments `not_ready_sweeps`, and `DEGRADED_SWEEPS` is
+    /// a count of passes — so a room would be called degraded about ten times sooner.
+    #[test]
+    fn a_convergence_pass_takes_neither_of_the_two_steps_that_count_passes() {
+        let mut drifting = view(RoomState::Running, DesiredState::Running);
+        drifting.redeploy_requested_at = Some(now());
+        let unready = view(RoomState::Running, DesiredState::Running);
+
+        let rooms = vec![drifting.clone(), unready.clone()];
+        let cluster = snapshot(vec![
+            deployment(&drifting, "hash-1", 1),
+            deployment(&unready, "hash-1", 0),
+        ]);
+
+        // The full pass does both.
+        let full: Vec<Step> = plan(&rooms, &cluster, now(), 1, TickKind::Reconcile)
+            .into_iter()
+            .map(|a| a.step)
+            .collect();
+        assert!(full.contains(&Step::Recreate), "{full:?}");
+        assert!(full.contains(&Step::NotReady), "{full:?}");
+
+        // The convergence pass does neither, and does not substitute something else for them.
+        assert!(
+            plan(&rooms, &cluster, now(), 1, TickKind::Converge).is_empty(),
+            "a convergence pass must leave a settled fleet alone entirely"
+        );
+    }
+
+    /// The steps a convergence pass *is* for still happen at the short cadence, or the mechanism
+    /// buys nothing: a room coming up must reach `running` without waiting for the full pass.
+    #[test]
+    fn a_convergence_pass_still_converges() {
+        for (state, dep, expected) in [
+            (RoomState::Provisioning, None, Step::Provision),
+            (RoomState::Idle, None, Step::Start),
+            (RoomState::Starting, Some(("hash-1", 1)), Step::MarkRunning),
+            (
+                RoomState::Stopping,
+                None,
+                Step::MarkIdle(IdleReason::StopComplete),
+            ),
+        ] {
+            let room = view(state, DesiredState::Running);
+            let cluster = snapshot(
+                dep.map(|(hash, ready)| deployment(&room, hash, ready))
+                    .into_iter()
+                    .collect(),
+            );
+            let actions = plan(
+                std::slice::from_ref(&room),
+                &cluster,
+                now(),
+                1,
+                TickKind::Converge,
+            );
+            assert_eq!(
+                actions.into_iter().map(|a| a.step).collect::<Vec<_>>(),
+                vec![expected.clone()],
+                "state={state:?} must still be converged on the short cadence"
+            );
+        }
+    }
+
+    /// What keeps the loop on the short cadence, and the case that made it necessary.
+    #[test]
+    fn a_restarting_room_reads_as_converging_though_its_state_says_idle() {
+        let restarting = view(RoomState::Idle, DesiredState::Running);
+        let mut draining = deployment(&restarting, "hash-1", 0);
+        draining.deleting = true;
+
+        assert_eq!(
+            converging(std::slice::from_ref(&restarting), &snapshot(vec![draining])),
+            1,
+            "a room mid-restart looks like a resting room in every column"
+        );
+
+        // A settled fleet is not converging, or the short cadence would never stop.
+        let running = view(RoomState::Running, DesiredState::Running);
+        assert_eq!(
+            converging(
+                std::slice::from_ref(&running),
+                &snapshot(vec![deployment(&running, "hash-1", 1)])
+            ),
+            0
+        );
+
+        // Including one that has drifted: the recreate is paced, so looking sooner would not start
+        // it sooner, and converging on it would hold the whole loop at the short cadence for as
+        // long as a rollout takes.
+        let mut drifted = view(RoomState::Running, DesiredState::Running);
+        drifted.redeploy_requested_at = Some(now());
+        assert_eq!(
+            converging(
+                std::slice::from_ref(&drifted),
+                &snapshot(vec![deployment(&drifted, "hash-1", 1)])
+            ),
+            0,
+            "a queued redeploy is not a reason to spin"
+        );
+    }
+
+    /// The label vocabulary is one vocabulary, not two that happen to agree today.
+    ///
+    /// `metrics::init` seeds `TICK_KINDS` to zero so a cold orchestrator renders both series. A
+    /// kind written here and missing from that list would render as *no data* instead of as a zero
+    /// — and "the loop has stopped converging" would be indistinguishable from "nothing has been
+    /// scraped yet", which is precisely the ambiguity the seeding exists to remove.
+    #[test]
+    fn every_tick_kind_is_a_label_the_registry_seeds() {
+        for kind in [TickKind::Reconcile, TickKind::Converge] {
+            assert!(
+                puna_core::metrics::TICK_KINDS.contains(&kind.as_str()),
+                "{kind:?} publishes {:?}, which metrics::init does not seed",
+                kind.as_str()
+            );
+        }
+        assert_eq!(
+            puna_core::metrics::TICK_KINDS.len(),
+            2,
+            "a seeded label with no kind to produce it is a series that stays zero forever"
         );
     }
 
@@ -850,7 +1101,7 @@ mod tests {
                 .collect(),
         );
 
-        let actions = plan(&rooms, &cluster, now(), 2);
+        let actions = plan(&rooms, &cluster, now(), 2, TickKind::Reconcile);
         assert_eq!(actions.len(), 2, "the cap holds");
         let acted: Vec<RoomId> = actions.iter().map(|a| a.room).collect();
         assert!(
@@ -861,7 +1112,7 @@ mod tests {
         // The deferred rooms are not lost -- the loop is level-triggered, so the next tick sees
         // them again and they are now the oldest outstanding requests.
         let remaining: Vec<RoomView> = vec![rooms[1].clone(), rooms[3].clone()];
-        let actions = plan(&remaining, &cluster, now(), 2);
+        let actions = plan(&remaining, &cluster, now(), 2, TickKind::Reconcile);
         assert_eq!(actions.len(), 2, "deferred, never dropped");
     }
 
@@ -897,7 +1148,7 @@ mod tests {
         ];
         let cluster = snapshot(vec![deployment(&rooms[2], "hash-1", 1)]);
 
-        let actions = plan(&rooms, &cluster, now(), 1);
+        let actions = plan(&rooms, &cluster, now(), 1, TickKind::Reconcile);
         assert_eq!(actions.len(), 3);
         assert_eq!(
             actions.iter().map(|a| a.step.clone()).collect::<Vec<_>>(),
@@ -912,6 +1163,9 @@ mod tests {
         }
 
         // Same inputs, same answer: nothing here reads a clock or a cache.
-        assert_eq!(plan(&rooms, &cluster, now(), 1), actions);
+        assert_eq!(
+            plan(&rooms, &cluster, now(), 1, TickKind::Reconcile),
+            actions
+        );
     }
 }
