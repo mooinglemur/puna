@@ -500,6 +500,20 @@ async fn load_views(
 /// gap: pahoa reports `null` until a client has spoken, so a room nobody has ever joined is
 /// measured from when it started. That is the clearest reap candidate there is -- somebody opened
 /// a room and walked away -- and treating it as unanswerable would exempt it forever.
+///
+/// **`started_at` is a FLOOR, not a fallback, and the difference is what stops a start/reap loop.**
+/// Taking the later of the two means a room can never be reaped for less time than it has been up,
+/// whatever the activity column says.
+///
+/// It costs nothing today, because pahoa's `last_client_message_at` is a process-global
+/// `AtomicU64` that is never saved -- a restarted room reports `null` until somebody speaks, so the
+/// activity reading can never be older than the start. **It stops costing nothing the moment P23
+/// lands.** pahoa's per-slot check timer IS persisted (`save.rs`, restored in `room.rs`), so a room
+/// reaped on Monday and started again on Thursday comes back reporting a check from Monday. Read as
+/// a fallback, that is three days idle on a room thirty seconds old: Puna would reap it on the
+/// first tick, whoever had just opened it would hit the URL again, and the room would spend its
+/// life going up and straight back down. Written as a floor, the same room simply waits out its
+/// window like any other.
 fn idle_since(
     row: &impl IdleFacts,
     now: chrono::DateTime<chrono::Utc>,
@@ -514,7 +528,12 @@ fn idle_since(
     if row.probe_kind() != Some(puna_core::probe::ProbeKind::Https.as_str()) {
         return None;
     }
-    row.last_activity_at().or_else(|| row.started_at())
+    // The LATER of the two, not the first that is present. See the note above: a persisted activity
+    // timestamp from before a reap would otherwise make a freshly started room instantly overdue.
+    [row.last_activity_at(), row.started_at()]
+        .into_iter()
+        .flatten()
+        .max()
 }
 
 /// The four columns [`idle_since`] reads, as a trait so the rule can be tested against every
@@ -1092,6 +1111,36 @@ mod db_tests {
         assert!(
             after(timeout + chrono::TimeDelta::seconds(1)),
             "a room up longer than the window with nobody ever in it should be reaped"
+        );
+    }
+
+    /// **A stale activity reading can never make a freshly started room overdue.**
+    ///
+    /// This is the case that arrives with pahoa's P23. Its per-slot check timer is *persisted* --
+    /// unlike `last_client_message_at`, which is a process-global `AtomicU64` that resets on every
+    /// start -- so a room reaped on Monday and started again on Thursday comes back reporting a
+    /// check from Monday.
+    ///
+    /// Read as a fallback (`activity.or(started)`) that is three days idle on a room thirty seconds
+    /// old, and Puna reaps it on the first tick. Whoever opened it hits the URL again, it starts,
+    /// it is reaped again: a loop, driven by somebody trying to play, that looks from the outside
+    /// like rooms refusing to stay up. Read as a floor (`max`), the room waits out its window like
+    /// any other.
+    #[test]
+    fn a_room_is_never_reaped_for_longer_than_it_has_been_up() {
+        let facts = Idle {
+            probed_at: Some(at(0)),
+            probe_kind: Some(HTTPS),
+            // Somebody last did something three days ago, before the room was reaped.
+            last_activity_at: Some(at(-3 * 24 * 60)),
+            // And it came back thirty seconds ago.
+            started_at: Some(at(0) - chrono::TimeDelta::seconds(30)),
+        };
+
+        assert_eq!(
+            idle_since(&facts, at(0)),
+            facts.started_at,
+            "a persisted reading from before the restart outranked the restart itself"
         );
     }
 
