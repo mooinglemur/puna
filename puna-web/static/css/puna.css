@@ -49,6 +49,17 @@
   --radius: 6px;
 }
 
+/* The theme selector, in full.
+ *
+ * Because every color above goes through `light-dark()` and `color-scheme` is inherited, choosing
+ * a theme is choosing this one property on the root -- there is no second palette, no
+ * `prefers-color-scheme` block, and nothing that can fall out of step with the tokens.
+ *
+ * The bare `:root` keeps `light dark`, so a reader who has chosen nothing follows their system, as
+ * this page has done since M10. `theme.js` sets the attribute before first paint. */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
 html { -webkit-text-size-adjust: 100%; }
 
 body {
@@ -89,6 +100,48 @@ a:hover { text-decoration: none; }
 }
 
 .who { color: var(--muted); }
+
+/* --- the theme selector --------------------------------------------------------------------------
+   Hidden until `theme.js` reveals it: without scripting it cannot store a choice or apply one, and
+   a control that does nothing is worse than none. Same shape as `js-copy` for the clipboard
+   buttons. */
+.theme { display: none; }
+
+.js-theme .theme {
+  display: inline-flex;
+  align-self: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.theme button {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.4rem;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-radius: calc(var(--radius) - 3px);
+  cursor: pointer;
+}
+
+.theme button:hover { color: var(--text); }
+.theme button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* **Which button reads as active is decided by the attribute, not by script.** `theme.js` sets
+   `data-theme` before the first paint, so the highlight is correct in the first frame -- driving it
+   from a class the script adds later would mean the control briefly disagreeing with the page it
+   is describing. `:not([data-theme])` is the follow-the-system case, which is the absence of a
+   stored choice rather than a value of its own. */
+:root:not([data-theme]) .theme button[data-set="system"],
+:root[data-theme="light"] .theme button[data-set="light"],
+:root[data-theme="dark"] .theme button[data-set="dark"] {
+  color: var(--text);
+  background: var(--bg);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
 
 main {
   /* A measure, not a full-bleed page: the slot table is the only wide thing here and it scrolls on

@@ -208,10 +208,10 @@ fn a_glyph_only_control_names_itself_twice() {
         }
     }
 
-    // A source lint is the easiest kind to write vacuously, so say how much it must have seen. Six
+    // A source lint is the easiest kind to write vacuously, so say how much it must have seen. Nine
     // glyph controls exist today; a change that leaves none is a change this lint stopped guarding.
     assert!(
-        examined >= 6,
+        examined >= 9,
         "only {examined} glyph-only controls found -- this lint is no longer looking at anything"
     );
     assert!(
@@ -379,4 +379,94 @@ fn blank_comments(source: &str) -> String {
     }
 
     out
+}
+
+/// **The theme selector's contract, which spans three files and fails silently in all of them.**
+///
+/// Choosing a theme is one property: `theme.js` writes `data-theme` on `<html>`, and `puna.css`
+/// turns that into `color-scheme`, which every `light-dark()` token resolves against. The three
+/// buttons name their choice in `data-set`.
+///
+/// Break any half of that and **the control keeps working**: the button still highlights, the
+/// choice still persists across a reload, and the page never changes color. Nothing errors, nothing
+/// logs, and the only way to notice is to look at it — which is how a theme switcher gets shipped
+/// broken and stays that way.
+///
+/// So each side is read out of its own file and checked against the others.
+#[test]
+fn the_theme_selector_agrees_across_markup_script_and_stylesheet() {
+    let script = std::fs::read_to_string(source("static/theme.js")).expect("theme.js");
+    let css = std::fs::read_to_string(source("static/css/puna.css")).expect("puna.css");
+    let base = std::fs::read_to_string(source("templates/base.html")).expect("base.html");
+
+    // The attribute the script writes is the attribute the stylesheet keys on. Written as
+    // `dataset.theme` in JavaScript and `[data-theme=` in CSS, so neither spelling can be grepped
+    // for in the other file -- which is exactly why this drifts unnoticed.
+    assert!(
+        script.contains("documentElement.dataset.theme"),
+        "theme.js no longer writes the attribute the stylesheet reads"
+    );
+
+    for choice in ["light", "dark"] {
+        assert!(
+            css.contains(&format!(
+                ":root[data-theme=\"{choice}\"] {{ color-scheme: {choice}; }}"
+            )),
+            "puna.css does not turn data-theme={choice} into a color-scheme, so choosing it \
+             would change nothing"
+        );
+        assert!(
+            base.contains(&format!("data-set=\"{choice}\"")),
+            "no button offers {choice}"
+        );
+    }
+
+    // Following the system is the third state and is the ABSENCE of a stored value, so the
+    // stylesheet marks it active with `:not([data-theme])` rather than a value of its own. A
+    // `[data-theme="system"]` rule would never match anything the script writes.
+    assert!(
+        base.contains("data-set=\"system\""),
+        "no button offers following the system"
+    );
+    assert!(
+        css.contains(":root:not([data-theme]) .theme button[data-set=\"system\"]"),
+        "nothing marks the follow-the-system button as the active one"
+    );
+    assert!(
+        !css.contains("[data-theme=\"system\"]"),
+        "`system` is the absence of the attribute, so a rule keyed on that value is dead"
+    );
+
+    // The bare `:root` must keep `light dark`: a reader who has chosen nothing follows their
+    // system, which this page has done since M10 and which the override must not take away.
+    assert!(
+        css.contains("color-scheme: light dark;"),
+        "the default stopped following the system"
+    );
+
+    // Revealed by a class, because without scripting the control cannot work at all.
+    assert!(script.contains("classList.add(\"js-theme\")"));
+    assert!(css.contains(".theme { display: none; }") && css.contains(".js-theme .theme {"));
+
+    // **Not deferred.** A deferred script runs after parsing, so the page would paint in the system
+    // theme and snap to the chosen one -- a white flash on every navigation for somebody who picked
+    // dark. This is the assertion that keeps somebody from "tidying" it in with the others.
+    //
+    // Anchored on `<script` AND the filename together, not on the filename alone: the comment
+    // above the tag explains why it is not deferred and therefore *mentions* `static/theme.js`, so
+    // a search for the name finds prose first and this passes with the tag mutated. It did, until
+    // a mutation caught it. Same shape as the dispatcher's ordering lint.
+    let tag = base
+        .lines()
+        .find(|line| line.contains("<script") && line.contains("theme.js"))
+        .expect("base.html loads theme.js with a script tag");
+    assert!(
+        !tag.contains("defer") && !tag.contains("async"),
+        "theme.js must block, or the theme arrives after the first paint: {tag}"
+    );
+}
+
+/// A path inside the crate, for reading a source file a test asserts against.
+fn source(relative: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
 }

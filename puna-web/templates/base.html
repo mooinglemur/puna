@@ -15,6 +15,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}{{ base.site_name }}{% endblock %}</title>
 <link rel="stylesheet" href="/static/css/puna.css?v={{ base.static_version }}">
+{# **No `defer`, and that is the whole point of it being here rather than at the foot with the
+   others.** It sets `color-scheme` on <html> from the reader's stored choice, and it has to do that
+   before the first paint -- deferred, the page would paint in the system theme and snap to the
+   chosen one, which is a white flash on every navigation for somebody who picked dark. Inline
+   would also work and would need `unsafe-inline` the day a CSP is added. See static/theme.js. #}
+<script src="/static/theme.js?v={{ base.static_version }}"></script>
 </head>
 <body>
 <header class="topbar">
@@ -31,6 +37,40 @@
 {% else %}
 <a href="/auth/login">log in with Discord</a>
 {% endif %}
+
+{# Three states, not two: light, dark, and following the system -- which is the default and is a
+   real choice rather than the absence of one, so it gets a control like the other two.
+
+   Rendered on every page and hidden until `theme.js` reveals it, because without scripting it
+   cannot work at all. Which button reads as active comes from `[data-theme]` in the stylesheet
+   rather than from script, so it is correct in the first frame; `theme.js` only supplies
+   `aria-pressed`, which CSS cannot set. #}
+<div class="theme" role="group" aria-label="Color theme" data-theme-toggle>
+<button type="button" data-set="light" aria-pressed="false"
+        title="Light theme" aria-label="Use the light theme">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<circle cx="8" cy="8" r="3.1" fill="none" stroke="currentColor"/>
+<path d="M8 .9v1.9M8 13.2v1.9M.9 8h1.9M13.2 8h1.9M2.98 2.98 4.3 4.3M11.7 11.7l1.32 1.32M13.02 2.98 11.7 4.3M4.3 11.7l-1.32 1.32"
+      fill="none" stroke="currentColor" stroke-linecap="round"/>
+</svg>
+</button>
+<button type="button" data-set="dark" aria-pressed="false"
+        title="Dark theme" aria-label="Use the dark theme">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<path d="M13.6 10.2A5.9 5.9 0 0 1 5.8 2.4a5.9 5.9 0 1 0 7.8 7.8z" fill="none" stroke="currentColor"
+      stroke-linejoin="round"/>
+</svg>
+</button>
+{# A display, because "the system" is the device rather than a time of day -- a half-filled circle
+   is the other common choice and reads as a contrast control instead. #}
+<button type="button" data-set="system" aria-pressed="false"
+        title="Follow the system theme" aria-label="Follow the system theme">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<rect x="1.4" y="2.4" width="13.2" height="9" rx="1.4" fill="none" stroke="currentColor"/>
+<path d="M5.4 14h5.2M8 11.4V14" fill="none" stroke="currentColor" stroke-linecap="round"/>
+</svg>
+</button>
+</div>
 </nav>
 </header>
 <main>
