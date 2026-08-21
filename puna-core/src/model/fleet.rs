@@ -124,14 +124,18 @@ pub struct FleetRoom {
     pub desired_spec_hash: Option<String>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     pub redeploy_requested_at: Option<DateTime<Utc>>,
-    /// When a client last spoke, as pahoa reported it.
+    /// When a slot last registered a genuinely **new location check** — the number the reaper acts
+    /// on, and the reference server's own idle signal.
     ///
-    /// **`None` is "nobody has ever spoken here", not "just now"** — pahoa reports null activity
-    /// until a client says something, so a room somebody opened and walked away from has this
-    /// empty. The table measures from `started_at` in that case, the same fallback the reaper uses,
-    /// so the two never disagree about how idle a room is.
+    /// **`None` is "nobody has ever checked anything here", not "just now."** A room whose
+    /// organizer is still getting people connected has that shape; it is measured from
+    /// `started_at` instead, exactly as the reaper does, so the table never explains a decision the
+    /// orchestrator did not make.
+    ///
+    /// Deliberately **not** `last_activity_at`, which moves on any packet and would show a room
+    /// full of people chatting as freshly active right up until the reaper took it down.
     #[diesel(sql_type = Nullable<Timestamptz>)]
-    pub last_activity_at: Option<DateTime<Utc>>,
+    pub last_check_at: Option<DateTime<Utc>>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     pub started_at: Option<DateTime<Utc>>,
     /// When an administrator exempted this room from the idle reaper, and who did.
@@ -192,13 +196,18 @@ impl FleetRoom {
     /// forever and would render every resting room as increasingly idle. Nothing is idling there --
     /// it is already off.
     ///
-    /// Falls back to `started_at` for a room nobody has ever joined, matching the reaper exactly.
-    /// If the two disagreed the table would explain a decision the orchestrator did not make.
+    /// Floored at `started_at`, matching the reaper exactly — including for a room nobody has ever
+    /// checked in. If the two disagreed the table would explain a decision the orchestrator did not
+    /// make. **The later of the two, not the first present**: pahoa persists the check timer, so a
+    /// room stopped for days reports days of check-idle the moment it returns.
     pub fn idle_since(&self) -> Option<DateTime<Utc>> {
         if self.state != "running" {
             return None;
         }
-        self.last_activity_at.or(self.started_at)
+        [self.last_check_at, self.started_at]
+            .into_iter()
+            .flatten()
+            .max()
     }
 }
 
@@ -257,7 +266,7 @@ pub async fn overview(
                 r.created_by, u.username AS created_by_name, r.running_image,
                 r.deployment_created_at, r.process_started_at, r.clients_connected,
                 r.spec_hash, r.desired_spec_hash, r.redeploy_requested_at,
-                r.last_activity_at, r.started_at, r.pinned_at, p.username AS pinned_by_name
+                r.last_check_at, r.started_at, r.pinned_at, p.username AS pinned_by_name
            FROM rooms r
            LEFT JOIN users u ON u.id = r.created_by
            LEFT JOIN users p ON p.id = r.pinned_by

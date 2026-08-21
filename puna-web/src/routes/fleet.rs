@@ -373,8 +373,8 @@ mod tests {
             deployment_created_at: running.map(|_| Utc::now() - TimeDelta::days(6)),
             process_started_at: running.map(|_| Utc::now() - TimeDelta::days(6)),
             clients_connected: running.map(|_| 4),
-            // Spoke in an hour ago, which is well inside any sane idle timeout.
-            last_activity_at: running.map(|_| Utc::now() - TimeDelta::hours(1)),
+            // Checked something an hour ago, well inside any sane idle timeout.
+            last_check_at: running.map(|_| Utc::now() - TimeDelta::hours(1)),
             started_at: running.map(|_| Utc::now() - TimeDelta::days(6)),
             pinned_at: None,
             pinned_by_name: None,
@@ -630,13 +630,13 @@ mod tests {
         let mut up = room(Some(CONFIGURED));
         assert!(
             up.idle_since()
-                .is_some_and(|at| at == up.last_activity_at.unwrap()),
-            "a running room reports when somebody last spoke"
+                .is_some_and(|at| at == up.last_check_at.unwrap()),
+            "a running room reports when somebody last checked something"
         );
 
-        // Nobody has ever joined: measured from the start, which is the clearest reap candidate
-        // there is rather than a gap in the data.
-        up.last_activity_at = None;
+        // Nobody has checked anything yet: measured from the start, which is the clearest reap
+        // candidate there is rather than a gap in the data.
+        up.last_check_at = None;
         assert_eq!(up.idle_since(), up.started_at);
 
         // Stopped: no answer at all.

@@ -150,17 +150,20 @@ pub struct OrchestratorConfig {
     /// keeps a socket alive indefinitely while nobody is playing. A reaper counting sockets would
     /// never fire on exactly the rooms it exists for.
     ///
-    /// **This is NOT yet what the reference means by idle, and the difference errs toward keeping
-    /// rooms up.** Puna reads pahoa's `activity.idle_seconds`, which pahoa refreshes on *every*
-    /// packet from any client — chat included. The reference server's own `auto_shutdown` measures
-    /// from the last new **location check** instead (`MultiServer.py:2675`, over
-    /// `client_activity_timers`), so a room where everybody is chatting and nobody is playing reaps
-    /// there and does not here.
+    /// **Idle means nobody has CHECKED A LOCATION, which is what the reference means by it.**
+    /// Puna reads pahoa's `activity.last_check_at` (its P23), which moves only on a genuinely new
+    /// location check — the same signal the reference server's own `auto_shutdown` uses
+    /// (`MultiServer.py:2675`, over `client_activity_timers`). A room full of people idling in chat
+    /// reaps; a room where somebody is playing does not.
     ///
-    /// pahoa keeps the reference-shaped timer per slot and mirrors upstream exactly, but exposes it
-    /// only through the tracker document rather than `/admin/v1/status` — so puna cannot reach it
-    /// without pulling megabytes per tick. Asked for as **P23** in pahoa's `HANDOFF.md`; when it
-    /// lands this switches over and rooms reap sooner than they do today.
+    /// Deliberately **not** `activity.idle_seconds`, which moves on any packet at all and would
+    /// keep such a room up forever. That number is still recorded and shown, because "somebody is
+    /// connected and talking" is worth knowing on its own — it is just not this decision.
+    ///
+    /// **Floored at how long the room has been up.** pahoa persists the check timer across a
+    /// restart, so a room stopped for three days reports three days of check-idle the moment it
+    /// returns; compared naively that is a room reaped thirty seconds after somebody started it,
+    /// then started again, then reaped again. See `reconcile::idle_since`.
     ///
     /// A reaped room is stopped, not deleted: it keeps its port, its save and its files, and anyone
     /// with the link starts it again. That is the same lifecycle the reference implementation has,

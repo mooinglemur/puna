@@ -138,8 +138,24 @@ pub struct NetStatus {
 /// `None` throughout until a client has spoken. Never zero for "never".
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ActivityStatus {
+    /// Moves on **any** packet from any client — chat, `Sync`, `Get`, `StatusUpdate`. It answers
+    /// whether the sockets are alive, which is what it is named for, and it is **not** the number
+    /// an idle reaper wants: a room full of people idling in chat keeps it fresh forever.
     pub last_client_message_at: Option<DateTime<Utc>>,
     pub idle_seconds: Option<i64>,
+    /// Moves only when a slot registers a genuinely **new** location check — the reference's own
+    /// auto-shutdown signal (`MultiServer.py:2671-2682`), room-wide here and per-slot inside pahoa.
+    ///
+    /// **`None` means no slot has ever checked anything**, which is a real answer rather than a
+    /// gap: a room whose organizer is still getting people connected has that shape. Never read it
+    /// as a check at the epoch.
+    ///
+    /// **Persisted across a room restart**, unlike `last_client_message_at`, which is a
+    /// process-global that resets. So a room stopped for three days reports three days of
+    /// check-idle the moment it comes back — the honest answer, and the reason anything reaping on
+    /// this needs a floor on how long the room has been *up*. pahoa's own README says so.
+    pub last_check_at: Option<DateTime<Utc>>,
+    pub check_idle_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

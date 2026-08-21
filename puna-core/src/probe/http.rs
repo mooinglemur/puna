@@ -195,6 +195,8 @@ pub fn parse(document: &serde_json::Value) -> RoomStatus {
             .map_or_else(ActivityStatus::default, |activity| ActivityStatus {
                 last_client_message_at: timestamp(activity, "last_client_message_at"),
                 idle_seconds: number(activity, "idle_seconds"),
+                last_check_at: timestamp(activity, "last_check_at"),
+                check_idle_seconds: number(activity, "check_idle_seconds"),
             }),
 
         options: document.get("options").filter(|v| !v.is_null()).cloned(),

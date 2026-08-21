@@ -56,12 +56,11 @@ disconnected a room at a time rather than all at once.
   <th data-key="restarted"
       title="When the pod itself last restarted, which Puna did not ask for -- an eviction, a drain, or a container restart in place. Blank means it has not.">Restarted</th>
   <th data-key="clients">Clients</th>
-  {# The reaper's own number, beside the control that exempts a room from it. "Idle" here means
-     since any client last SENT ANYTHING -- not since anybody last connected, and not since anybody
-     last played. A tab left open overnight holds a socket and says nothing, which is the room this
-     column exists to surface; a room full of people chatting resets it, which the REFERENCE server
-     would not. See `Config::idle_timeout` and pahoa's P23. #}
-  <th data-key="idle" title="Since any client last sent anything, chat included. A room quiet for longer than the idle timeout is stopped, one room per reconcile tick.">Idle</th>
+  {# The reaper's own number, beside the control that exempts a room from it. "Idle" means since a
+     slot last CHECKED A LOCATION -- the reference server's own idle signal, and the only one a room
+     full of people chatting will let go stale. Not since anybody connected (a tab left open
+     overnight holds a socket and says nothing) and not since anybody spoke. #}
+  <th data-key="idle" title="Since a slot last checked a location -- not since anybody last connected or chatted. A room idle longer than the timeout is stopped, one room per reconcile tick.">Idle</th>
   <th></th>
 </tr>
 </thead>

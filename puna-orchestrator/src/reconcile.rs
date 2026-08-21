@@ -399,13 +399,13 @@ async fn load_views(
         // The three columns the idle question is answered from. All nullable, and the combination
         // is what decides whether it is answerable at all -- see `idle_since` below.
         #[diesel(sql_type = Nullable<Timestamptz>)]
-        last_activity_at: Option<chrono::DateTime<chrono::Utc>>,
-        #[diesel(sql_type = Nullable<Timestamptz>)]
         started_at: Option<chrono::DateTime<chrono::Utc>>,
         #[diesel(sql_type = Nullable<Timestamptz>)]
         probed_at: Option<chrono::DateTime<chrono::Utc>>,
         #[diesel(sql_type = Nullable<Text>)]
         probe_kind: Option<String>,
+        #[diesel(sql_type = Nullable<Timestamptz>)]
+        last_check_at: Option<chrono::DateTime<chrono::Utc>>,
     }
 
     impl IdleFacts for Row {
@@ -415,19 +415,19 @@ async fn load_views(
         fn probe_kind(&self) -> Option<&str> {
             self.probe_kind.as_deref()
         }
-        fn last_activity_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-            self.last_activity_at
-        }
         fn started_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
             self.started_at
+        }
+        fn last_check_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+            self.last_check_at
         }
     }
 
     let rows: Vec<Row> = diesel::sql_query(
         "SELECT id, lock_key, state::text AS state, desired_state::text AS desired_state,
                 spec_hash, state_changed_at, retry_after, not_ready_sweeps,
-                redeploy_requested_at, pinned_at, last_activity_at, started_at,
-                probed_at, probe_kind
+                redeploy_requested_at, pinned_at, started_at,
+                probed_at, probe_kind, last_check_at
            FROM rooms
           WHERE environment = $1::puna_environment
           ORDER BY created_at",
@@ -481,7 +481,14 @@ async fn load_views(
         .collect())
 }
 
-/// When this room last had somebody in it, or `None` if that cannot be answered.
+/// When this room was last *played*, or `None` if that cannot be answered.
+///
+/// **Played, not merely occupied**, and the difference is the whole point of pahoa's P23. There are
+/// two activity timers on that surface: `last_client_message_at` moves on any packet — chat,
+/// `Sync`, `Get` — so a room where everybody is talking and nobody is playing keeps it fresh
+/// forever; `last_check_at` moves only when a slot registers a genuinely new location check, which
+/// is what the reference server's own auto-shutdown measures (`MultiServer.py:2671-2682`). This
+/// prefers the second and falls back to the first only for rooms whose image cannot report it.
 ///
 /// **`None` is the safe answer and this function reaches for it three ways**, because the reaper
 /// acts on the result and every way of being wrong here costs somebody their session:
@@ -495,6 +502,12 @@ async fn load_views(
 ///      `last_activity_at` untouched, so the column would hold whatever the last HTTPS probe wrote
 ///      -- or nothing at all -- and neither is an answer about now.
 ///   3. **The room has no `started_at`.** Nothing to measure from.
+///
+/// **`last_activity_at` is deliberately not consulted here, and reinstating it would be a
+/// regression rather than a safety net.** It moves on any packet, so a room where everybody is
+/// chatting and nobody is playing would never reap -- which is the state this whole signal exists
+/// to distinguish. The column is still written, and still shown on the room page and the admin
+/// table, where "somebody is connected and talking" is worth knowing on its own.
 ///
 /// Where the probe IS fresh and capable, a `NULL` `last_activity_at` is a real answer rather than a
 /// gap: pahoa reports `null` until a client has spoken, so a room nobody has ever joined is
@@ -528,9 +541,10 @@ fn idle_since(
     if row.probe_kind() != Some(puna_core::probe::ProbeKind::Https.as_str()) {
         return None;
     }
-    // The LATER of the two, not the first that is present. See the note above: a persisted activity
-    // timestamp from before a reap would otherwise make a freshly started room instantly overdue.
-    [row.last_activity_at(), row.started_at()]
+    // The LATER of the two, not the first that is present. See the note above: pahoa PERSISTS the
+    // check timer, so a room reaped on Monday and started on Thursday reports Monday -- and read as
+    // a fallback that is three days idle on a room thirty seconds old.
+    [row.last_check_at(), row.started_at()]
         .into_iter()
         .flatten()
         .max()
@@ -541,8 +555,8 @@ fn idle_since(
 trait IdleFacts {
     fn probed_at(&self) -> Option<chrono::DateTime<chrono::Utc>>;
     fn probe_kind(&self) -> Option<&str>;
-    fn last_activity_at(&self) -> Option<chrono::DateTime<chrono::Utc>>;
     fn started_at(&self) -> Option<chrono::DateTime<chrono::Utc>>;
+    fn last_check_at(&self) -> Option<chrono::DateTime<chrono::Utc>>;
 }
 
 /// The four facts, standing alone, so [`idle_since`] can be exercised against every combination of
@@ -552,8 +566,8 @@ trait IdleFacts {
 struct Idle {
     probed_at: Option<chrono::DateTime<chrono::Utc>>,
     probe_kind: Option<&'static str>,
-    last_activity_at: Option<chrono::DateTime<chrono::Utc>>,
     started_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_check_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[cfg(test)]
@@ -564,11 +578,11 @@ impl IdleFacts for Idle {
     fn probe_kind(&self) -> Option<&str> {
         self.probe_kind
     }
-    fn last_activity_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        self.last_activity_at
-    }
     fn started_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.started_at
+    }
+    fn last_check_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.last_check_at
     }
 }
 
@@ -1004,7 +1018,7 @@ mod db_tests {
                 &Idle {
                     probed_at: Some(at(0)),
                     probe_kind: Some(HTTPS),
-                    last_activity_at: Some(spoke),
+                    last_check_at: Some(spoke),
                     started_at: Some(at(-600)),
                 },
                 at(0)
@@ -1017,7 +1031,7 @@ mod db_tests {
             idle_since(
                 &Idle {
                     probe_kind: Some(HTTPS),
-                    last_activity_at: Some(spoke),
+                    last_check_at: Some(spoke),
                     ..Idle::default()
                 },
                 at(0)
@@ -1033,7 +1047,7 @@ mod db_tests {
                 &Idle {
                     probed_at: Some(at(-60)),
                     probe_kind: Some(HTTPS),
-                    last_activity_at: Some(spoke),
+                    last_check_at: Some(spoke),
                     started_at: Some(at(-600)),
                 },
                 at(0)
@@ -1049,7 +1063,7 @@ mod db_tests {
                 &Idle {
                     probed_at: Some(at(0)),
                     probe_kind: Some("tcp"),
-                    last_activity_at: Some(spoke),
+                    last_check_at: Some(spoke),
                     started_at: Some(at(-600)),
                 },
                 at(0)
@@ -1079,7 +1093,7 @@ mod db_tests {
                 probed_at: Some(at(0)),
                 probe_kind: Some(HTTPS),
                 // Nobody has said anything in this room, ever.
-                last_activity_at: None,
+                last_check_at: None,
                 started_at: Some(at(0) - up_for),
             };
             let room = crate::plan::RoomView {
@@ -1114,6 +1128,34 @@ mod db_tests {
         );
     }
 
+    /// **The reaper reads the CHECK timer, which is the whole point of pahoa's P23.**
+    ///
+    /// A room full of people talking and nobody playing keeps `last_client_message_at` fresh
+    /// forever — it moves on any packet — so reaping on it means never reaping the rooms this
+    /// exists for. `last_check_at` moves only on a genuinely new location check, which is what the
+    /// reference server's own auto-shutdown measures.
+    ///
+    /// Asserted by giving the room a check five hours old and nothing else: if the message timer
+    /// were consulted at all, this fixture could not distinguish the two, so the guard is that
+    /// `idle_since` reports the check time rather than anything derived from a socket being busy.
+    #[test]
+    fn the_reaper_measures_from_the_last_check_not_the_last_packet() {
+        let checked = at(-300);
+        assert_eq!(
+            idle_since(
+                &Idle {
+                    probed_at: Some(at(0)),
+                    probe_kind: Some(HTTPS),
+                    last_check_at: Some(checked),
+                    started_at: Some(at(-600)),
+                },
+                at(0)
+            ),
+            Some(checked),
+            "the reaper is not measuring from the last location check"
+        );
+    }
+
     /// **A stale activity reading can never make a freshly started room overdue.**
     ///
     /// This is the case that arrives with pahoa's P23. Its per-slot check timer is *persisted* --
@@ -1132,7 +1174,7 @@ mod db_tests {
             probed_at: Some(at(0)),
             probe_kind: Some(HTTPS),
             // Somebody last did something three days ago, before the room was reaped.
-            last_activity_at: Some(at(-3 * 24 * 60)),
+            last_check_at: Some(at(-3 * 24 * 60)),
             // And it came back thirty seconds ago.
             started_at: Some(at(0) - chrono::TimeDelta::seconds(30)),
         };
@@ -1158,7 +1200,7 @@ mod db_tests {
                 &Idle {
                     probed_at: Some(at(0)),
                     probe_kind: Some(HTTPS),
-                    last_activity_at: None,
+                    last_check_at: None,
                     started_at: Some(started),
                 },
                 at(0)

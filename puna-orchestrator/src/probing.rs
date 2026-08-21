@@ -304,7 +304,11 @@ async fn record(
                 last_activity_at = $3,
                 probed_at = now(),
                 probe_kind = $4,
-                process_started_at = $5
+                process_started_at = $5,
+                -- The reaper's own signal: when a slot last registered a genuinely NEW location
+                -- check. `last_activity_at` above moves on any packet and stays fresh in a room
+                -- where everybody is chatting and nobody is playing.
+                last_check_at = $6
           WHERE id = $1",
     )
     .bind::<SqlUuid, _>(room)
@@ -322,6 +326,7 @@ async fn record(
     // reloaded its save and every client reconnected. `None` follows the same rule as everything
     // else on this row -- cannot tell, never zero.
     .bind::<Nullable<Timestamptz>, _>(status.started_at)
+    .bind::<Nullable<Timestamptz>, _>(status.activity.last_check_at)
     .execute(conn)
     .await?;
 
@@ -493,6 +498,8 @@ mod db_tests {
                     activity: ActivityStatus {
                         last_client_message_at: Some(spoke_at),
                         idle_seconds: Some(300),
+                        last_check_at: Some(spoke_at - chrono::TimeDelta::hours(2)),
+                        check_idle_seconds: Some(7200),
                     },
                     ..Default::default()
                 },
