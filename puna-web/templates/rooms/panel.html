@@ -15,7 +15,14 @@
 <div class="panel" data-room="{{ room.id }}" data-state="{{ room.state }}"
      data-desired="{{ room.desired_state }}" data-working="{% if is_working %}1{% else %}0{% endif %}">
 
-{# One row of the address table: the thing to paste, a control that copies it, and what it is for.
+{# The address table's heading, as a macro so the two tables cannot describe their columns
+   differently. They are the same shape on purpose: the second one is the first one's alternative,
+   and reading as a matched pair is what makes that obvious. #}
+{% macro address_head() %}
+<thead><tr><th>Host:port</th><th>Description</th></tr></thead>
+{% endmacro %}
+
+{# One row of an address table: the thing to paste, a control that copies it, and what it is for.
 
    A macro so the icon and the button exist once. The two rows differ only in their port and their
    sentence, and an SVG written out twice is two things to keep in step for no reason. #}
@@ -65,22 +72,49 @@
    that never stops asking. #}
 <noscript><meta http-equiv="refresh" content="5"></noscript>
 
-{# The address is the thing players came for, so it leads. Both ports are shown as rows of one
-   table rather than a sentence apiece: they are two spellings of the same room, and a table is
-   what lets somebody see that at a glance and take the one they want. #}
+{# The address is the thing players came for, so it leads -- and **only one address does.**
+
+   The two ports are one room, and the wrong choice fails ASYMMETRICALLY. Take the standard port
+   when your client cannot keep up and pahoa drops the connection and says so: loud, and it points
+   at itself. Take the filtered port by accident and everything works -- the game plays, your own
+   items arrive -- you simply never see anybody else's finds, and conclude the multiworld is dead.
+   That failure is silent and gives its victim no reason to suspect the address they pasted.
+
+   So the filtered one goes behind a deliberate click. Merely de-emphasising it would not do: a
+   muted second URL is still a second URL on screen, and the thing being guarded against is somebody
+   copying the first address they see without reading. A control that SWAPPED which address is shown
+   would be worse than either, because the same position would then hold different values at
+   different times and nothing on screen would say which one you have. #}
 {% else if room.state == "running" %}
 {% if let Some(host) = room.advertised_host %}
-<table class="address">
-<thead><tr><th>Host:port</th><th>Description</th></tr></thead>
-<tbody>
 {% if let Some(port) = room.advertised_port %}
+<table class="address">
+{% call address_head() %}{% endcall %}
+<tbody>
 {% call address_row(host, port, "standard view", "most clients should use this one") %}{% endcall %}
-{% endif %}
-{% if let Some(filtered) = room.advertised_filtered_port %}
-{% call address_row(host, filtered, "feed-filtered view", "same room, filters out other slots' item traffic") %}{% endcall %}
-{% endif %}
 </tbody>
 </table>
+{% endif %}
+
+{% if let Some(filtered) = room.advertised_filtered_port %}
+{# The summary names the SYMPTOM, not the feature. "Don't want the full item feed?" asks somebody to
+   already know what the item feed is; a player whose client is stuttering in a 200-slot async does
+   not think in those words. They think "it keeps dropping me" -- so that is what the line says, and
+   nobody without the problem opens it. #}
+<details class="alt-address">
+<summary><strong>Client lagging or dropping out?</strong> There is a second address.</summary>
+<p class="hint">Same room, same save, same slot &mdash; it just leaves out other players&rsquo; item
+traffic, which is what floods a client in a large multiworld. You still get your own items, chat and
+announcements. <strong>Use the address above unless you are having trouble</strong>: on this one you
+will not see other people&rsquo;s finds go by.</p>
+<table class="address">
+{% call address_head() %}{% endcall %}
+<tbody>
+{% call address_row(host, filtered, "feed-filtered view", "same room, filters out other slots' item traffic") %}{% endcall %}
+</tbody>
+</table>
+</details>
+{% endif %}
 {% endif %}
 
 {% else if room.state == "idle" || room.state == "failed" %}

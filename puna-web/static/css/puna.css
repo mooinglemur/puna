@@ -536,6 +536,30 @@ summary { cursor: pointer; }
   margin: 2rem 0 0.6rem;
 }
 
+/* The second address, behind a click.
+ *
+ * Quiet on purpose: it is the answer to a question most readers do not have, and the whole reason
+ * it is collapsed is that a second address in view gets copied by somebody who did not read either
+ * label. Muted until hovered or focused, so it is findable without competing with the address it
+ * sits under. */
+.alt-address {
+  margin: 0.75rem 0 0;
+  font-size: 0.92rem;
+}
+
+.alt-address > summary {
+  cursor: pointer;
+  color: var(--muted);
+  width: fit-content;
+}
+
+.alt-address > summary:hover { color: var(--text); }
+.alt-address > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Indented once open, so the second table reads as belonging to the disclosure rather than as a
+   peer of the address above it. */
+.alt-address[open] > :not(summary) { margin-left: 1.1rem; }
+
 /* The room's name and the control that changes it, on one line. `align-items: baseline` rather
    than `center` so the pencil sits on the heading's baseline instead of floating in the middle of
    its line box, which at h1 size is a visible drift. */

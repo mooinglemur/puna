@@ -1859,6 +1859,60 @@ mod tests {
         );
     }
 
+    /// **Only ONE address is on screen by default, and it is the standard one.**
+    ///
+    /// The two ports fail asymmetrically. A client that cannot keep up on the standard port is
+    /// dropped by pahoa, loudly, with a line in the room's log naming the reason. A player who
+    /// takes the *filtered* port by accident has everything work — their game plays, their own
+    /// items arrive — and simply never sees anybody else's finds, which reads as a dead multiworld
+    /// and gives them no reason to suspect the address they pasted.
+    ///
+    /// So the guarded failure is somebody copying the first address they see without reading either
+    /// label, and the test is positional: the filtered one must sit *after* the disclosure that
+    /// hides it. Asserting only that both are present -- which the previous version did -- passes
+    /// just as happily with them side by side, which is the layout this replaced.
+    #[test]
+    fn the_filtered_address_is_behind_a_disclosure_and_the_standard_one_is_not() {
+        let html = a_panel().render().expect("renders");
+
+        let disclosure = html
+            .find("<details class=\"alt-address\"")
+            .expect("the second address has no disclosure to hide it");
+        let standard = html
+            .find("data-copy=\"mw.example:40000\"")
+            .expect("the standard address is not offered");
+        let filtered = html
+            .find("data-copy=\"mw.example:40001\"")
+            .expect("the filtered address is not offered at all");
+
+        assert!(
+            standard < disclosure,
+            "the standard address must be the one on screen, not the hidden one"
+        );
+        assert!(
+            filtered > disclosure,
+            "the filtered address is on screen beside the standard one, so it can be copied by \
+             somebody who read neither label -- which fails silently"
+        );
+
+        // The summary names the symptom rather than the feature, so the person with the problem
+        // recognizes themselves and nobody else opens it.
+        assert!(
+            html.contains("Client lagging or dropping out?"),
+            "the disclosure does not say who it is for"
+        );
+        // And it warns, at the point of copying, about the thing that has no other symptom.
+        //
+        // Asserted around the apostrophe rather than through it: the template writes `&rsquo;`
+        // literally, askama would write `&#x27;` for the same character in an expression, and a
+        // test that pins either spelling breaks on a rewording that changed nothing. This codebase
+        // has made that mistake once already.
+        assert!(
+            html.contains("finds go by"),
+            "the second address does not say what it costs"
+        );
+    }
+
     /// A room with no filtered port renders one row, not an empty second one.
     #[test]
     fn a_room_without_a_filtered_port_shows_one_address() {
