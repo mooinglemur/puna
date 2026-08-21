@@ -45,8 +45,15 @@ pub struct Row {
     pub running_tag: Option<String>,
     pub drift: Option<&'static str>,
     pub deployed_ago: Option<String>,
-    /// Present only when the process is meaningfully younger than its Deployment -- i.e. the room
-    /// restarted under Puna without its spec changing.
+    /// Present only when the process is meaningfully younger than its Deployment -- i.e. the pod
+    /// restarted **without Puna asking**, its spec unchanged. An eviction, a drain, or a container
+    /// restart in place.
+    ///
+    /// This is the column the word *restart* belongs to, and the only one. What Puna does to a room
+    /// on purpose is a **redeploy**, and the two are one word apart with different causes: a
+    /// redeploy is somebody pressing a button, a restart is Kubernetes moving the room underneath
+    /// everybody. Both reload the save and disconnect every client, which is why an organizer
+    /// notices the second one and cannot otherwise account for it.
     pub restarted_ago: Option<String>,
     /// The two ages again as seconds, for `data-value`.
     ///
@@ -238,10 +245,10 @@ async fn redeploy(
     // "Already queued" is a real answer and a different one from "queued", because the whole
     // question an operator has after pressing this is whether anything is going to happen.
     let notice = if marked == 1 {
-        "Queued. The room stops on the next reconcile and is back on the same address about a \
-         minute later."
+        "Redeploy queued. The room stops on the next reconcile and is back on the same address \
+         under a minute later."
     } else {
-        "That room already had a restart queued; its place in the queue is unchanged."
+        "That room already had a redeploy queued; its place in the queue is unchanged."
     };
     Ok(Flash::success(Redirect::to(uri!(show)), notice))
 }
@@ -265,7 +272,7 @@ async fn redeploy_drifted(
     let marked = fleet::request_redeploy(&mut conn, &ids).await?;
 
     let notice = format!(
-        "Queued {marked} of {} drifted rooms. They restart one per tick, oldest request first, so \
+        "Queued {marked} of {} drifted rooms. They redeploy one per tick, oldest request first, so \
          the rollout is gradual rather than all at once.",
         ids.len()
     );
@@ -304,7 +311,7 @@ mod tests {
 
     /// **An idle room cannot drift**, and that is not a technicality: it is running nothing, so it
     /// picks up the current spec whenever it next starts. Counting it as drifted would put every
-    /// stopped room in the environment into a bulk restart that would *start* them all.
+    /// stopped room in the environment into a bulk redeploy that would *start* them all.
     #[test]
     fn only_a_room_with_a_deployment_can_drift() {
         assert_eq!(
@@ -357,13 +364,19 @@ mod tests {
     /// be reachable — a button nobody can find is the failure this codebase has already shipped
     /// twice.
     #[test]
-    fn the_table_shows_drift_and_offers_a_restart() {
+    fn the_table_shows_drift_and_offers_a_redeploy() {
         let drifted = room(Some("registry.example.com/g/pahoa:sha-old"));
         let current = room(Some(CONFIGURED));
         let idle = room(None);
+        // A room with a request already in flight, so the "redeploy queued" cell actually renders.
+        // Without one that branch is never taken and every assertion about its wording passes
+        // against markup nothing produced -- which is exactly what happened until a mutation of
+        // the tag failed to fail.
+        let mut queued = room(Some(CONFIGURED));
+        queued.redeploy_requested_at = Some(Utc::now());
         let overview = Overview {
             pahoa_image: Some(CONFIGURED.into()),
-            rooms: vec![drifted.clone(), current, idle.clone()],
+            rooms: vec![drifted.clone(), current, queued.clone(), idle.clone()],
             resting: 2,
         };
         assert_eq!(overview.drifted().count(), 1);
@@ -405,16 +418,40 @@ mod tests {
         assert!(html.contains("image drift"), "and flagged as drifted");
         assert!(
             html.contains(&format!("/admin/rooms/{}/redeploy", drifted.id)),
-            "the restart control is reachable for a running room"
+            "the redeploy control is reachable for a running room"
         );
         assert!(
             !html.contains(&format!("/admin/rooms/{}/redeploy", idle.id)),
-            "and is not offered for a room with nothing to restart"
+            "and is not offered for a room with nothing to redeploy"
         );
         assert!(
-            html.contains("Restart all drifted rooms"),
+            html.contains("Redeploy all drifted rooms"),
             "the bulk control appears when something has drifted"
         );
+
+        // **"Redeploy" is Puna's action; "Restarted" is the column reporting that Kubernetes
+        // replaced the pod without being asked.** They are one word apart and they mean different
+        // things, so the page must not use the first word for the second event -- which it did,
+        // with a "restart queued" tag sitting two columns from a header reading "Restarted".
+        assert!(
+            html.contains("<th data-key=\"restarted\""),
+            "the pod-restart column is still reported"
+        );
+        assert!(
+            html.contains("redeploy queued"),
+            "a room with a request in flight says so -- and this is what gives the check below \
+             something to check"
+        );
+        assert!(
+            !html.contains(&format!("/admin/rooms/{}/redeploy\"", queued.id)),
+            "a room already queued is not offered the control again"
+        );
+        for wrong in ["Restart all", ">Restart<", "restart queued"] {
+            assert!(
+                !html.contains(wrong),
+                "{wrong:?} names Puna's own action \"restart\", which is the other column"
+            );
+        }
 
         // The corner link and the tab both carry the deployment's name, so a page cannot be
         // mistaken for the other environment's at a glance -- which is the whole point of setting

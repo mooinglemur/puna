@@ -28,10 +28,10 @@ computed until it completes a tick.</p>
 {# The count and the pace are both in the sentence you click: a control whose blast radius is the
    whole environment should say what it will do before it does it. #}
 <form method="post" action="/admin/rooms/redeploy-drifted" class="inline">
-<p class="warning">{{ drifted +}} room(s) are not running the configured spec. Restarting them
-queues each one; the orchestrator restarts one per tick, oldest request first, so players are
+<p class="warning">{{ drifted +}} room(s) are not running the configured spec. Redeploying them
+queues each one; the orchestrator redeploys one per tick, oldest request first, so players are
 disconnected a room at a time rather than all at once.
-<button type="submit">Restart all drifted rooms</button></p>
+<button type="submit">Redeploy all drifted rooms</button></p>
 </form>
 {% endif %}
 
@@ -47,8 +47,14 @@ disconnected a room at a time rather than all at once.
 <thead>
 <tr>
   <th data-key="name">Room</th><th data-key="state">State</th><th data-key="created">Created by</th>
-  <th data-key="running">Running</th><th data-key="deployed">Deployed</th>
-  <th data-key="restarted">Restarted</th>
+  <th data-key="running">Running</th>
+  {# The two ages are different events and the words for them are one letter apart in a hurry, so
+     each header says which one it is. **Deployed** moves when Puna redeploys the room -- the button
+     in the last column. **Restarted** moves when Kubernetes replaces the pod underneath it, which
+     Puna did not ask for and which is the whole reason this column exists. #}
+  <th data-key="deployed" title="How long this spec has been in force. A redeploy resets it.">Deployed</th>
+  <th data-key="restarted"
+      title="When the pod itself last restarted, which Puna did not ask for -- an eviction, a drain, or a container restart in place. Blank means it has not.">Restarted</th>
   <th data-key="clients">Clients</th><th></th>
 </tr>
 </thead>
@@ -93,13 +99,15 @@ disconnected a room at a time rather than all at once.
 <td>{% if let Some(n) = row.clients %}{{ n }}{% else %}<span class="hint">&mdash;</span>{% endif %}</td>
 <td>
   {% if row.redeploy_pending %}
-  <span class="tag">restart queued</span>
+  {# "redeploy", not "restart", and this cell is the one where the distinction is sharpest: it sits
+     two columns from a header that says *Restarted*, which means something else entirely. #}
+  <span class="tag">redeploy queued</span>
   {% else if row.running_image.is_some() %}
   <form method="post" action="/admin/rooms/{{ row.id }}/redeploy" class="inline">
-    <button type="submit">Restart</button>
+    <button type="submit">Redeploy</button>
   </form>
   {% else %}
-  {# Nothing to restart. Offering the control here would teach people it does nothing. #}
+  {# Nothing to redeploy. Offering the control here would teach people it does nothing. #}
   <span class="hint">&mdash;</span>
   {% endif %}
 </td>
@@ -133,7 +141,7 @@ disconnected a room at a time rather than all at once.
 </details>
 {% endif %}
 
-<p class="hint">A restart typically takes less than a minute from pressing the button, and the room&rsquo;s players
+<p class="hint">A redeploy typically takes less than a minute from pressing the button, and the room&rsquo;s players
 are typically disconnected for about 15-20 seconds. The room saves on the way down, keeps its port, and clients
 reconnect on their own once it is back.</p>
 
