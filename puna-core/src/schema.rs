@@ -291,6 +291,8 @@ diesel::table! {
         process_started_at -> Nullable<Timestamptz>,
         desired_spec_hash -> Nullable<Text>,
         redeploy_requested_at -> Nullable<Timestamptz>,
+        pinned_at -> Nullable<Timestamptz>,
+        pinned_by -> Nullable<Int8>,
     }
 }
 
@@ -340,7 +342,6 @@ diesel::joinable!(room_members -> rooms (room_id));
 diesel::joinable!(room_slots -> rooms (room_id));
 diesel::joinable!(room_slots -> users (owner_id));
 diesel::joinable!(rooms -> generations (generation_id));
-diesel::joinable!(rooms -> users (created_by));
 diesel::joinable!(settings -> users (updated_by));
 
 diesel::allow_tables_to_appear_in_same_query!(

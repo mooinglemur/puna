@@ -120,6 +120,10 @@ pub struct Reconciler {
     advertise_host: String,
     pahoa_image: String,
     max_recreates_per_tick: usize,
+    /// Converted to `chrono` once here rather than at every comparison: the planner speaks
+    /// `chrono::Duration` throughout, and mixing the two duration types at a boundary is how a
+    /// seconds/milliseconds mistake gets in.
+    idle_timeout: chrono::Duration,
     sweeper: Sweeper,
     prober: Arc<Prober>,
 }
@@ -150,6 +154,8 @@ impl Reconciler {
             advertise_host: config.common.advertise_host.clone(),
             pahoa_image: config.pahoa_image.clone(),
             max_recreates_per_tick: config.max_recreates_per_tick,
+            idle_timeout: chrono::Duration::from_std(config.idle_timeout)
+                .unwrap_or_else(|_| chrono::Duration::zero()),
             sweeper: Sweeper::new(config.trash_retention),
             prober,
         }
@@ -204,7 +210,7 @@ impl Reconciler {
         };
 
         let mut conn = self.pool.get().await?;
-        let mut views = load_views(&mut conn, self.environment).await?;
+        let mut views = load_views(&mut conn, self.environment, chrono::Utc::now()).await?;
         report.rooms = views.len();
 
         // --- FULL PASSES ONLY, and each for its own reason -----------------------------------
@@ -238,6 +244,7 @@ impl Reconciler {
             &snapshot,
             chrono::Utc::now(),
             self.max_recreates_per_tick,
+            self.idle_timeout,
             kind,
         );
         report.actions = actions.len();
@@ -352,9 +359,17 @@ impl Reconciler {
 /// A room whose `state` or `desired_state` does not parse is **left out**, not defaulted: those
 /// values come from a database that may be newer than this binary, and acting on a state this code
 /// does not understand is worse than leaving the room alone and saying so.
+/// How long a probe reading stays trustworthy.
+///
+/// Three reconcile intervals at the default, expressed as a wall clock rather than a count of
+/// passes so it means the same thing whatever the cadence. A room whose last probe is older than
+/// this is a room Puna is not currently observing, whatever the columns still say.
+const PROBE_FRESH_FOR: chrono::TimeDelta = chrono::TimeDelta::minutes(5);
+
 async fn load_views(
     conn: &mut diesel_async::AsyncPgConnection,
     environment: Environment,
+    now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Vec<RoomView>, diesel::result::Error> {
     use diesel::sql_types::{Integer, Nullable, Text, Timestamptz, Uuid as SqlUuid};
     use diesel_async::RunQueryDsl;
@@ -379,12 +394,40 @@ async fn load_views(
         not_ready_sweeps: i32,
         #[diesel(sql_type = Nullable<Timestamptz>)]
         redeploy_requested_at: Option<chrono::DateTime<chrono::Utc>>,
+        #[diesel(sql_type = Nullable<Timestamptz>)]
+        pinned_at: Option<chrono::DateTime<chrono::Utc>>,
+        // The three columns the idle question is answered from. All nullable, and the combination
+        // is what decides whether it is answerable at all -- see `idle_since` below.
+        #[diesel(sql_type = Nullable<Timestamptz>)]
+        last_activity_at: Option<chrono::DateTime<chrono::Utc>>,
+        #[diesel(sql_type = Nullable<Timestamptz>)]
+        started_at: Option<chrono::DateTime<chrono::Utc>>,
+        #[diesel(sql_type = Nullable<Timestamptz>)]
+        probed_at: Option<chrono::DateTime<chrono::Utc>>,
+        #[diesel(sql_type = Nullable<Text>)]
+        probe_kind: Option<String>,
+    }
+
+    impl IdleFacts for Row {
+        fn probed_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+            self.probed_at
+        }
+        fn probe_kind(&self) -> Option<&str> {
+            self.probe_kind.as_deref()
+        }
+        fn last_activity_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+            self.last_activity_at
+        }
+        fn started_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+            self.started_at
+        }
     }
 
     let rows: Vec<Row> = diesel::sql_query(
         "SELECT id, lock_key, state::text AS state, desired_state::text AS desired_state,
                 spec_hash, state_changed_at, retry_after, not_ready_sweeps,
-                redeploy_requested_at
+                redeploy_requested_at, pinned_at, last_activity_at, started_at,
+                probed_at, probe_kind
            FROM rooms
           WHERE environment = $1::puna_environment
           ORDER BY created_at",
@@ -414,6 +457,10 @@ async fn load_views(
                 return None;
             };
 
+            // Computed before the row is consumed below: it reads four fields, and the struct
+            // update that follows moves `spec_hash` out.
+            let idle_since = idle_since(&row, now);
+
             Some(RoomView {
                 id: row.id,
                 lock_key: row.lock_key,
@@ -427,9 +474,83 @@ async fn load_views(
                 retry_after: row.retry_after,
                 not_ready_sweeps: row.not_ready_sweeps,
                 redeploy_requested_at: row.redeploy_requested_at,
+                pinned: row.pinned_at.is_some(),
+                idle_since,
             })
         })
         .collect())
+}
+
+/// When this room last had somebody in it, or `None` if that cannot be answered.
+///
+/// **`None` is the safe answer and this function reaches for it three ways**, because the reaper
+/// acts on the result and every way of being wrong here costs somebody their session:
+///
+///   1. **No probe has ever succeeded**, or the last one is older than [`PROBE_FRESH_FOR`]. A
+///      stale row is indistinguishable from a quiet room -- both say "nobody has spoken since X"
+///      -- and the difference is whether Puna has been listening. An unreachable room whose
+///      players are perfectly happy would otherwise look like the emptiest room in the fleet and
+///      be reaped first, because the reaper takes the longest-idle candidate.
+///   2. **The probe is the TCP fallback**, which reports reachability and nothing else. It leaves
+///      `last_activity_at` untouched, so the column would hold whatever the last HTTPS probe wrote
+///      -- or nothing at all -- and neither is an answer about now.
+///   3. **The room has no `started_at`.** Nothing to measure from.
+///
+/// Where the probe IS fresh and capable, a `NULL` `last_activity_at` is a real answer rather than a
+/// gap: pahoa reports `null` until a client has spoken, so a room nobody has ever joined is
+/// measured from when it started. That is the clearest reap candidate there is -- somebody opened
+/// a room and walked away -- and treating it as unanswerable would exempt it forever.
+fn idle_since(
+    row: &impl IdleFacts,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    let probed_at = row.probed_at()?;
+    if now - probed_at > PROBE_FRESH_FOR {
+        return None;
+    }
+    // Only the activity-capable probe answers this question. Compared against the kind the probe
+    // records, so a future probe that cannot report activity is excluded by not being on this list
+    // rather than by somebody remembering to add it here.
+    if row.probe_kind() != Some(puna_core::probe::ProbeKind::Https.as_str()) {
+        return None;
+    }
+    row.last_activity_at().or_else(|| row.started_at())
+}
+
+/// The four columns [`idle_since`] reads, as a trait so the rule can be tested against every
+/// combination of them without a database.
+trait IdleFacts {
+    fn probed_at(&self) -> Option<chrono::DateTime<chrono::Utc>>;
+    fn probe_kind(&self) -> Option<&str>;
+    fn last_activity_at(&self) -> Option<chrono::DateTime<chrono::Utc>>;
+    fn started_at(&self) -> Option<chrono::DateTime<chrono::Utc>>;
+}
+
+/// The four facts, standing alone, so [`idle_since`] can be exercised against every combination of
+/// them without a database. Test-only: the production caller reads a row.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, Default)]
+struct Idle {
+    probed_at: Option<chrono::DateTime<chrono::Utc>>,
+    probe_kind: Option<&'static str>,
+    last_activity_at: Option<chrono::DateTime<chrono::Utc>>,
+    started_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[cfg(test)]
+impl IdleFacts for Idle {
+    fn probed_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.probed_at
+    }
+    fn probe_kind(&self) -> Option<&str> {
+        self.probe_kind
+    }
+    fn last_activity_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.last_activity_at
+    }
+    fn started_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.started_at
+    }
 }
 
 /// Fill in [`RoomView::desired_spec_hash`] for the rooms whose decision it can change.
@@ -838,5 +959,175 @@ mod db_tests {
             assert_eq!(read(&mut conn).await.as_deref(), Some("pahoa:sha-two"));
         })
         .await;
+    }
+
+    // ---- can the idle question be answered at all? ---------------------------------------------
+
+    const HTTPS: &str = "https";
+
+    fn at(minutes: i64) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::from_timestamp(1_770_000_000, 0).expect("a fixed instant")
+            + chrono::TimeDelta::minutes(minutes)
+    }
+
+    /// **Every way the answer is unavailable, and each is a distinct hazard.**
+    ///
+    /// The reaper takes the LONGEST-idle candidate, so a room that reads as "idle forever" is
+    /// reaped first. Each `None` below is a room that would read exactly that way if the gap were
+    /// papered over with a default — and in every case the room may be full of people.
+    #[test]
+    fn an_unanswerable_idle_question_is_none_rather_than_ancient() {
+        let spoke = at(-10);
+
+        // The ordinary case: fresh probe, capable probe, a client has spoken.
+        assert_eq!(
+            idle_since(
+                &Idle {
+                    probed_at: Some(at(0)),
+                    probe_kind: Some(HTTPS),
+                    last_activity_at: Some(spoke),
+                    started_at: Some(at(-600)),
+                },
+                at(0)
+            ),
+            Some(spoke)
+        );
+
+        // 1. No probe has ever succeeded.
+        assert_eq!(
+            idle_since(
+                &Idle {
+                    probe_kind: Some(HTTPS),
+                    last_activity_at: Some(spoke),
+                    ..Idle::default()
+                },
+                at(0)
+            ),
+            None,
+            "a room never successfully probed was given an idle time"
+        );
+
+        // 2. The last probe is stale. The columns still say "nobody has spoken since X" -- they
+        //    just have not been refreshed, and the room may be busy and unreachable.
+        assert_eq!(
+            idle_since(
+                &Idle {
+                    probed_at: Some(at(-60)),
+                    probe_kind: Some(HTTPS),
+                    last_activity_at: Some(spoke),
+                    started_at: Some(at(-600)),
+                },
+                at(0)
+            ),
+            None,
+            "a stale reading was treated as current"
+        );
+
+        // 3. The TCP fallback, which reports reachability and nothing else. Whatever sits in
+        //    `last_activity_at` was written by some earlier probe and is not an answer about now.
+        assert_eq!(
+            idle_since(
+                &Idle {
+                    probed_at: Some(at(0)),
+                    probe_kind: Some("tcp"),
+                    last_activity_at: Some(spoke),
+                    started_at: Some(at(-600)),
+                },
+                at(0)
+            ),
+            None,
+            "a probe that cannot observe activity was read as observing none"
+        );
+    }
+
+    /// **A room nobody has joined yet is safe until it has been UP for the whole window.**
+    ///
+    /// End to end, across both halves, because that is where this property lives: `idle_since`
+    /// supplies the fallback and `should_reap` applies the clock, and each was asserted on its own.
+    /// Separately correct, they could still compose into "a room with no activity is reaped
+    /// immediately" — if the fallback returned the epoch, or `now`, or if the threshold were
+    /// applied only to real activity. Nothing about that would have failed a test.
+    ///
+    /// It matters because a freshly started room legitimately has no activity: pahoa reports null
+    /// until a client speaks, so somebody who opens a room and takes ten minutes to get their group
+    /// into it has a room in exactly this state the whole time.
+    #[test]
+    fn a_room_with_no_activity_yet_is_reaped_only_once_it_has_been_up_that_long() {
+        let timeout = chrono::TimeDelta::hours(4);
+
+        let after = |up_for: chrono::TimeDelta| {
+            let facts = Idle {
+                probed_at: Some(at(0)),
+                probe_kind: Some(HTTPS),
+                // Nobody has said anything in this room, ever.
+                last_activity_at: None,
+                started_at: Some(at(0) - up_for),
+            };
+            let room = crate::plan::RoomView {
+                id: puna_core::ids::RoomId::new(),
+                lock_key: 1,
+                state: puna_core::model::room::RoomState::Running,
+                desired: puna_core::model::room::DesiredState::Running,
+                spec_hash: None,
+                desired_spec_hash: None,
+                state_changed_at: at(0) - up_for,
+                retry_after: None,
+                not_ready_sweeps: 0,
+                redeploy_requested_at: None,
+                idle_since: idle_since(&facts, at(0)),
+                pinned: false,
+            };
+            room.should_reap(at(0), timeout)
+        };
+
+        assert!(
+            !after(chrono::TimeDelta::minutes(1)),
+            "reaped a room that had just started"
+        );
+        assert!(
+            !after(chrono::TimeDelta::hours(3)),
+            "reaped a room up for three hours"
+        );
+        assert!(!after(timeout), "reaped a room exactly at the threshold");
+        assert!(
+            after(timeout + chrono::TimeDelta::seconds(1)),
+            "a room up longer than the window with nobody ever in it should be reaped"
+        );
+    }
+
+    /// A room nobody has ever joined is measured from when it started — which is a real answer,
+    /// not a gap.
+    ///
+    /// pahoa reports `null` activity until a client speaks, so this is the shape of "somebody
+    /// opened a room and walked away". It is the clearest reap candidate there is, and treating the
+    /// null as unanswerable would exempt it permanently.
+    #[test]
+    fn a_room_nobody_ever_joined_is_measured_from_its_start() {
+        let started = at(-300);
+        assert_eq!(
+            idle_since(
+                &Idle {
+                    probed_at: Some(at(0)),
+                    probe_kind: Some(HTTPS),
+                    last_activity_at: None,
+                    started_at: Some(started),
+                },
+                at(0)
+            ),
+            Some(started)
+        );
+
+        // With no start either there is nothing to measure from.
+        assert_eq!(
+            idle_since(
+                &Idle {
+                    probed_at: Some(at(0)),
+                    probe_kind: Some(HTTPS),
+                    ..Idle::default()
+                },
+                at(0)
+            ),
+            None
+        );
     }
 }

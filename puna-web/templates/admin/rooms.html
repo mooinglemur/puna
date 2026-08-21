@@ -55,7 +55,12 @@ disconnected a room at a time rather than all at once.
   <th data-key="deployed" title="How long this spec has been in force. A redeploy resets it.">Deployed</th>
   <th data-key="restarted"
       title="When the pod itself last restarted, which Puna did not ask for -- an eviction, a drain, or a container restart in place. Blank means it has not.">Restarted</th>
-  <th data-key="clients">Clients</th><th></th>
+  <th data-key="clients">Clients</th>
+  {# The reaper's own number, beside the control that exempts a room from it. "Idle" here means
+     since anybody last SPOKE, not since anybody last connected -- a tab left open overnight holds
+     a socket and says nothing, which is exactly the room this column exists to surface. #}
+  <th data-key="idle" title="Since any client last spoke. A room quiet for longer than the idle timeout is stopped, one room per reconcile tick.">Idle</th>
+  <th></th>
 </tr>
 </thead>
 <tbody>
@@ -97,6 +102,20 @@ disconnected a room at a time rather than all at once.
   {% endif %}
 </td>
 <td>{% if let Some(n) = row.clients %}{{ n }}{% else %}<span class="hint">&mdash;</span>{% endif %}</td>
+<td{% if let Some(secs) = row.idle_secs +%} data-value="{{ secs }}"{% endif %}>
+{%- if row.pinned %}
+{# Stated where the number would be, because the number is what the reaper acts on and here it does
+   not. Who pinned it answers the question the tag raises. #}
+<span class="tag">pinned</span>
+{% if let Some(who) = row.pinned_by %}<div class="hint">by {{+ who }}</div>{% endif %}
+{% else if let Some(idle) = row.idle %}
+{{ idle }}
+{% else %}
+{# Not running, so nothing is idling -- or Puna cannot currently see the room, in which case it is
+   not reapable either. Both are honestly a dash rather than a zero. #}
+<span class="hint">&mdash;</span>
+{% endif %}
+</td>
 <td>
   {% if row.redeploy_pending %}
   {# "redeploy", not "restart", and this cell is the one where the distinction is sharpest: it sits
@@ -110,6 +129,11 @@ disconnected a room at a time rather than all at once.
   {# Nothing to redeploy. Offering the control here would teach people it does nothing. #}
   <span class="hint">&mdash;</span>
   {% endif %}
+  {# Offered on every row, running or not: pinning a room that is currently down is how you keep it
+     up after somebody starts it, which is a thing an operator wants to do BEFORE the event. #}
+  <form method="post" action="/admin/rooms/{{ row.id }}/pin?pinned={% if row.pinned %}false{% else %}true{% endif %}" class="inline">
+    <button type="submit">{% if row.pinned %}Unpin{% else %}Pin{% endif %}</button>
+  </form>
 </td>
 </tr>
 {% endfor %}

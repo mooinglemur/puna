@@ -142,6 +142,18 @@ pub struct OrchestratorConfig {
     /// passes, so their pace stays one per [`Self::reconcile_interval`] no matter how often this
     /// fires — a fleet-wide restart rolls at the same speed either way. See `plan::plan`.
     pub converge_interval: Duration,
+    /// How long a running room may go without any client speaking before the orchestrator takes it
+    /// down. Zero disables the reaper entirely.
+    ///
+    /// **Measured from the last client MESSAGE, never from the socket count.** One player commonly
+    /// holds three connections — game client, text client, tracker — and a tab left open overnight
+    /// keeps a socket alive indefinitely while nobody is playing. A reaper counting sockets would
+    /// never fire on exactly the rooms it exists for.
+    ///
+    /// A reaped room is stopped, not deleted: it keeps its port, its save and its files, and anyone
+    /// with the link starts it again. That is the same lifecycle the reference implementation has,
+    /// and the reason the whole port-reservation table exists.
+    pub idle_timeout: Duration,
     pub command_timeout: Duration,
     pub trash_retention: Duration,
     /// Which probe reaches rooms. `https` is the default because pahoa has shipped the whole admin
@@ -220,6 +232,7 @@ impl OrchestratorConfig {
             data_pvc: optional("PUNA_DATA_PVC", "puna-data"),
             reconcile_interval: parse_duration("PUNA_RECONCILE_INTERVAL", 30)?,
             converge_interval: parse_duration("PUNA_CONVERGE_INTERVAL", 3)?,
+            idle_timeout: parse_duration("PUNA_IDLE_TIMEOUT", 4 * 3600)?,
             command_timeout: parse_duration("PUNA_COMMAND_TIMEOUT", 15)?,
             trash_retention: parse_duration("PUNA_TRASH_RETENTION", 7 * 24 * 3600)?,
             room_probe: optional("PUNA_ROOM_PROBE", "https")

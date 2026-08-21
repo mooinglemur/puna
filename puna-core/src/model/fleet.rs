@@ -124,6 +124,21 @@ pub struct FleetRoom {
     pub desired_spec_hash: Option<String>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     pub redeploy_requested_at: Option<DateTime<Utc>>,
+    /// When a client last spoke, as pahoa reported it.
+    ///
+    /// **`None` is "nobody has ever spoken here", not "just now"** — pahoa reports null activity
+    /// until a client says something, so a room somebody opened and walked away from has this
+    /// empty. The table measures from `started_at` in that case, the same fallback the reaper uses,
+    /// so the two never disagree about how idle a room is.
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    pub last_activity_at: Option<DateTime<Utc>>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    pub started_at: Option<DateTime<Utc>>,
+    /// When an administrator exempted this room from the idle reaper, and who did.
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    pub pinned_at: Option<DateTime<Utc>>,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub pinned_by_name: Option<String>,
 }
 
 impl FleetRoom {
@@ -166,6 +181,24 @@ impl FleetRoom {
     pub fn restarted_since_deploy(&self) -> Option<DateTime<Utc>> {
         let (deployed, started) = (self.deployment_created_at?, self.process_started_at?);
         (started - deployed > chrono::TimeDelta::seconds(60)).then_some(started)
+    }
+}
+
+impl FleetRoom {
+    /// How long this room has been quiet, where that is a question with an answer.
+    ///
+    /// **Only for a running room**, and the restriction is not cosmetic: a stopped room's
+    /// `last_activity_at` is whenever somebody last spoke *before it came down*, which grows
+    /// forever and would render every resting room as increasingly idle. Nothing is idling there --
+    /// it is already off.
+    ///
+    /// Falls back to `started_at` for a room nobody has ever joined, matching the reaper exactly.
+    /// If the two disagreed the table would explain a decision the orchestrator did not make.
+    pub fn idle_since(&self) -> Option<DateTime<Utc>> {
+        if self.state != "running" {
+            return None;
+        }
+        self.last_activity_at.or(self.started_at)
     }
 }
 
@@ -223,9 +256,11 @@ pub async fn overview(
         "SELECT r.id, r.name, r.state::text AS state, r.desired_state::text AS desired_state,
                 r.created_by, u.username AS created_by_name, r.running_image,
                 r.deployment_created_at, r.process_started_at, r.clients_connected,
-                r.spec_hash, r.desired_spec_hash, r.redeploy_requested_at
+                r.spec_hash, r.desired_spec_hash, r.redeploy_requested_at,
+                r.last_activity_at, r.started_at, r.pinned_at, p.username AS pinned_by_name
            FROM rooms r
            LEFT JOIN users u ON u.id = r.created_by
+           LEFT JOIN users p ON p.id = r.pinned_by
           WHERE r.environment = $1::puna_environment
                 {}
           ORDER BY (r.running_image IS NULL), r.name",
@@ -277,4 +312,38 @@ pub async fn request_redeploy(
     .execute(conn)
     .await?;
     Ok(marked)
+}
+
+/// Pin or unpin a room, exempting it from the idle reaper.
+///
+/// Returns whether the row moved, so the caller can tell "pinned" from "already pinned" — the whole
+/// question an operator has after pressing the control is whether anything changed.
+pub async fn set_pinned(
+    conn: &mut AsyncPgConnection,
+    room: RoomId,
+    pinned: bool,
+    by: i64,
+) -> Result<bool, diesel::result::Error> {
+    // `IS DISTINCT FROM` on the target state rather than an unconditional write, so pinning a
+    // pinned room keeps the ORIGINAL timestamp and actor. Overwriting them would quietly rewrite
+    // history to whoever pressed the button last.
+    let moved = if pinned {
+        diesel::sql_query(
+            "UPDATE rooms SET pinned_at = now(), pinned_by = $2
+              WHERE id = $1 AND pinned_at IS NULL",
+        )
+        .bind::<SqlUuid, _>(room)
+        .bind::<BigInt, _>(by)
+        .execute(conn)
+        .await?
+    } else {
+        diesel::sql_query(
+            "UPDATE rooms SET pinned_at = NULL, pinned_by = NULL
+              WHERE id = $1 AND pinned_at IS NOT NULL",
+        )
+        .bind::<SqlUuid, _>(room)
+        .execute(conn)
+        .await?
+    };
+    Ok(moved > 0)
 }

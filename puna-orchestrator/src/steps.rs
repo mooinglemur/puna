@@ -89,6 +89,7 @@ pub async fn execute(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outco
         Step::MarkDegraded => bump_not_ready(ctx, action, true).await,
         Step::MarkIdle(reason) => mark_idle(ctx, action, *reason).await,
         Step::Stop => stop(ctx, action).await,
+        Step::Reap => reap(ctx, action).await,
         Step::Retry => retry(ctx, action).await,
         Step::Delete => delete(ctx, action).await,
         Step::FailStart => {
@@ -976,6 +977,62 @@ fn retry_delay(failure_count: i32, room: RoomId) -> chrono::TimeDelta {
 /// **The port reservation is deliberately untouched.** A room comes back on the same port, which is
 /// the requirement the whole reservation table exists for -- and the reason idle teardown never
 /// releases anything.
+/// Take a room down because nobody has spoken in it for the configured window.
+///
+/// **It writes a REQUEST and nothing else.** `desired_state` goes to `stopped` and the ordinary
+/// [`Step::Stop`] path does the teardown on a following pass, so there is exactly one code path
+/// that stops a room and the reaper cannot drift from it.
+///
+/// That also settles what a reaped room looks like afterwards: identical to one somebody stopped.
+/// Same page, same Start button, same port, same save — which is right, because from a player's
+/// side that is what happened, and a room that idles out and returns on a URL hit is the design the
+/// whole reservation table exists to support.
+///
+/// **This is the orchestrator writing a column §2 calls web-owned**, and it is the second place
+/// that happens — `recreate` already clears `redeploy_requested_at`. The rule's purpose is that two
+/// writers must not fight over one value, and these two do not: the web tier says `running` when
+/// somebody opens the room, this says `stopped` when it falls quiet, and each is a level-triggered
+/// statement about the present rather than a claim on the column. Guarded anyway, in the `WHERE`:
+/// the update only fires while the row still says `running`, so a stop, close or delete that
+/// arrived between the plan and the apply wins rather than being overwritten.
+async fn reap(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
+    let mut conn = ctx.pool.get().await?;
+
+    let marked = diesel::sql_query(
+        "UPDATE rooms
+            SET desired_state = 'stopped', desired_at = now()
+          WHERE id = $1 AND desired_state = 'running'",
+    )
+    .bind::<SqlUuid, _>(action.room)
+    .execute(&mut conn)
+    .await?;
+
+    if marked == 0 {
+        // Somebody asked for something else in the window between planning and applying. Their
+        // instruction is newer than this one and stands.
+        tracing::debug!(room = %action.room, "reap skipped; the room is no longer wanted running");
+        return Ok(Outcome::Done);
+    }
+
+    // Recorded against the room so the page can say WHY it stopped. Without this the room reads as
+    // one somebody stopped by hand, and the organizer who did not stop it has no way to find out
+    // what did -- which is the support conversation this row exists to end.
+    puna_core::model::event::record(
+        &mut conn,
+        action.room,
+        puna_core::model::event::Actor::Orchestrator,
+        "reaped",
+        serde_json::json!({}),
+    )
+    .await?;
+
+    tracing::info!(
+        room = %action.room,
+        "no client has spoken for the idle timeout; asking the room to stop"
+    );
+    Ok(Outcome::Done)
+}
+
 pub(crate) async fn clear_deployment(
     conn: &mut AsyncPgConnection,
     room: RoomId,

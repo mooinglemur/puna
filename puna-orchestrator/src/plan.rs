@@ -95,6 +95,49 @@ pub struct RoomView {
     /// A request, so it is **consumed** rather than observed: every step that leaves the room
     /// running its freshly-rendered spec clears it.
     pub redeploy_requested_at: Option<DateTime<Utc>>,
+
+    /// When a client last spoke in this room, as pahoa reported it — falling back to when the room
+    /// started, for one that nobody has ever joined.
+    ///
+    /// **`None` means the idle question cannot be answered**, and the reaper refuses to act on it.
+    /// That distinction is the whole safety property: a probe that fails leaves this stale or
+    /// absent, and a stale reading is indistinguishable from a quiet room. Inability to observe is
+    /// not evidence of idleness, so the caller computes this only where it is trustworthy.
+    pub idle_since: Option<DateTime<Utc>>,
+
+    /// Whether an administrator exempted this room from the reaper.
+    pub pinned: bool,
+}
+
+impl RoomView {
+    /// Whether this room has gone quiet for long enough to be taken down.
+    ///
+    /// Four things must all hold, and each of the three refusals is a distinct hazard:
+    ///
+    ///   * **A timeout is configured.** Zero disables the reaper, which is how a deployment that
+    ///     wants rooms up until somebody stops them says so.
+    ///   * **The room is not pinned.** An administrator said this one stays up.
+    ///   * **The idle question is answerable at all.** `idle_since` is `None` when the probe could
+    ///     not tell — an unreachable room, a stale reading, a tcp-fallback probe that reports no
+    ///     activity at all. **A room Puna cannot see is not a room Puna may reap**, because a
+    ///     failed probe and an empty room produce the same silence, and only one of them should
+    ///     cost somebody their session.
+    ///   * **And then, finally, the clock.**
+    ///
+    /// The order matters only for reading; the compiler shortcuts either way. What matters is that
+    /// the third is a refusal rather than a default — the same null-is-not-zero rule the probe
+    /// columns follow, applied to the one decision that acts on them.
+    pub fn should_reap(&self, now: DateTime<Utc>, idle_timeout: Duration) -> bool {
+        // `<= zero` rather than `== zero`, so a nonsensical negative disables the reaper instead of
+        // making every room instantly overdue.
+        if idle_timeout <= Duration::zero() || self.pinned {
+            return false;
+        }
+        let Some(since) = self.idle_since else {
+            return false;
+        };
+        now - since > idle_timeout
+    }
 }
 
 /// Why a room is being put back to `idle`.
@@ -109,6 +152,15 @@ pub enum IdleReason {
     // room in `idle` itself. One step, so the applier cannot delete the Deployment and then fail to
     // move the row -- which would leave a room advertising a pod that is gone.
 }
+
+/// How many rooms one full pass may take down for being idle.
+///
+/// **One**, and not configurable, unlike the recreate cap. A reap is never urgent — the rooms it
+/// acts on are by definition ones nobody is using — so there is no situation where draining the
+/// queue faster is worth the risk of a fleet coming down at once. A hundred rooms that all went
+/// quiet overnight take a hundred intervals to reap, which is fifty minutes at the default and
+/// costs nobody anything.
+pub const MAX_REAPS_PER_TICK: usize = 1;
 
 /// One thing to do to one room.
 ///
@@ -168,6 +220,19 @@ pub enum Step {
     /// The room sat in `starting` past [`START_DEADLINE`]. Record `last_error`, bump
     /// `failure_count`, set `retry_after`, and move to `failed`.
     FailStart,
+
+    /// Nobody has spoken in this room for [`Config::idle_timeout`]: ask for it to stop.
+    ///
+    /// **It writes `desired_state = 'stopped'` rather than tearing anything down**, and the
+    /// ordinary [`Step::Stop`] path does the work on a following pass. Two consequences, both
+    /// wanted. A reaped room is afterwards *indistinguishable from one somebody stopped* — same
+    /// page, same Start button, same port, same save — which is exactly right, because to a player
+    /// that is what happened. And the teardown stays in one place, so there is no second code path
+    /// that stops a room and can drift from the first.
+    ///
+    /// It is also the reason this is a step rather than a sweep: a reap has to be planned, capped
+    /// and testable like every other decision about a room.
+    Reap,
 }
 
 impl Step {
@@ -192,6 +257,11 @@ impl Step {
             | Step::Retry
             | Step::Stop
             | Step::Delete => true,
+            // A reap only writes the request; the teardown is the `Stop` a following pass plans.
+            // Answering `true` is what makes that following pass a convergence one, so a reaped
+            // room comes down in seconds rather than at the next full interval. The PACE is on how
+            // many reaps are started per full pass, not on how quickly one of them finishes.
+            Step::Reap => true,
             // `MarkIdle` settles the room only if nobody wants it running — and if somebody does,
             // the next pass plans a Start. Cheaper to look again than to encode that here.
             Step::MarkIdle(_) => true,
@@ -286,12 +356,13 @@ pub fn plan(
     cluster: &ClusterSnapshot,
     now: DateTime<Utc>,
     max_recreates: usize,
+    idle_timeout: Duration,
     kind: TickKind,
 ) -> Vec<Action> {
     let planned: Vec<(&RoomView, Step)> = rooms
         .iter()
         .filter_map(|room| {
-            step_for(room, cluster.deployment(room.id), now).map(|step| (room, step))
+            step_for(room, cluster.deployment(room.id), now, idle_timeout).map(|step| (room, step))
         })
         // **Two steps a convergence pass must not take.** Both would otherwise change behavior
         // simply because the loop looked more often, which is the trap in a variable cadence.
@@ -300,6 +371,10 @@ pub fn plan(
         //     would turn "one room per reconcile interval" into "one room every few seconds" and
         //     tear through a fleet-wide restart queue -- the exact stampede the cap exists to
         //     prevent, reintroduced by the mechanism meant to make one restart quicker.
+        //   * `Reap` is paced the same way `Recreate` is -- one per pass -- and for the same
+        //     reason: at the convergence cadence a fleet that has gone quiet overnight would come
+        //     down a room every few seconds instead of one per interval. The threshold itself does
+        //     not care how often it is evaluated, but the CAP does, and the cap is the pacing.
         //   * `NotReady` COUNTS PASSES. `not_ready_sweeps` reaching DEGRADED_SWEEPS is what calls a
         //     room degraded, so counting convergence passes would declare a room degraded roughly
         //     ten times sooner -- a threshold silently redefined by a scheduling change.
@@ -308,7 +383,8 @@ pub fn plan(
         // anything added later is the one these two fail -- **a step whose meaning depends on how
         // often it is taken belongs to the full pass.**
         .filter(|(_, step)| {
-            kind == TickKind::Reconcile || !matches!(step, Step::Recreate | Step::NotReady)
+            kind == TickKind::Reconcile
+                || !matches!(step, Step::Recreate | Step::NotReady | Step::Reap)
         })
         .collect();
 
@@ -333,7 +409,26 @@ pub fn plan(
         let room = planned[index].0;
         (room.redeploy_requested_at, room.id)
     });
-    let deferred: Vec<usize> = by_age.into_iter().skip(max_recreates).collect();
+    let mut deferred: Vec<usize> = by_age.into_iter().skip(max_recreates).collect();
+
+    // **Reaps are capped separately, at one, and the budgets do not share.** A tick that recreates
+    // a room and reaps another has done one of each, which is the intent -- they are different
+    // operations on different rooms and neither crowds the other out.
+    //
+    // Ordered by how long the room has been quiet, so the longest-abandoned goes first and a room
+    // cannot be starved by one that fell quiet later. `id` breaks ties, so the choice is stable
+    // rather than dependent on the order the rows came back.
+    let mut by_idle: Vec<usize> = planned
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, step))| *step == Step::Reap)
+        .map(|(index, _)| index)
+        .collect();
+    by_idle.sort_by_key(|&index| {
+        let room = planned[index].0;
+        (room.idle_since, room.id)
+    });
+    deferred.extend(by_idle.into_iter().skip(MAX_REAPS_PER_TICK));
 
     planned
         .into_iter()
@@ -352,6 +447,7 @@ fn step_for(
     room: &RoomView,
     deployment: Option<&RoomDeployment>,
     now: DateTime<Utc>,
+    idle_timeout: Duration,
 ) -> Option<Step> {
     // Deletion wins from every state, including `integrity_fault` and `failed`. It is the one
     // request that must not be blocked by the room being in a bad way -- a room nobody can fix is
@@ -472,6 +568,20 @@ fn step_for(
                 // being torn down has no use for a restart.
                 Some(_) if room.redeploy_requested_at.is_some() => Some(Step::Recreate),
 
+                // **Quiet for long enough.** Deliberately BELOW the redeploy arm: a redeploy is a
+                // request somebody made about this room, it consumes itself in one pass, and
+                // reaping first would leave that request pending on a stopped room -- to fire the
+                // moment anybody started it again, bouncing the room out from under them. Let the
+                // redeploy happen; the room is still idle on the next tick.
+                //
+                // Above everything below it, though: there is nothing worth converging on a room
+                // that is about to come down.
+                Some(_)
+                    if room.state == RoomState::Running && room.should_reap(now, idle_timeout) =>
+                {
+                    Some(Step::Reap)
+                }
+
                 // The running spec is not the one the row describes -- a new image, a changed
                 // port, or a `slot_auth` change, which reaches pahoa through the Secret and moves
                 // nothing else in the pod. A hash we cannot match at all (`None` on the row) is the
@@ -519,6 +629,11 @@ fn step_for(
 mod tests {
     use super::*;
 
+    /// Disables the reaper, which is what every test not about reaping wants: a fixture room has no
+    /// probe reading, so it would be exempt anyway, and saying so here means a future change to
+    /// that default cannot silently start reaping in unrelated tests.
+    const NO_REAPING: Duration = Duration::zero();
+
     fn now() -> DateTime<Utc> {
         DateTime::from_timestamp(1_770_000_000, 0).expect("a valid fixed instant")
     }
@@ -539,6 +654,10 @@ mod tests {
             // Nobody has asked for a restart, which is the state every room is in until a person
             // acts. Drift alone must never populate this.
             redeploy_requested_at: None,
+            // Not reapable by default: no probe has answered for this room, so the idle question is
+            // unanswerable and the reaper refuses. A test about reaping says so explicitly.
+            idle_since: None,
+            pinned: false,
         }
     }
 
@@ -570,6 +689,7 @@ mod tests {
             cluster,
             now(),
             1,
+            NO_REAPING,
             TickKind::Reconcile,
         );
         assert!(actions.len() <= 1, "one action per room per tick");
@@ -724,7 +844,7 @@ mod tests {
         ]);
 
         // The full pass does both.
-        let full: Vec<Step> = plan(&rooms, &cluster, now(), 1, TickKind::Reconcile)
+        let full: Vec<Step> = plan(&rooms, &cluster, now(), 1, NO_REAPING, TickKind::Reconcile)
             .into_iter()
             .map(|a| a.step)
             .collect();
@@ -733,7 +853,7 @@ mod tests {
 
         // The convergence pass does neither, and does not substitute something else for them.
         assert!(
-            plan(&rooms, &cluster, now(), 1, TickKind::Converge).is_empty(),
+            plan(&rooms, &cluster, now(), 1, NO_REAPING, TickKind::Converge).is_empty(),
             "a convergence pass must leave a settled fleet alone entirely"
         );
     }
@@ -763,6 +883,7 @@ mod tests {
                 &cluster,
                 now(),
                 1,
+                NO_REAPING,
                 TickKind::Converge,
             );
             assert_eq!(
@@ -1147,7 +1268,7 @@ mod tests {
                 .collect(),
         );
 
-        let actions = plan(&rooms, &cluster, now(), 2, TickKind::Reconcile);
+        let actions = plan(&rooms, &cluster, now(), 2, NO_REAPING, TickKind::Reconcile);
         assert_eq!(actions.len(), 2, "the cap holds");
         let acted: Vec<RoomId> = actions.iter().map(|a| a.room).collect();
         assert!(
@@ -1158,7 +1279,14 @@ mod tests {
         // The deferred rooms are not lost -- the loop is level-triggered, so the next tick sees
         // them again and they are now the oldest outstanding requests.
         let remaining: Vec<RoomView> = vec![rooms[1].clone(), rooms[3].clone()];
-        let actions = plan(&remaining, &cluster, now(), 2, TickKind::Reconcile);
+        let actions = plan(
+            &remaining,
+            &cluster,
+            now(),
+            2,
+            NO_REAPING,
+            TickKind::Reconcile,
+        );
         assert_eq!(actions.len(), 2, "deferred, never dropped");
     }
 
@@ -1194,7 +1322,7 @@ mod tests {
         ];
         let cluster = snapshot(vec![deployment(&rooms[2], "hash-1", 1)]);
 
-        let actions = plan(&rooms, &cluster, now(), 1, TickKind::Reconcile);
+        let actions = plan(&rooms, &cluster, now(), 1, NO_REAPING, TickKind::Reconcile);
         assert_eq!(actions.len(), 3);
         assert_eq!(
             actions.iter().map(|a| a.step.clone()).collect::<Vec<_>>(),
@@ -1210,8 +1338,192 @@ mod tests {
 
         // Same inputs, same answer: nothing here reads a clock or a cache.
         assert_eq!(
-            plan(&rooms, &cluster, now(), 1, TickKind::Reconcile),
+            plan(&rooms, &cluster, now(), 1, NO_REAPING, TickKind::Reconcile),
             actions
+        );
+    }
+
+    // ---- the idle reaper -------------------------------------------------------------------
+
+    /// A running room the cluster is happy with, which is the starting point for every reap case.
+    fn running_room() -> RoomView {
+        view(RoomState::Running, DesiredState::Running)
+    }
+
+    /// [`decide`], with a reaper that is actually switched on.
+    fn decide_with(
+        room: &RoomView,
+        cluster: &ClusterSnapshot,
+        idle_timeout: Duration,
+    ) -> Option<Step> {
+        plan(
+            std::slice::from_ref(room),
+            cluster,
+            now(),
+            1,
+            idle_timeout,
+            TickKind::Reconcile,
+        )
+        .into_iter()
+        .next()
+        .map(|a| a.step)
+    }
+
+    const FOUR_HOURS: Duration = Duration::hours(4);
+
+    fn quiet_room(idle_for: Duration) -> RoomView {
+        let mut room = running_room();
+        room.idle_since = Some(now() - idle_for);
+        room
+    }
+
+    /// The clock, from both sides of it.
+    #[test]
+    fn a_room_is_reaped_only_once_it_has_been_quiet_for_the_whole_window() {
+        assert!(!quiet_room(Duration::hours(3)).should_reap(now(), FOUR_HOURS));
+        assert!(
+            !quiet_room(FOUR_HOURS).should_reap(now(), FOUR_HOURS),
+            "not yet"
+        );
+        assert!(
+            quiet_room(Duration::hours(4) + Duration::seconds(1)).should_reap(now(), FOUR_HOURS)
+        );
+    }
+
+    /// **The safety property: inability to observe is not evidence of idleness.**
+    ///
+    /// `idle_since` is `None` whenever the question cannot be answered — no probe has succeeded,
+    /// the last one is stale, or the probe in use cannot report activity at all. Every one of those
+    /// looks exactly like a silent room from the column's side, and only one of them means nobody
+    /// is playing. A reaper that read `None` as "very idle" would take down the rooms Puna has lost
+    /// sight of **first**, because it reaps the longest-idle candidate — precisely the rooms whose
+    /// players are most likely to still be there and least likely to be reachable for an
+    /// explanation.
+    #[test]
+    fn a_room_puna_cannot_see_is_never_reaped() {
+        let mut blind = quiet_room(Duration::days(30));
+        blind.idle_since = None;
+        assert!(
+            !blind.should_reap(now(), FOUR_HOURS),
+            "a room with no answer to the idle question was reaped"
+        );
+    }
+
+    /// Pinning exempts a room, and only from this.
+    #[test]
+    fn a_pinned_room_is_never_reaped() {
+        let mut pinned = quiet_room(Duration::days(30));
+        pinned.pinned = true;
+        assert!(!pinned.should_reap(now(), FOUR_HOURS));
+
+        // And unpinning restores it, rather than needing anything else to change.
+        pinned.pinned = false;
+        assert!(pinned.should_reap(now(), FOUR_HOURS));
+    }
+
+    /// Zero disables the reaper, which is how a deployment says "rooms stay up until stopped".
+    #[test]
+    fn a_zero_timeout_reaps_nothing() {
+        let ancient = quiet_room(Duration::days(365));
+        assert!(!ancient.should_reap(now(), Duration::zero()));
+        // A negative one too, rather than making every room instantly overdue.
+        assert!(!ancient.should_reap(now(), Duration::seconds(-1)));
+    }
+
+    /// **One room per pass, and the longest-quiet one goes first.**
+    ///
+    /// A fleet that went quiet overnight must not come down together: every reap is a teardown and
+    /// a restore on one shared volume, which is the same stampede the recreate cap exists to
+    /// prevent. Oldest-first also means a room cannot be starved by one that fell quiet later.
+    #[test]
+    fn a_pass_reaps_at_most_one_room_starting_with_the_quietest() {
+        let mut rooms = Vec::new();
+        for hours in [5, 40, 9] {
+            rooms.push(quiet_room(Duration::hours(hours)));
+        }
+        let cluster = snapshot(
+            rooms
+                .iter()
+                .map(|r| deployment(r, "hash-1", 1))
+                .collect::<Vec<_>>(),
+        );
+
+        let actions = plan(&rooms, &cluster, now(), 1, FOUR_HOURS, TickKind::Reconcile);
+        assert_eq!(actions.len(), 1, "a pass reaped more than one room");
+        assert_eq!(actions[0].step, Step::Reap);
+        assert_eq!(
+            actions[0].room, rooms[1].id,
+            "the room quiet for 40 hours should go before ones quiet for 5 and 9"
+        );
+    }
+
+    /// **A convergence pass reaps nothing.**
+    ///
+    /// The threshold does not care how often it is evaluated, but the one-per-pass cap does: at the
+    /// convergence cadence a quiet fleet would come down a room every few seconds rather than one
+    /// per reconcile interval. That is the M17e rule — a step whose meaning depends on how often it
+    /// is taken belongs to the full pass — and this is the third step to fail it.
+    #[test]
+    fn a_convergence_pass_never_reaps() {
+        let rooms = vec![quiet_room(Duration::days(2))];
+        let cluster = snapshot(vec![deployment(&rooms[0], "hash-1", 1)]);
+
+        assert!(
+            plan(&rooms, &cluster, now(), 1, FOUR_HOURS, TickKind::Converge).is_empty(),
+            "a convergence pass reaped a room, so the pace now depends on the cadence"
+        );
+        assert_eq!(
+            plan(&rooms, &cluster, now(), 1, FOUR_HOURS, TickKind::Reconcile).len(),
+            1,
+            "and the full pass still does"
+        );
+    }
+
+    /// A redeploy somebody asked for outranks a reap.
+    ///
+    /// Reaping first would leave the request pending on a stopped room, to fire the moment anybody
+    /// started it again — bouncing the room out from under whoever just opened it. Letting the
+    /// redeploy run costs one tick; the room is still quiet on the next.
+    #[test]
+    fn a_requested_redeploy_outranks_a_reap() {
+        let mut room = quiet_room(Duration::days(2));
+        room.redeploy_requested_at = Some(now() - Duration::minutes(1));
+        let cluster = snapshot(vec![deployment(&room, "hash-1", 1)]);
+
+        assert_eq!(
+            decide_with(&room, &cluster, FOUR_HOURS),
+            Some(Step::Recreate)
+        );
+    }
+
+    /// And a stop, close or delete outranks both: there is nothing to reap on a room already coming
+    /// down, and a second instruction would only race the first.
+    #[test]
+    fn a_room_already_coming_down_is_not_reaped() {
+        for desired in [
+            DesiredState::Stopped,
+            DesiredState::Closed,
+            DesiredState::Deleted,
+        ] {
+            let mut room = quiet_room(Duration::days(2));
+            room.desired = desired;
+            let cluster = snapshot(vec![deployment(&room, "hash-1", 1)]);
+            let step = decide_with(&room, &cluster, FOUR_HOURS);
+            assert_ne!(step, Some(Step::Reap), "{desired:?} was reaped as well");
+        }
+    }
+
+    /// Only a `running` room is reaped. One still `starting` has by definition had no chance to be
+    /// spoken in, and reaping it would fight the start that is in flight.
+    #[test]
+    fn a_room_that_is_not_yet_running_is_not_reaped() {
+        let mut starting = quiet_room(Duration::days(2));
+        starting.state = RoomState::Starting;
+        starting.state_changed_at = now() - Duration::seconds(5);
+        let cluster = snapshot(vec![deployment(&starting, "hash-1", 0)]);
+        assert_ne!(
+            decide_with(&starting, &cluster, FOUR_HOURS),
+            Some(Step::Reap)
         );
     }
 }

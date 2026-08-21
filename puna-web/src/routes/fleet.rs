@@ -65,6 +65,13 @@ pub struct Row {
     pub restarted_secs: Option<i64>,
     pub clients: Option<i32>,
     pub redeploy_pending: bool,
+    /// How long the room has been quiet, and the same span as a sort key. `None` for a room that is
+    /// not running -- nothing is idling on a room that is already off.
+    pub idle: Option<String>,
+    pub idle_secs: Option<i64>,
+    /// Whether the reaper is barred from this room, and who barred it.
+    pub pinned: bool,
+    pub pinned_by: Option<String>,
 }
 
 #[derive(Template, WebTemplate)]
@@ -168,6 +175,10 @@ fn rows_of(overview: &Overview) -> Vec<Row> {
             restarted_secs: room.restarted_since_deploy().map(elapsed_secs),
             clients: room.clients_connected,
             redeploy_pending: room.redeploy_requested_at.is_some(),
+            idle: room.idle_since().map(ago),
+            idle_secs: room.idle_since().map(elapsed_secs),
+            pinned: room.pinned_at.is_some(),
+            pinned_by: room.pinned_by_name.clone(),
         })
         .collect()
 }
@@ -279,8 +290,40 @@ async fn redeploy_drifted(
     Ok(Flash::success(Redirect::to(uri!(show)), notice))
 }
 
+/// Exempt a room from the idle reaper, or stop exempting it.
+///
+/// **It changes nothing else.** A pinned room still stops, closes, redeploys and deletes on
+/// request; the pin withholds exactly one thing, which is the orchestrator's decision to take it
+/// down for being quiet.
+#[post("/admin/rooms/<id>/pin?<pinned>")]
+async fn pin(
+    session: AdminSession,
+    pool: &State<Pool>,
+    id: RoomParam,
+    pinned: bool,
+) -> Result<Flash<Redirect>> {
+    let mut conn = pool.get().await?;
+    let moved = fleet::set_pinned(&mut conn, id.0, pinned, session.user_id()).await?;
+
+    tracing::info!(
+        room = %id,
+        pinned,
+        moved,
+        by = session.user_id(),
+        "room pin changed"
+    );
+
+    let notice = match (pinned, moved) {
+        (true, true) => "Pinned. The idle reaper will leave this room alone until it is unpinned.",
+        (true, false) => "That room was already pinned; who pinned it and when are unchanged.",
+        (false, true) => "Unpinned. This room can be taken down again once it goes quiet.",
+        (false, false) => "That room was not pinned.",
+    };
+    Ok(Flash::success(Redirect::to(uri!(show)), notice))
+}
+
 pub fn routes() -> Vec<rocket::Route> {
-    routes![show, resting, redeploy, redeploy_drifted]
+    routes![show, resting, redeploy, redeploy_drifted, pin]
 }
 
 #[cfg(test)]
@@ -330,6 +373,11 @@ mod tests {
             deployment_created_at: running.map(|_| Utc::now() - TimeDelta::days(6)),
             process_started_at: running.map(|_| Utc::now() - TimeDelta::days(6)),
             clients_connected: running.map(|_| 4),
+            // Spoke in an hour ago, which is well inside any sane idle timeout.
+            last_activity_at: running.map(|_| Utc::now() - TimeDelta::hours(1)),
+            started_at: running.map(|_| Utc::now() - TimeDelta::days(6)),
+            pinned_at: None,
+            pinned_by_name: None,
             spec_hash: Some("hash-1".into()),
             desired_spec_hash: None,
             redeploy_requested_at: None,
@@ -567,6 +615,86 @@ mod tests {
             resting: 0,
         });
         assert_eq!(none[0].deployed_secs, None);
+    }
+
+    /// **The Idle column reports a running room's quiet, and nothing else's.**
+    ///
+    /// A stopped room's `last_activity_at` is whenever somebody last spoke *before it came down*,
+    /// which grows forever — so reporting it would show every resting room as steadily more idle,
+    /// which is both false and alarming. Nothing is idling on a room that is already off.
+    ///
+    /// The fallback to `started_at` matches the reaper exactly. If the two disagreed, this table
+    /// would explain a decision the orchestrator did not make.
+    #[test]
+    fn idle_is_reported_for_running_rooms_and_measured_the_way_the_reaper_measures() {
+        let mut up = room(Some(CONFIGURED));
+        assert!(
+            up.idle_since()
+                .is_some_and(|at| at == up.last_activity_at.unwrap()),
+            "a running room reports when somebody last spoke"
+        );
+
+        // Nobody has ever joined: measured from the start, which is the clearest reap candidate
+        // there is rather than a gap in the data.
+        up.last_activity_at = None;
+        assert_eq!(up.idle_since(), up.started_at);
+
+        // Stopped: no answer at all.
+        let down = room(None);
+        assert_eq!(
+            down.idle_since(),
+            None,
+            "a room that is already off was reported as idling"
+        );
+    }
+
+    /// Pinning replaces the number rather than sitting beside it, because for a pinned room the
+    /// number is not what happens next.
+    #[test]
+    fn a_pinned_room_says_so_where_its_idle_time_would_be() {
+        let mut pinned = room(Some(CONFIGURED));
+        pinned.id = id(0);
+        pinned.pinned_at = Some(Utc::now());
+        pinned.pinned_by_name = Some("troy".into());
+
+        let overview = Overview {
+            pahoa_image: Some(CONFIGURED.into()),
+            rooms: vec![pinned],
+            resting: 0,
+        };
+        let page = RoomsTemplate {
+            base: TplContext {
+                is_logged_in: true,
+                is_admin: true,
+                username: "troy".into(),
+                site_name: "puna",
+                version: "test",
+                static_version: "test",
+                view_as: None,
+            },
+            desired_tag: None,
+            desired_image: Some(CONFIGURED.into()),
+            drifted: 0,
+            rows: rows_of(&overview),
+            resting: 0,
+            notice: None,
+        };
+        let html = page.render().expect("renders");
+
+        assert!(
+            html.contains(">pinned<"),
+            "the row does not say it is pinned"
+        );
+        assert!(html.contains("by troy"), "or who pinned it");
+        // And the control offered is the one that undoes it.
+        assert!(
+            html.contains(&format!("/admin/rooms/{}/pin?pinned=false", id(0))),
+            "a pinned room is not offered an unpin"
+        );
+        assert!(
+            !html.contains("pinned=true"),
+            "a pinned room was offered a pin, which would do nothing"
+        );
     }
 
     /// A creator who has a row but has never logged in reads as words, not as a Discord id.
