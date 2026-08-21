@@ -171,6 +171,21 @@ code {
   cursor: pointer;
 }
 
+/* A button that is really a link: an in-table action, styled to sit beside the words it acts on
+   rather than as a control competing with them. Still a <button> in a <form>, because it POSTs --
+   `release` changes the roster and must not be reachable by following a link. */
+.linklike {
+  padding: 0;
+  font: inherit;
+  color: var(--link);
+  background: none;
+  border: none;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.linklike:hover { text-decoration: none; }
+
 .js-copy .copy:hover { color: var(--text); border-color: var(--border); }
 .js-copy .copy:focus-visible { color: var(--text); border-color: var(--accent); }
 

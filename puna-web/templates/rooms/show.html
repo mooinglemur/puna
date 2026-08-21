@@ -11,17 +11,36 @@
    banner while the room is down, which for an async is most of the time -- so this is exactly when
    a player wants it, and gating it on `running` would hide a page that works. #}
 {% if can_see_tracker %}
-<p class="tracker"><a href="/tracker/{{ room.tracker_id }}">Tracker</a>
-<span class="hint">&mdash; shareable, and it names neither this page nor the room's address.</span></p>
+<p class="tracker"><a href="/tracker/{{ room.tracker_id }}">Multiworld Tracker</a></p>
 {% endif %}
 
 <h2>Slots</h2>
-<table class="slots">
-<thead><tr><th>#</th><th>Player</th><th>Game</th><th>Held by</th><th>Patch</th><th>Tracker</th></tr></thead>
+{# Filter and sort come from `table.js`, which reorders the rows the server already sent rather than
+   rendering any. Without scripting the box and the arrows are simply absent and the table is the
+   order the server chose. #}
+<input type="search" class="table-search" data-filters="slots"
+       placeholder="Filter slots" aria-label="Filter slots">
+<table class="slots" id="slots" data-sortable>
+<thead><tr>
+{# The slot number carries the per-slot tracker link, so the row's identity and the way into it are
+   one thing rather than a column of repeated words at the far end of the table. `data-value` keeps
+   it sorting as a number whatever the cell renders. #}
+<th data-key>#</th><th data-key>Player</th><th data-key>Game</th><th data-key>Held by</th>
+{% if room.slot_auth == puna_core::model::room::SlotAuth::PerSlot %}<th data-key>Password</th>{% endif %}
+<th data-key>Patch</th>
+</tr></thead>
 <tbody>
 {% for slot in slots %}
 <tr>
-<td>{{ slot.slot_number }}</td>
+{# The number IS the link to this slot's tracker, where the viewer is allowed one -- and it sorts as
+   a number regardless, from `data-value`. #}
+<td data-value="{{ slot.slot_number }}">
+{% if can_see_tracker %}
+{% if let Some(tracker) = slot.tracker_id %}
+<a href="/tracker/{{ tracker }}" title="Your tracker for this slot">{{ slot.slot_number }}</a>
+{% else %}{{ slot.slot_number }}{% endif %}
+{% else %}{{ slot.slot_number }}{% endif %}
+</td>
 <td>{{ slot.player_name }}</td>
 <td>
 {{ slot.game }}
@@ -30,9 +49,6 @@
 <td>
 {% if slot.is_mine %}
 <strong>you</strong>
-{% if room.slot_auth == puna_core::model::room::SlotAuth::PerSlot %}
-<a href="/room/{{ room.id }}/slot/{{ slot.slot_number }}/password">your password</a>
-{% endif %}
 {% else if slot.owner_id.is_some() %}
 claimed
 {% else if let Some(token) = slot.claim_token %}
@@ -41,7 +57,34 @@ claimed
 {% else %}
 unclaimed
 {% endif %}
+{# Unbinding the slot, for organizers. A roster action, not a kick: whoever is connected right now
+   stays connected, and the console's `kick` is the separate decision that says so. #}
+{% if slot.can_release %}
+<form method="post" action="/room/{{ room.id }}/slot/{{ slot.slot_number }}/release" class="inline">
+<button type="submit" class="linklike"
+        title="Unbind this slot and mint a fresh claim link">release</button>
+</form>
+{% endif %}
 </td>
+{% if room.slot_auth == puna_core::model::room::SlotAuth::PerSlot %}
+{# The password itself, in the same monospace treatment as the address and with the same copy
+   control -- it is the other thing on this page somebody pastes into a client. `slot_views`
+   decided whether this viewer gets a value at all; the markup only asks whether there is one. #}
+<td>
+{% if let Some(password) = slot.password %}
+<code>{{ password }}</code>
+<button type="button" class="copy" data-copy="{{ password }}"
+        aria-label="Copy the password for slot {{+ slot.slot_number }}">
+<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+<rect x="5.5" y="1.5" width="9" height="11" rx="1.5" fill="none" stroke="currentColor"/>
+<path d="M10.5 14.5h-8a1 1 0 0 1-1-1v-9" fill="none" stroke="currentColor" stroke-linecap="round"/>
+</svg>
+</button>
+{% else %}
+<span class="hint">&mdash;</span>
+{% endif %}
+</td>
+{% endif %}
 {# The patch already carries this room's address, so it is ready to open rather than something to
    configure -- and it carries the right one even while the room is down, because the port
    reservation outlives the pod. #}
@@ -51,19 +94,6 @@ unclaimed
 <a href="/room/{{ room.id }}/slot/{{ slot.slot_number }}/patch">download</a>
 {% else %}
 <span class="hint">claim this slot to download</span>
-{% endif %}
-{% else %}
-<span class="hint">&mdash;</span>
-{% endif %}
-</td>
-{# Gated on can_see_tracker as well as ownership. `disabled` policy answers 404 for EVERY tracker id
-   including a slot's own, so without this an owner is offered a link the route refuses. #}
-<td>
-{% if can_see_tracker %}
-{% if let Some(tracker) = slot.tracker_id %}
-<a href="/tracker/{{ tracker }}">yours</a>
-{% else %}
-<span class="hint">&mdash;</span>
 {% endif %}
 {% else %}
 <span class="hint">&mdash;</span>
@@ -139,4 +169,5 @@ discards them and they cannot be recovered.</p>
 
 {% block scripts %}
 <script src="/static/room.js?v={{ base.static_version }}" defer></script>
+<script src="/static/table.js?v={{ base.static_version }}" defer></script>
 {% endblock %}

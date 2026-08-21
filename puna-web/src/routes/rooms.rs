@@ -125,6 +125,15 @@ pub struct SlotView {
     /// Also gated on `can_see_tracker` at the template, since `disabled` policy 404s every tracker
     /// id including a slot's own.
     pub tracker_id: Option<puna_core::ids::TrackerId>,
+    /// This slot's password, and **only when the viewer may see it** -- its owner, the room's
+    /// staff, or an admin, which is the same rule `SlotAccess` applies to the JSON route.
+    ///
+    /// The struct's note above exists for exactly this field: a template cannot prove it did not
+    /// render something, so the decision is made in `slot_views` and the markup only asks whether
+    /// there is a value. `None` outside per-slot mode, where a per-slot password has no meaning.
+    pub password: Option<String>,
+    /// Whether this viewer is offered a control to unbind the slot from its owner.
+    pub can_release: bool,
 }
 
 fn slot_views(
@@ -132,12 +141,30 @@ fn slot_views(
     viewer: Option<i64>,
     role: Option<RoomRole>,
     patched: &std::collections::HashSet<i32>,
+    per_slot_passwords: bool,
 ) -> Vec<SlotView> {
     slots
         .into_iter()
         .map(|s| SlotView {
             is_mine: matches!((viewer, s.owner_id), (Some(v), Some(o)) if v == o),
             has_patch: patched.contains(&s.slot_number),
+            // **The one field this struct's own note warns about**, so it is gated here and the
+            // gate is the same three-way rule `SlotAccess` applies to the JSON route: the slot's
+            // owner, the room's staff, or an admin. `GET /room/<id>` is a PUBLIC page, so anything
+            // else would put every player's password in front of anyone holding the room's URL.
+            //
+            // Also `None` outside per-slot mode, where the column has no meaning: the other two
+            // modes either have no password or have one shared room password, which is not a
+            // property of a slot and is not rendered here at all.
+            password: match (per_slot_passwords, role.is_some(), viewer, s.owner_id) {
+                (false, ..) => None,
+                (true, true, ..) => s.password.clone(),
+                (true, _, Some(v), Some(o)) if v == o => s.password.clone(),
+                _ => None,
+            },
+            // Unbinding a slot is an organizer's, matching every other roster action. A helper runs
+            // the room; who holds a slot is who is playing it.
+            can_release: role.is_some_and(|r| r >= RoomRole::Organizer) && s.owner_id.is_some(),
             // Owner only, and NOT widened to staff -- see the field's note. Computed from the same
             // comparison as `is_mine` rather than from it, so the two cannot drift apart.
             tracker_id: match (viewer, s.owner_id) {
@@ -159,6 +186,56 @@ fn slot_views(
             owner_id: s.owner_id,
         })
         .collect()
+}
+
+/// Unbind a slot from whoever holds it, and mint a fresh claim link.
+///
+/// The roster half of the same job `claim` does, and organizer-guarded like every other roster
+/// action: a helper runs the room, an organizer decides who is in it.
+///
+/// **A new claim token, not merely a cleared owner.** The old link was single-use and is already
+/// spent, so leaving the slot unclaimed with no token would produce a slot nobody can take — the
+/// organizer would have to release it and then find some other way to hand it out. `slot::release`
+/// mints one in the same statement, which is why this route hands the page back rather than the
+/// token: the roster is where staff read claim links, and it now has one.
+///
+/// It does **not** touch the room. A released slot's password is unchanged and its connection, if
+/// somebody is playing on it right now, is not dropped — releasing is a statement about who owns a
+/// slot on the roster, not a kick. Removing them from the running room is `kick` in the console,
+/// which is a separate decision and says so.
+#[post("/room/<id>/slot/<n>/release")]
+async fn release_slot(
+    id: RoomParam,
+    n: i32,
+    access: RoomAccess<Organizer>,
+    pool: &State<Pool>,
+) -> Result<Redirect> {
+    let mut conn = pool.get().await?;
+    let previous = slot::get(&mut conn, id.0, n)
+        .await?
+        .ok_or_else(|| not_found("no such slot"))?;
+    slot::release(&mut conn, id.0, n).await?;
+
+    event::record(
+        &mut conn,
+        id.0,
+        event::Actor::User(access.user_id()),
+        "slot_released",
+        // The slot and the person who held it, because "who was playing slot 3 before" is exactly
+        // the question somebody asks later. Never the new token: an audit trail is not a place to
+        // put a credential.
+        serde_json::json!({ "slot": n, "previous_owner": previous.owner_id }),
+    )
+    .await?;
+
+    tracing::info!(
+        room = %id,
+        slot = n,
+        previous_owner = ?previous.owner_id,
+        user_id = access.user_id(),
+        "slot released"
+    );
+    Ok(Redirect::to(format!("/room/{id}")))
 }
 
 /// Take the room down **and stop anyone but staff bringing it back.**
@@ -325,7 +402,13 @@ async fn show(
     let can_see_spoiler = room::may_see_spoiler(room.spoiler_policy, role.is_some(), owns_a_slot);
     let can_see_tracker = room::may_see_tracker(room.tracker_policy, role.is_some(), owns_a_slot);
 
-    let slots = slot_views(room_slots, session.user_id, role, &patched);
+    let slots = slot_views(
+        room_slots,
+        session.user_id,
+        role,
+        &patched,
+        room.slot_auth == SlotAuth::PerSlot,
+    );
     let siblings = room::siblings(&mut conn, room.id, room.generation_id).await?;
     let message = event::latest(&mut conn, room.id)
         .await?
@@ -564,6 +647,7 @@ fn phrase(kind: &str) -> Option<&'static str> {
         "ip_mismatch" => "the address was wrong, so the room is moving to another port",
         "failed" => "the last attempt to start this room failed",
         "port_reclaimed" => "this room's port was reassigned while it was idle",
+        "slot_released" => "a slot was released back to the pool",
         _ => return None,
     })
 }
@@ -959,6 +1043,7 @@ pub fn routes() -> Vec<rocket::Route> {
         revoke_invite,
         redeem_invite,
         claim_slot,
+        release_slot,
         slot_password,
         set_slot_auth,
     ]
@@ -983,6 +1068,90 @@ mod tests {
         }
     }
 
+    /// **A per-slot password reaches its owner and the room's staff, and nobody else at all.**
+    ///
+    /// `GET /room/<id>` is a PUBLIC page — the unguessable id is the whole authorization — so
+    /// rendering the passwords into the slot table means the gate is the only thing between a
+    /// shared room link and every player's credential. This is the rule `SlotAccess` applies to the
+    /// JSON route, asserted here because the table now shows the value rather than linking to it.
+    #[test]
+    fn a_slot_password_reaches_its_owner_and_staff_and_nobody_else() {
+        let mine = 100_i64;
+        let theirs = 200_i64;
+        let slots = vec![slot(1, Some(mine)), slot(2, Some(theirs)), slot(3, None)];
+
+        // A player: their own, and nothing else. Not the unclaimed slot either -- an unclaimed slot
+        // still has a password, and it is not a free credential for whoever asks first.
+        let views = slot_views(slots.clone(), Some(mine), None, &Default::default(), true);
+        assert!(views[0].password.is_some(), "own slot: password expected");
+        assert!(
+            views[1].password.is_none(),
+            "another player's password leaked"
+        );
+        assert!(
+            views[2].password.is_none(),
+            "an unclaimed slot's password leaked"
+        );
+
+        // A visitor holding the room link and nothing else: none of them.
+        let views = slot_views(slots.clone(), None, None, &Default::default(), true);
+        assert!(
+            views.iter().all(|v| v.password.is_none()),
+            "the public page handed a visitor the room's credentials"
+        );
+
+        // Staff: all of them, which is what makes the table usable for handing them out.
+        let views = slot_views(
+            slots.clone(),
+            Some(999),
+            Some(RoomRole::Organizer),
+            &Default::default(),
+            true,
+        );
+        assert!(views.iter().all(|v| v.password.is_some()));
+
+        // **And nothing at all outside per-slot mode**, where the column is not rendered and the
+        // value would be a credential with nowhere legitimate to appear.
+        let views = slot_views(
+            slots,
+            Some(999),
+            Some(RoomRole::Organizer),
+            &Default::default(),
+            false,
+        );
+        assert!(
+            views.iter().all(|v| v.password.is_none()),
+            "a password was carried in a mode that has none"
+        );
+    }
+
+    /// Releasing is an organizer's, and only where there is somebody to release.
+    #[test]
+    fn only_an_organizer_is_offered_release_and_only_on_a_claimed_slot() {
+        let slots = vec![slot(1, Some(100)), slot(2, None)];
+
+        for role in [None, Some(RoomRole::Helper)] {
+            let views = slot_views(slots.clone(), None, role, &Default::default(), false);
+            assert!(
+                views.iter().all(|v| !v.can_release),
+                "{role:?} was offered a roster action"
+            );
+        }
+
+        let views = slot_views(
+            slots,
+            Some(999),
+            Some(RoomRole::Organizer),
+            &Default::default(),
+            false,
+        );
+        assert!(views[0].can_release, "a claimed slot can be released");
+        assert!(
+            !views[1].can_release,
+            "an unclaimed slot has nobody to release, so the control would do nothing"
+        );
+    }
+
     /// **A slot's tracker id reaches its owner and nobody else, staff included.**
     ///
     /// The id exists so a player can share their own progress without handing over the multiworld's
@@ -996,7 +1165,7 @@ mod tests {
         let slots = vec![slot(1, Some(mine)), slot(2, Some(theirs)), slot(3, None)];
 
         // The owner, holding no role at all.
-        let views = slot_views(slots.clone(), Some(mine), None, &Default::default());
+        let views = slot_views(slots.clone(), Some(mine), None, &Default::default(), true);
         assert!(views[0].tracker_id.is_some(), "own slot: link expected");
         assert!(
             views[1].tracker_id.is_none(),
@@ -1011,6 +1180,7 @@ mod tests {
             Some(999),
             Some(RoomRole::Organizer),
             &Default::default(),
+            true,
         );
         assert!(
             views.iter().all(|v| v.tracker_id.is_none()),
@@ -1018,7 +1188,7 @@ mod tests {
         );
 
         // Anonymous.
-        let views = slot_views(slots, None, None, &Default::default());
+        let views = slot_views(slots, None, None, &Default::default(), true);
         assert!(views.iter().all(|v| v.tracker_id.is_none()));
     }
 
