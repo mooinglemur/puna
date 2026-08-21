@@ -261,6 +261,19 @@ fn step_for(
         RoomState::Deleting => None,
 
         RoomState::Idle => match room.desired {
+            // **Not while the last Deployment is still going away.** A recreate drops the room to
+            // `idle` the moment the API server accepts the delete, and under foreground propagation
+            // the object outlives that call for as long as the pod takes to drain -- up to the full
+            // grace period, since pahoa flushes a final save on SIGTERM.
+            //
+            // Starting inside that window is worse than waiting: the name is still taken, so a
+            // create conflicts, and the applier's `get` finds a readable Deployment whose spec hash
+            // matches the one about to be rendered -- so it ADOPTS a dying object and waits for a
+            // ready replica that can never arrive, until START_DEADLINE five minutes later.
+            //
+            // Nothing else needs to happen here: the object's disappearance is what makes the room
+            // startable, and the loop is level-triggered, so the next pass takes the ordinary path.
+            DesiredState::Running if deployment.is_some_and(|d| d.deleting) => None,
             DesiredState::Running => Some(Step::Start),
             // Resting, holding its port. Nothing to do, and specifically nothing to clean up:
             // idle teardown never touches the directory or the reservation.
@@ -412,6 +425,7 @@ mod tests {
             replicas: 1,
             ready_replicas: ready,
             created_at: now(),
+            deleting: false,
         }
     }
 
@@ -524,6 +538,37 @@ mod tests {
                 "state={state:?} desired={desired:?} deployment={dep:?}"
             );
         }
+    }
+
+    /// **An idle room does not start on top of a Deployment that is still draining.**
+    ///
+    /// The row above — idle, wanting to run, with a leftover Deployment — plans `Start` on purpose,
+    /// because `Start` is idempotent and reconciles the spec itself. That reasoning holds for an
+    /// object that is *staying*; it is exactly wrong for one that has been accepted for deletion.
+    /// The name is still taken, so nothing can be created under it, and the applier's read finds a
+    /// live-looking object whose spec hash matches the one about to be rendered.
+    ///
+    /// Waiting costs a pass. Not waiting cost five minutes: the room would adopt the dying object
+    /// and sit in `starting` until `START_DEADLINE`.
+    #[test]
+    fn a_draining_deployment_is_waited_out_rather_than_started_over() {
+        let room = view(RoomState::Idle, DesiredState::Running);
+
+        let mut draining = deployment(&room, "hash-1", 1);
+        draining.deleting = true;
+        assert_eq!(
+            decide(&room, &snapshot(vec![draining])),
+            None,
+            "a room whose last Deployment is going away has nothing to do but wait"
+        );
+
+        // And the moment it is gone, the ordinary path resumes. This half is what stops the guard
+        // from being a room that never starts again.
+        assert_eq!(
+            decide(&room, &snapshot(Vec::new())),
+            Some(Step::Start),
+            "the object's disappearance is the signal"
+        );
     }
 
     /// Deletion is reachable from every state, because a room nobody can fix is exactly the room

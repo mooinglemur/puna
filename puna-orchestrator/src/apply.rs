@@ -68,6 +68,16 @@ pub enum Started {
     /// IPAM has not answered yet. Nothing is wrong; the next tick reads it again.
     AwaitingAddress,
 
+    /// The previous Deployment is still draining, so the name is taken and nothing can be created
+    /// under it yet. Nothing is wrong: the room stays `idle` **keeping its reservation**, and the
+    /// pass that finds the object gone starts it.
+    ///
+    /// Distinct from [`Started::Recreating`] on purpose. That one means *this pass deleted
+    /// something*; this one means *a previous pass already did, and it has not finished*. Folding
+    /// them together would have every tick issue a redundant delete against an object that is
+    /// already going away.
+    AwaitingTeardown,
+
     /// **The silent Cilium failure, caught.** Sharing degraded and the room was allocated a
     /// different address, on which it would be perfectly healthy and unreachable by name. The
     /// Deployment is already deleted (which collects the Service); the caller quarantines the pair
@@ -113,6 +123,16 @@ pub async fn ensure_room_running(
 
     // 2.
     let uid = match cluster.get_deployment(&name).await? {
+        // **Checked before the hash, and that order is the whole guard.** A Deployment accepted for
+        // deletion stays readable until its pod drains, and its annotation still carries the spec
+        // hash it was created with -- which is the hash about to be rendered whenever a restart was
+        // asked for rather than caused by drift. So the arm below would match it and adopt a dying
+        // object, recording its uid and then waiting out START_DEADLINE for a replica that is on its
+        // way out. Deleting it again (the arm after) is merely useless.
+        //
+        // A live read, unlike the planner's snapshot: this one is authoritative, so it also covers
+        // the case where a stale cache told the planner the object was already gone.
+        Some(existing) if existing.deleting => return Ok(Started::AwaitingTeardown),
         Some(existing) if existing.spec_hash.as_deref() == Some(spec.spec_hash.as_str()) => {
             existing.uid
         }
@@ -469,6 +489,65 @@ mod tests {
         assert_eq!(
             snapshot.service(room).and_then(|s| s.owner_uid.clone()),
             Some("uid-2".to_string())
+        );
+    }
+
+    /// **A start must never adopt a Deployment that is on its way out.**
+    ///
+    /// The dangerous case is the *unchanged* spec — a plain "restart this room", the admin button —
+    /// because the draining object's annotation still carries exactly the hash about to be
+    /// rendered. Without the `deleting` check the hash arm matches, the dying object's uid is
+    /// recorded, the room moves to `starting`, and it waits out `START_DEADLINE`: five minutes of
+    /// downtime in place of a few seconds, ending in a failure with nothing pointing at the cause.
+    ///
+    /// Reachable in production because a foreground delete returns as soon as it is accepted, so
+    /// any `NOTIFY` landing in the drain window — somebody pressing Start, a `/room/<id>`
+    /// navigation — wakes a pass inside it.
+    #[tokio::test]
+    async fn a_start_waits_for_a_draining_deployment_rather_than_adopting_it() {
+        let cluster = FakeCluster::new();
+        let mut recorder = Recording::default();
+        let room = RoomId::new();
+        let spec = spec(room, "pahoa:test");
+
+        start(&cluster, &spec, &mut recorder).await.expect("start");
+        let live_uid = recorder.calls.last().expect("recorded").1.clone();
+
+        // From here the fake behaves like a real API server: the delete is accepted and the object
+        // stays until the pod is done.
+        cluster.hold_deletions();
+        cluster
+            .delete_deployment(&crate::cluster::object_name(room))
+            .await
+            .expect("delete accepted");
+
+        cluster.clear_calls();
+        assert_eq!(
+            start(&cluster, &spec, &mut recorder).await.expect("start"),
+            Started::AwaitingTeardown,
+            "the identical spec is exactly the case that would be adopted"
+        );
+
+        // Nothing was created, and nothing was deleted a second time: the object is already going.
+        assert_eq!(
+            cluster.ops(),
+            vec![Op::ApplySecret, Op::GetDeployment],
+            "a waiting pass touches nothing but the Secret it always re-applies"
+        );
+        assert_eq!(
+            recorder.calls.last().map(|(_, uid, _)| uid.clone()),
+            Some(live_uid),
+            "the dying object's uid must not have been recorded over the room's"
+        );
+
+        // Once the pod is gone the ordinary path takes over, with a fresh uid.
+        cluster.finish_deletions();
+        let started = start(&cluster, &spec, &mut recorder)
+            .await
+            .expect("restart");
+        assert!(
+            matches!(started, Started::Converged { .. }),
+            "got {started:?}"
         );
     }
 

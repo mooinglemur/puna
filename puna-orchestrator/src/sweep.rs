@@ -561,6 +561,7 @@ mod tests {
             replicas: 1,
             ready_replicas: 1,
             created_at: Utc::now() - chrono::TimeDelta::from_std(age).expect("an age"),
+            deleting: false,
         }
     }
 

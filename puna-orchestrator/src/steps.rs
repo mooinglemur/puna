@@ -331,6 +331,20 @@ async fn start(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
             clear_deployment(&mut conn, id, "the running spec no longer matches the row").await?;
         }
 
+        Ok(Started::AwaitingTeardown) => {
+            // Left in `idle`, holding its reservation, and deliberately not an error: the previous
+            // pod is still flushing its final save, which is the behavior the 45-second grace period
+            // exists to protect. Nothing to do but let it finish.
+            //
+            // The planner normally catches this from the snapshot, so reaching here means the
+            // snapshot was stale -- a live read is what the applier has that the planner does not.
+            // At `debug` because it is expected and self-clearing; the room's own state says more.
+            tracing::debug!(
+                room = %id,
+                "the previous Deployment is still draining; starting once it is gone"
+            );
+        }
+
         Ok(Started::AddressMismatch { observed }) => {
             puna_core::metrics::PORT_IP_MISMATCH.inc();
             puna_core::metrics::ROOM_STARTS

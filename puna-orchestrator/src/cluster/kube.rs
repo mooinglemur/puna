@@ -306,6 +306,10 @@ fn read_deployment(deployment: &Deployment, naming: &spec::Naming) -> Option<Roo
             .as_ref()
             .map(|time| time.0)
             .unwrap_or_else(chrono::Utc::now),
+        // Presence is the whole signal; the value is when the delete was accepted, which nothing
+        // needs. Kubernetes sets it on the object and leaves it readable until the finalizers
+        // clear -- so this reads `true` for exactly as long as the old pod is still draining.
+        deleting: metadata.deletion_timestamp.is_some(),
     })
 }
 

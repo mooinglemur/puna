@@ -173,6 +173,20 @@ pub struct RoomDeployment {
     pub replicas: i32,
     pub ready_replicas: i32,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// **This object is going away**: it carries a `deletionTimestamp` and is waiting on its
+    /// finalizers, which under foreground propagation means waiting on its pod to drain.
+    ///
+    /// Load-bearing rather than informational, because a delete **returns as soon as the API server
+    /// accepts it** — foreground sets the propagation policy, it does not block. So there is a
+    /// window, as long as the pod's grace period, in which the Deployment is still readable and is
+    /// nobody's Deployment: it will not come back, and a new one cannot take its place while it
+    /// holds the name.
+    ///
+    /// Without this flag a start landing in that window sees an ordinary object with a matching
+    /// spec hash and **adopts it** — recording a dying object's uid and waiting for a ready replica
+    /// that can never arrive, until the start deadline five minutes later. That is strictly worse
+    /// than waiting, so both the planner and [`crate::apply::ensure_room_running`] check it.
+    pub deleting: bool,
 }
 
 /// A Service as the reconciler sees it.

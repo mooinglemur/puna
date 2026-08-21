@@ -75,6 +75,8 @@ struct StoredDeployment {
     replicas: i32,
     ready_replicas: i32,
     created_at: DateTime<Utc>,
+    /// Accepted for deletion and waiting on its pod. See [`FakeCluster::hold_deletions`].
+    deleting: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -97,6 +99,8 @@ struct Inner {
     ingress_ip: String,
     ingress_delay: u32,
     now: DateTime<Utc>,
+    /// See [`FakeCluster::hold_deletions`]. Off by default, which is the optimistic model.
+    hold_deletions: bool,
 }
 
 pub struct FakeCluster {
@@ -190,6 +194,39 @@ impl FakeCluster {
         collect_dependents(&mut inner, &name);
     }
 
+    /// Model what a foreground delete actually does: **accept, and leave the object behind.**
+    ///
+    /// By default this fake removes a Deployment the instant `delete_deployment` returns, which is
+    /// the optimistic case -- the pod exited immediately -- and is a fine model for most of what the
+    /// lifecycle suite asserts. It is not what Kubernetes does. `DeleteParams::foreground()` sets a
+    /// propagation policy and returns as soon as the API server accepts the request; the object
+    /// stays readable, carrying a `deletionTimestamp`, until its pod finishes draining -- up to the
+    /// full 45-second grace period, because pahoa flushes a final save on `SIGTERM`.
+    ///
+    /// **That gap was invisible here, and a real bug lived in it**: a start landing inside the
+    /// window found a readable Deployment with a matching spec hash and adopted it. The default
+    /// being the only thing ever exercised is precisely why nothing caught that.
+    ///
+    /// Turn this on and deletes park; call [`FakeCluster::finish_deletions`] to let the pods finish.
+    pub fn hold_deletions(&self) {
+        self.lock().hold_deletions = true;
+    }
+
+    /// Every parked deletion completes: the objects go, and their dependents are collected with
+    /// them, exactly as garbage collection would.
+    pub fn finish_deletions(&self) {
+        let mut inner = self.lock();
+        let done: Vec<String> = inner
+            .deployments
+            .iter()
+            .filter(|(_, d)| d.deleting)
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in done {
+            collect_dependents(&mut inner, &name);
+        }
+    }
+
     pub fn calls(&self) -> Vec<Call> {
         self.lock().calls.clone()
     }
@@ -254,6 +291,7 @@ fn read_deployment(stored: &StoredDeployment) -> RoomDeployment {
         replicas: stored.replicas,
         ready_replicas: stored.ready_replicas,
         created_at: stored.created_at,
+        deleting: stored.deleting,
     }
 }
 
@@ -314,6 +352,9 @@ impl ClusterApi for FakeCluster {
         self.record(Op::CreateDeployment, &name, false)?;
 
         let mut inner = self.lock();
+        // Including one that is draining: a `deletionTimestamp` does not free the name, so a create
+        // over a dying object is a conflict rather than a replacement. This is what makes "wait for
+        // it to be gone" the only way through, instead of something the applier could skip.
         if inner.deployments.contains_key(&name) {
             return Err(ClusterError::AlreadyExists { name });
         }
@@ -331,6 +372,7 @@ impl ClusterApi for FakeCluster {
                 replicas: 1,
                 ready_replicas: 0,
                 created_at,
+                deleting: false,
             },
         );
         Ok(uid)
@@ -341,6 +383,15 @@ impl ClusterApi for FakeCluster {
         let mut inner = self.lock();
         // Absent is success: the caller wanted it gone and it is. Teardown runs every tick until
         // the room's row is gone, so anything else would turn a completed delete into an error.
+        if inner.hold_deletions
+            && let Some(stored) = inner.deployments.get_mut(name)
+        {
+            // Accepted, not finished -- dependents stay, because garbage collection has not run.
+            // A second delete of an already-draining object is also accepted, as the API server
+            // accepts it: the request is a no-op and returns success.
+            stored.deleting = true;
+            return Ok(());
+        }
         collect_dependents(&mut inner, name);
         Ok(())
     }

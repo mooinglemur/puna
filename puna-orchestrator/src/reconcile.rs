@@ -645,6 +645,7 @@ mod db_tests {
                 replicas: 1,
                 ready_replicas: 1,
                 created_at: chrono::Utc::now() - chrono::TimeDelta::days(6),
+                deleting: false,
             }],
             services: Vec::new(),
             secrets: Vec::new(),
