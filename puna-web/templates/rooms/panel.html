@@ -22,11 +22,11 @@
 <thead><tr><th>Address</th></tr></thead>
 {% endmacro %}
 
-{# One row of an address table: the thing to paste, a control that copies it, and what it is for.
+{# One row of an address table: the thing to paste, and a control that copies it.
 
-   A macro so the icon and the button exist once. The two rows differ only in their port and their
-   sentence, and an SVG written out twice is two things to keep in step for no reason. #}
-{% macro address_row(host, port, summary, detail) %}
+   A macro so the icon and the button exist once. The two rows differ only in their port, and an SVG
+   written out twice is two things to keep in step for no reason. #}
+{% macro address_row(host, port) %}
 <tr>
 <td><code>{{ host }}:{{ port }}</code>
 {# Rendered by the server but INERT until `room.js` proves the clipboard is actually reachable --
@@ -46,7 +46,6 @@
 </svg>
 </button>
 </td>
-<td class="purpose"><strong>{{ summary }}</strong> &mdash; {{+ detail }}</td>
 </tr>
 {% endmacro %}
 
@@ -92,7 +91,7 @@
 <table class="address">
 {% call address_head() %}{% endcall %}
 <tbody>
-{% call address_row(host, port, "standard view", "most clients should use this one") %}{% endcall %}
+{% call address_row(host, port) %}{% endcall %}
 </tbody>
 </table>
 </div>
@@ -113,7 +112,7 @@ will not see other people&rsquo;s finds go by.</p>
 <table class="address">
 {% call address_head() %}{% endcall %}
 <tbody>
-{% call address_row(host, filtered, "feed-filtered view", "same room, filters out other slots' item traffic") %}{% endcall %}
+{% call address_row(host, filtered) %}{% endcall %}
 </tbody>
 </table>
 </div>

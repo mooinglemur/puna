@@ -1858,13 +1858,51 @@ mod tests {
             "the second address is offered with nothing to tell somebody whether they want it"
         );
         assert!(
-            !html.contains("<th>Description</th>"),
-            "the address table grew its description column back"
-        );
-        assert!(
             html.contains("<th>Address</th>"),
             "the address column is not named for the thing players are looking for"
         );
+
+        // **The BODY has to match the header, and asserting the header alone does not say that.**
+        // The first version of this checked for `<th>Address</th>` and the absence of
+        // `<th>Description</th>` -- both true of a one-column header sitting over a two-column body,
+        // which is exactly the state that shipped: a table with a stray cell hanging off every row.
+        // Counting cells is the assertion that a table is not broken.
+        // `<thead>` starts with `<th`, so a naive substring count reads a one-column header as two.
+        // This counts tag STARTS: `<th` or `<td` followed by `>` or an attribute.
+        fn cells(fragment: &str, tag: &str) -> usize {
+            fragment
+                .match_indices(tag)
+                .filter(|(at, _)| {
+                    fragment[at + tag.len()..].starts_with(|c: char| c == '>' || c.is_whitespace())
+                })
+                .count()
+        }
+
+        for table in html.split("<table class=\"address\">").skip(1) {
+            let table = table.split("</table>").next().unwrap_or_default();
+            assert_eq!(
+                cells(table, "<th"),
+                1,
+                "the address table has more than one column heading:\n{table}"
+            );
+            // Body rows only -- the heading row is a `<tr>` too, and counting `<td>` in it finds
+            // none.
+            let body = table
+                .split("<tbody>")
+                .nth(1)
+                .and_then(|b| b.split("</tbody>").next())
+                .expect("the address table has a body");
+            assert!(!body.trim().is_empty(), "the address table has no rows");
+
+            for row in body.split("<tr>").skip(1) {
+                let row = row.split("</tr>").next().unwrap_or_default();
+                assert_eq!(
+                    cells(row, "<td"),
+                    1,
+                    "an address row has a cell the header does not account for:\n{row}"
+                );
+            }
+        }
 
         // The label is what a screen reader announces, and suppression eats the space before an
         // expression even inside an attribute -- where nothing on screen would reveal it.
