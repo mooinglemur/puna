@@ -232,7 +232,15 @@ unclaimed
 
    The order is deliberate: the two that need no confirmation sit together at the left, then the
    four that send something into somebody's game, then the two that move items in bulk. #}
-<td class="moderation">
+{# **Who this row is, carried once for the whole cell rather than on each of the nine controls.**
+   `moderation.js` reads it from the control's own `<td>` to name the target in the dialog: a
+   confirmation that says only "Hint an item" is one a misclick sails straight through, and the two
+   controls that do NOT confirm have nothing but this to show who they acted on.
+
+   The game is here too because the item and location suggestions are scoped to it -- naming it is
+   what stops "why is my item not in the list" being a mystery. Both values are already rendered in
+   visible columns of this same row, so nothing is disclosed that was not already. #}
+<td class="moderation" data-player="{{ slot.player_name }}" data-game="{{ slot.game }}">
 <div class="actions">
 
 {% if room.slot_auth == puna_core::model::room::SlotAuth::PerSlot %}
@@ -382,8 +390,16 @@ unclaimed
    has the same commands and the same fields. #}
 <dialog id="moderate" class="sheet moderate" aria-labelledby="moderate-title">
 
-<form method="post" action="/room/{{ room.id }}/command" data-mod-form>
+{# **The heading and the target sit OUTSIDE the three stages, so every stage shows them.** The
+   result used to carry its own heading, which meant the one moment an operator most needs to know
+   who they just acted on was the one moment the answer had scrolled away.
+
+   It matters most for the two controls that do not confirm: a misclicked kick otherwise shows a
+   spinner and nothing else. #}
 <h2 id="moderate-title" data-mod-title>Confirm</h2>
+<p class="target" data-mod-target></p>
+
+<form method="post" action="/room/{{ room.id }}/command" data-mod-form>
 <p class="hint" data-mod-explain></p>
 <input type="hidden" name="kind" data-mod-kind value="">
 <input type="hidden" name="slot" data-mod-slot value="">
@@ -426,9 +442,9 @@ without spending this slot&rsquo;s points</label>
 </div>
 
 {# The answer, and the only way out of it is the button. `role="status"` so it is announced rather
-   than silently replacing the form for somebody not watching the middle of the screen. #}
+   than silently replacing the form for somebody not watching the middle of the screen. No heading
+   of its own: it rewrites the shared one above, which keeps the target line beside the answer. #}
 <div data-mod-result hidden role="status">
-<h2 data-mod-result-title></h2>
 <div data-mod-result-lines></div>
 <p class="buttons"><button type="button" data-mod-dismiss>Dismiss</button></p>
 </div>

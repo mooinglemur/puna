@@ -260,6 +260,23 @@ dialog.moderate::backdrop {
 }
 
 .moderate h2 { margin: 0 0 0.4rem; font-size: 1.1rem; }
+
+/* **Who the action is for**, and it has to be the second thing read after the verb -- a dialog that
+   says only "Hint an item" is one a misclick sails through. Given its own surface rather than set as
+   prose so it reads as the subject of the sentence above it, and so it is still obvious in the
+   spinner and answer stages, where there is no other context left on screen. */
+.moderate .target {
+  margin: 0 0 0.8rem;
+  padding: 0.4rem 0.6rem;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  /* The game can be long and the player name is untrusted text out of an uploaded seed, so this
+     wraps rather than pushing the dialog wider than the viewport. */
+  white-space: normal;
+}
 .moderate .hint { margin: 0 0 0.9rem; }
 .moderate label { display: block; margin-bottom: 0.3rem; }
 .moderate label.inline { display: inline; }

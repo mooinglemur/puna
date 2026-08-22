@@ -2289,4 +2289,68 @@ mod tests {
             owner_never_logged_in: false,
         }
     }
+
+    /// **Every dialog has to say which slot it is for**, and the pieces that make that possible are
+    /// in three files, so this checks all three agree.
+    ///
+    /// The failure is a misclick that cannot be caught: a confirmation reading only "Hint an item"
+    /// looks the same whichever row was clicked, and the two controls that skip confirmation have
+    /// nothing but this to show who they acted on. The target is read from the control's own cell
+    /// rather than passed around, so it cannot describe one row while acting on another.
+    #[test]
+    fn every_moderation_dialog_can_name_the_slot_it_acts_on() {
+        let mut staff = page_as(true, false);
+        staff.room.slot_auth = SlotAuth::PerSlot;
+        staff.slots = vec![a_slot(false)];
+        let html = staff.render().expect("renders");
+
+        // The cell carries who and what game, once per row rather than on each of nine controls.
+        assert!(
+            html.contains(r#"data-player="Kai""#),
+            "the moderation cell does not carry the player it acts on"
+        );
+        assert!(
+            html.contains(r#"data-game="A Link to the Past""#),
+            "the moderation cell does not carry the game, which scopes the suggestions"
+        );
+
+        // And the dialog has somewhere to put it.
+        assert!(
+            html.contains("data-mod-target"),
+            "the dialog has no target line"
+        );
+
+        // **Outside the three stages**, or the answer stage -- the moment it matters most -- would
+        // not show it. Asserted by position: the target must precede the form that the working and
+        // result panes replace.
+        let target = html.find("data-mod-target").expect("checked above");
+        let form = html.find("data-mod-form").expect("the dialog has a form");
+        assert!(
+            target < form,
+            "the target sits inside a stage, so it disappears when that stage is swapped out"
+        );
+
+        // The script reads exactly these names. A rename on either side is silent: the dialog still
+        // opens, and the line is simply blank.
+        let script = include_str!("../../static/moderation.js");
+        for hook in ["data-mod-target", "dataset.player", "dataset.game"] {
+            assert!(
+                script.contains(hook),
+                "moderation.js no longer reads {hook}, so the target line renders empty"
+            );
+        }
+
+        // Every command must have a title, including the two that never open a confirmation --
+        // their spinner and answer use the same shared heading.
+        for command in ["lock_slot", "kick"] {
+            let at = script
+                .find(&format!("{command}: {{"))
+                .unwrap_or_else(|| panic!("{command} left the script"));
+            let entry = &script[at..at + 120.min(script.len() - at)];
+            assert!(
+                entry.contains("title:"),
+                "{command} has no title, so its dialog is headed \"Confirm\" with nothing confirmed"
+            );
+        }
+    }
 }

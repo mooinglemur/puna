@@ -30,7 +30,6 @@
   var working = dialog.querySelector("[data-mod-working]");
   var workingLabel = dialog.querySelector("[data-mod-working-label]");
   var result = dialog.querySelector("[data-mod-result]");
-  var resultTitle = dialog.querySelector("[data-mod-result-title]");
   var resultLines = dialog.querySelector("[data-mod-result-lines]");
   var names = document.getElementById("mod-names");
 
@@ -40,8 +39,10 @@
   // unlocking, and a kicked client reconnects — so they go straight to the room. Everything else
   // sends items or hints into somebody's game and cannot be taken back, so it asks first.
   var COMMANDS = {
-    lock_slot: { confirm: false, working: "Locking" },
-    kick: { confirm: false, working: "Kicking" },
+    // The two that skip the confirmation still need a title and a target, because the dialog they
+    // DO get -- the spinner, then the answer -- is the only thing that says who was acted on.
+    lock_slot: { confirm: false, title: "Lock", working: "Locking" },
+    kick: { confirm: false, title: "Kick", working: "Kicking" },
     hint: {
       confirm: true,
       fields: ["item", "force"],
@@ -99,6 +100,7 @@
     var locking = link.dataset.locked === "true";
     return {
       confirm: false,
+      title: locking ? "Lock" : "Unlock",
       working: locking ? "Locking" : "Unlocking",
     };
   }
@@ -131,8 +133,21 @@
       input.disabled = !applies;
     });
 
-    form.querySelector("[data-mod-title]").textContent = spec.title || "Confirm";
+    dialog.querySelector("[data-mod-title]").textContent = spec.title || "Confirm";
     form.querySelector("[data-mod-explain]").textContent = spec.explain || "";
+
+    // **Who this is for.** Read from the control's own cell rather than passed around, so it cannot
+    // describe one row while acting on another -- the failure it exists to prevent.
+    var cell = link.closest("[data-player]");
+    var target = dialog.querySelector("[data-mod-target]");
+    if (target) {
+      var who = cell ? cell.dataset.player : "";
+      var game = cell ? cell.dataset.game : "";
+      // Built with textContent, never innerHTML: a player name is text out of an uploaded seed.
+      target.textContent =
+        "Slot " + link.dataset.slot + (who ? " \u2014 " + who : "") + (game ? " \u00b7 " + game : "");
+    }
+
     if (names) names.replaceChildren();
   }
 
@@ -148,7 +163,8 @@
   }
 
   function finish(body) {
-    resultTitle.textContent = body.heading || (body.ok ? "Done" : "Refused");
+    dialog.querySelector("[data-mod-title]").textContent =
+      body.heading || (body.ok ? "Done" : "Refused");
     result.className = body.ok ? "ok" : "not-ok";
     lines(resultLines, body.lines);
     show(result);
