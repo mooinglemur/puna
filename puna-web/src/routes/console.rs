@@ -1018,3 +1018,292 @@ mod tests {
         );
     }
 }
+
+// --- the credential rule, against a real database ---------------------------------------------
+//
+// `prepare_slot_credential` is the piece of the console with the most reasoning behind it and no
+// way to assert any of it without a room in a given state. Every branch is a statement about what
+// the operator is told, and the failure mode of each is quiet: a lock that was dropped, a lock
+// claimed to be in force when it is not, or a room left unable to start.
+#[cfg(test)]
+mod credential_tests {
+    use super::*;
+    use crate::testdb::{
+        ACTOR, insert_generation, insert_room, insert_slot, insert_user, secret_is_stale, with_db,
+    };
+    use diesel_async::RunQueryDsl;
+    use puna_core::model::room;
+    use puna_core::model::slot;
+
+    async fn a_room(conn: &mut diesel_async::AsyncPgConnection, state: &str) -> room::Room {
+        insert_user(conn, ACTOR).await;
+        let generation = insert_generation(conn).await;
+        let id = insert_room(conn, generation, state, "per_slot").await;
+        insert_slot(conn, id, 1, Some("aaaaa-bbbbb")).await;
+        insert_slot(conn, id, 2, Some("ccccc-ddddd")).await;
+        room::get(conn, id).await.expect("read").expect("the room")
+    }
+
+    fn lock(slot: i32, locked: bool) -> RoomCommand {
+        RoomCommand::LockSlot { slot, locked }
+    }
+
+    /// A running room is the ordinary case: the row is written, the Secret is marked stale so the
+    /// change outlives the pod, and the caller is told to queue the command.
+    #[tokio::test]
+    async fn locking_a_running_room_writes_the_row_and_asks_for_a_live_push() {
+        with_db(|pool| async move {
+            let mut conn = pool.get().await.expect("connection");
+            let room = a_room(&mut conn, "running").await;
+
+            let prepared = prepare_slot_credential(&mut conn, &room, &lock(1, true), ACTOR)
+                .await
+                .expect("prepared");
+
+            assert_eq!(prepared, Prepared::Live("slot_locked"));
+            let stored = slot::get(&mut conn, room.id, 1)
+                .await
+                .expect("read")
+                .expect("slot");
+            assert!(stored.is_locked());
+            assert!(
+                secret_is_stale(&mut conn, room.id).await,
+                "the durable half was skipped, so this lock would lapse at the next restart"
+            );
+        })
+        .await;
+    }
+
+    /// **A room in transition is refused, and NOTHING is written.**
+    ///
+    /// The rule Troy gave, and the reason it is a refusal rather than either confident answer: a
+    /// `starting` pod may already have read the old password map and is not yet answering, so
+    /// "it worked" may be false and "it takes effect at the next start" is false by construction —
+    /// the start it refers to is the one already in flight. Failing is an acceptable answer;
+    /// claiming a lock is in force when it may not be is not.
+    ///
+    /// The half-written case is what makes "nothing is written" worth asserting separately: a
+    /// refusal that had already locked the row would leave the row and the pod disagreeing with
+    /// nothing to reconcile them.
+    #[tokio::test]
+    async fn a_room_in_transition_refuses_and_changes_nothing() {
+        with_db(|pool| async move {
+            let mut conn = pool.get().await.expect("connection");
+
+            for state in ["starting", "stopping", "degraded", "provisioning"] {
+                let room = a_room(&mut conn, state).await;
+
+                let refused = prepare_slot_credential(&mut conn, &room, &lock(1, true), ACTOR)
+                    .await
+                    .expect_err("a room in transition must refuse");
+                assert_eq!(refused.status, Status::Conflict, "{state}");
+                assert!(
+                    refused.source.to_string().contains(state),
+                    "the refusal does not say which state the room is in: {refused}"
+                );
+
+                let untouched = slot::get(&mut conn, room.id, 1)
+                    .await
+                    .expect("read")
+                    .expect("slot");
+                assert!(
+                    !untouched.is_locked(),
+                    "{state}: the row was written anyway"
+                );
+                assert!(
+                    !secret_is_stale(&mut conn, room.id).await,
+                    "{state}: the Secret was marked stale by a refused change"
+                );
+            }
+        })
+        .await;
+    }
+
+    /// A room at rest has no process to tell, and that is not a failure: a start renders the Secret
+    /// from the row, so the change is guaranteed to be in force when it comes up.
+    #[tokio::test]
+    async fn a_room_at_rest_stores_the_change_for_its_next_start() {
+        with_db(|pool| async move {
+            let mut conn = pool.get().await.expect("connection");
+
+            for state in ["idle", "failed"] {
+                let room = a_room(&mut conn, state).await;
+                let prepared = prepare_slot_credential(&mut conn, &room, &lock(1, true), ACTOR)
+                    .await
+                    .expect("prepared");
+
+                assert_eq!(prepared, Prepared::Stored("slot_locked"), "{state}");
+                assert!(secret_is_stale(&mut conn, room.id).await, "{state}");
+            }
+        })
+        .await;
+    }
+
+    /// **The narrow window the confident answers cannot cover.**
+    ///
+    /// The guard read the room before the write; if it began starting in between, `start` may have
+    /// rendered the Secret from the row as it was. Constructed exactly as it happens: the caller
+    /// holds an `idle` snapshot while the row now says `starting`, which is what the function
+    /// compares.
+    ///
+    /// It must not report `Stored` — that would promise the change takes effect at a start which
+    /// has already begun.
+    #[tokio::test]
+    async fn a_room_that_starts_underneath_the_change_is_reported_as_uncertain() {
+        with_db(|pool| async move {
+            let mut conn = pool.get().await.expect("connection");
+            let stale_snapshot = a_room(&mut conn, "idle").await;
+
+            // The room starts between the guard's read and the write.
+            diesel::sql_query("UPDATE rooms SET state = 'starting' WHERE id = $1")
+                .bind::<diesel::sql_types::Uuid, _>(stale_snapshot.id)
+                .execute(&mut conn)
+                .await
+                .expect("the room starts");
+
+            let prepared =
+                prepare_slot_credential(&mut conn, &stale_snapshot, &lock(1, true), ACTOR)
+                    .await
+                    .expect("prepared");
+
+            assert_eq!(prepared, Prepared::Uncertain("slot_locked"));
+            // Written, and marked stale: the change is real, it is only its timing that is unknown.
+            assert!(secret_is_stale(&mut conn, stale_snapshot.id).await);
+        })
+        .await;
+    }
+
+    /// **Locking the last slot anyone can connect to would leave the room unable to start.**
+    ///
+    /// The Secret builder refuses an empty password map, so this would surface minutes later as a
+    /// `failed` room with a Secret error, long after whoever caused it stopped looking. Refused up
+    /// front, with the alternative named — locking everybody is closing the room.
+    #[tokio::test]
+    async fn locking_the_last_open_slot_is_refused_before_it_breaks_the_room() {
+        with_db(|pool| async move {
+            let mut conn = pool.get().await.expect("connection");
+            let room = a_room(&mut conn, "running").await;
+
+            prepare_slot_credential(&mut conn, &room, &lock(1, true), ACTOR)
+                .await
+                .expect("the first lock is fine");
+
+            let refused = prepare_slot_credential(&mut conn, &room, &lock(2, true), ACTOR)
+                .await
+                .expect_err("locking the last open slot must refuse");
+            assert_eq!(refused.status, Status::Conflict);
+            assert!(
+                refused.source.to_string().contains("closing the room"),
+                "the refusal does not name the thing the operator actually wants: {refused}"
+            );
+
+            let still_open = slot::get(&mut conn, room.id, 2)
+                .await
+                .expect("read")
+                .expect("slot");
+            assert!(!still_open.is_locked());
+        })
+        .await;
+    }
+
+    /// Outside per-slot mode a lock has no spelling at all: it is an omission from a password map
+    /// that does not exist. 404 rather than 400, matching pahoa's own endpoint.
+    #[tokio::test]
+    async fn locking_is_refused_where_there_is_no_password_map() {
+        with_db(|pool| async move {
+            let mut conn = pool.get().await.expect("connection");
+            insert_user(&mut conn, ACTOR).await;
+            let generation = insert_generation(&mut conn).await;
+            let id = insert_room(&mut conn, generation, "running", "none").await;
+            insert_slot(&mut conn, id, 1, None).await;
+            let room = room::get(&mut conn, id).await.expect("read").expect("room");
+
+            let refused = prepare_slot_credential(&mut conn, &room, &lock(1, true), ACTOR)
+                .await
+                .expect_err("must refuse");
+            assert_eq!(refused.status, Status::NotFound);
+        })
+        .await;
+    }
+
+    /// A repeat is a no-op, and must NOT mark the Secret stale: a rewrite for nothing is a wasted
+    /// apply on every duplicate click, and an event row claiming something changed.
+    #[tokio::test]
+    async fn locking_an_already_locked_slot_changes_nothing() {
+        with_db(|pool| async move {
+            let mut conn = pool.get().await.expect("connection");
+            let room = a_room(&mut conn, "running").await;
+
+            prepare_slot_credential(&mut conn, &room, &lock(1, true), ACTOR)
+                .await
+                .expect("the first lock");
+            // Clear the mark, so the assertion below is about the SECOND call rather than the first.
+            diesel::sql_query("UPDATE rooms SET secret_synced_at = now() WHERE id = $1")
+                .bind::<diesel::sql_types::Uuid, _>(room.id)
+                .execute(&mut conn)
+                .await
+                .expect("clear the mark");
+
+            let again = prepare_slot_credential(&mut conn, &room, &lock(1, true), ACTOR)
+                .await
+                .expect("prepared");
+
+            assert_eq!(again, Prepared::NotApplicable);
+            assert!(
+                !secret_is_stale(&mut conn, room.id).await,
+                "a repeat lock asked for a Secret rewrite that changes nothing"
+            );
+        })
+        .await;
+    }
+
+    /// Rotation travels the same path, and the value never reaches the queue: the orchestrator
+    /// reads it from the row, which is what keeps a credential out of the audit trail.
+    #[tokio::test]
+    async fn rotation_replaces_the_password_and_marks_the_secret_stale() {
+        with_db(|pool| async move {
+            let mut conn = pool.get().await.expect("connection");
+            let room = a_room(&mut conn, "running").await;
+
+            let prepared = prepare_slot_credential(
+                &mut conn,
+                &room,
+                &RoomCommand::RotatePassword { slot: 1 },
+                ACTOR,
+            )
+            .await
+            .expect("prepared");
+
+            assert_eq!(prepared, Prepared::Live("slot_password_rotated"));
+            let rotated = slot::get(&mut conn, room.id, 1)
+                .await
+                .expect("read")
+                .expect("slot");
+            assert_ne!(rotated.password.as_deref(), Some("aaaaa-bbbbb"));
+            assert!(secret_is_stale(&mut conn, room.id).await);
+        })
+        .await;
+    }
+
+    /// Everything else passes through untouched — this function must not have opinions about the
+    /// twelve commands that are pahoa's.
+    #[tokio::test]
+    async fn an_ordinary_command_is_left_alone() {
+        with_db(|pool| async move {
+            let mut conn = pool.get().await.expect("connection");
+            // `starting`, which the credential commands refuse: a passthrough must not inherit
+            // that rule, since a room that is not running rejects the command later with a message
+            // that offers a Start button.
+            let room = a_room(&mut conn, "starting").await;
+
+            let prepared =
+                prepare_slot_credential(&mut conn, &room, &RoomCommand::Release { slot: 1 }, ACTOR)
+                    .await
+                    .expect("prepared");
+
+            assert_eq!(prepared, Prepared::NotApplicable);
+            assert!(!secret_is_stale(&mut conn, room.id).await);
+        })
+        .await;
+    }
+}

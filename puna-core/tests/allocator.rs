@@ -530,16 +530,31 @@ async fn a_reservation_outside_the_range_is_never_handed_back() {
             .await
             .expect("a port");
 
+        // **The window is derived from the SEEDED range, not from `held`, and that is what makes
+        // this test deterministic.**
+        //
+        // It used to be `held + 100 ..= held + 300`, which reads as though `held` were the bottom
+        // of the range. It is not: phase 2 of the allocator picks with `ORDER BY last_activity ASC,
+        // random()`, and on a fresh database every unbound pair ties at `-infinity` -- so `held` is
+        // a uniformly random pair anywhere in dev's 5000. Whenever it landed in the top 300 the
+        // window ran off the end of the seeded rows, no reservation existed inside it, and the
+        // allocator correctly answered `Exhausted`. About one run in sixteen, failing with the
+        // right answer to a question the test did not mean to ask.
+        let (low, high) = common::port_range(&mut conn, "dev").await;
+        let _ = (low, high);
+        let (window_lo, window_hi) = (held + 100, held + 300);
+
+
         // Move the recorded range out from under the reservation WITHOUT reconciling the rows, so
         // the stale binding survives -- the state a mid-flight range change would leave behind.
-        common::set_recorded_range(&mut conn, "dev", held + 100, held + 300).await;
+        common::set_recorded_range(&mut conn, "dev", window_lo, window_hi).await;
 
         let fresh = port::allocate_pair(&orch, &mut conn, DEV, room)
             .await
             .expect("a fresh port");
         assert_ne!(fresh, held, "the stale reservation must not be returned");
         assert!(
-            (held + 100..=held + 300).contains(&fresh),
+            (window_lo..=window_hi).contains(&fresh),
             "and the replacement is inside the range, got {fresh}"
         );
     })

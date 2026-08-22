@@ -146,6 +146,20 @@ stages:
 
 .always: &always
   rules:
+    # **Not on a schedule.** A scheduled pipeline exists to run `flake-hunt` and nothing else, and
+    # without this every job here would join it: a nightly would rebuild both binaries and re-push
+    # both images -- including the moving `:latest` tag -- for a commit that has not changed.
+    #
+    # The waste is the smaller half. The real cost is that re-pushing `:latest` breaks the check
+    # used before pinning an image: compare the `Docker-Content-Digest` of `sha-<short sha>` against
+    # `:latest`, and equality means that tag is what CI actually built for that commit. A nightly
+    # rebuild can move `:latest` to a different digest for the same sha, so the comparison starts
+    # answering a question nobody asked.
+    #
+    # It must come FIRST -- GitLab takes the first matching rule, and `$CI_COMMIT_BRANCH` is set on
+    # a scheduled pipeline too, so put after it this would never be reached.
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
     - if: '$CI_COMMIT_BRANCH'
     - if: '$CI_PIPELINE_SOURCE == "web"'
 
@@ -220,6 +234,118 @@ schema-drift:
         exit 1
       fi
     - echo "schema.rs matches the migrations"
+
+# Runs the whole suite many times over, looking for tests that fail intermittently.
+#
+# --- WHY THIS EXISTS ------------------------------------------------------------------------------
+# Two flaky tests have been found in this repository, both by hand, both only because somebody
+# happened to run the suite dozens of times in a row:
+#
+#   * `the_capability_gauge_...` raced another test that reseeded the same process-global metrics
+#     registry without taking the shared mutex. Measured at 2 failures in 60.
+#   * `a_reservation_outside_the_range_is_never_handed_back` built its port window relative to a
+#     port the allocator picks at RANDOM (`ORDER BY last_activity, random()`, and on a fresh
+#     database every pair ties), so roughly one run in eight the window fell outside the seeded
+#     rows. Measured at 5 in 40.
+#
+# Neither is visible in a single run, and both are worse than a plain failure: a pipeline that goes
+# green on a re-run is one people learn to re-run rather than diagnose.
+#
+# --- WHY IT REPORTS A RATE RATHER THAN STOPPING AT THE FIRST FAILURE -------------------------------
+# "5 in 40" is the diagnosis. It is what distinguishes a 12% race from a 3% one, which is what tells
+# you how many runs an A/B of a candidate fix needs to mean anything -- and both flakes above were
+# confirmed fixed by exactly that comparison. Stopping early would throw that away to save minutes
+# on a job that runs while everyone is asleep.
+#
+# --- THE WHOLE WORKSPACE, AT THE DEFAULT PARALLELISM ----------------------------------------------
+# Not just the Postgres-backed suites. The metrics race needed *other tests in flight* to lose --
+# running the suspect module alone showed 0 failures in 40 -- so anything that narrows the run or
+# serializes it would have missed the one flake we already know the shape of.
+#
+# --- THIS JOB CAN SILENTLY NEVER RUN, WHICH IS THE HAZARD IT IS ITSELF SUBJECT TO -----------------
+# `$CI_PIPELINE_SOURCE == "schedule"` requires a pipeline schedule to exist under
+# CI/CD > Schedules in GitLab. **There is no way to declare one from this file.** With no schedule
+# the job never runs, and a job that never runs looks exactly like a job that always passes.
+# If nothing here has failed in months, check that a nightly schedule on `main` still exists before
+# concluding the suite is stable.
+#
+# `interruptible: false` overrides the default for the same reason: GitLab cancels redundant
+# pipelines on a ref, and a push to main part-way through would otherwise quietly kill the night's
+# run and leave the same false all-clear.
+#
+# Run it on demand from CI/CD > Run pipeline, optionally with FLAKE_HUNT_RUNS set higher when
+# hunting something specific -- 50 runs is a night's default, not a number worth trusting for a
+# flake below a few percent.
+flake-hunt:
+  <<: *rust-env
+  stage: check
+  interruptible: false
+  timeout: 1h
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+      when: manual
+      allow_failure: true
+  services:
+    - name: docker.io/library/postgres:17
+      alias: postgres
+      variables:
+        POSTGRES_USER: puna
+        POSTGRES_PASSWORD: puna
+        POSTGRES_DB: puna
+  variables:
+    # --- THE CPU LIMIT IS LOAD-BEARING HERE, MORE THAN ON ANY BUILD JOB ------------------------------
+    # A long nightly asking for eight CPUs looks impolite, and removing this block is the obvious
+    # courtesy. Do not: `available_parallelism()` reads the cgroup CPU QUOTA, which comes from the
+    # limit -- the same mechanism the anchor above describes for cargo's build parallelism -- and the
+    # Rust test harness picks its THREAD COUNT from that call. So the limit is how many tests run at
+    # once, which is the variable a concurrency race is sensitive to.
+    #
+    # The one race this repository has found needed exactly that: the metrics-registry flake measured
+    # 2 failures in 60 runs of the whole lib and **0 in 40 of the suspect module alone**. It could
+    # only lose with enough other tests in flight. Cut the CPUs and this job still runs fifty times,
+    # still reports a rate, still passes -- and quietly stops being able to find the thing it exists
+    # for, which is the failure mode it was written to catch.
+    #
+    # There is a duller reason too: the loop is preceded by one full `--no-run` compile, and at a
+    # small default that alone can approach the timeout on a job that then wants ten minutes of
+    # tests. It runs at night with `interruptible: false`, so it is not competing with anyone.
+    <<: *k8s-resources
+    CARGO_HOME: $CI_PROJECT_DIR/.cargo
+    DATABASE_URL: postgres://puna:puna@postgres:5432/puna
+    # Same reasoning as the `check` job: without this a missing service turns most of the coverage
+    # into a skip that reports ok, which in THIS job would mean hunting flakes in tests that never
+    # ran.
+    PUNA_REQUIRE_DB_TESTS: "1"
+    FLAKE_HUNT_RUNS: "50"
+  script:
+    # Compiled once, so the loop below times the tests rather than the build -- and so a genuine
+    # compile failure is reported as one instead of as fifty test failures.
+    - cargo test --workspace --no-run
+    - |
+      echo "running the workspace suite $FLAKE_HUNT_RUNS times"
+      failures=0
+      for i in $(seq 1 "$FLAKE_HUNT_RUNS"); do
+        if cargo test --workspace > "/tmp/flake-run-$i.log" 2>&1; then
+          printf '.'
+        else
+          failures=$((failures + 1))
+          printf '\n=== run %s of %s FAILED ===\n' "$i" "$FLAKE_HUNT_RUNS"
+          # The lines that identify it, not the whole log: a workspace run is hundreds of lines
+          # and about twenty of them say which test died and why.
+          grep -E '^test .* FAILED|panicked at|^test result: FAILED' "/tmp/flake-run-$i.log" \
+            || tail -40 "/tmp/flake-run-$i.log"
+        fi
+      done
+      printf '\n%s failure(s) in %s runs\n' "$failures" "$FLAKE_HUNT_RUNS"
+      if [ "$failures" -ne 0 ]; then
+        echo
+        echo "A test that fails intermittently is worse than one that fails: the pipeline goes"
+        echo "green on a re-run and nobody looks again. Fix the test, then confirm with an A/B --"
+        echo "run it this many times before and after, and compare the rates."
+        exit 1
+      fi
+      echo "no intermittent failures"
 
 # ---- rust-build stage ----
 

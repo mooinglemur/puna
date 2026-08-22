@@ -50,3 +50,13 @@ rocket_oauth2 = "0.5.1-rc.1"
 [build-dependencies]
 sha2 = "0.10"
 walkdir = "2"
+
+# The Postgres harness in src/testdb.rs, and nothing else. It creates and drops a scratch database
+# per test, which needs a raw connection for `CREATE DATABASE` (diesel-async's pool cannot run it),
+# and catches a panic so the drop still happens.
+#
+# **A `#[cfg(test)]` module rather than tests/, because this is a binary crate**: an integration
+# test links a library, and there is none here -- the same reason puna-orchestrator has its own.
+[dev-dependencies]
+futures-util.workspace = true
+tokio-postgres.workspace = true

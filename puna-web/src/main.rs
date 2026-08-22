@@ -18,6 +18,8 @@ mod guards;
 mod metrics_listener;
 mod params;
 mod routes;
+#[cfg(test)]
+mod testdb;
 mod tpl;
 mod upstream;
 
