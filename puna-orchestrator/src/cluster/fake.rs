@@ -37,8 +37,8 @@ use chrono::{DateTime, Duration, Utc};
 use puna_core::ids::RoomId;
 
 use super::{
-    ClusterApi, ClusterError, OwnerRef, Result, RoomDeployment, RoomSecret, RoomService, RoomSpec,
-    SecretSpec, ServiceSpec,
+    ClusterApi, ClusterError, IpamRefusal, OwnerRef, Result, RoomDeployment, RoomSecret,
+    RoomService, RoomSpec, SecretSpec, ServiceSpec,
 };
 
 /// The address the fake's IPAM hands out, matching the one dev is configured with.
@@ -98,6 +98,8 @@ struct Inner {
     withheld: Vec<String>,
     ingress_ip: String,
     ingress_delay: u32,
+    /// See [`FakeCluster::refuse_ingress`]. `None` is a cluster that allocates normally.
+    ipam_refusal: Option<IpamRefusal>,
     now: DateTime<Utc>,
     /// See [`FakeCluster::hold_deletions`]. Off by default, which is the optimistic model.
     hold_deletions: bool,
@@ -174,6 +176,20 @@ impl FakeCluster {
     /// Withhold the ingress address for the next `reads` calls to `get_service`.
     pub fn delay_ingress(&self, reads: u32) {
         self.lock().ingress_delay = reads;
+    }
+
+    /// Refuse to allocate at all, stating a reason — Cilium's *other* conflict branch.
+    ///
+    /// A Service that requests a specific address (which every room does) and collides gets no
+    /// allocation rather than a different one, so this withholds the address **permanently** where
+    /// [`FakeCluster::delay_ingress`] withholds it for a counted number of reads. The two look
+    /// identical to anything reading only `ingress_ip`, which is the whole reason the condition is
+    /// read.
+    pub fn refuse_ingress(&self, reason: &str, message: &str) {
+        self.lock().ipam_refusal = Some(IpamRefusal {
+            reason: reason.to_string(),
+            message: message.to_string(),
+        });
     }
 
     /// Make the next `get_deployment` for this room answer `None` though the object exists.
@@ -326,7 +342,10 @@ impl ClusterApi for FakeCluster {
                 room_id: Some(stored.spec.room_id),
                 // A list does not consume the delay: only the read-back poll does, and charging a
                 // sweep for it would make the two interfere.
-                ingress_ip: (stored.pending_reads == 0).then(|| inner.ingress_ip.clone()),
+                ingress_ip: (stored.pending_reads == 0 && inner.ipam_refusal.is_none())
+                    .then(|| inner.ingress_ip.clone()),
+                ipam_refusal: inner.ipam_refusal.clone(),
+                ports: stored.spec.published_ports(),
                 owner_uid: Some(stored.spec.owner.uid.clone()),
             })
             .collect())
@@ -434,6 +453,7 @@ impl ClusterApi for FakeCluster {
 
         let mut inner = self.lock();
         let ingress_ip = inner.ingress_ip.clone();
+        let refusal = inner.ipam_refusal.clone();
         let Some(stored) = inner.services.get_mut(name) else {
             return Ok(None);
         };
@@ -446,7 +466,9 @@ impl ClusterApi for FakeCluster {
         Ok(Some(RoomService {
             name: stored.spec.name(),
             room_id: Some(stored.spec.room_id),
-            ingress_ip: answered.then_some(ingress_ip),
+            ingress_ip: (answered && refusal.is_none()).then_some(ingress_ip),
+            ipam_refusal: refusal,
+            ports: stored.spec.published_ports(),
             owner_uid: Some(stored.spec.owner.uid.clone()),
         }))
     }

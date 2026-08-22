@@ -30,10 +30,17 @@ use k8s_openapi::api::core::v1::{Secret, Service};
 use kube::api::{Api, DeleteParams, ListParams, Patch, PatchParams, PostParams};
 
 use super::{
-    ClusterApi, ClusterError, Result, RoomDeployment, RoomSecret, RoomService, RoomSpec,
-    SecretSpec, ServiceSpec,
+    ClusterApi, ClusterError, IpamRefusal, Result, RoomDeployment, RoomSecret, RoomService,
+    RoomSpec, SecretSpec, ServiceSpec,
 };
 use crate::spec::{self, Site};
+
+/// Cilium's condition on a `LoadBalancer` Service, and the only one Puna reads.
+///
+/// Spelled once because it is a string contract with another project: a typo here reads exactly
+/// like a cluster that never refuses anything, which is the failure mode this whole path exists to
+/// remove.
+const IPAM_REQUEST_SATISFIED: &str = "IPAMRequestSatisfied";
 
 /// Count one API call, by what it did and how it went.
 ///
@@ -325,6 +332,34 @@ fn read_service(service: &Service, naming: &spec::Naming) -> Option<RoomService>
             .and_then(|lb| lb.ingress.as_ref())
             .and_then(|ingress| ingress.first())
             .and_then(|ingress| ingress.ip.clone()),
+        // Only an explicit `False` counts. A missing condition -- an older Cilium, or a Service the
+        // operator has not reached yet -- reads as `None` and leaves the room waiting, which is the
+        // behavior this had before the condition was read at all.
+        ipam_refusal: service
+            .status
+            .as_ref()
+            .and_then(|s| s.conditions.as_ref())
+            .and_then(|conditions| {
+                conditions
+                    .iter()
+                    .find(|c| c.type_ == IPAM_REQUEST_SATISFIED)
+            })
+            .filter(|c| c.status == "False")
+            .map(|c| IpamRefusal {
+                reason: c.reason.clone(),
+                message: c.message.clone(),
+            }),
+        ports: service
+            .spec
+            .as_ref()
+            .and_then(|s| s.ports.as_ref())
+            .map(|ports| {
+                ports
+                    .iter()
+                    .filter_map(|p| u16::try_from(p.port).ok())
+                    .collect()
+            })
+            .unwrap_or_default(),
         owner_uid: controller_uid(metadata),
     })
 }

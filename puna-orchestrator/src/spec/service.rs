@@ -61,23 +61,23 @@ pub fn build(spec: &RoomServiceSpec, site: &Site) -> Service {
     // landing on a private address the room is unreachable from. See `LB_POOL_KEY`.
     labels.insert(site.naming.lb_pool_key.clone(), site.naming.lb_pool.clone());
 
-    let mut ports = vec![ServicePort {
-        name: Some(PORT_FULL.to_string()),
-        port: i32::from(spec.base_port),
-        // By name, so the Service and the container cannot disagree about which listener is which.
-        target_port: Some(IntOrString::String(PORT_FULL.to_string())),
-        protocol: Some("TCP".to_string()),
-        ..Default::default()
-    }];
-    if spec.wants_filtered {
-        ports.push(ServicePort {
-            name: Some(PORT_FILTERED.to_string()),
-            port: i32::from(spec.base_port) + 1,
-            target_port: Some(IntOrString::String(PORT_FILTERED.to_string())),
+    // The numbers come from `published_ports` rather than being derived again here, so the manifest
+    // and everything that reads a Service's ports back agree by construction. The NAMES stay local:
+    // they are manifest vocabulary, and they are what keeps the Service and the container from
+    // disagreeing about which listener is which.
+    let ports: Vec<ServicePort> = spec
+        .published_ports()
+        .into_iter()
+        .zip([PORT_FULL, PORT_FILTERED])
+        .map(|(port, name)| ServicePort {
+            name: Some(name.to_string()),
+            port: i32::from(port),
+            // By name, so the Service and the container cannot disagree about which is which.
+            target_port: Some(IntOrString::String(name.to_string())),
             protocol: Some("TCP".to_string()),
             ..Default::default()
-        });
-    }
+        })
+        .collect();
 
     Service {
         metadata: ObjectMeta {

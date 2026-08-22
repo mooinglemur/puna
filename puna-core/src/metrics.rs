@@ -150,6 +150,37 @@ pub static PORT_RECLAIMS: LazyLock<IntCounter> = LazyLock::new(|| {
     register!(IntCounter::new("puna_port_reclaims_total", "Port pairs reclaimed via LRU").unwrap())
 });
 
+/// Allocations Cilium refused outright, because the port was already held on the shared address.
+///
+/// **The rate is the whole signal, and it is deliberately left to an alert to interpret.** One
+/// external Service holding one port produces a single increment, because the room quarantines that
+/// pair and succeeds on the next one. A range misconfiguration — two environments drawing from one
+/// span — produces a sustained rate instead, as rooms walk pair after pair. Puna does not try to
+/// tell those apart: it keeps looking for a working port either way and states what happened, and
+/// where the line between "bad luck" and "somebody mis-set `PUNA_PORT_RANGE`" falls is a threshold
+/// an operator can tune without a release.
+///
+/// `conflict` separates the two cases worth acting on differently. `external` is somebody else's
+/// Service and is operations; `internal` means the port is held by a Service Puna itself manages,
+/// which is a Puna bug — a leaked object the sweep should have collected — and deserves its own
+/// alert rather than being averaged into the same number.
+///
+/// Read alongside [`PORTS_QUARANTINED`], which is what shows the *fleet* cost: a sustained refusal
+/// rate drives that gauge up, and a range overlap is visible there as quarantine climbing without
+/// rooms coming up.
+pub static PORT_REFUSALS: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register!(
+        IntCounterVec::new(
+            Opts::new(
+                "puna_port_refusals_total",
+                "Port pairs Cilium refused to allocate, by whose Service holds the port"
+            ),
+            &["conflict"],
+        )
+        .unwrap()
+    )
+});
+
 /// Services that came up on an address other than the expected shared VIP. Should stay zero;
 /// non-zero means something outside Puna took a port on the sharing key.
 pub static PORT_IP_MISMATCH: LazyLock<IntCounter> = LazyLock::new(|| {
@@ -506,7 +537,20 @@ pub const ROOM_STATES: &[&str] = &[
 ];
 
 /// Outcomes of a start attempt.
-pub const START_RESULTS: &[&str] = &["ok", "failed", "port_exhausted", "ip_mismatch"];
+pub const START_RESULTS: &[&str] = &[
+    "ok",
+    "failed",
+    "port_exhausted",
+    "ip_mismatch",
+    "address_refused",
+];
+
+/// Who holds the port a refusal collided with, for [`PORT_REFUSALS`].
+///
+/// **Seeded to zero so `internal` renders as a real zero.** That series should never move — it means
+/// Puna is holding a port against itself — and an alert on it is only trustworthy if the absence of
+/// the series and a genuine zero are distinguishable.
+pub const PORT_CONFLICTS: &[&str] = &["external", "internal"];
 
 /// The two cadences the reconcile loop runs at, for [`RECONCILE_TICKS`].
 ///
@@ -570,6 +614,7 @@ pub const ORCHESTRATOR_FAMILIES: &[&str] = &[
     "puna_ports_bound",
     "puna_ports_quarantined",
     "puna_port_reclaims_total",
+    "puna_port_refusals_total",
     "puna_port_ip_mismatch_total",
     "puna_generations",
     "puna_generation_bytes",
@@ -693,6 +738,7 @@ fn init_orchestrator() {
     LazyLock::force(&PORTS_BOUND);
     LazyLock::force(&PORTS_QUARANTINED);
     LazyLock::force(&PORT_RECLAIMS);
+    LazyLock::force(&PORT_REFUSALS);
     LazyLock::force(&PORT_IP_MISMATCH);
     LazyLock::force(&ORCHESTRATOR_LEADER);
     LazyLock::force(&INTEGRITY_FAULTS);
@@ -716,6 +762,9 @@ fn init_orchestrator() {
     }
     for kind in TICK_KINDS {
         RECONCILE_TICKS.with_label_values(&[kind]).reset();
+    }
+    for conflict in PORT_CONFLICTS {
+        PORT_REFUSALS.with_label_values(&[conflict]).reset();
     }
     // Seeded to zero so a cold orchestrator renders every capability rather than none, and from
     // the SAME vocabulary the publisher uses -- the two diverging is exactly what went wrong.

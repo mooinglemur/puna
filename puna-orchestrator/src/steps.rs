@@ -383,6 +383,100 @@ async fn start(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
             .await?;
         }
 
+        Ok(Started::AddressRefused { refusal }) => {
+            // Whose Service holds the port. `external` is operations -- somebody took a port on the
+            // sharing key, and Puna's answer is to use a different one. `internal` is a Puna bug:
+            // a Service of ours outliving its room, which the sweep reports and which no amount of
+            // reallocating will fix. **Both quarantine and both move on** -- the label exists so an
+            // alert can treat them differently, not so this code can.
+            let conflict = match conflicting_puna_service(ctx, id, base_port).await {
+                Ok(Some(name)) => {
+                    tracing::error!(
+                        room = %id,
+                        port = base_port,
+                        holder = %name,
+                        "a Service Puna manages is holding this room's port. That is a leak, not a \
+                         collision: reallocating moves this room and leaves the stale object behind."
+                    );
+                    "internal"
+                }
+                Ok(None) => "external",
+                // Classification is diagnostic. Failing the start over it would turn a room that
+                // needs a different port into a room that does not get one at all.
+                Err(e) => {
+                    tracing::warn!(room = %id, error = ?e, "could not attribute the port conflict");
+                    "external"
+                }
+            };
+
+            // `puna_room_starts_total` is NOT touched here: `fail_with` below owns that increment,
+            // and counting it in both places would make the result labels sum to more than the
+            // attempts.
+            puna_core::metrics::PORT_REFUSALS
+                .with_label_values(&[conflict])
+                .inc();
+            tracing::error!(
+                room = %id,
+                port = base_port,
+                conflict,
+                reason = %refusal.reason,
+                detail = %refusal.message,
+                "the load balancer refused to allocate this room's address. The port is already \
+                 held on the shared address, so this pair can never be satisfied. Quarantining it \
+                 and allocating another."
+            );
+
+            port::quarantine(
+                &ctx.orchestrator,
+                &mut conn,
+                ctx.environment,
+                base_port,
+                Utc::now() + QUARANTINE,
+            )
+            .await?;
+            event(
+                &mut conn,
+                id,
+                "address_refused",
+                serde_json::json!({
+                    "port": base_port,
+                    "conflict": conflict,
+                    "reason": refusal.reason,
+                    "detail": refusal.message,
+                }),
+            )
+            .await?;
+            drop(conn);
+
+            // **`failed`, not `idle`, and this is the pacing.** An idle room that wants to run is
+            // what `plan::converging` counts, so going back to `idle` would re-plan `Start` every
+            // `PUNA_CONVERGE_INTERVAL` -- and every attempt quarantines another pair. One room could
+            // take the whole range inside a couple of hours and put every OTHER room into port
+            // exhaustion, which is a fleet-wide outage caused by one contested port.
+            //
+            // The existing backoff already means "keep trying, paced": 15s doubling to a ten-minute
+            // cap, per room, cleared entirely by a successful start. So a one-off conflict costs the
+            // room fifteen seconds and a persistent one settles at six attempts an hour instead of
+            // six hundred. Nothing new to tune, and the reason lands on the room page where somebody
+            // can read it.
+            //
+            // The backoff cannot be short-circuited here either: `attach_desired_spec_hashes` skips
+            // a room with no reservation, and the quarantine above unbound this one -- so M10c's
+            // "a changed spec interrupts the wait" needs a hash it cannot compute, and stays out of
+            // the way until the room retries on its own.
+            return fail_with(
+                ctx,
+                action,
+                &format!(
+                    "the load balancer refused this room's address on port {base_port}: \
+                     {} ({})",
+                    refusal.message, refusal.reason
+                ),
+                "address_refused",
+            )
+            .await;
+        }
+
         Err(e) => {
             // A fatal cluster error stops this room rather than failing identically every 30
             // seconds; a transient one is left to the next tick, which is the retry.
@@ -399,6 +493,37 @@ async fn start(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
     }
 
     Ok(Outcome::Done)
+}
+
+/// Find a Service Puna manages that is already publishing this room's pair, if there is one.
+///
+/// Attribution for a refusal, and the reason [`crate::cluster::RoomService`] carries its ports at
+/// all. The list is label-selected to `managed-by=puna`, so anything it returns is ours by
+/// definition — the question is only whether one of them is sitting on the port this room was just
+/// refused. The room's *own* Service is excluded by name: its Deployment has been deleted but the
+/// garbage collector may not have caught up, and finding ourselves would report every refusal as a
+/// leak.
+///
+/// A read rather than a decision. Both answers quarantine and reallocate.
+async fn conflicting_puna_service(
+    ctx: &Context<'_>,
+    room: RoomId,
+    base_port: u16,
+) -> crate::cluster::Result<Option<String>> {
+    let ours = crate::cluster::object_name(room);
+    Ok(ctx
+        .cluster
+        .list_services()
+        .await?
+        .into_iter()
+        .find(|service| {
+            service.name != ours
+                && service
+                    .ports
+                    .iter()
+                    .any(|port| *port == base_port || *port == base_port + 1)
+        })
+        .map(|service| service.name))
 }
 
 /// Record that a pair was taken from an idle room and given to another.
@@ -944,6 +1069,22 @@ async fn delete(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
 /// Secret that refuses to render all end in the same place, and all three leave a pod that is
 /// either crashlooping or about to.
 async fn fail(ctx: &Context<'_>, action: &Action, error: &str) -> anyhow::Result<Outcome> {
+    fail_with(ctx, action, error, "failed").await
+}
+
+/// [`fail`], with the start-outcome label spelled out.
+///
+/// Exists because a refusal is a start failure that deserves its own `puna_room_starts_total`
+/// series: it is paced and diagnosed differently from a room that will not come up, and folding it
+/// into `failed` would hide the one outcome an operator can act on directly. **One writer either
+/// way** — the alternative was incrementing a second label at the call site, which would have made
+/// the result labels sum to more than the attempts.
+async fn fail_with(
+    ctx: &Context<'_>,
+    action: &Action,
+    error: &str,
+    result: &str,
+) -> anyhow::Result<Outcome> {
     // **Delete before recording, not after.** Left alone, a failed room's Deployment crashloops for
     // the entire backoff against a spec nothing will use -- burning restarts, holding a scheduling
     // slot, and making `kubectl delete pod` look broken, because the Deployment recreates the pod
@@ -1010,7 +1151,7 @@ async fn fail(ctx: &Context<'_>, action: &Action, error: &str) -> anyhow::Result
         .await?;
 
     puna_core::metrics::ROOM_STARTS
-        .with_label_values(&["failed"])
+        .with_label_values(&[result])
         .inc();
     event(
         &mut conn,
@@ -1314,6 +1455,79 @@ mod db_tests {
                 testdb::observed(&mut conn, room).await.unwrap().state,
                 "idle"
             );
+        })
+        .await;
+    }
+
+    /// A refused address is PACED, and the pacing is the point.
+    ///
+    /// Landing the room back in `idle` would be the obvious spelling — it keeps its objects gone
+    /// and the next pass allocates a different pair, which is exactly what should happen. It is
+    /// also what `plan::converging` counts, so the next pass is three seconds away and each one
+    /// quarantines another pair. One contested port would take the whole range inside a couple of
+    /// hours and put every other room into exhaustion.
+    ///
+    /// So this asserts the room is `failed` with a `retry_after`, which is the same "keep trying,
+    /// paced" the backoff has always meant — and that the pair it could not have is quarantined
+    /// rather than handed straight back.
+    #[tokio::test]
+    async fn a_refused_address_paces_the_room_rather_than_retrying_at_the_convergence_cadence() {
+        testdb::with_db(|pool| async move {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let layout = Layout::new(tmp.path());
+            let cluster = FakeCluster::new();
+            let site = site();
+            let ctx = context(&pool, &cluster, &layout, &site);
+
+            let mut conn = pool.get().await.expect("connection");
+            let generation = testdb::insert_generation(&mut conn, &layout, 4).await;
+            let room = testdb::insert_room(
+                &mut conn,
+                generation,
+                NewRoom {
+                    state: "idle",
+                    desired: "running",
+                    ..Default::default()
+                },
+            )
+            .await;
+            testdb::insert_slot(&mut conn, room, 1, None).await;
+
+            cluster.refuse_ingress(
+                "already_allocated_incompatible_service",
+                "port is already allocated to another service",
+            );
+            execute(&ctx, &action(&pool, room, Step::Start).await)
+                .await
+                .expect("start");
+
+            let observed = testdb::observed(&mut conn, room).await.expect("the room");
+            assert_eq!(
+                observed.state, "failed",
+                "an idle room that wants to run is re-planned every convergence pass, so this has \
+                 to rest in `failed` or it burns a port pair every three seconds"
+            );
+            assert!(
+                observed.retry_after.is_some(),
+                "the wait is what paces it; without one the planner retries immediately"
+            );
+            assert_eq!(observed.failure_count, 1);
+            // Cilium's own words, so the room page can explain itself.
+            let error = observed.last_error.unwrap_or_default();
+            assert!(
+                error.contains("already_allocated_incompatible_service"),
+                "the reason belongs on the room, got {error:?}"
+            );
+
+            // The pair is held out rather than handed straight back to the next allocation.
+            assert_eq!(
+                testdb::reservation(&mut conn, room).await,
+                None,
+                "a refused pair is unbound and quarantined"
+            );
+            // And nothing is left running on an address that was never assigned.
+            let snapshot = cluster.snapshot().await.expect("snapshot");
+            assert_eq!(snapshot.deployment(room), None);
         })
         .await;
     }

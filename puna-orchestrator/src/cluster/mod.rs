@@ -135,6 +135,18 @@ impl ServiceSpec {
     pub fn name(&self) -> String {
         object_name(self.room_id)
     }
+
+    /// The ports this Service publishes, in the order the manifest lists them.
+    ///
+    /// Shared with the fake rather than restated there, so a room's published set cannot mean one
+    /// thing in the manifest builder and another in every test that reads it back.
+    pub fn published_ports(&self) -> Vec<u16> {
+        let mut ports = vec![self.base_port];
+        if self.wants_filtered {
+            ports.push(self.base_port + 1);
+        }
+        ports
+    }
 }
 
 /// A room's Secret: the environment `spec::secret::build` produced.
@@ -196,18 +208,41 @@ pub struct RoomService {
     pub room_id: Option<RoomId>,
     /// `status.loadBalancer.ingress[0].ip`, once IPAM has answered.
     ///
-    /// **`None` is ambiguous, and that is the gap worth knowing about.** It means "not yet" for the
-    /// 0.3–0.5 s IPAM normally takes, and it *also* means "refused" — a port conflict on a Service
-    /// that requested a specific address gets no allocation at all rather than a different one. The
-    /// two are indistinguishable here because this struct carries only the address; Cilium states
-    /// the reason in the Service's `IPAMRequestSatisfied` condition, which nothing reads.
+    /// **`None` alone is ambiguous**, which is why [`RoomService::ipam_refusal`] sits beside it. It
+    /// means "not yet" for the 0.3–0.5 s IPAM normally takes, and it *also* means "refused" — a port
+    /// conflict on a Service that requested a specific address gets no allocation at all rather than
+    /// a different one. Read together the two are decisive: an absent address with a refusal is
+    /// permanent, an absent address without one is a room to look at again next pass.
     ///
     /// A value that is not the configured address is a different failure again, and still worth
     /// quarantining — it just is not the one a port collision produces.
     pub ingress_ip: Option<String>,
+    /// Why IPAM refused, when it did — the `IPAMRequestSatisfied` condition read as `False`.
+    ///
+    /// **`None` covers satisfied, still deciding, and not published at all**, which is deliberate:
+    /// only an explicit `False` is a refusal, so a Cilium that does not publish the condition
+    /// degrades to the old behavior of waiting rather than to tearing rooms down. Fails safe in the
+    /// one direction that matters.
+    pub ipam_refusal: Option<IpamRefusal>,
+    /// The published ports, which is how a refusal is attributed. A conflict is a fact about a
+    /// port, and the only way to tell "somebody else took it" from "Puna leaked a Service holding
+    /// it" is to look at what Puna's own Services are holding.
+    pub ports: Vec<u16>,
     /// `None` means nothing will ever garbage-collect this: either the ownerReference was written
     /// without a uid or the Deployment it named is already gone.
     pub owner_uid: Option<String>,
+}
+
+/// Cilium declining to allocate, in its own words.
+///
+/// Both halves are kept because they answer different questions. `reason` is a stable enum
+/// (`already_allocated_incompatible_service` for the port collision) and is what anything
+/// programmatic should branch on; `message` is prose that names specifics and is what a person
+/// reads out of a `room_events` row at the moment they are wondering why a room will not come up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IpamRefusal {
+    pub reason: String,
+    pub message: String,
 }
 
 /// A Secret as the reconciler sees it. Never its contents — a sweep needs to know a Secret exists

@@ -32,7 +32,7 @@
 use puna_core::ids::RoomId;
 
 use crate::cluster::{
-    ClusterApi, ClusterError, OwnerRef, RoomSpec, SecretSpec, ServiceSpec, object_name,
+    ClusterApi, ClusterError, IpamRefusal, OwnerRef, RoomSpec, SecretSpec, ServiceSpec, object_name,
 };
 use crate::spec::Site;
 use crate::spec::secret::SecretData;
@@ -67,6 +67,16 @@ pub enum Started {
 
     /// IPAM has not answered yet. Nothing is wrong; the next tick reads it again.
     AwaitingAddress,
+
+    /// **IPAM said no.** The port is taken on the shared address, so this pair will never be
+    /// satisfied — Cilium's specific-request branch refuses outright rather than allocating
+    /// somewhere else, which is what separates this from [`Started::AddressMismatch`].
+    ///
+    /// Acted on at the first sighting, like a mismatch and for the same reason: the read behind it
+    /// is `get_service`, which is authoritative, so there is no stale snapshot to wait out. The
+    /// Deployment is already deleted (which collects the Service, releasing the request); the
+    /// caller quarantines the pair and the next pass allocates a different one.
+    AddressRefused { refusal: IpamRefusal },
 
     /// The previous Deployment is still draining, so the name is taken and nothing can be created
     /// under it yet. Nothing is wrong: the room stays `idle` **keeping its reservation**, and the
@@ -198,7 +208,19 @@ pub async fn ensure_room_running(
 
     // 6. Never advertise an address that is not the one DNS points at.
     match service.ingress_ip {
-        None => Ok(Started::AwaitingAddress),
+        // A refusal is stated, so an absent address is only "not yet" when nothing says otherwise.
+        None => match service.ipam_refusal {
+            Some(refusal) => {
+                // Same ordering as the mismatch below, for the same reason: the Deployment has to
+                // go before the caller quarantines, or the still-live Service keeps asking for a
+                // port the allocator has already moved on from.
+                cluster
+                    .delete_deployment(&object_name(spec.room_id))
+                    .await?;
+                Ok(Started::AddressRefused { refusal })
+            }
+            None => Ok(Started::AwaitingAddress),
+        },
         Some(ip) if ip == request.site.lb_ip => Ok(Started::Converged {
             uid,
             ingress_ip: ip,
@@ -594,6 +616,64 @@ mod tests {
             snapshot.service(room),
             None,
             "the bad allocation has to be gone before the caller quarantines the pair"
+        );
+    }
+
+    /// Cilium's *other* conflict branch: a specific request that collides is refused outright.
+    ///
+    /// The distinction this asserts is the whole reason the condition is read. Both this and
+    /// [`an_address_that_has_not_arrived_yet_is_not_a_failure`] present an absent `ingress_ip`; only
+    /// one of them is a room that will never come up on this pair.
+    #[tokio::test]
+    async fn a_refused_allocation_tears_the_room_down_rather_than_waiting_forever() {
+        let cluster = FakeCluster::new();
+        let mut recorder = Recording::default();
+        let room = RoomId::new();
+        let spec = spec(room, "pahoa:test");
+
+        cluster.refuse_ingress(
+            "already_allocated_incompatible_service",
+            "port 40000/TCP is already allocated to another service",
+        );
+        let started = start(&cluster, &spec, &mut recorder).await.expect("start");
+        assert_eq!(
+            started,
+            Started::AddressRefused {
+                refusal: IpamRefusal {
+                    reason: "already_allocated_incompatible_service".into(),
+                    message: "port 40000/TCP is already allocated to another service".into(),
+                }
+            }
+        );
+
+        // Same ordering the mismatch path needs: the request has to be released before the caller
+        // quarantines the pair and allocates a different one.
+        let snapshot = cluster.snapshot().await.expect("snapshot");
+        assert_eq!(snapshot.deployment(room), None);
+        assert_eq!(snapshot.service(room), None);
+    }
+
+    /// A cluster that publishes no condition must keep the old behavior.
+    ///
+    /// The one direction this may not fail in. Reading a missing condition as a refusal would tear
+    /// down every room in an environment whose Cilium is a version older than the one this was
+    /// written against — during the 0.3–0.5 s every healthy room spends without an address.
+    #[tokio::test]
+    async fn a_silent_cluster_is_waited_on_rather_than_treated_as_a_refusal() {
+        let cluster = FakeCluster::new();
+        let mut recorder = Recording::default();
+        let spec = spec(RoomId::new(), "pahoa:test");
+
+        // No `refuse_ingress`: the address is simply not there yet, and nothing says why.
+        cluster.delay_ingress(1);
+        assert_eq!(
+            start(&cluster, &spec, &mut recorder).await.expect("start"),
+            Started::AwaitingAddress
+        );
+        assert_eq!(
+            cluster.object_names().len(),
+            3,
+            "an unexplained absence must leave the room's objects alone"
         );
     }
 

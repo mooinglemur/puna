@@ -632,6 +632,8 @@ mod tests {
                 name: "mw-live".into(),
                 room_id: Some(room),
                 ingress_ip: Some("192.0.2.10".into()),
+                ipam_refusal: None,
+                ports: vec![40000, 40001],
                 owner_uid: Some("uid-mw-live".into()),
             }],
             ..Default::default()
