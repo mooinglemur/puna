@@ -37,7 +37,9 @@ need to.</p>
     {# **Only on the multiworld view.** A slot's own page renders exactly one row here, so a filter
        over it can do nothing but hide it. `tracker.js` guards on the box's absence already. #}
     {% if slot.is_none() %}
-    <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter slots">
+    <div class="table-controls">
+      <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter slots">
+    </div>
     {% endif %}
     <div class="table-scroll">
       <div class="scroll-x">
@@ -63,7 +65,9 @@ need to.</p>
          because the live document is all it has; Puna has the seed. --- #}
   <section class="table-block" data-view="locations">
     <h2>Locations</h2>
-    <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter locations">
+    <div class="table-controls">
+      <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter locations">
+    </div>
     {# **Bounded, and ONE scroll container rather than two.** These two tables are the only ones on
        the site whose length is unbounded by anything a person chose -- a slot's world can hold
        thousands of locations -- so they scroll inside themselves instead of making the page
@@ -129,7 +133,9 @@ need to.</p>
   <section class="table-block" data-view="hints">
     <details>
       <summary><h2>Hints</h2></summary>
-      <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter hints">
+      <div class="table-controls">
+        <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter hints">
+      </div>
       <div class="table-scroll">
         <div class="scroll-x">
         <table>

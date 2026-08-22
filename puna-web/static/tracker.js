@@ -417,6 +417,15 @@
   // The interval comes from the server (`next_poll_ms`), derived from the document's own cache
   // window: asking faster than that cannot produce new data, and only the server knows what it is.
 
+  // **The controls are revealed here, exactly as `table.js` does it for the server-rendered
+  // tables.** The class means "filtering and sorting are live on this page", not "table.js loaded"
+  // -- and this file drives its own, so it has to say so too.
+  //
+  // Saying otherwise is what hid the items filter and its toggle: the stylesheet gates
+  // `.table-controls` on the class, `table.js` was the only thing setting it, and the tracker does
+  // not load `table.js`.
+  document.documentElement.classList.add("js-tables");
+
   const tables = Array.from(root.querySelectorAll(".table-block")).map((s) => new Table(s));
   const freshness = document.getElementById("freshness");
 

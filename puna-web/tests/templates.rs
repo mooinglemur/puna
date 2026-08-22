@@ -977,6 +977,47 @@ fn a_filter_box_is_hidden_until_the_script_that_drives_it_arrives() {
         "nothing reveals `.table-controls`, so the box never appears at all"
     );
 
+    // **Every page with a filter box must load something that reveals it.** This is the half that
+    // was missing, and it cost exactly what it protects: the tracker has its own `tracker.js` and
+    // does not load `table.js`, so wrapping one of its boxes in `.table-controls` hid the box AND
+    // the toggle beside it -- gated by a class nothing on that page ever set. The markup was right,
+    // the stylesheet was right, and the control was invisible.
+    for path in templates() {
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("could not read {path:?}: {e}"));
+
+        // **Fragments are checked through the pages that include them, not on their own.**
+        // `admin/resting.html` carries a filter box and loads nothing, because it is injected into
+        // `/admin/rooms` and included by `resting_page.html` -- both of which load the script. So a
+        // page is expanded with whatever it includes before being asked, and a template that
+        // extends nothing is skipped as a fragment.
+        if !raw.contains("{% extends") {
+            continue;
+        }
+        let page = expand_includes(&raw);
+        if !page.contains("class=\"table-search\"") {
+            continue;
+        }
+        let raw = page;
+
+        // Which scripts this page pulls in, and whether any of them says the class.
+        let reveals = raw
+            .match_indices("/static/")
+            .filter_map(|(at, _)| raw[at + "/static/".len()..].split(['?', '"']).next())
+            .filter(|f| f.ends_with(".js"))
+            .any(|file| {
+                std::fs::read_to_string(source(&format!("static/{file}")))
+                    .is_ok_and(|js| js.contains(r#"classList.add("js-tables")"#))
+            });
+
+        assert!(
+            reveals,
+            "{}: renders a filter box but loads no script that adds `js-tables`, so the stylesheet \
+             keeps it hidden and the control never appears",
+            label(&path)
+        );
+    }
+
     // And every box names a table that exists in the same template, the way a `popovertarget` must.
     // A typo here is a box that renders, focuses, and filters nothing.
     let mut boxes = 0;
@@ -1054,4 +1095,36 @@ fn a_shorthand_duration_carries_the_instant_behind_it() {
         stamped >= 5,
         "only {stamped} timestamped cells found -- this lint is no longer looking at anything"
     );
+}
+
+/// A template with every `{% include "x" %}` replaced by the file it names.
+///
+/// One level deep, which is all this codebase has. Anything unreadable is left as the include tag,
+/// so a renamed partial shows up as a missing feature rather than as a silent pass.
+fn expand_includes(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut rest = source;
+
+    while let Some(at) = rest.find("{% include \"") {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + "{% include \"".len()..];
+        let Some((name, tail)) = after.split_once('"') else {
+            out.push_str(rest);
+            return out;
+        };
+        match std::fs::read_to_string(source_template(name)) {
+            Ok(included) => out.push_str(&included),
+            Err(_) => out.push_str(&rest[at..at + "{% include \"".len() + name.len()]),
+        }
+        rest = tail;
+    }
+
+    out.push_str(rest);
+    out
+}
+
+fn source_template(relative: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("templates")
+        .join(relative)
 }
