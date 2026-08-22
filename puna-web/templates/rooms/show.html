@@ -71,8 +71,12 @@
 
 <h2>Slots</h2>
 {# Filter and sort come from `table.js`, which reorders the rows the server already sent rather than
-   rendering any. Without scripting the box and the arrows are simply absent and the table is the
-   order the server chose. #}
+   rendering any. Without scripting the arrows are absent, because script draws them -- and the box
+   is HIDDEN rather than absent, since it is plain markup and would otherwise sit there looking
+   usable while typing into it did nothing. `table.js` puts `js-tables` on <html>; the stylesheet
+   reveals it from there, the same gate `.theme` and `.copy` sit behind.
+
+   This comment used to claim the box was absent too. It was not, and had never been. #}
 <div class="table-controls">
 <input type="search" class="table-search" data-filters="slots"
        placeholder="Filter slots" aria-label="Filter slots">

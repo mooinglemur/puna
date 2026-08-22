@@ -124,5 +124,13 @@
   }
 
   window.PunaTables = { scan: scan };
+
+  // **The filter boxes are revealed here, not rendered visible.** They do nothing without this
+  // file: the sort arrows are drawn by script and are simply absent with scripting off, but a
+  // `<input type="search">` is plain markup and would sit there looking usable while typing into it
+  // did nothing -- which is worse than no control, and is the reason `.theme` and `.copy` are both
+  // gated the same way. The comment claiming the box was "simply absent" was wrong for as long as
+  // it stood.
+  document.documentElement.classList.add("js-tables");
   scan(document);
 })();

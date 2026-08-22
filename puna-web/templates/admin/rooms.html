@@ -32,7 +32,16 @@ computed until it completes a tick.</p>
 <p class="warning">{{ drifted +}} room(s) are not running the configured spec. Redeploying them
 queues each one; the orchestrator redeploys one per tick, oldest request first, so players are
 disconnected a room at a time rather than all at once.
-<button type="submit">Redeploy all drifted rooms</button></p>
+<button type="submit" class="with-icon">
+<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+<path d="M2.6 8a5.4 5.4 0 0 1 9.2-3.8" fill="none" stroke="currentColor" stroke-linecap="round"/>
+<path d="M11.8 1.2v3h-3" fill="none" stroke="currentColor" stroke-linecap="round"
+      stroke-linejoin="round"/>
+<path d="M13.4 8a5.4 5.4 0 0 1-9.2 3.8" fill="none" stroke="currentColor" stroke-linecap="round"/>
+<path d="M4.2 14.8v-3h3" fill="none" stroke="currentColor" stroke-linecap="round"
+      stroke-linejoin="round"/>
+</svg>
+Redeploy all drifted rooms</button></p>
 </form>
 {% endif %}
 
@@ -127,7 +136,19 @@ disconnected a room at a time rather than all at once.
   <span class="tag">redeploy queued</span>
   {% else if row.running_image.is_some() %}
   <form method="post" action="/admin/rooms/{{ row.id }}/redeploy" class="inline">
-    <button type="submit">Redeploy</button>
+    {# A glyph BESIDE the word, not instead of it. The pairing with the pin below is deliberate --
+       see its note -- and turning this into a second icon-only control would flatten the one thing
+       that distinguishes "disconnects everybody" from "changes whether a timer applies". #}
+    <button type="submit" class="with-icon">
+<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+<path d="M2.6 8a5.4 5.4 0 0 1 9.2-3.8" fill="none" stroke="currentColor" stroke-linecap="round"/>
+<path d="M11.8 1.2v3h-3" fill="none" stroke="currentColor" stroke-linecap="round"
+      stroke-linejoin="round"/>
+<path d="M13.4 8a5.4 5.4 0 0 1-9.2 3.8" fill="none" stroke="currentColor" stroke-linecap="round"/>
+<path d="M4.2 14.8v-3h3" fill="none" stroke="currentColor" stroke-linecap="round"
+      stroke-linejoin="round"/>
+</svg>
+      Redeploy</button>
   </form>
   {% else %}
   {# Nothing to redeploy. Offering the control here would teach people it does nothing. #}
@@ -176,6 +197,14 @@ disconnected a room at a time rather than all at once.
 <p>No rooms are meant to be running in this environment.</p>
 {% endif %}
 
+{# **Above the stopped-and-closed section, because it describes the controls in the table ABOVE it.**
+   At the foot of the page it sat under a collapsed `<details>`, so the sentence explaining what the
+   button you just pressed will do was the one thing you had to scroll past a closed section to
+   reach. #}
+<p class="hint">A redeploy typically takes less than a minute from pressing the button, and the room&rsquo;s players
+are typically disconnected for about 15-20 seconds. The room saves on the way down, keeps its port, and clients
+reconnect on their own once it is back.</p>
+
 {# **Loaded on demand, because this list only grows.** Every room anybody ever stopped stays in the
    database, so putting them in the table above would mean the page an operator opens during an
    incident gets slower every week -- while answering a question about the rooms that are supposed
@@ -197,9 +226,6 @@ disconnected a room at a time rather than all at once.
 </details>
 {% endif %}
 
-<p class="hint">A redeploy typically takes less than a minute from pressing the button, and the room&rsquo;s players
-are typically disconnected for about 15-20 seconds. The room saves on the way down, keeps its port, and clients
-reconnect on their own once it is back.</p>
 
 {% endblock %}
 

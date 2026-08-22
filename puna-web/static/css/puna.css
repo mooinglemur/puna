@@ -748,7 +748,23 @@ summary { cursor: pointer; }
 }
 
 /* The search box and any toggles beside it, on one line until the viewport says otherwise. */
-.table-controls {
+/* A button carrying a glyph beside its word, rather than instead of it.
+   `inline-flex` so the two are centred against each other -- left as inline content the svg sits on
+   the text baseline and rides a little low. An explicit class rather than `button:has(svg)`, so a
+   browser without `:has()` gets the same layout instead of the fallback. */
+.with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* Hidden until `table.js` reveals it, the same gate `.theme` and `.copy` sit behind and for the same
+   reason: filtering is entirely that file's doing, so without it the box is a text field somebody
+   types into while nothing happens. The sort arrows need no gate -- script draws them, so they are
+   genuinely absent -- but a search input is plain markup and would look perfectly usable. */
+.table-controls { display: none; }
+
+.js-tables .table-controls {
   display: flex;
   flex-wrap: wrap;
   align-items: center;

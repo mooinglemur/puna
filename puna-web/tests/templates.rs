@@ -933,3 +933,59 @@ fn every_column_has_a_heading() {
         offenders.join("\n  ")
     );
 }
+
+/// **A filter box that scripting has not reached must not look usable.**
+///
+/// Three files have to agree and each spells the contract differently, so no grep in one finds the
+/// others: a template renders `class="table-search"`, `table.js` adds `js-tables` to `<html>`, and
+/// `puna.css` reveals `.table-controls` from that class. Break any one and the box still renders,
+/// still takes focus, still accepts typing — and filters nothing, with no error anywhere. It is the
+/// same failure `.theme` and `.copy` are gated against, and the same shape as the theme lint below.
+///
+/// The room page's own comment asserted the box was "simply absent" without scripting for as long
+/// as it stood, which is how this went unnoticed: the claim was in the file and was never true.
+#[test]
+fn a_filter_box_is_hidden_until_the_script_that_drives_it_arrives() {
+    let css = code_only_css(&std::fs::read_to_string(source("static/css/puna.css")).expect("css"));
+    let script = std::fs::read_to_string(source("static/table.js")).expect("table.js");
+
+    // The script's half.
+    assert!(
+        script.contains("classList.add(\"js-tables\")"),
+        "table.js no longer marks the document, so every filter box stays hidden for everyone"
+    );
+
+    // The stylesheet's half, both directions: hidden by default, revealed by the class.
+    assert!(
+        css.contains(".table-controls { display: none; }"),
+        "`.table-controls` is no longer hidden by default, so the box shows without its script"
+    );
+    assert!(
+        css.contains(".js-tables .table-controls"),
+        "nothing reveals `.table-controls`, so the box never appears at all"
+    );
+
+    // And every box names a table that exists in the same template, the way a `popovertarget` must.
+    // A typo here is a box that renders, focuses, and filters nothing.
+    let mut boxes = 0;
+    for path in templates() {
+        let source = blank_comments(
+            &std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("could not read {path:?}: {e}")),
+        );
+        let ids: Vec<&str> = attribute_values(&source, "id=\"").collect();
+        for target in attribute_values(&source, "data-filters=\"") {
+            boxes += 1;
+            assert!(
+                ids.contains(&target),
+                "{}: data-filters=\"{target}\" names no table in this template",
+                label(&path)
+            );
+        }
+    }
+
+    assert!(
+        boxes >= 3,
+        "only {boxes} filter boxes found -- this lint is no longer looking at anything"
+    );
+}
