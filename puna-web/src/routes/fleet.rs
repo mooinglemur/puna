@@ -63,12 +63,18 @@ pub struct Row {
     /// `data-value` in preference to the cell's text for exactly this.
     pub deployed_secs: Option<i64>,
     pub restarted_secs: Option<i64>,
+    /// The same instants as epoch milliseconds, for the `title` `localtime.js` renders in the
+    /// reader's own timezone. The shorthand answers "how long ago"; this answers "when", which is
+    /// the question somebody has once they are correlating with a log line.
+    pub deployed_at_ms: Option<i64>,
+    pub restarted_at_ms: Option<i64>,
     pub clients: Option<i32>,
     pub redeploy_pending: bool,
     /// How long the room has been quiet, and the same span as a sort key. `None` for a room that is
     /// not running -- nothing is idling on a room that is already off.
     pub idle: Option<String>,
     pub idle_secs: Option<i64>,
+    pub idle_at_ms: Option<i64>,
     /// Whether the reaper is barred from this room, and who barred it.
     pub pinned: bool,
     pub pinned_by: Option<String>,
@@ -119,6 +125,14 @@ fn tag_of(image: &str) -> Option<String> {
 }
 
 /// The same span `ago` renders, as a number a column can be ordered by.
+/// The instant itself, for a tooltip the browser renders in its own timezone.
+///
+/// Sent rather than reconstructed from the age beside it: the server knows the moment exactly, and
+/// `now - age` in the browser would fold in page latency and any clock skew for no reason.
+fn at_ms(at: chrono::DateTime<chrono::Utc>) -> i64 {
+    at.timestamp_millis()
+}
+
 fn elapsed_secs(at: chrono::DateTime<chrono::Utc>) -> i64 {
     (chrono::Utc::now() - at).num_seconds().max(0)
 }
@@ -171,12 +185,15 @@ fn rows_of(overview: &Overview) -> Vec<Row> {
             drift: room.drift(fleet_image).map(|d| d.label()),
             deployed_ago: room.deployment_created_at.map(ago),
             restarted_ago: room.restarted_since_deploy().map(ago),
+            deployed_at_ms: room.deployment_created_at.map(at_ms),
+            restarted_at_ms: room.restarted_since_deploy().map(at_ms),
             deployed_secs: room.deployment_created_at.map(elapsed_secs),
             restarted_secs: room.restarted_since_deploy().map(elapsed_secs),
             clients: room.clients_connected,
             redeploy_pending: room.redeploy_requested_at.is_some(),
             idle: room.idle_since().map(ago),
             idle_secs: room.idle_since().map(elapsed_secs),
+            idle_at_ms: room.idle_since().map(at_ms),
             pinned: room.pinned_at.is_some(),
             pinned_by: room.pinned_by_name.clone(),
         })

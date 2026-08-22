@@ -101,10 +101,10 @@ Redeploy all drifted rooms</button></p>
   {% endif %}
 </td>
 {# `data-value` because "6d 2h" and "40m" do not compare as text in the order they mean. #}
-<td{% if let Some(secs) = row.deployed_secs +%} data-value="{{ secs }}"{% endif %}>
+<td{% if let Some(secs) = row.deployed_secs +%} data-value="{{ secs }}"{% endif %}{% if let Some(at) = row.deployed_at_ms +%} data-at="{{ at }}"{% endif %}>
 {%- if let Some(age) = row.deployed_ago %}{{ age }}{% else %}<span class="hint">&mdash;</span>{% endif -%}
 </td>
-<td{% if let Some(secs) = row.restarted_secs +%} data-value="{{ secs }}"{% endif %}>
+<td{% if let Some(secs) = row.restarted_secs +%} data-value="{{ secs }}"{% endif %}{% if let Some(at) = row.restarted_at_ms +%} data-at="{{ at }}"{% endif %}>
   {# Shown only when the process is younger than its Deployment by more than a tick, which means
      Kubernetes moved the pod or the container restarted in place -- the room reloaded its save and
      every client reconnected. Never is the healthy case. #}
@@ -115,7 +115,7 @@ Redeploy all drifted rooms</button></p>
   {% endif %}
 </td>
 <td>{% if let Some(n) = row.clients %}{{ n }}{% else %}<span class="hint">&mdash;</span>{% endif %}</td>
-<td{% if let Some(secs) = row.idle_secs +%} data-value="{{ secs }}"{% endif %}>
+<td{% if let Some(secs) = row.idle_secs +%} data-value="{{ secs }}"{% endif %}{% if let Some(at) = row.idle_at_ms +%} data-at="{{ at }}"{% endif %}>
 {%- if row.pinned %}
 {# Stated where the number would be, because the number is what the reaper acts on and here it does
    not. Who pinned it answers the question the tag raises. #}
@@ -232,6 +232,7 @@ reconnect on their own once it is back.</p>
 {% block scripts %}
 {# `table.js` first: `ondemand.js` calls into it after injecting a table, and both are `defer`, so
    they execute in document order and the API exists by then. #}
+<script src="/static/localtime.js?v={{ base.static_version }}" defer></script>
 <script src="/static/table.js?v={{ base.static_version }}" defer></script>
 <script src="/static/ondemand.js?v={{ base.static_version }}" defer></script>
 {% endblock %}

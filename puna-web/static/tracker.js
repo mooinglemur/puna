@@ -99,10 +99,25 @@
   function age(msAgo) {
     if (msAgo === null || msAgo === undefined) return { text: "never", class: "hint" };
     const minutes = Math.floor((msAgo + (Date.now() - lastResponseAt)) / 60000);
-    if (minutes < 1) return "just now";
-    if (minutes < 60) return `${minutes}m ago`;
-    if (minutes < 2880) return `${Math.floor(minutes / 60)}h ago`;
-    return `${Math.floor(minutes / 1440)}d ago`;
+    const text =
+      minutes < 1
+        ? "just now"
+        : minutes < 60
+          ? `${minutes}m ago`
+          : minutes < 2880
+            ? `${Math.floor(minutes / 60)}h ago`
+            : `${Math.floor(minutes / 1440)}d ago`;
+
+    // **The exact moment, behind the shorthand.** `lastResponseAt` is when this document arrived
+    // and `msAgo` is how old the event was THEN, so their difference is the instant itself -- and
+    // it does not drift as the page sits open, unlike the age above it.
+    //
+    // Computed here rather than swept afterwards because these cells are rebuilt on every render;
+    // a sweep would have to re-walk the table each time and would race the next one.
+    const title = window.PunaTime
+      ? window.PunaTime.absolute(lastResponseAt - msAgo)
+      : undefined;
+    return title ? { text, title } : text;
   }
 
   function idFromApi() {
@@ -290,6 +305,8 @@
       td.appendChild(target);
     }
     target.textContent = value.text;
+    // On the CELL rather than the link inside it, so the whole cell is a hover target.
+    if (value.title) td.title = value.title;
     if (value.class) td.classList.add(value.class);
     if (value.tag) {
       const tag = document.createElement("span");

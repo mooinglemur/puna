@@ -49,8 +49,11 @@ pub struct Row {
     pub changed_by: Option<String>,
     pub joined: String,
     pub joined_secs: i64,
+    /// The instants behind the two ages, as epoch milliseconds. See `fleet::at_ms`.
+    pub joined_at_ms: i64,
     pub last_seen: String,
     pub last_seen_secs: i64,
+    pub last_seen_at_ms: i64,
     pub rooms_created: i64,
     pub slots_held: i64,
     /// Whether the "view as" control is offered. Not for yourself: it would be a session rewrite
@@ -98,6 +101,8 @@ fn rows_of(users: Vec<AdminUser>, viewer: i64) -> Vec<Row> {
             changed_by: u.changed_by_name.clone(),
             joined: ago(u.first_seen_at),
             joined_secs: elapsed_secs(u.first_seen_at),
+            joined_at_ms: u.first_seen_at.timestamp_millis(),
+            last_seen_at_ms: u.last_seen_at.timestamp_millis(),
             last_seen: ago(u.last_seen_at),
             last_seen_secs: elapsed_secs(u.last_seen_at),
             rooms_created: u.rooms_created,

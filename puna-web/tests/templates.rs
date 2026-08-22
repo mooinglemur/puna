@@ -1001,3 +1001,57 @@ fn a_filter_box_is_hidden_until_the_script_that_drives_it_arrives() {
         "only {boxes} filter boxes found -- this lint is no longer looking at anything"
     );
 }
+
+/// **Every shorthand duration carries the instant behind it**, and the three files that make that
+/// work have to agree.
+///
+/// A cell reading "6d 2h" answers how long ago and cannot answer *when* — which is the question
+/// somebody has once they are correlating a row with a log line or somebody else's account. The
+/// exact moment goes in a `title`, rendered in the reader's own timezone, which is why it is the
+/// browser's job: the server has the instant and does not have the reader.
+///
+/// Break any part and the page still renders perfectly — there is simply no tooltip, on hover, with
+/// nothing logged. So: the templates emit `data-at`, `localtime.js` reads it, and every page that
+/// renders one loads the file.
+#[test]
+fn a_shorthand_duration_carries_the_instant_behind_it() {
+    let script = std::fs::read_to_string(source("static/localtime.js")).expect("localtime.js");
+
+    // The CALL, not any mention of the attribute -- the first version of this asserted
+    // `contains("[data-at]")` and matched the doc comment on `stamp` describing what it sweeps, so
+    // it passed with the selector renamed. Fourth time in this codebase a lint has matched its own
+    // prose; see the note on the theme selector.
+    assert!(
+        script.contains(r#"querySelectorAll("[data-at]")"#),
+        "localtime.js no longer sweeps the attribute the templates emit"
+    );
+    assert!(
+        script.contains("window.PunaTime"),
+        "the formatter is not exported, so tracker.js cannot reach it for the cells it builds"
+    );
+
+    let mut stamped = 0;
+    for path in templates() {
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("could not read {path:?}: {e}"));
+        let source = blank_comments(&raw);
+        let count = source.matches("data-at=").count();
+        if count == 0 {
+            continue;
+        }
+        stamped += count;
+
+        // The page has to actually load the helper, or the attribute is inert markup.
+        assert!(
+            raw.contains("/static/localtime.js"),
+            "{}: renders {count} `data-at` cell(s) and never loads localtime.js, so the tooltips \
+             silently never appear",
+            label(&path)
+        );
+    }
+
+    assert!(
+        stamped >= 5,
+        "only {stamped} timestamped cells found -- this lint is no longer looking at anything"
+    );
+}

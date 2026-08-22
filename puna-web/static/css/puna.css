@@ -764,6 +764,12 @@ tbody tr:hover { background: var(--surface); }
    a room's slot count, an admin's fleet -- and is left to the page. */
 .table-scroll.bounded { max-height: min(60vh, 40rem); }
 
+/* **Locations gets half.** It is the longest table on the site and the least often read line by
+   line -- a slot's world runs to thousands of entries, and what somebody wants from it is a search
+   result or a sense of how much is left, not a wall. Items sits above it and is read in order, so
+   it keeps the full height. */
+.table-block[data-view="locations"] .table-scroll.bounded { max-height: min(30vh, 20rem); }
+
 /* The header stays put while the rows move under it, which is the whole reason a bounded table is
    usable at all: a location list scrolled 400 rows deep is meaningless without its columns.
    Resolves against `.table-scroll`, which is why these tables have ONE wrapper -- see the note in

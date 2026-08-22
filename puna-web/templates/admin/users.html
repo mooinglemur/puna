@@ -82,8 +82,8 @@ theirs to lose.</p>
 <div class="hint">{% if row.is_active %}restored{% else %}set{% endif +%} by {{+ who }}</div>
 {% endif %}
 </td>
-<td data-value="{{ row.joined_secs }}">{{ row.joined }}</td>
-<td data-value="{{ row.last_seen_secs }}">{{ row.last_seen }}</td>
+<td data-value="{{ row.joined_secs }}" data-at="{{ row.joined_at_ms }}">{{ row.joined }}</td>
+<td data-value="{{ row.last_seen_secs }}" data-at="{{ row.last_seen_at_ms }}">{{ row.last_seen }}</td>
 <td data-value="{{ row.rooms_created }}">{{ row.rooms_created +}} / {{+ row.slots_held }}</td>
 <td>
 {# The flex row goes on a DIV inside the cell, not on the cell. `display: flex` on a `<td>` removes
@@ -204,6 +204,7 @@ not theirs to lose.</p>
 {% endblock %}
 
 {% block scripts %}
+<script src="/static/localtime.js?v={{ base.static_version }}" defer></script>
 <script src="/static/table.js?v={{ base.static_version }}" defer></script>
 <script src="/static/copy.js?v={{ base.static_version }}" defer></script>
 {% endblock %}

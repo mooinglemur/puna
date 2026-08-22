@@ -143,5 +143,8 @@ need to.</p>
 {% endblock %}
 
 {% block scripts %}
+{# First: `tracker.js` calls `PunaTime.absolute` on the cells it builds, and both are
+   `defer`, so they execute in document order and the helper exists by then. #}
+<script src="/static/localtime.js?v={{ base.static_version }}" defer></script>
 <script src="/static/tracker.js?v={{ base.static_version }}" defer></script>
 {% endblock %}
