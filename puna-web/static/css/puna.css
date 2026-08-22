@@ -160,10 +160,20 @@ td .actions {
    descenders -- while a bare `.act` button is a flex item sized to itself. `align-items: center`
    then centers two boxes of different heights, and the button inside the taller one rides its text
    baseline instead of its centre. Flexing the form collapses it onto the button it contains, so
-   every glyph in the row is measured the same way. */
+   every glyph in the row is measured the same way.
+
+   **`margin: 0` is not tidiness -- it is the other half of the same bug, and this rule CAUSED it.**
+   `form { margin: 0 0 1.25rem }` at the foot of this file applies to these forms like any other.
+   It was inert while they were `display: inline`, because vertical margins do not apply to an
+   inline box -- and the `display: flex` above turns them back into block-level boxes, which
+   re-enables it. `align-items: center` then centres each form's MARGIN box, so every form-wrapped
+   glyph floated about 10px above the bare buttons beside it: half the restored margin. Rows whose
+   controls happened to be all-forms or all-buttons looked perfectly fine, which is what made it
+   read as a row-height problem rather than a margin one. */
 td .actions form {
   display: flex;
   align-items: center;
+  margin: 0;
 }
 
 .act {
@@ -833,6 +843,12 @@ summary { cursor: pointer; }
   display: flex;
   align-items: center;
   gap: 0.35rem;
+  /* **Not tidiness.** `form { margin: 0 0 1.25rem }` below is inert on an inline form and comes back
+     the moment `display: flex` makes this one block-level -- so opening the rename field grew the
+     titlebar by 20px and pushed the whole page down with it, which is precisely the thing this
+     control is built NOT to do. Found by the lint in tests/templates.rs, after the same mistake
+     shipped on `/admin/users`. */
+  margin: 0;
 }
 
 /* Sized toward the heading it stands in for, so the swap reads as the title becoming editable

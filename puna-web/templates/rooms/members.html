@@ -8,7 +8,7 @@
    somebody who is staff, and everything below changes who they are. #}
 <div class="scroll-x">
 <table class="members">
-<thead><tr><th>Discord id</th><th>Name</th><th>Role</th><th>Added</th>{% if may_manage %}<th></th>{% endif %}</tr></thead>
+<thead><tr><th>Discord id</th><th>Name</th><th>Role</th><th>Added</th>{% if may_manage %}<th>Actions</th>{% endif %}</tr></thead>
 <tbody>
 {% for entry in members %}
 <tr>
@@ -63,7 +63,7 @@ it never lowers a role somebody already holds.</p>
 {% if !invites.is_empty() %}
 <div class="scroll-x">
 <table class="invites">
-<thead><tr><th>Link</th><th>Role</th><th>Uses left</th><th></th></tr></thead>
+<thead><tr><th>Link</th><th>Role</th><th>Uses left</th><th>Actions</th></tr></thead>
 <tbody>
 {% for invite in invites %}
 <tr>

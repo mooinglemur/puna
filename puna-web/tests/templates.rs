@@ -849,3 +849,87 @@ fn a_client_error_never_carries_a_converted_error_chain() {
         offenders.join("\n  ")
     );
 }
+
+/// **A `<form>` given a block-level `display` must reset its margin**, because this stylesheet sets
+/// one globally.
+///
+/// `form { margin: 0 0 1.25rem }` is right for the forms that are page sections. It is inert on the
+/// ones marked `.inline`, because **vertical margins do not apply to an inline box** — and that is
+/// exactly what makes the trap invisible: turning such a form into a flex container to line its
+/// contents up *re-enables* a margin that was doing nothing a moment earlier.
+///
+/// It shipped on `/admin/users`. `td .actions form { display: flex; align-items: center }` was added
+/// to stop form-wrapped glyphs riding their text baseline, and the restored 1.25rem then had
+/// `align-items: center` centre each form's **margin box** — floating every form-wrapped glyph about
+/// half that above the bare buttons beside it. Rows whose controls happened to be all forms or all
+/// buttons lined up perfectly, so it read as a row-height problem for two rounds of fixing.
+#[test]
+fn a_form_made_into_a_block_resets_the_margin_this_stylesheet_gives_every_form() {
+    let css = std::fs::read_to_string(source("static/css/puna.css")).expect("puna.css");
+    let mut offenders = Vec::new();
+    let mut examined = 0;
+
+    for block in code_only_css(&css).split('}') {
+        let Some((selector, body)) = block.split_once('{') else {
+            continue;
+        };
+        let selector = selector.trim().replace('\n', " ");
+
+        // Rules that target a `<form>` element by name. `.rename form`, `td .actions form`, and any
+        // future one -- a class selector cannot be checked this way and does not need to be, since
+        // the global default is keyed on the element.
+        if !selector.split(',').any(|s| s.trim().ends_with("form")) {
+            continue;
+        }
+        // Only the ones that make it block-level. An inline form keeps the margin inert.
+        if !(body.contains("display: flex")
+            || body.contains("display: block")
+            || body.contains("display: grid")
+            || body.contains("display: inline-flex"))
+        {
+            continue;
+        }
+        examined += 1;
+
+        if !body.contains("margin") {
+            offenders.push(format!(
+                "{selector}: makes a form block-level without resetting `margin`, so the global \
+                 `form {{ margin: 0 0 1.25rem }}` comes back to life"
+            ));
+        }
+    }
+
+    assert!(
+        examined >= 1,
+        "no block-level form rules found -- this lint is no longer looking at anything"
+    );
+    assert!(
+        offenders.is_empty(),
+        "a margin that was inert on an inline form applies again once it is block-level:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+/// A column of controls says what it is. An empty `<th>` leaves the reader counting cells to work
+/// out what the icons under it do — and it is invisible in review, because the table renders fine.
+#[test]
+fn every_column_has_a_heading() {
+    let mut offenders = Vec::new();
+
+    for path in templates() {
+        let source = blank_comments(
+            &std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("could not read {path:?}: {e}")),
+        );
+        for (at, _) in source.match_indices("<th></th>") {
+            let line = line_of(&source, at).unwrap_or_default();
+            offenders.push(format!("{}:{line}: an unnamed column", label(&path)));
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "these columns render controls under a blank heading:\n  {}",
+        offenders.join("\n  ")
+    );
+}
