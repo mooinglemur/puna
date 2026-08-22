@@ -7,10 +7,32 @@
 //! hundreds of them share one public address as long as their ports stay distinct — measured at 300
 //! Services on one key, all landing on the same IP.
 //!
-//! **The failure mode is silent, and every annotation here is aimed at it.** Cilium does not error
-//! when sharing degrades; its own documentation says conflicting Services "will be allocated
-//! different IPs". A room would come up perfectly healthy on an address DNS never mentions, so the
-//! applier reads `status.loadBalancer.ingress` back and quarantines the pair on a mismatch.
+//! **The failure mode is silent, and every annotation here is aimed at it** — but not in the way
+//! this comment said until 2026-08-22, and the difference decides which of Puna's guards can fire.
+//!
+//! Cilium's documentation says conflicting Services "will be allocated different IPs", and that
+//! sentence is real. It describes **one of two code paths, and a room never takes it.**
+//! `satisfyService` in `operator/pkg/lbipam/lbipam.go` branches on whether the Service requested a
+//! specific address: the "different IPs" behavior is the *generic* branch, which falls through to
+//! allocating a fresh one. Every room Service here sets `lbipam.cilium.io/ips`, so every room takes
+//! the *specific* branch — which on conflict logs
+//! `already_allocated_incompatible_service`, sets `IPAMRequestSatisfied=False`, and `continue`s
+//! **with no address at all.**
+//!
+//! So a port conflict presents as an **absent** address, not a wrong one. Two consequences:
+//!
+//!   * [`Started::AddressMismatch`](crate::apply::Started::AddressMismatch) and the quarantine
+//!     behind it cannot fire for a port conflict. The room lands in `AwaitingAddress` instead and
+//!     re-requests the same conflicting port every tick, forever, with nothing counting it. The
+//!     mismatch machinery is kept because a differing address arriving by some other route is still
+//!     worth refusing to serve — just do not rely on it for this.
+//!   * **The read-back cannot validate `PUNA_LB_IP` itself.** Both sides of that comparison derive
+//!     from the same value, so pointing it at a different pool address is honored by Cilium and
+//!     passes the check. That is structural rather than an oversight, and is covered by an alert on
+//!     the cluster side that holds the anchor as a literal.
+//!
+//! The conclusion is unchanged: the annotations are the design and the read-back is worth having.
+//! Only the mechanism was wrong.
 //!
 //! Two of the four are easy to omit and both have been:
 //!

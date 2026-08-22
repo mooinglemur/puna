@@ -194,9 +194,16 @@ pub struct RoomDeployment {
 pub struct RoomService {
     pub name: String,
     pub room_id: Option<RoomId>,
-    /// `status.loadBalancer.ingress[0].ip`, once IPAM has answered. `None` means "not yet", and
-    /// **a value that is not the configured address is the silent Cilium failure** — the room is
-    /// live on an address DNS never mentions, so §5 quarantines the pair rather than serving it.
+    /// `status.loadBalancer.ingress[0].ip`, once IPAM has answered.
+    ///
+    /// **`None` is ambiguous, and that is the gap worth knowing about.** It means "not yet" for the
+    /// 0.3–0.5 s IPAM normally takes, and it *also* means "refused" — a port conflict on a Service
+    /// that requested a specific address gets no allocation at all rather than a different one. The
+    /// two are indistinguishable here because this struct carries only the address; Cilium states
+    /// the reason in the Service's `IPAMRequestSatisfied` condition, which nothing reads.
+    ///
+    /// A value that is not the configured address is a different failure again, and still worth
+    /// quarantining — it just is not the one a port collision produces.
     pub ingress_ip: Option<String>,
     /// `None` means nothing will ever garbage-collect this: either the ownerReference was written
     /// without a uid or the Deployment it named is already gone.

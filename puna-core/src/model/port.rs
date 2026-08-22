@@ -461,8 +461,9 @@ pub async fn stats(
 ///
 /// Dev and prod have separate clusters, so this should be impossible -- but the two share one
 /// public address and therefore one port space, and a `DATABASE_URL` pointed at the wrong one
-/// would allocate from the wrong half. Cilium reports that as nothing at all: it silently hands
-/// out a second IP and the losing room answers on an address DNS never mentions.
+/// would allocate from the wrong half. Cilium reports that as nothing Puna can see: because every
+/// room requests a specific address, a conflict is **refused** rather than reallocated, and the
+/// room sits in `idle` re-requesting the same port on every tick.
 ///
 /// This is the cheapest of the three guards on that failure, and the only one that catches it
 /// before a single port is allocated. The others are the CHECK constraint on the table and the

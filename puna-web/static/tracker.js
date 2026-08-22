@@ -22,6 +22,12 @@
   // slot's.
   const slotQuery = root.dataset.slot ? `?slot=${encodeURIComponent(root.dataset.slot)}` : "";
 
+  // **Which tracker this is**, and it namespaces every remembered preference. The hints table is on
+  // both pages and its toggle is a different question on each -- "what am I still waiting for"
+  // against "what is outstanding anywhere" -- so sharing one key would make choosing on one page
+  // silently change the other.
+  const pageType = root.dataset.slot ? "slot" : "room";
+
   // Declared up here because `age()` reads it and is called from the first render. The polling loop
   // that maintains it is at the bottom of this file.
   let intervalMs = 60000;
@@ -57,6 +63,9 @@
 
     locations: {
       rows: (d) => d.locations,
+      // Hide what is done, leaving what is left. A predicate on the view rather than a branch in
+      // `Table`, for the same reason `collapse` is one: what "done" means belongs to the view.
+      exclude: (r) => r.checked,
       cells: (r) => [r.name, r.checked ? "✔" : ""],
       rowClass: (r) => (r.checked ? "done" : null),
     },
@@ -84,6 +93,7 @@
 
     hints: {
       rows: (d) => d.hints,
+      exclude: (r) => r.found,
       cells: (r) => [
         r.receiving_name,
         { text: r.item, tag: r.classification === "filler" ? null : r.classification },
@@ -165,14 +175,23 @@
       this.toggle = section.querySelector("[data-toggle]");
       // Read AFTER `toggles.js` has restored it -- both files are `defer`, so they run in document
       // order and the box is already in its remembered state by the time this asks.
-      this.collapsed = !!(this.toggle && this.toggle.checked);
+      this.toggled = !!(this.toggle && this.toggle.checked);
+      // Namespaced by page type, so the hints table's sort on a slot page is not the multiworld's.
+      this.sortKey = `tracker.${pageType}.${this.view}.sort`;
       this.headers = Array.from(section.querySelectorAll("th[data-key]"));
       this.details = section.querySelector("details");
       this.rows = [];
 
       const state = readState();
       this.query = state.get(`${this.view}.q`) || "";
-      this.sort = parseSort(state.get(`${this.view}.sort`));
+      // **The fragment wins where it has an opinion**, because that is what a shared link carries --
+      // somebody sending "look at this sorted by checks" must not have it overridden by whatever
+      // the recipient last chose. Absent one, the remembered sort applies, which is what makes a
+      // fresh visit pick up where the reader left off rather than at the server's order.
+      this.sort = parseSort(
+        state.get(`${this.view}.sort`) ||
+          (window.PunaToggles ? window.PunaToggles.recall(this.sortKey) : "")
+      );
       if (this.search) this.search.value = this.query;
       if (this.details && state.get(`${this.view}.open`) === "1") this.details.open = true;
 
@@ -185,7 +204,7 @@
         // `toggles.js` owns persisting it; this only reacts. Two listeners on one input rather than
         // a callback threaded through, so neither file has to know the other's shape.
         this.toggle.addEventListener("change", () => {
-          this.collapsed = this.toggle.checked;
+          this.toggled = this.toggle.checked;
           this.render();
         });
       }
@@ -246,7 +265,13 @@
     persist() {
       const params = readState();
       setOrDelete(params, `${this.view}.q`, this.query);
-      setOrDelete(params, `${this.view}.sort`, this.sort ? `${this.sort.key}:${this.sort.dir}` : "");
+      const sort = this.sort ? `${this.sort.key}:${this.sort.dir}` : "";
+      setOrDelete(params, `${this.view}.sort`, sort);
+      // Both: the fragment so the view can be shared, the store so it survives arriving without one.
+      // Only the SORT is remembered -- a search box that refilled itself on every visit would hide
+      // rows for a reason the reader has long forgotten typing, and unlike a sort that is not
+      // visible at a glance.
+      if (window.PunaToggles) window.PunaToggles.remember(this.sortKey, sort);
       if (this.details) setOrDelete(params, `${this.view}.open`, this.details.open ? "1" : "");
       writeState(params);
     }
@@ -277,7 +302,13 @@
       // item, among those matching"; filter then collapse would answer "the most recent MATCHING
       // instance", which for a search that excludes the newest one shows an older row as though it
       // were current. Same rows, different meaning, and the wrong one is not visibly wrong.
-      let rows = this.collapsed ? collapse(this.rows, this.config.collapse) : this.rows;
+      let rows = this.rows;
+      if (this.toggled) {
+        // A view declares one or the other, never both today -- but applying collapse first would
+        // be the right order if one ever did: fold duplicates, then drop what is finished.
+        if (this.config.collapse) rows = collapse(rows, this.config.collapse);
+        if (this.config.exclude) rows = rows.filter((row) => !this.config.exclude(row));
+      }
 
       if (needle) {
         // Matched against the RENDERED cells, not the raw fields, so what you can see is what you

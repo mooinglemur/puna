@@ -217,7 +217,8 @@ async fn sixty_four_concurrent_allocations_get_distinct_ports() {
 
         // SKIP LOCKED is what makes this work under READ COMMITTED: N allocators take N distinct
         // rows with no retries and no serialization failures. A bug here is two rooms on one
-        // port, which Cilium resolves by silently allocating a second IP.
+        // port, which Cilium REFUSES rather than resolving: a Service requesting a specific
+        // address gets none at all on conflict, so the room simply never starts.
         let mut tasks = Vec::new();
         for room in rooms {
             let pool = pool.clone();

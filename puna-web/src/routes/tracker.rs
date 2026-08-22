@@ -1235,9 +1235,8 @@ mod tests {
             "the items column is headed `#`, which does not say what it counts"
         );
 
-        let key = "tracker.items.latest";
         assert!(
-            html.contains(&format!(r#"data-toggle="{key}""#)),
+            html.contains(r#"data-toggle="tracker.slot.items.latest""#),
             "the collapse toggle is missing from the items table"
         );
 
@@ -1262,6 +1261,47 @@ mod tests {
         assert!(
             tracker.contains("collapse: { key: \"item\", recency: \"order\" }"),
             "the items view no longer declares how it collapses"
+        );
+    }
+
+    /// **Every remembered preference is keyed by PAGE TYPE**, and the hints table is why.
+    ///
+    /// It is on both trackers, and its toggle asks a different question on each: on a slot's page
+    /// "what am I still waiting for", on the multiworld's "what is outstanding anywhere". One shared
+    /// key would make a choice on one page silently change the other — which looks like the setting
+    /// not persisting, rather than like two views sharing state.
+    #[test]
+    fn a_remembered_preference_is_scoped_to_the_page_it_was_made_on() {
+        let one_slot = tracker_page(Some(1)).render().expect("renders");
+        let multiworld = tracker_page(None).render().expect("renders");
+
+        assert!(
+            one_slot.contains(r#"data-toggle="tracker.slot.hints.hidefound""#),
+            "the slot page's hints toggle is not scoped to it"
+        );
+        assert!(
+            multiworld.contains(r#"data-toggle="tracker.room.hints.hidefound""#),
+            "the multiworld page's hints toggle is not scoped to it"
+        );
+        assert!(
+            !multiworld.contains("tracker.slot."),
+            "the multiworld page carries a slot-scoped key, so the two share state"
+        );
+
+        // The per-slot tables, which exist on one page only.
+        assert!(one_slot.contains(r#"data-toggle="tracker.slot.locations.hidechecked""#));
+        assert!(one_slot.contains(r#"data-toggle="tracker.slot.items.latest""#));
+
+        // And the script derives the same namespace for the sorts it remembers, from the same
+        // signal the template branches on -- `data-slot` being present.
+        let tracker = std::fs::read_to_string("static/tracker.js").expect("tracker.js");
+        assert!(
+            tracker.contains(r#"root.dataset.slot ? "slot" : "room""#),
+            "tracker.js no longer derives the page type, so remembered sorts would collide"
+        );
+        assert!(
+            tracker.contains("`tracker.${pageType}.${this.view}.sort`"),
+            "the remembered sort key is not scoped by page and table"
         );
     }
 

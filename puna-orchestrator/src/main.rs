@@ -276,8 +276,9 @@ async fn reconcile_until_lost(
 /// Refuse to run against the wrong environment's database.
 ///
 /// Dev and prod share one public address and therefore one port space, and Cilium does not report
-/// a collision -- it silently allocates a second IP, leaving a room reachable on an address DNS
-/// never mentions. A `DATABASE_URL` pointed at the wrong environment is unrecoverable, so it is
+/// a collision to Puna: a room requesting a specific address is REFUSED one on conflict, so it
+/// never starts and no counter moves. A `DATABASE_URL` pointed at the wrong environment is
+/// unrecoverable, so it is
 /// checked at startup rather than discovered by a player.
 async fn assert_environment(
     pool: &puna_core::db::Pool,

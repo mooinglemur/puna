@@ -86,6 +86,30 @@
     });
   }
 
-  window.PunaToggles = { get: get, set: set, bind: bind };
+  // --- the same store, for view state that is not a boolean -------------------------------------
+  // A remembered column sort is the same kind of thing as a remembered checkbox: it changes how a
+  // page shows what it already has, nobody else can see it, and losing it costs a click. So it
+  // shares the store rather than growing a second one -- one key to inspect in devtools, one place
+  // that knows about `localStorage` throwing.
+  function recall(key) {
+    var v = load()[key];
+    return typeof v === "string" ? v : "";
+  }
+
+  function remember(key, value) {
+    var all = load();
+    // Empty clears, matching `set` -- the store holds only what somebody chose.
+    if (value) all[key] = value;
+    else delete all[key];
+    save(all);
+  }
+
+  window.PunaToggles = {
+    get: get,
+    set: set,
+    bind: bind,
+    recall: recall,
+    remember: remember,
+  };
   bind(document);
 })();

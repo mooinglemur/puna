@@ -2,8 +2,10 @@
 //!
 //! Everything here is a hard input with no default that could plausibly be wrong. The port range
 //! in particular: dev and prod share one public address and therefore one port space, and Cilium
-//! does not report a collision -- it silently allocates a second IP, leaving a room reachable on
-//! an address DNS never mentions. A defaulted environment would be a way to get that wrong
+//! does not report a collision as an error. It **refuses the room an address entirely** -- every
+//! room Service requests a specific IP, and that branch of LB-IPAM answers a conflict with
+//! `already_allocated_incompatible_service` and no allocation -- so the room never starts and
+//! nothing on Puna's side counts it. A defaulted environment would be a way to get that wrong
 //! quietly, so there is no default.
 
 use std::path::PathBuf;

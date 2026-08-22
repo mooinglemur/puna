@@ -67,6 +67,9 @@ need to.</p>
     <h2>Locations</h2>
     <div class="table-controls">
       <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter locations">
+      <label class="only-mine">
+        <input type="checkbox" data-toggle="tracker.slot.locations.hidechecked"> only what is left
+      </label>
     </div>
     {# **Bounded, and ONE scroll container rather than two.** These two tables are the only ones on
        the site whose length is unbounded by anything a person chose -- a slot's world can hold
@@ -101,7 +104,7 @@ need to.</p>
          appears rather than the rows simply vanishing -- "you have three of these" is the fact a
          reader loses otherwise, and losing it silently would make the list look wrong. #}
       <label class="only-mine">
-        <input type="checkbox" data-toggle="tracker.items.latest"> only the most recent of each item
+        <input type="checkbox" data-toggle="tracker.slot.items.latest"> only the most recent of each item
       </label>
     </div>
     {# **Bounded, and ONE scroll container rather than two.** These two tables are the only ones on
@@ -135,6 +138,14 @@ need to.</p>
       <summary><h2>Hints</h2></summary>
       <div class="table-controls">
         <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter hints">
+        {# **Keyed by page type**, because this table is on both and they are different questions: on
+           a slot's page it is "what am I still waiting for", on the multiworld's it is "what is
+           outstanding anywhere". Somebody who wants one collapsed rarely wants the other. #}
+        <label class="only-mine">
+          <input type="checkbox"
+                 data-toggle="tracker.{% if slot.is_some() %}slot{% else %}room{% endif %}.hints.hidefound">
+          only what is not found yet
+        </label>
       </div>
       <div class="table-scroll">
         <div class="scroll-x">
