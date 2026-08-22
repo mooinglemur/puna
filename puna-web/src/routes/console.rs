@@ -65,6 +65,14 @@ pub struct ConsoleTemplate {
     /// Whether locking has a spelling in this room. It is expressed as an omission from the
     /// per-slot password map, so outside that mode there is no map and nothing to omit from.
     per_slot_passwords: bool,
+    /// A command and a slot chosen in advance, from the room page's moderation controls.
+    ///
+    /// **This is the whole of the no-JavaScript path for that column.** Those controls are links
+    /// here, so somebody who followed one arrives with the command and the player already picked
+    /// and only the value left to fill in. `kind` is checked against [`MENU`] before it is
+    /// rendered, because it comes out of a URL.
+    preselect_kind: Option<String>,
+    preselect_slot: Option<i32>,
 }
 
 /// One line of the console's history.
@@ -102,13 +110,16 @@ impl HistoryEntry {
 }
 
 /// The console pane.
-#[get("/room/<_id>/console?<ran>&<pending>&<stored>&<uncertain>")]
+#[get("/room/<_id>/console?<ran>&<pending>&<stored>&<uncertain>&<kind>&<slot>")]
+#[allow(clippy::too_many_arguments)]
 async fn show(
     _id: RoomParam,
     ran: Option<String>,
     pending: Option<bool>,
     stored: Option<bool>,
     uncertain: Option<bool>,
+    kind: Option<String>,
+    slot: Option<i32>,
     access: RoomAccess<Helper>,
     pool: &State<Pool>,
 ) -> Result<ConsoleTemplate> {
@@ -141,10 +152,41 @@ async fn show(
         still_running: pending.unwrap_or(false),
         stored: stored.unwrap_or(false),
         uncertain: uncertain.unwrap_or(false),
+        // **Validated against the menu, not echoed.** These arrive in a URL, and a `<option
+        // selected>` rendered from an unchecked query parameter is arbitrary text chosen by
+        // whoever wrote the link -- the same shape M17b's flash cookie replaced `?notice=` to
+        // avoid. An unknown value selects nothing, which is what a bare console does anyway.
+        preselect_kind: kind.filter(|k| MENU.contains(&k.as_str())),
+        preselect_slot: slot,
         is_organizer: access.role() >= puna_core::model::member::RoomRole::Organizer,
         per_slot_passwords: room.slot_auth == puna_core::model::room::SlotAuth::PerSlot,
     })
 }
+
+/// Every `<option value>` the console's command menu offers, in the order it offers them.
+///
+/// Read together they *are* the menu, and three things depend on that: the tests below assert each
+/// builds and that each is offered to the right tier, and [`show`] uses it to decide whether a
+/// `?kind=` in a URL names a real command before rendering it as selected. A command added to
+/// `console.html` and not here is one nobody checked either way, and one the moderation column
+/// cannot link to.
+const MENU: &[&str] = &[
+    "status",
+    "say",
+    "countdown",
+    "hint",
+    "hint_location",
+    "release",
+    "collect",
+    "send_item",
+    "send_multiple",
+    "send_location",
+    "allow_release",
+    "alias",
+    "kick",
+    "lock_slot",
+    "option",
+];
 
 /// The console form.
 ///
@@ -449,15 +491,75 @@ pub(crate) async fn prepare_slot_credential(
     })
 }
 
+/// What a command run answers with: a page, or the same outcome as JSON.
+///
+/// **One route rather than two**, so the tier check, the preparation and the wait exist once. The
+/// moderation controls on the room page ask for JSON and render the answer in a dialog; the console
+/// form asks for a page and gets a redirect, which is also what happens with no scripting at all.
+#[derive(rocket::Responder)]
+pub enum Ran {
+    Json(rocket::serde::json::Json<serde_json::Value>),
+    Redirect(Box<Redirect>),
+    Failed(Error),
+}
+
+/// Turn a refusal into something the dialog can show.
+///
+/// **Only for statuses below 500.** The [`Error`] responder deliberately sends no body at all,
+/// because an `anyhow` chain from a database failure can name tables, columns and connection
+/// strings — and every such error arrives through `From`, which always builds a `500`. A 4xx here
+/// is always hand-built with a message written for the person reading it, so the two cases are
+/// distinguishable and only the authored one is repeated back.
+fn refusal_as_json(error: &Error) -> serde_json::Value {
+    let message = if error.status.code < 500 {
+        error.source.to_string()
+    } else {
+        "Something went wrong on our side. The command was not run.".to_string()
+    };
+    serde_json::json!({
+        "ok": false,
+        "pending": false,
+        "heading": "Refused",
+        "lines": [message],
+    })
+}
+
 /// Queue a command and wait for the answer.
-#[post("/room/<_id>/command", data = "<form>")]
+#[post("/room/<id>/command", data = "<form>")]
 async fn run(
+    id: RoomParam,
+    form: Form<CommandForm>,
+    access: RoomAccess<Helper>,
+    pool: &State<Pool>,
+    waiters: &State<std::sync::Arc<Waiters>>,
+    wants_json: crate::guards::WantsJson,
+) -> Ran {
+    match run_inner(id, form, access, pool, waiters, wants_json.0).await {
+        Ok(ran) => ran,
+        // Rendered here rather than propagated, because the `?` in `run_inner` would otherwise
+        // hand a JSON caller a bare status with no body and the dialog would have nothing to say.
+        Err(error) if wants_json.0 => {
+            let body = refusal_as_json(&error);
+            // Logged the way the responder would have, since that path is being skipped.
+            if error.status.code >= 500 {
+                tracing::error!(error = ?error.source, "command request failed");
+            } else {
+                tracing::debug!(error = %error.source, "command request rejected");
+            }
+            Ran::Json(rocket::serde::json::Json(body))
+        }
+        Err(error) => Ran::Failed(error),
+    }
+}
+
+async fn run_inner(
     _id: RoomParam,
     form: Form<CommandForm>,
     access: RoomAccess<Helper>,
     pool: &State<Pool>,
     waiters: &State<std::sync::Arc<Waiters>>,
-) -> Result<Redirect> {
+    wants_json: bool,
+) -> Result<Ran> {
     let command =
         build(&form).map_err(|message| Error::new(Status::BadRequest, anyhow::anyhow!(message)))?;
 
@@ -495,10 +597,33 @@ async fn run(
     // `rejected` row saying the room is down -- true, and nothing the operator needs to act on.
     match prepared {
         Prepared::Stored(_) => {
-            return Ok(Redirect::to(format!("/room/{room}/console?stored=true")));
+            return Ok(if wants_json {
+                answer(serde_json::json!({
+                    "ok": true,
+                    "pending": false,
+                    "heading": "Stored",
+                    "lines": ["This room is not running, so there was nothing to tell. \
+                              The change takes effect the next time it starts."],
+                }))
+            } else {
+                page(format!("/room/{room}/console?stored=true"))
+            });
         }
         Prepared::Uncertain(_) => {
-            return Ok(Redirect::to(format!("/room/{room}/console?uncertain=true")));
+            return Ok(if wants_json {
+                answer(serde_json::json!({
+                    // **Not `ok`.** The dialog draws this as a warning because that is what it is:
+                    // the change is recorded and may not be in force, and the operator has to look.
+                    "ok": false,
+                    "pending": false,
+                    "heading": "Recorded, but the room started underneath it",
+                    "lines": ["The room began starting while this was being applied, so it may not \
+                              be in force. Check the slot now that the room is up, and run it \
+                              again if it did not take."],
+                }))
+            } else {
+                page(format!("/room/{room}/console?uncertain=true"))
+            });
         }
         Prepared::NotApplicable | Prepared::Live(_) => {}
     }
@@ -515,14 +640,64 @@ async fn run(
     .await?;
     drop(conn);
 
-    match commands::wait_for(pool, waiters.inner(), id).await {
-        Some(_) => Ok(Redirect::to(format!("/room/{room}/console?ran={id}"))),
-        // Out of budget. The command is still running and the row is still readable, so this is a
-        // slower answer rather than a lost one.
-        None => Ok(Redirect::to(format!(
-            "/room/{room}/console?ran={id}&pending=true"
-        ))),
+    let finished = commands::wait_for(pool, waiters.inner(), id).await;
+    if !wants_json {
+        return Ok(match finished {
+            Some(_) => page(format!("/room/{room}/console?ran={id}")),
+            // Out of budget. The command is still running and the row is still readable, so this
+            // is a slower answer rather than a lost one.
+            None => page(format!("/room/{room}/console?ran={id}&pending=true")),
+        });
     }
+
+    Ok(answer(match finished {
+        Some(row) => {
+            // **A refusal is an answer, not a failure**, and the dialog has to show which. A room
+            // that understood and said no lands in `ok` with `output` explaining why; retrying it
+            // would loop, so the operator is told rather than offered another go.
+            let succeeded = row.state == "ok" && row.result.as_ref().is_some_and(|r| r.ok);
+            let mut lines: Vec<String> = row
+                .result
+                .as_ref()
+                .map(|r| r.output.clone())
+                .unwrap_or_default();
+            if let Some(error) = &row.error {
+                lines.push(error.clone());
+            }
+            if lines.is_empty() {
+                // pahoa's own phrasing is what an organizer expects to read, so this only stands in
+                // when there was none -- a terse `{"ok": true}` is a legal answer.
+                lines.push(if succeeded {
+                    "Done.".into()
+                } else {
+                    format!("The room answered {}.", row.state)
+                });
+            }
+            serde_json::json!({
+                "ok": succeeded,
+                "pending": false,
+                "heading": if succeeded { "Done" } else { "The room said no" },
+                "lines": lines,
+                "command": id.to_string(),
+            })
+        }
+        None => serde_json::json!({
+            "ok": false,
+            "pending": true,
+            "heading": "Still running",
+            "lines": ["This is taking longer than usual. It has not been lost — it will appear in \
+                      the room's command history when it finishes."],
+            "command": id.to_string(),
+        }),
+    }))
+}
+
+fn answer(body: serde_json::Value) -> Ran {
+    Ran::Json(rocket::serde::json::Json(body))
+}
+
+fn page(to: String) -> Ran {
+    Ran::Redirect(Box::new(Redirect::to(to)))
 }
 
 /// One command's row, for polling and for a link out of the history pane.
@@ -561,8 +736,91 @@ async fn one(
     })))
 }
 
+/// Item or location names from the cached datapackage, for the moderation controls' autocomplete.
+///
+/// ## Why this exists at all
+///
+/// **pahoa matches exactly, never fuzzily** — the caller is a program, so a near miss should be a
+/// visible error rather than a silent decision to act on something else. That is the right rule and
+/// it makes a text box hostile: an operator typing "Progressive Sword " gets a refusal and no idea
+/// which character was wrong. Suggestions turn an exact-match API into something a person can drive.
+///
+/// ## Scoped to the target slot's own game, which is also the correct game
+///
+/// Not a convenience: it is the resolution rule M16 transcribed from the reference. An item sent to
+/// or hinted for a slot resolves in **that slot's** game, and a location in that slot's own world
+/// likewise — so the one game this reads is the one game the command will be interpreted in.
+/// Offering the whole seed's names would suggest things the room will refuse.
+///
+/// ## Disclosure
+///
+/// A game's datapackage is public knowledge — it ships with the world, not with the seed — and it
+/// carries no information about *this* multiworld: not what is where, not who holds what. It is
+/// `Helper`-guarded regardless, because that is the tier the controls it feeds belong to and there
+/// is no reason to widen it.
+#[get("/room/<_id>/slot/<n>/names?<kind>&<q>")]
+async fn slot_names(
+    _id: RoomParam,
+    n: i32,
+    kind: &str,
+    q: Option<String>,
+    access: RoomAccess<Helper>,
+    pool: &State<Pool>,
+    cache: &State<crate::routes::tracker::NameCache>,
+) -> Result<rocket::serde::json::Json<serde_json::Value>> {
+    /// Enough to choose from, few enough that the list stays a list. A datalist the length of a
+    /// game's item table is the same problem as no suggestions at all.
+    const LIMIT: usize = 20;
+
+    let mut conn = pool.get().await?;
+    let slot = puna_core::model::slot::get(&mut conn, access.room.id, n)
+        .await?
+        .ok_or_else(|| crate::error::not_found("no such slot"))?;
+
+    let games = crate::routes::tracker::names_for(&mut conn, cache, access.room.generation_id)
+        .await
+        .map_err(|e| Error::new(Status::InternalServerError, anyhow::anyhow!(e.to_string())))?;
+
+    // An absent game is an empty list, not an error: a generation ingested before the name cache
+    // existed has no rows, and the operator can still type the name. Failing here would turn a
+    // cosmetic gap into a control that looks broken.
+    let table = games.get(&slot.game).map(|names| match kind {
+        "location" => &names.locations,
+        _ => &names.items,
+    });
+
+    let query = q.unwrap_or_default().trim().to_lowercase();
+    let mut matches: Vec<&str> = Vec::new();
+    if let Some(table) = table {
+        // **Prefix matches first**, because somebody typing "Prog" wants the items that start that
+        // way before the ones that merely contain it. Two passes rather than a sort with a key:
+        // the tables run to thousands of entries and this walks each at most twice.
+        for pass in [true, false] {
+            for name in table.values() {
+                if matches.len() >= LIMIT {
+                    break;
+                }
+                let lower = name.to_lowercase();
+                let hit = if pass {
+                    lower.starts_with(&query)
+                } else {
+                    !lower.starts_with(&query) && lower.contains(&query)
+                };
+                if hit {
+                    matches.push(name);
+                }
+            }
+        }
+    }
+
+    Ok(rocket::serde::json::Json(serde_json::json!({
+        "game": slot.game,
+        "names": matches,
+    })))
+}
+
 pub fn routes() -> Vec<rocket::Route> {
-    routes![show, run, one]
+    routes![show, run, one, slot_names]
 }
 
 #[cfg(test)]
@@ -641,28 +899,57 @@ mod tests {
         );
     }
 
-    /// Every `<option value>` the console's command menu offers, in the order it offers them.
+    use super::MENU;
+
+    /// **The moderation column names its commands in three places, and all three must agree.**
     ///
-    /// Read together they *are* the menu, and both tests below depend on that: one asserts each
-    /// builds, the other asserts each is offered to the right tier. A command added to
-    /// `console.html` and not here is one nobody checked either way.
-    const MENU: &[&str] = &[
-        "status",
-        "say",
-        "countdown",
-        "hint",
-        "hint_location",
-        "release",
-        "collect",
-        "send_item",
-        "send_multiple",
-        "send_location",
-        "allow_release",
-        "alias",
-        "kick",
-        "lock_slot",
-        "option",
-    ];
+    /// A control there carries `data-command` for the script, a `kind=` in its `href` for the
+    /// no-script path, and needs an entry in `moderation.js`'s `COMMANDS` table. Every mismatch is
+    /// silent in its own way, which is why this reads all three rather than trusting review:
+    ///
+    /// * a `data-command` that is not in [`MENU`] posts a `kind` the form refuses, and the link it
+    ///   falls back to arrives at a console with nothing selected;
+    /// * an `href` naming a different command than `data-command` makes the scripted and
+    ///   unscripted paths do **different things**, which is the worst of the three because both
+    ///   work;
+    /// * a command with no `COMMANDS` entry hits `if (!spec) return` and the glyph does nothing at
+    ///   all — no dialog, no navigation, no error.
+    #[test]
+    fn the_moderation_column_agrees_with_the_command_set_and_the_script() {
+        let page = include_str!("../../templates/rooms/show.html");
+        let script = include_str!("../../static/moderation.js");
+
+        let mut found = 0;
+        for (at, _) in page.match_indices("data-command=\"") {
+            found += 1;
+            let rest = &page[at + "data-command=\"".len()..];
+            let command = rest.split('"').next().expect("a closing quote");
+
+            assert!(
+                MENU.contains(&command),
+                "the moderation column offers {command:?}, which the console form cannot build"
+            );
+
+            // The anchor's own href, which is the whole no-script path. Bounded to this element by
+            // stopping at the tag's end rather than scanning into the next one.
+            let element = rest.split('>').next().unwrap_or_default();
+            assert!(
+                element.contains(&format!("kind={command}&amp;")),
+                "the {command:?} control links to a different command than it posts:\n{element}"
+            );
+
+            // The script's table. `COMMANDS` is keyed by the bare command name.
+            assert!(
+                script.contains(&format!("{command}: {{")),
+                "moderation.js has no entry for {command:?}, so that glyph silently does nothing"
+            );
+        }
+
+        assert!(
+            found >= 9,
+            "only {found} moderation controls found -- this lint is no longer looking at anything"
+        );
+    }
 
     /// The form covers the whole command set, and nothing else. An unknown `kind` is refused rather
     /// than silently doing nothing.
@@ -712,7 +999,7 @@ mod tests {
 
         let template = include_str!("../../templates/rooms/console.html");
         assert!(
-            template.contains(r#"<option value="option">"#),
+            template.contains(r#"<option value="option""#),
             "the option command left the menu"
         );
         // The gate, and that it is the one *immediately* above the command it gates -- searched
@@ -720,7 +1007,7 @@ mod tests {
         // three `is_organizer` blocks and the naive `rfind` matched the last one on the page,
         // which sits below this and would have passed with the gate deleted.
         let at = template
-            .find(r#"<option value="option">"#)
+            .find(r#"<option value="option""#)
             .expect("checked above");
         let gate = template[..at]
             .rfind("{% if is_organizer %}")

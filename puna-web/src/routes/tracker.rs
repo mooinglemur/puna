@@ -120,7 +120,7 @@ impl NameCache {
 /// **An empty map is a valid answer**, not an error: a generation ingested before the name cache
 /// existed has no rows, and the digest renders raw ids for it. Failing here would turn a cosmetic
 /// gap into a dead tracker.
-async fn names_for(
+pub(crate) async fn names_for(
     conn: &mut diesel_async::AsyncPgConnection,
     cache: &NameCache,
     generation: GenerationId,

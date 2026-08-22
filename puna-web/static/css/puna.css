@@ -232,6 +232,61 @@ td .actions form {
   [popover].sheet { display: none; }
 }
 
+/* --- the moderation dialog -------------------------------------------------------------------
+   A `<dialog>` rather than a `popover`, and the difference is the requirement rather than taste:
+   `showModal()` makes the rest of the page inert, so an answer has to be dismissed before anything
+   else can be touched. A popover light-dismisses on a stray click, which is precisely what a "did
+   this work?" answer must not do -- a granted hint and a refused one look identical once the box is
+   gone.
+
+   It borrows `.sheet` for its surface and adds only what a dialog needs: the UA stylesheet centers
+   it and gives it a border and a margin of its own, which the shared rules do not expect. */
+dialog.moderate {
+  width: min(32rem, calc(100vw - 2rem));
+  /* `border` rather than the UA's default, and `padding` because `.sheet`'s does not apply here:
+     that rule is `[popover].sheet`, and this element has no `popover` attribute. */
+  padding: 1rem 1.15rem 1.15rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 30px var(--float-shadow);
+}
+
+dialog.moderate::backdrop {
+  /* Dimmed rather than clear, for the same reason the sanction overlays are: it says "answer this
+     first", which with an inert page behind it is literally true. */
+  background: rgb(0 0 0 / 0.45);
+}
+
+.moderate h2 { margin: 0 0 0.4rem; font-size: 1.1rem; }
+.moderate .hint { margin: 0 0 0.9rem; }
+.moderate label { display: block; margin-bottom: 0.3rem; }
+.moderate label.inline { display: inline; }
+.moderate input[type="text"] { width: 100%; box-sizing: border-box; }
+.moderate p { margin: 0 0 0.6rem; }
+.moderate .buttons {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.9rem 0 0;
+}
+
+/* The answer, in the two voices this stylesheet already has: `.notice`'s accent for a room that
+   said yes, `.warning`'s for a room that said no. Reusing them rather than inventing a third
+   palette is the point -- a refusal here should look like a refusal everywhere else on the site.
+
+   A left border as well as a hue, following the rule `.notice`/`.warning`/`.error` set: color alone
+   is not a distinction every reader can make, and "did this work" is the worst question to answer
+   in hue only. */
+[data-mod-result] {
+  padding-left: 0.75rem;
+  border-left: 4px solid var(--accent);
+}
+[data-mod-result].not-ok {
+  border-left-color: var(--warn-fg);
+  color: var(--warn-fg);
+}
+
 /* --- the theme selector --------------------------------------------------------------------------
    Hidden until `theme.js` reveals it: without scripting it cannot store a choice or apply one, and
    a control that does nothing is worse than none. Same shape as `js-copy` for the clipboard
@@ -619,9 +674,32 @@ th {
 }
 
 /* Player and game names are untrusted text out of an uploaded zip and can be long; they are the
-   two columns allowed to wrap rather than stretch the table. */
+   two columns allowed to wrap rather than stretch the table.
+
+   **Wrapping is the first answer to an over-wide table, and `.scroll-x` is the second.** What makes
+   these tables exceed the page is `white-space: nowrap` above, not the number of columns -- so the
+   columns whose content is prose give way, and the ones holding something that must not break
+   mid-token keep it. A wrapped `host:port` or password is worse than a scrollbar; a wrapped game
+   name is not. The wrapper still exists because at phone width even a fully wrapped table does not
+   fit, and a bare table widens the whole page rather than degrading. */
 .slots td:nth-child(2),
-.slots td:nth-child(3) { white-space: normal; }
+.slots td:nth-child(3),
+.slots td:nth-child(4) { white-space: normal; }
+
+/* --- the moderation column ------------------------------------------------------------------------
+   Eight controls, and they WRAP rather than force the table wider: at ~26px each they are a third of
+   the room page's measure on their own, and a column that pushes a table into a horizontal scroll is
+   a column that makes every other column harder to read. Two rows of four is a better answer than a
+   scrollbar. */
+.moderation .actions { flex-wrap: wrap; }
+
+/* On the cell, because the controls are links rather than a form: `td .actions` above only reaches
+   the flex row, and this is the cell's own constraint. Bounded so the wrap actually happens --
+   without a max the flex row is content-sized and never has a reason to break. */
+.slots td.moderation {
+  white-space: normal;
+  max-width: 15rem;
+}
 
 tbody tr:hover { background: var(--surface); }
 

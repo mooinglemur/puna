@@ -152,6 +152,11 @@ pub struct SlotView {
     /// True when the holder exists but has never signed in — the lobby-push case, where a slot is
     /// assigned to a Discord id that has no account here yet.
     pub owner_never_logged_in: bool,
+    /// Whether this slot is barred from connecting, which decides which way the lock control points.
+    ///
+    /// Shown to staff only, with the rest of the moderation column: it is a fact about a sanction
+    /// rather than about the game, and `GET /room/<id>` is public.
+    pub is_locked: bool,
 }
 
 fn slot_views(
@@ -177,6 +182,9 @@ fn slot_views(
                 _ => false,
             },
             is_mine: matches!((viewer, s.owner_id), (Some(v), Some(o)) if v == o),
+            // Staff only, and gated here rather than in markup for the same reason the password is:
+            // this page is public, and whether a player has been shut out is nobody else's business.
+            is_locked: role.is_some_and(|r| r >= RoomRole::Helper) && s.is_locked(),
             has_patch: patched.contains(&s.slot_number),
             // **The one field this struct's own note warns about**, so it is gated here and the
             // gate is the same three-way rule `SlotAccess` applies to the JSON route: the slot's
@@ -1636,6 +1644,7 @@ mod tests {
             is_spectator: false,
             owner_id: Some(77),
             is_mine: false,
+            is_locked: false,
             claim_token: None,
             has_patch: true,
             can_download: true,
@@ -2154,5 +2163,130 @@ mod tests {
             "a helper is not an organizer -- closing is an organizer's decision to undo"
         );
         assert!(may_start(&closed, Some(RoomRole::Organizer)));
+    }
+
+    /// **The moderation column is staff-only, and so is the width that makes room for it.**
+    ///
+    /// `GET /room/<id>` is public — the unguessable id is the whole authorization — so every control
+    /// here is one a shared link must not hand out. The width follows for the same reason it exists:
+    /// a player's view of this page is five columns and prose, which the 62rem measure is right for.
+    #[test]
+    fn only_staff_see_the_moderation_column_and_the_width_that_fits_it() {
+        let mut staff = page_as(true, false);
+        staff.room.slot_auth = SlotAuth::PerSlot;
+        staff.slots = vec![a_slot(false)];
+        let staff_html = staff.render().expect("renders");
+
+        for command in [
+            "lock_slot",
+            "kick",
+            "hint",
+            "hint_location",
+            "send_location",
+            "send_item",
+            "collect",
+            "release",
+        ] {
+            assert!(
+                staff_html.contains(&format!("data-command=\"{command}\"")),
+                "staff are not offered {command}"
+            );
+        }
+        assert!(
+            staff_html.contains("<body class=\"wide\">"),
+            "the page did not opt out of the prose measure for the column it just grew"
+        );
+        assert!(
+            staff_html.contains("id=\"moderate\""),
+            "the dialog is missing"
+        );
+
+        // A player: the same room, the same slot, none of it.
+        let mut player = page_as(false, false);
+        player.room.slot_auth = SlotAuth::PerSlot;
+        player.slots = vec![a_slot(false)];
+        let player_html = player.render().expect("renders");
+
+        assert!(
+            !player_html.contains("data-command="),
+            "a moderation control reached a public page"
+        );
+        assert!(
+            !player_html.contains("id=\"moderate\""),
+            "the moderation dialog reached a public page"
+        );
+        assert!(
+            !player_html.contains("<body class=\"wide\">"),
+            "a player's roster is prose-shaped and should keep the measure"
+        );
+    }
+
+    /// The lock control is drawn as the state's REMEDY, not its description: a locked slot offers
+    /// "unlock". Getting this backwards is a control that reads correctly and does the opposite of
+    /// what the operator wants, twice in a row.
+    #[test]
+    fn a_locked_slot_offers_the_way_out_of_the_lock() {
+        let mut staff = page_as(true, false);
+        staff.room.slot_auth = SlotAuth::PerSlot;
+
+        staff.slots = vec![a_slot(false)];
+        let open = staff.render().expect("renders");
+        assert!(
+            open.contains(r#"data-locked="true""#),
+            "an open slot must offer a lock"
+        );
+        assert!(
+            open.contains("Lock:"),
+            "the tooltip does not describe locking"
+        );
+
+        staff.slots = vec![a_slot(true)];
+        let shut = staff.render().expect("renders");
+        assert!(
+            shut.contains(r#"data-locked="false""#),
+            "a locked slot must offer an unlock"
+        );
+        assert!(
+            shut.contains("Unlock:"),
+            "the tooltip does not describe unlocking"
+        );
+    }
+
+    /// Locking is expressed as an omission from the per-slot password map, so outside that mode it
+    /// has no spelling at all and the route answers 404. A control the route refuses is worse than
+    /// no control.
+    #[test]
+    fn the_lock_control_appears_only_where_locking_means_something() {
+        let mut staff = page_as(true, false);
+        staff.room.slot_auth = SlotAuth::None;
+        staff.slots = vec![a_slot(false)];
+        let html = staff.render().expect("renders");
+
+        assert!(
+            !html.contains(r#"data-command="lock_slot""#),
+            "a room with no per-slot passwords offered a lock the route would refuse"
+        );
+        // The rest of the column is unaffected -- locking is the only mode-dependent one.
+        assert!(html.contains(r#"data-command="kick""#));
+    }
+
+    fn a_slot(locked: bool) -> SlotView {
+        SlotView {
+            slot_number: 1,
+            player_name: "Kai".into(),
+            game: "A Link to the Past".into(),
+            is_spectator: false,
+            owner_id: Some(77),
+            is_mine: false,
+            is_locked: locked,
+            claim_token: None,
+            has_patch: true,
+            can_download: true,
+            password: Some("abcde-fghij".into()),
+            tracker_id: None,
+            can_release: true,
+            owner_name: Some("kai".into()),
+            owner_never_logged_in: false,
+        }
     }
 }

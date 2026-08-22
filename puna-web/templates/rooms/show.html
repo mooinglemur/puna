@@ -1,5 +1,10 @@
 {% extends "base.html" %}
 {% block title %}{{ room.name }}{% endblock %}
+{# **Wide only for staff, because the page is only wide for staff.** A player sees a five-column
+   roster on a page that is otherwise prose, and the 62rem measure is right for that. The moderation
+   column adds eight controls and exists for helpers and above, which is exactly when the table
+   stops being prose-shaped -- so the width follows the content rather than the URL. #}
+{% block layout %}{% if is_staff %}wide{% endif %}{% endblock %}
 {% block content %}
 {# The name, and for staff who may change it, a pencil that swaps it for a field.
 
@@ -86,6 +91,9 @@
 <th data-key>#</th><th data-key>Player</th><th data-key>Game</th><th data-key>Held by</th>
 {% if room.slot_auth == puna_core::model::room::SlotAuth::PerSlot %}<th data-key>Password</th>{% endif %}
 <th data-key>Patch</th>
+{# Not sortable: it is a row of controls, and an arrow on it would promise an ordering of actions
+   that does not exist. #}
+{% if is_staff %}<th>Moderation</th>{% endif %}
 </tr></thead>
 <tbody>
 {% for slot in slots %}
@@ -207,11 +215,226 @@ unclaimed
 <span class="hint">&mdash;</span>
 {% endif %}
 </td>
+
+{% if is_staff %}
+{# --- the moderation column -------------------------------------------------------------------
+   Every control here is a LINK to the console with the command and the slot already chosen, and
+   `moderation.js` upgrades it into a dialog on the page. Three things fall out of that shape:
+
+   * **It works with no scripting**, landing on a page that has the same command, the same slot and
+     every field it needs. The alternative -- a form per action per row -- degrades no better and
+     costs a `<form>` and a popover on every one of a room's slots, which for a 200-slot room is
+     over a thousand elements rendered so that six of them might be opened.
+   * **The route is the same either way.** `POST /room/<id>/command` answers a redirect to a form
+     post and JSON to a scripted one, so the tier check and the whole command path exist once.
+   * **The glyphs stay small.** `.actions` wraps, so eight controls reflow into two rows rather than
+     forcing the table wider than the page.
+
+   The order is deliberate: the two that need no confirmation sit together at the left, then the
+   four that send something into somebody's game, then the two that move items in bulk. #}
+<td class="moderation">
+<div class="actions">
+
+{% if room.slot_auth == puna_core::model::room::SlotAuth::PerSlot %}
+{% if slot.is_locked %}
+{# An OPEN padlock: this slot is shut out, and the control lets it back in. Drawn as the state's
+   remedy rather than its description, like every other control in this column. #}
+<a class="act" data-command="lock_slot" data-locked="false" data-slot="{{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=lock_slot&amp;slot={{ slot.slot_number }}"
+   title="Unlock: let this slot connect again. Its password is unchanged."
+   aria-label="Unlock slot {{+ slot.slot_number }}">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<rect x="3.2" y="7" width="9.6" height="7" rx="1.4" fill="none" stroke="currentColor"/>
+<path d="M5.4 7V4.9a2.6 2.6 0 0 1 5.1-.6" fill="none" stroke="currentColor" stroke-linecap="round"/>
+</svg>
+</a>
+{% else %}
+{# A SHUT padlock. Not "remove password": under pahoa's fail-closed rule clearing a slot's entry
+   bars it rather than opening it, which is the opposite of what "clear" suggests -- §4 is emphatic
+   that the control has to say lock. #}
+<a class="act" data-command="lock_slot" data-locked="true" data-slot="{{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=lock_slot&amp;slot={{ slot.slot_number }}"
+   title="Lock: bar this slot from connecting. Its password is kept, so unlocking restores it."
+   aria-label="Lock slot {{+ slot.slot_number }}">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<rect x="3.2" y="7" width="9.6" height="7" rx="1.4" fill="none" stroke="currentColor"/>
+<path d="M5.4 7V4.9a2.6 2.6 0 0 1 5.2 0V7" fill="none" stroke="currentColor" stroke-linecap="round"/>
+</svg>
+</a>
+{% endif %}
+{% endif %}
+
+{# An arrow leaving a doorway. **A disconnect, not a ban** -- the client may reconnect at once, and
+   most do automatically within seconds, so the tooltip says so rather than letting somebody press
+   it twice and conclude the console is broken. #}
+<a class="act" data-command="kick" data-slot="{{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=kick&amp;slot={{ slot.slot_number }}"
+   title="Kick: close this slot's connections. They can reconnect immediately."
+   aria-label="Kick slot {{+ slot.slot_number }}">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<path d="M9.5 2.5h-6v11h6" fill="none" stroke="currentColor" stroke-linejoin="round"/>
+<path d="M7.5 8h6.5M11.5 5.5 14 8l-2.5 2.5" fill="none" stroke="currentColor"
+      stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+</a>
+
+{# A lightbulb: where is this thing. #}
+<a class="act" data-command="hint" data-slot="{{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=hint&amp;slot={{ slot.slot_number }}"
+   title="Hint: tell this slot where an item is. Charges their points unless forced."
+   aria-label="Hint an item for slot {{+ slot.slot_number }}">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<path d="M5.4 9.6a4 4 0 1 1 5.2 0c-.6.5-.9 1-.9 1.7h-3.4c0-.7-.3-1.2-.9-1.7z" fill="none"
+      stroke="currentColor" stroke-linejoin="round"/>
+<path d="M6.3 13.4h3.4" fill="none" stroke="currentColor" stroke-linecap="round"/>
+</svg>
+</a>
+
+{# A map pin: what is in this place. The mirror of the lightbulb, and a separate verb rather than a
+   mode of it because that is how the reference names it. #}
+<a class="act" data-command="hint_location" data-slot="{{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=hint_location&amp;slot={{ slot.slot_number }}"
+   title="Hint location: tell this slot what is in one of their locations."
+   aria-label="Hint a location for slot {{+ slot.slot_number }}">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<path d="M8 14.2s4.4-4.3 4.4-7.4a4.4 4.4 0 1 0-8.8 0C3.6 9.9 8 14.2 8 14.2z" fill="none"
+      stroke="currentColor" stroke-linejoin="round"/>
+<circle cx="8" cy="6.6" r="1.5" fill="none" stroke="currentColor"/>
+</svg>
+</a>
+
+{# The same pin with a check through it: this one CHECKS the location and sends out whatever it
+   holds, rather than pointing at it. One step further than the hint, and irreversible. #}
+<a class="act" data-command="send_location" data-slot="{{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=send_location&amp;slot={{ slot.slot_number }}"
+   title="Send location: check one of this slot's locations and send out what is there."
+   aria-label="Check a location for slot {{+ slot.slot_number }}">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<path d="M8 14.2s4.4-4.3 4.4-7.4a4.4 4.4 0 1 0-8.8 0C3.6 9.9 8 14.2 8 14.2z" fill="none"
+      stroke="currentColor" stroke-linejoin="round"/>
+<path d="M6.1 6.6 7.5 8l2.5-2.5" fill="none" stroke="currentColor" stroke-linecap="round"
+      stroke-linejoin="round"/>
+</svg>
+</a>
+
+{# A parcel with an arrow into it: hand this slot an item outright. #}
+<a class="act" data-command="send_item" data-slot="{{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=send_item&amp;slot={{ slot.slot_number }}"
+   title="Send item: give this slot an item directly."
+   aria-label="Send an item to slot {{+ slot.slot_number }}">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<path d="M2.2 6.4h11.6v7.2H2.2z" fill="none" stroke="currentColor" stroke-linejoin="round"/>
+<path d="M8 1.6v3.6M6.2 3.8 8 5.6l1.8-1.8" fill="none" stroke="currentColor" stroke-linecap="round"
+      stroke-linejoin="round"/>
+</svg>
+</a>
+
+{# A tray with an arrow coming IN: gather this slot's own items from everywhere else. #}
+<a class="act" data-command="collect" data-slot="{{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=collect&amp;slot={{ slot.slot_number }}"
+   title="Collect: gather every item belonging to this slot that is still out in the multiworld."
+   aria-label="Collect for slot {{+ slot.slot_number }}">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<path d="M1.8 9.6v3.6h12.4V9.6" fill="none" stroke="currentColor" stroke-linejoin="round"/>
+<path d="M8 2v6.4M5.4 5.8 8 8.4l2.6-2.6" fill="none" stroke="currentColor" stroke-linecap="round"
+      stroke-linejoin="round"/>
+</svg>
+</a>
+
+{# The same tray with the arrow going OUT: send this slot's remaining items to whoever they belong
+   to. The mirror of collect, and the pairing is the point -- one gathers in, one sends out. #}
+<a class="act" data-command="release" data-slot="{{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=release&amp;slot={{ slot.slot_number }}"
+   title="Release: send this slot's remaining items to the players they belong to."
+   aria-label="Release the items in slot {{+ slot.slot_number }}">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<path d="M1.8 9.6v3.6h12.4V9.6" fill="none" stroke="currentColor" stroke-linejoin="round"/>
+<path d="M8 8.4V2M5.4 4.6 8 2l2.6 2.6" fill="none" stroke="currentColor" stroke-linecap="round"
+      stroke-linejoin="round"/>
+</svg>
+</a>
+
+</div>
+</td>
+{% endif %}
 </tr>
 {% endfor %}
 </tbody>
 </table>
 </div>
+
+{% if is_staff %}
+{# --- the moderation dialog ---------------------------------------------------------------------
+   **One dialog for the whole table**, not one per row: the controls above are links, and this is
+   what `moderation.js` opens instead of following them. A set per slot would be six forms on every
+   row of a room that may have hundreds.
+
+   **A `<dialog>` rather than a `popover`**, and the difference is the requirement: `showModal()`
+   makes the rest of the page inert, so a result has to be dismissed before anything else can be
+   touched. A popover light-dismisses on a stray click, which is the one thing a "did this work?"
+   answer must not do.
+
+   Every field is rendered here and hidden; the script chooses which apply to the command. Building
+   the markup in JavaScript instead would put the question of what each command asks for in a file
+   with no type checking, a second time -- and `build()` in console.rs is already the answer.
+
+   Absent this file the dialog is never opened and never shown: the links go to the console, which
+   has the same commands and the same fields. #}
+<dialog id="moderate" class="sheet moderate" aria-labelledby="moderate-title">
+
+<form method="post" action="/room/{{ room.id }}/command" data-mod-form>
+<h2 id="moderate-title" data-mod-title>Confirm</h2>
+<p class="hint" data-mod-explain></p>
+<input type="hidden" name="kind" data-mod-kind value="">
+<input type="hidden" name="slot" data-mod-slot value="">
+<input type="hidden" name="locked" data-mod-locked value="">
+
+{# The two name fields, and the reason they are separate rather than one box: an item and a
+   location are looked up in different tables, and pahoa matches EXACTLY, so offering the wrong kind
+   of name produces a refusal rather than a near miss. The datalist is shared because only one of
+   them is ever visible. #}
+<p data-mod-field="item">
+<label for="mod-item">Item</label>
+<input type="text" id="mod-item" name="item" list="mod-names" autocomplete="off"
+       data-mod-suggest="item" placeholder="start typing; the game's own names appear">
+</p>
+<p data-mod-field="location">
+<label for="mod-location">Location</label>
+<input type="text" id="mod-location" name="location" list="mod-names" autocomplete="off"
+       data-mod-suggest="location" placeholder="start typing; the game's own names appear">
+</p>
+<datalist id="mod-names"></datalist>
+
+{# `force` grants outright and spends nothing. The default charges the slot's own points as `!hint`
+   would and MAY GRANT FEWER THAN ASKED OR NONE, so the room's answer is the truth rather than this
+   box -- which is why the result below renders `output` verbatim. #}
+<p data-mod-field="force">
+<label class="inline"><input type="checkbox" name="force" value="true"> Force &mdash; grant it
+without spending this slot&rsquo;s points</label>
+</p>
+
+<p class="buttons">
+<button type="submit" data-mod-confirm>Confirm</button>
+<button type="button" data-mod-cancel>Cancel</button>
+</p>
+</form>
+
+{# Shown while the command is in the queue and the room has not answered. A spinner beside a
+   sentence rather than instead of one: a spinner alone cannot tell "working" from "stuck". #}
+<div data-mod-working hidden>
+<p><span class="swirl" aria-hidden="true"></span> <span data-mod-working-label></span></p>
+</div>
+
+{# The answer, and the only way out of it is the button. `role="status"` so it is announced rather
+   than silently replacing the form for somebody not watching the middle of the screen. #}
+<div data-mod-result hidden role="status">
+<h2 data-mod-result-title></h2>
+<div data-mod-result-lines></div>
+<p class="buttons"><button type="button" data-mod-dismiss>Dismiss</button></p>
+</div>
+
+</dialog>
+{% endif %}
 
 {% if can_see_spoiler %}
 <p><a href="/room/{{ room.id }}/spoiler">Spoiler log</a></p>
@@ -288,4 +511,10 @@ discards them and they cannot be recovered.</p>
 <script src="/static/copy.js?v={{ base.static_version }}" defer></script>
 <script src="/static/room.js?v={{ base.static_version }}" defer></script>
 <script src="/static/table.js?v={{ base.static_version }}" defer></script>
+{% if is_staff %}
+{# Only where the controls exist. It returns early without the dialog anyway, but shipping a file
+   to every visitor of a public page for a control none of them can see is the sort of thing that
+   is easy to leave and hard to notice. #}
+<script src="/static/moderation.js?v={{ base.static_version }}" defer></script>
+{% endif %}
 {% endblock %}

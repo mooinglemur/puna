@@ -208,10 +208,12 @@ fn a_glyph_only_control_names_itself_twice() {
         }
     }
 
-    // A source lint is the easiest kind to write vacuously, so say how much it must have seen. Seventeen
-    // glyph controls exist today; a change that leaves none is a change this lint stopped guarding.
+    // A source lint is the easiest kind to write vacuously, so say how much it must have seen.
+    // Twenty-six glyph controls exist today -- nine of them the room page's moderation column, which
+    // is why this number moves in steps. A change that leaves none is a change this lint stopped
+    // guarding. Raise it by reading the count this assertion prints, not by guessing.
     assert!(
-        examined >= 17,
+        examined >= 26,
         "only {examined} glyph-only controls found -- this lint is no longer looking at anything"
     );
     assert!(

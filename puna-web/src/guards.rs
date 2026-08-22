@@ -73,6 +73,32 @@ impl<'r> FromRequest<'r> for Navigation {
     }
 }
 
+/// Whether the caller asked for JSON rather than a page.
+///
+/// One route can then answer a form post with a redirect and a scripted control with a result, so
+/// the tier check and the whole command path exist once. **Asked of `Accept` rather than the path**,
+/// because the two callers are the same operation seen by different clients — a second URL would be
+/// a second thing to keep in step, and the one that drifts is the one nobody reviews.
+///
+/// Deliberately not `Sec-Fetch-Mode`, unlike [`Navigation`]: that guard is about whether a *person*
+/// navigated, which is a decision about side effects. This is about how to render an answer, and
+/// `Accept` is the header that means exactly that.
+pub struct WantsJson(pub bool);
+
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for WantsJson {
+    type Error = std::convert::Infallible;
+
+    async fn from_request(request: &'r Request<'_>) -> Outcome<Self, Self::Error> {
+        RocketOutcome::Success(WantsJson(
+            request
+                .headers()
+                .get_one("Accept")
+                .is_some_and(|accept| accept.contains("application/json")),
+        ))
+    }
+}
+
 /// A minimum role, lifted to the type level so it can index a guard.
 pub trait MinRole: Send + Sync + 'static {
     const ROLE: RoomRole;
