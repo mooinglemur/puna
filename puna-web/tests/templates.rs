@@ -756,3 +756,96 @@ fn code_only_css(css: &str) -> String {
     out.push_str(rest);
     out
 }
+
+/// **A refusal's message reaches the operator now, so a 4xx must never carry a converted error.**
+///
+/// The [`Error`] responder deliberately sends no body at all: an `anyhow` chain from a database
+/// failure can name tables, columns and connection strings. `refusal_as_json` in `routes::console`
+/// makes an exception for statuses below 500, because the moderation dialog has to say *why* a
+/// command was refused, and "409" on its own is not an answer somebody can act on.
+///
+/// **That exception is only safe because of an invariant this asserts**: every 4xx in this crate is
+/// hand-built with `anyhow!(...)` — a literal, or a domain error's own `Display` — while everything
+/// converted through `From` becomes a 500 and everything built from a foreign error is a 503. Add
+/// one `Error::new(Status::BadRequest, db_error.into())` and a diesel chain starts rendering in a
+/// dialog, with nothing failing anywhere.
+///
+/// Checked over the source because there is no request that can prove the absence of a call site.
+#[test]
+fn a_client_error_never_carries_a_converted_error_chain() {
+    let mut offenders = Vec::new();
+    let mut examined = 0;
+
+    fn walk(dir: &Path, into: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, into);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                into.push(path);
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    walk(&source("src"), &mut files);
+
+    for path in files {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let text = code_only(&text);
+        let name = path
+            .strip_prefix(source(""))
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+
+        for (at, _) in text.match_indices("Error::new(Status::") {
+            // The status and the source expression, bounded to this call rather than scanning on
+            // into the next one.
+            let call = &text[at..];
+            let call = &call[..call.find(')').map_or(call.len(), |end| {
+                // The source expression can itself contain parentheses, so take the line.
+                call[..end].len().max(call.find('\n').unwrap_or(call.len()))
+            })];
+
+            // 5xx is allowed to carry anything: its body is never rendered.
+            let client_error = [
+                "BadRequest",
+                "Forbidden",
+                "NotFound",
+                "Conflict",
+                "Unauthorized",
+            ]
+            .iter()
+            .any(|status| call.contains(&format!("Status::{status}")));
+            if !client_error {
+                continue;
+            }
+            examined += 1;
+
+            if !call.contains("anyhow::anyhow!") && !call.contains("anyhow!") {
+                let line = line_of(&text, at).unwrap_or_default();
+                offenders.push(format!(
+                    "{name}:{line}: a client error built from something other than `anyhow!(...)`, \
+                     so its message may be a converted chain: {}",
+                    call.lines().next().unwrap_or_default().trim()
+                ));
+            }
+        }
+    }
+
+    assert!(
+        examined >= 20,
+        "only {examined} client errors found -- this lint is no longer looking at anything"
+    );
+    assert!(
+        offenders.is_empty(),
+        "a converted error would render its chain in the moderation dialog:\n  {}",
+        offenders.join("\n  ")
+    );
+}
