@@ -383,6 +383,53 @@ async fn start(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
             .await?;
         }
 
+        // **Refused for a reason a different port cannot fix.** `no_pool`, a lost
+        // `onelemur.com/lb-pool` label, a wrong sharing key, an ExternalTrafficPolicy the holder
+        // will not share with -- all properties of the Service template or of `PUNA_LB_IP`, which
+        // `spec::service` renders identically for every room in the environment. So this is never
+        // one room's problem, and reallocating would have every room in the namespace quarantine a
+        // pair an hour until the range drained, with nothing that was going to start starting.
+        //
+        // The reservation is therefore LEFT BOUND and nothing is quarantined: the room comes back on
+        // its own port once somebody fixes the cause. It still fails, so the backoff paces it and
+        // the reason lands on the room page -- which is the whole remedy here, since the fix is a
+        // human editing a manifest.
+        Ok(Started::AddressRefused { refusal }) if !refusal.is_port_collision() => {
+            tracing::error!(
+                room = %id,
+                port = base_port,
+                reason = %refusal.reason,
+                detail = %refusal.message,
+                "the load balancer refused this room's address for a reason that is not a port \
+                 conflict. Every room here renders the same Service template, so this very likely \
+                 affects the whole environment. The port pair is kept, not quarantined."
+            );
+            event(
+                &mut conn,
+                id,
+                "address_unsatisfiable",
+                serde_json::json!({
+                    "port": base_port,
+                    "reason": refusal.reason,
+                    "detail": refusal.message,
+                }),
+            )
+            .await?;
+
+            return fail_with(
+                ctx,
+                action,
+                &format!(
+                    "the load balancer will not give this room an address: {} ({}). This is not a \
+                     port conflict — check PUNA_LB_IP, PUNA_LB_SHARING_KEY and the Service's \
+                     lb-pool label, which are the same for every room here.",
+                    refusal.message, refusal.reason
+                ),
+                "address_unsatisfiable",
+            )
+            .await;
+        }
+
         Ok(Started::AddressRefused { refusal }) => {
             // Whose Service holds the port. `external` is operations -- somebody took a port on the
             // sharing key, and Puna's answer is to use a different one. `internal` is a Puna bug:
@@ -1493,9 +1540,12 @@ mod db_tests {
             .await;
             testdb::insert_slot(&mut conn, room, 1, None).await;
 
+            // Cilium's verbatim shape. The `Reason:` suffix is what distinguishes a genuine
+            // collision from a template fault, so an invented message would exercise the wrong arm.
             cluster.refuse_ingress(
                 "already_allocated_incompatible_service",
-                "port is already allocated to another service",
+                "The IP '38.246.56.121' is already allocated to an incompatible service. \
+                 Reason: same port and protocol",
             );
             execute(&ctx, &action(&pool, room, Step::Start).await)
                 .await
@@ -1528,6 +1578,65 @@ mod db_tests {
             // And nothing is left running on an address that was never assigned.
             let snapshot = cluster.snapshot().await.expect("snapshot");
             assert_eq!(snapshot.deployment(room), None);
+        })
+        .await;
+    }
+
+    /// A refusal that is not about the port must NOT spend one.
+    ///
+    /// `no_pool`, a missing `lb-pool` label, a wrong sharing key — all rendered identically for
+    /// every room by `spec::service`, so they are never one room's problem. Quarantining here would
+    /// have every room in the namespace burn a pair an hour until the range drained, with nothing
+    /// that was going to start starting: a configuration mistake laundered into port exhaustion,
+    /// pointing whoever reads the alert at two port ranges that are perfectly correct.
+    #[tokio::test]
+    async fn a_refusal_that_is_not_a_port_conflict_keeps_the_rooms_reservation() {
+        testdb::with_db(|pool| async move {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let layout = Layout::new(tmp.path());
+            let cluster = FakeCluster::new();
+            let site = site();
+            let ctx = context(&pool, &cluster, &layout, &site);
+
+            let mut conn = pool.get().await.expect("connection");
+            let generation = testdb::insert_generation(&mut conn, &layout, 4).await;
+            let room = testdb::insert_room(
+                &mut conn,
+                generation,
+                NewRoom {
+                    state: "idle",
+                    desired: "running",
+                    ..Default::default()
+                },
+            )
+            .await;
+            testdb::insert_slot(&mut conn, room, 1, None).await;
+
+            cluster.refuse_ingress(
+                "pool_selector_mismatch",
+                "no pool selects this service, check its labels",
+            );
+            execute(&ctx, &action(&pool, room, Step::Start).await)
+                .await
+                .expect("start");
+
+            let observed = testdb::observed(&mut conn, room).await.expect("the room");
+            assert_eq!(observed.state, "failed");
+            assert!(observed.retry_after.is_some());
+
+            // The whole point: the pair is still this room's, so it comes back on its own address
+            // the moment somebody fixes the manifest.
+            assert!(
+                testdb::reservation(&mut conn, room).await.is_some(),
+                "a refusal that a different port cannot fix must not cost a port"
+            );
+
+            // And the operator is not sent looking for a port conflict there is none of.
+            let error = observed.last_error.unwrap_or_default();
+            assert!(
+                error.contains("not a port conflict"),
+                "the room has to say what kind of refusal this was, got {error:?}"
+            );
         })
         .await;
     }

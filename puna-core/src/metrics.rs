@@ -160,6 +160,13 @@ pub static PORT_RECLAIMS: LazyLock<IntCounter> = LazyLock::new(|| {
 /// where the line between "bad luck" and "somebody mis-set `PUNA_PORT_RANGE`" falls is a threshold
 /// an operator can tune without a release.
 ///
+/// **Port collisions only.** A Service can be refused an address for reasons that have nothing to do
+/// with the port — no pool holds the configured IP, the `lb-pool` label is missing, the sharing key
+/// disagrees — and those are properties of the Service template, identical for every room in the
+/// environment. They are counted as `puna_room_starts_total{result="address_unsatisfiable"}` and
+/// **do not appear here**, which is what keeps this family, and the quarantine gauge beside it,
+/// meaning what their names say.
+///
 /// `conflict` separates the two cases worth acting on differently. `external` is somebody else's
 /// Service and is operations; `internal` means the port is held by a Service Puna itself manages,
 /// which is a Puna bug — a leaked object the sweep should have collected — and deserves its own
@@ -543,6 +550,7 @@ pub const START_RESULTS: &[&str] = &[
     "port_exhausted",
     "ip_mismatch",
     "address_refused",
+    "address_unsatisfiable",
 ];
 
 /// Who holds the port a refusal collided with, for [`PORT_REFUSALS`].

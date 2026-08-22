@@ -245,6 +245,41 @@ pub struct IpamRefusal {
     pub message: String,
 }
 
+/// Cilium's condition `reason` when a Service collides with another already holding the address.
+///
+/// **Not sufficient on its own**, which is the trap: it covers several distinct incompatibilities,
+/// and only one of them is about the port.
+const ALREADY_ALLOCATED: &str = "already_allocated_incompatible_service";
+
+/// The one `isCompatible` verdict that names the PORT.
+///
+/// Cilium interpolates it into the condition message as `Reason: <this>`, from a vocabulary of five
+/// Go constants with no interpolation of their own — so matching the phrase is reading a status
+/// field with a closed range, not parsing prose. The others are `different sharing key`, `different
+/// and not permitted namespace`, `different ExternalTrafficPolicy`, and `compatible
+/// ExternalTrafficPolicy local but selecting different set of pods`.
+const SAME_PORT_AND_PROTOCOL: &str = "same port and protocol";
+
+impl IpamRefusal {
+    /// Whether trying a **different port** could possibly help.
+    ///
+    /// Everything Puna does about a refusal turns on this. A genuine collision is a fact about one
+    /// port and the room should move; every other refusal is a fact about the Service *template* or
+    /// about `PUNA_LB_IP` — rendered identically for every room in the environment — so moving is
+    /// not merely useless, it is destructive. Each attempt quarantines a pair for an hour, and since
+    /// every room is refused for the same cause, the range drains while nothing that was ever going
+    /// to start starts. **A configuration mistake would be laundered into port exhaustion**, which
+    /// then misdirects whoever reads the alert into comparing two port ranges that are correct.
+    ///
+    /// **Unrecognized reasons answer `false`, deliberately.** If Cilium rewords a constant, the cost
+    /// of being wrong this way is one room failing loudly on a port it cannot have; the cost the
+    /// other way is a shared range drained across the whole environment. Only a positively
+    /// identified collision is allowed to spend a port.
+    pub fn is_port_collision(&self) -> bool {
+        self.reason == ALREADY_ALLOCATED && self.message.contains(SAME_PORT_AND_PROTOCOL)
+    }
+}
+
 /// A Secret as the reconciler sees it. Never its contents — a sweep needs to know a Secret exists
 /// and whether it is owned, and reading the values back would be the one call that puts every
 /// room's credentials through the orchestrator's logs on a bad day.
@@ -332,5 +367,86 @@ pub trait ClusterApi: Send + Sync {
             services: self.list_services().await?,
             secrets: self.list_secrets().await?,
         })
+    }
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::IpamRefusal;
+
+    fn refusal(reason: &str, incompatibility: &str) -> IpamRefusal {
+        IpamRefusal {
+            reason: reason.to_string(),
+            // The shape Cilium actually emits: one format string, the requested IP and the
+            // `isCompatible` verdict. Transcribed rather than paraphrased, because the suffix is
+            // what `is_port_collision` matches on.
+            message: format!(
+                "The IP '38.246.56.121' is already allocated to an incompatible service. \
+                 Reason: {incompatibility}"
+            ),
+        }
+    }
+
+    /// The one combination where moving to another port is the answer.
+    #[test]
+    fn only_a_port_and_protocol_collision_is_worth_reallocating_for() {
+        assert!(
+            refusal(
+                "already_allocated_incompatible_service",
+                "same port and protocol"
+            )
+            .is_port_collision()
+        );
+    }
+
+    /// Every other `isCompatible` verdict is a property of the Service template, so it is the same
+    /// for every room here — reallocating would drain the range without starting anything.
+    #[test]
+    fn the_other_incompatibilities_are_not_about_the_port() {
+        for incompatibility in [
+            "different sharing key",
+            "different and not permitted namespace",
+            "different ExternalTrafficPolicy",
+            "compatible ExternalTrafficPolicy local but selecting different set of pods",
+        ] {
+            let refusal = refusal("already_allocated_incompatible_service", incompatibility);
+            assert!(
+                !refusal.is_port_collision(),
+                "{incompatibility} is not a port conflict"
+            );
+        }
+    }
+
+    /// Reasons that never reach the compatibility check at all.
+    #[test]
+    fn a_pool_problem_is_never_a_port_problem() {
+        for reason in ["no_pool", "pool_selector_mismatch"] {
+            let refusal = IpamRefusal {
+                reason: reason.to_string(),
+                message: "no pool holds the requested IP".to_string(),
+            };
+            assert!(!refusal.is_port_collision(), "{reason}");
+        }
+    }
+
+    /// **The fail-safe direction.** An unrecognized reason must not be allowed to spend a port: one
+    /// room failing loudly is recoverable, a drained range shared by the environment is not.
+    #[test]
+    fn an_unrecognized_reason_does_not_spend_a_port() {
+        assert!(
+            !IpamRefusal {
+                reason: "some_future_cilium_reason".to_string(),
+                message: "a phrasing nobody has seen yet".to_string(),
+            }
+            .is_port_collision()
+        );
+        // Right reason, reworded verdict — still not positively identified, so still no.
+        assert!(
+            !refusal(
+                "already_allocated_incompatible_service",
+                "identical port and protocol"
+            )
+            .is_port_collision()
+        );
     }
 }

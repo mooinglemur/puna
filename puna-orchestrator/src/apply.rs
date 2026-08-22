@@ -631,17 +631,19 @@ mod tests {
         let room = RoomId::new();
         let spec = spec(room, "pahoa:test");
 
-        cluster.refuse_ingress(
-            "already_allocated_incompatible_service",
-            "port 40000/TCP is already allocated to another service",
-        );
+        // Cilium's verbatim shape. The applier does not classify — it hands the refusal up whole,
+        // and `steps` decides whether a different port would help — but a fabricated message here
+        // would read as real to the next person.
+        const MESSAGE: &str = "The IP '38.246.56.121' is already allocated to an incompatible \
+                               service. Reason: same port and protocol";
+        cluster.refuse_ingress("already_allocated_incompatible_service", MESSAGE);
         let started = start(&cluster, &spec, &mut recorder).await.expect("start");
         assert_eq!(
             started,
             Started::AddressRefused {
                 refusal: IpamRefusal {
                     reason: "already_allocated_incompatible_service".into(),
-                    message: "port 40000/TCP is already allocated to another service".into(),
+                    message: MESSAGE.into(),
                 }
             }
         );
