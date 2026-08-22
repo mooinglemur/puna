@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 {% block title %}{{ room.name }}{% endblock %}
-{# **Wide only for staff, because the page is only wide for staff.** A player sees a five-column
-   roster on a page that is otherwise prose, and the 62rem measure is right for that. The moderation
-   column adds eight controls and exists for helpers and above, which is exactly when the table
-   stops being prose-shaped -- so the width follows the content rather than the URL. #}
-{% block layout %}{% if is_staff %}wide{% endif %}{% endblock %}
+{# **Always wide.** This was briefly conditional on `is_staff`, on the theory that a player's view is
+   prose-shaped and wants the 62rem measure. It is not: the page is a heading, an address and a
+   roster, and the only long-form text on it sits inside a collapsed section. A table given the room
+   to breathe reads better than one held to a measure meant for paragraphs. #}
+{% block layout %}wide{% endblock %}
 {% block content %}
 {# The name, and for staff who may change it, a pencil that swaps it for a field.
 
@@ -111,7 +111,13 @@
 {% else %}{{ slot.slot_number }}{% endif %}
 {% else %}{{ slot.slot_number }}{% endif %}
 </td>
-<td>{{ slot.player_name }}</td>
+<td>{{ slot.player_name }}
+{# **The state, said in a word.** The lock and unlock glyphs in the moderation column differ by one
+   arc and are not tellable apart at a glance while scanning a roster -- so the column that answers
+   "who is shut out?" is this one, and the glyph over there is only the control that changes it.
+   Staff-only, because `slot_views` decides `is_locked` from the viewer's role: this page is public,
+   and whether somebody has been barred is not a fact for everyone holding the link. #}
+{% if slot.is_locked %}<span class="tag locked">locked</span>{% endif %}</td>
 <td>
 {{ slot.game }}
 {% if slot.is_spectator %}<span class="tag">spectator</span>{% endif %}
@@ -255,8 +261,11 @@ unclaimed
    title="Unlock: let this slot log in again."
    aria-label="Unlock slot {{+ slot.slot_number }}">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
-<rect x="3.2" y="7" width="9.6" height="7" rx="1.4" fill="none" stroke="currentColor"/>
-<path d="M5.4 7V4.9a2.6 2.6 0 0 1 5.1-.6" fill="none" stroke="currentColor" stroke-linecap="round"/>
+<rect x="2.2" y="7" width="9.6" height="7" rx="1.4" fill="none" stroke="currentColor"/>
+{# The shackle swung off the body entirely and standing to the right, rather than one leg made
+   shorter. At 15px a missing terminus is invisible; a hoop that has plainly left the lock is not. #}
+<path d="M8.6 7V4.6a2.6 2.6 0 0 1 5.2 0V6.4" fill="none" stroke="currentColor"
+      stroke-linecap="round"/>
 </svg>
 </a>
 {% else %}

@@ -422,7 +422,6 @@ code {
 
 /* The description column is prose and is the one column here allowed to wrap; the address column
    must not. */
-.address td.purpose { white-space: normal; }
 
 /* --- copy to clipboard ---------------------------------------------------------------------------
    Hidden until `room.js` has confirmed the clipboard is actually reachable. `navigator.clipboard`
@@ -634,6 +633,18 @@ p.error {
   border: 1px solid var(--border);
   border-radius: 999px;
   vertical-align: baseline;
+}
+
+/* A slot staff have barred from connecting. Warning colors rather than error, and the same
+   reasoning `.tag.drift` gives: it is a state somebody chose, not a fault -- but unlike drift it is
+   a state a player is currently experiencing, so it gets the stronger of the two quiet hues.
+
+   This chip is the primary signal, not a decoration on one: the lock and unlock glyphs in the
+   moderation column are a padlock either way, and telling them apart at a glance down a roster is
+   not something a 15px icon does. The word does that; the glyph is the control. */
+.tag.locked {
+  color: var(--warn-fg);
+  border-color: var(--warn-fg);
 }
 
 /* A room running something other than its current spec. Deliberately NOT `.tag.warning`: the

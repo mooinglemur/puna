@@ -1848,10 +1848,23 @@ mod tests {
             );
         }
 
-        // The filtered port is described rather than left as a second address with no explanation:
-        // it is the same room, and somebody has to be able to tell which one to take.
-        assert!(html.contains("standard view"));
-        assert!(html.contains("feed-filtered view"));
+        // **The filtered port still explains itself, and the standard one no longer needs to.**
+        // Both tables are one column now -- the descriptions were a column that, once the filtered
+        // address moved behind a disclosure, had exactly one row saying the only address on screen
+        // is the one to use. The explanation that matters lives on the disclosure itself, which is
+        // where somebody deciding between them actually is.
+        assert!(
+            html.contains("Client lagging or dropping out?"),
+            "the second address is offered with nothing to tell somebody whether they want it"
+        );
+        assert!(
+            !html.contains("<th>Description</th>"),
+            "the address table grew its description column back"
+        );
+        assert!(
+            html.contains("<th>Address</th>"),
+            "the address column is not named for the thing players are looking for"
+        );
 
         // The label is what a screen reader announces, and suppression eats the space before an
         // expression even inside an attribute -- where nothing on screen would reveal it.
@@ -2160,13 +2173,14 @@ mod tests {
         assert!(may_start(&closed, Some(RoomRole::Organizer)));
     }
 
-    /// **The moderation column is staff-only, and so is the width that makes room for it.**
+    /// **The moderation column is staff-only.** `GET /room/<id>` is public — the unguessable id is
+    /// the whole authorization — so every control here is one a shared link must not hand out.
     ///
-    /// `GET /room/<id>` is public — the unguessable id is the whole authorization — so every control
-    /// here is one a shared link must not hand out. The width follows for the same reason it exists:
-    /// a player's view of this page is five columns and prose, which the 62rem measure is right for.
+    /// The **width** is not staff-only and briefly was. This page is a heading, an address and a
+    /// roster; the only long-form text sits inside a collapsed section, so there is no prose for the
+    /// 62rem measure to protect.
     #[test]
-    fn only_staff_see_the_moderation_column_and_the_width_that_fits_it() {
+    fn only_staff_see_the_moderation_column() {
         let mut staff = page_as(true, false);
         staff.room.slot_auth = SlotAuth::PerSlot;
         staff.slots = vec![a_slot(false)];
@@ -2189,7 +2203,7 @@ mod tests {
         }
         assert!(
             staff_html.contains("<body class=\"wide\">"),
-            "the page did not opt out of the prose measure for the column it just grew"
+            "the room page no longer opts out of the prose measure"
         );
         assert!(
             staff_html.contains("id=\"moderate\""),
@@ -2210,10 +2224,8 @@ mod tests {
             !player_html.contains("id=\"moderate\""),
             "the moderation dialog reached a public page"
         );
-        assert!(
-            !player_html.contains("<body class=\"wide\">"),
-            "a player's roster is prose-shaped and should keep the measure"
-        );
+        // The width is the same for everybody: it is a property of the page, not of the viewer.
+        assert!(player_html.contains("<body class=\"wide\">"));
     }
 
     /// The lock control is drawn as the state's REMEDY, not its description: a locked slot offers
@@ -2267,6 +2279,64 @@ mod tests {
                 "{mode:?}: the lock control is missing, and pahoa's verb needs no password mode"
             );
         }
+    }
+
+    /// **A locked slot says so in a word, and only to staff.**
+    ///
+    /// The chip is the primary signal rather than a decoration on the glyph: the lock and unlock
+    /// controls are a padlock either way, and telling them apart at a glance down a roster is not
+    /// something a 15px icon does. So the column that answers "who is shut out?" is the roster, and
+    /// the glyph is only the control that changes it.
+    ///
+    /// Staff-only because `slot_views` gates `is_locked` on the viewer's role — this page is public,
+    /// and whether somebody has been barred is not a fact for everyone holding the link.
+    #[test]
+    fn a_locked_slot_is_named_in_the_roster_and_only_to_staff() {
+        let mut staff = page_as(true, false);
+        staff.slots = vec![a_slot(true)];
+        let staff_html = staff.render().expect("renders");
+        assert!(
+            staff_html.contains(">locked<"),
+            "a locked slot is indistinguishable from an open one while scanning the roster"
+        );
+
+        // Not locked: no chip, or the word means nothing.
+        let mut open = page_as(true, false);
+        open.slots = vec![a_slot(false)];
+        assert!(!open.render().expect("renders").contains(">locked<"));
+
+        // **And the gate is asserted where it lives, which is not the template.** `SlotView`'s own
+        // rule is that the decision happens in `slot_views` and the markup only asks whether there
+        // is a value -- a template cannot prove it did not render something. So this goes through
+        // the function rather than rendering a hand-built view, which would only prove the template
+        // renders what it is given.
+        let mut locked = slot(1, Some(100));
+        locked.locked_at = Some(chrono::Utc::now());
+
+        let staff_view = slot_views(
+            vec![locked.clone()],
+            None,
+            Some(RoomRole::Helper),
+            &Default::default(),
+            false,
+            &Default::default(),
+            false,
+        );
+        assert!(staff_view[0].is_locked, "staff cannot see who is barred");
+
+        let public_view = slot_views(
+            vec![locked],
+            None,
+            None,
+            &Default::default(),
+            false,
+            &Default::default(),
+            false,
+        );
+        assert!(
+            !public_view[0].is_locked,
+            "a public page would name somebody as barred"
+        );
     }
 
     /// **Lock bars the next login and disconnects nobody**, and the control has to say so: the
