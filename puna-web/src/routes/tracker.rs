@@ -1221,6 +1221,50 @@ mod tests {
         }
     }
 
+    /// **The items column is named for what it counts**, and the collapse toggle remembers itself.
+    ///
+    /// Three files have to agree for that toggle to work at all: the template names a key, and
+    /// `toggles.js` restores it while `tracker.js` reacts to it. Every mismatch is silent — the box
+    /// renders, ticks, and does nothing, or does something and forgets by the next page load.
+    #[test]
+    fn the_items_table_is_ordered_and_collapsible() {
+        let html = tracker_page(Some(1)).render().expect("renders");
+
+        assert!(
+            html.contains(r#"<th data-key="order" data-type="number">Order</th>"#),
+            "the items column is headed `#`, which does not say what it counts"
+        );
+
+        let key = "tracker.items.latest";
+        assert!(
+            html.contains(&format!(r#"data-toggle="{key}""#)),
+            "the collapse toggle is missing from the items table"
+        );
+
+        // The store that restores it, and the file that reacts to it. Checked against the CALLS
+        // rather than any mention -- a lint that matches its own prose has happened four times in
+        // this codebase.
+        let toggles = std::fs::read_to_string("static/toggles.js").expect("toggles.js");
+        assert!(
+            toggles.contains(r#"querySelectorAll("[data-toggle]")"#),
+            "toggles.js no longer restores the attribute the template emits"
+        );
+        assert!(
+            html.contains("/static/toggles.js"),
+            "the page emits a toggle and never loads the file that remembers it"
+        );
+
+        let tracker = std::fs::read_to_string("static/tracker.js").expect("tracker.js");
+        assert!(
+            tracker.contains(r#"querySelector("[data-toggle]")"#),
+            "tracker.js no longer reads the toggle, so ticking it changes nothing"
+        );
+        assert!(
+            tracker.contains("collapse: { key: \"item\", recency: \"order\" }"),
+            "the items view no longer declares how it collapses"
+        );
+    }
+
     /// Tables, not prose. The same opt-out the admin pages and the room page take.
     #[test]
     fn tracker_pages_are_not_held_to_the_prose_measure() {

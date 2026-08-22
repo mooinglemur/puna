@@ -63,9 +63,20 @@
 
     items: {
       rows: (d) => d.items,
+      // **One row per item name, keeping the most recent.** Declared here rather than built into
+      // `Table` because it is a property of what this view holds: an item list is the only one
+      // where the same thing legitimately appears many times, and where "how many" is a fact the
+      // reader wants rather than noise.
+      collapse: { key: "item", recency: "order" },
       cells: (r) => [
         String(r.order),
-        { text: r.item, tag: r.classification === "filler" ? null : r.classification },
+        {
+          text: r.item,
+          // Between the name and the class chip, quiet: it qualifies the name rather than
+          // categorizing it. Absent entirely at one, because "(x1)" is noise on every other row.
+          note: r.count > 1 ? `(x${r.count})` : null,
+          tag: r.classification === "filler" ? null : r.classification,
+        },
         r.from_name,
         r.location,
       ],
@@ -151,6 +162,10 @@
       this.tbody = section.querySelector("tbody");
       this.empty = section.querySelector(".empty");
       this.search = section.querySelector(".table-search");
+      this.toggle = section.querySelector("[data-toggle]");
+      // Read AFTER `toggles.js` has restored it -- both files are `defer`, so they run in document
+      // order and the box is already in its remembered state by the time this asks.
+      this.collapsed = !!(this.toggle && this.toggle.checked);
       this.headers = Array.from(section.querySelectorAll("th[data-key]"));
       this.details = section.querySelector("details");
       this.rows = [];
@@ -166,6 +181,15 @@
     }
 
     bind() {
+      if (this.toggle) {
+        // `toggles.js` owns persisting it; this only reacts. Two listeners on one input rather than
+        // a callback threaded through, so neither file has to know the other's shape.
+        this.toggle.addEventListener("change", () => {
+          this.collapsed = this.toggle.checked;
+          this.render();
+        });
+      }
+
       if (this.search) {
         this.search.addEventListener("input", () => {
           this.query = this.search.value;
@@ -249,7 +273,11 @@
 
     render() {
       const needle = this.query.trim().toLowerCase();
-      let rows = this.rows;
+      // **Before filtering, deliberately.** Collapse then filter answers "the most recent of each
+      // item, among those matching"; filter then collapse would answer "the most recent MATCHING
+      // instance", which for a search that excludes the newest one shows an older row as though it
+      // were current. Same rows, different meaning, and the wrong one is not visibly wrong.
+      let rows = this.collapsed ? collapse(this.rows, this.config.collapse) : this.rows;
 
       if (needle) {
         // Matched against the RENDERED cells, not the raw fields, so what you can see is what you
@@ -308,6 +336,13 @@
     // On the CELL rather than the link inside it, so the whole cell is a hover target.
     if (value.title) td.title = value.title;
     if (value.class) td.classList.add(value.class);
+    // Between the text and the tag, which is the order the object declares them in.
+    if (value.note) {
+      const note = document.createElement("span");
+      note.className = "hint";
+      note.textContent = value.note;
+      td.append(" ", note);
+    }
     if (value.tag) {
       const tag = document.createElement("span");
       tag.className = "tag";
@@ -316,9 +351,36 @@
     }
   }
 
+  // One row per `key`, keeping the row with the highest `recency` and counting how many there were.
+  //
+  // The count rides on a COPY rather than being written onto the row, because `this.rows` is the
+  // fetched data and is re-collapsed on every render -- mutating it would accumulate counts across
+  // renders and survive the toggle being turned back off.
+  function collapse(rows, config) {
+    if (!config) return rows;
+    const groups = new Map();
+
+    for (const row of rows) {
+      const key = row[config.key];
+      const seen = groups.get(key);
+      if (!seen) {
+        groups.set(key, { row, count: 1 });
+        continue;
+      }
+      seen.count += 1;
+      if (row[config.recency] > seen.row[config.recency]) seen.row = row;
+    }
+
+    return Array.from(groups.values(), ({ row, count }) =>
+      count > 1 ? Object.assign({}, row, { count }) : row
+    );
+  }
+
   function cellText(cell) {
     const value = typeof cell === "string" ? { text: cell } : cell;
-    return `${value.text || ""} ${value.tag || ""}`;
+    // Every rendered piece, in render order -- filtering matches what is on screen, so a count the
+    // reader can see has to be searchable and one they cannot must not be.
+    return `${value.text || ""} ${value.note || ""} ${value.tag || ""}`;
   }
 
   function compare(a, b, type) {

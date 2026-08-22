@@ -88,7 +88,18 @@ need to.</p>
 
   <section class="table-block" data-view="items">
     <h2>Items received</h2>
-    <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter items">
+    <div class="table-controls">
+      <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter items">
+      {# **Remembered across page loads**, by `toggles.js`, which restores every `[data-toggle]` from
+         one store. The key is namespaced by hand because that store is shared with every other page.
+
+         Collapsing keeps the MOST RECENT of each item and counts the rest, which is why the count
+         appears rather than the rows simply vanishing -- "you have three of these" is the fact a
+         reader loses otherwise, and losing it silently would make the list look wrong. #}
+      <label class="only-mine">
+        <input type="checkbox" data-toggle="tracker.items.latest"> only the most recent of each item
+      </label>
+    </div>
     {# **Bounded, and ONE scroll container rather than two.** These two tables are the only ones on
        the site whose length is unbounded by anything a person chose -- a slot's world can hold
        thousands of locations -- so they scroll inside themselves instead of making the page
@@ -101,7 +112,7 @@ need to.</p>
     <div class="table-scroll bounded">
       <table>
         <thead><tr>
-          <th data-key="order" data-type="number">#</th>
+          <th data-key="order" data-type="number">Order</th>
           <th data-key="item">Item</th>
           <th data-key="from_name">From</th>
           <th data-key="location">Found at</th>
@@ -145,6 +156,7 @@ need to.</p>
 {% block scripts %}
 {# First: `tracker.js` calls `PunaTime.absolute` on the cells it builds, and both are
    `defer`, so they execute in document order and the helper exists by then. #}
+<script src="/static/toggles.js?v={{ base.static_version }}" defer></script>
 <script src="/static/localtime.js?v={{ base.static_version }}" defer></script>
 <script src="/static/tracker.js?v={{ base.static_version }}" defer></script>
 {% endblock %}
