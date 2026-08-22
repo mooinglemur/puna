@@ -245,8 +245,10 @@ schema-drift:
 #     registry without taking the shared mutex. Measured at 2 failures in 60.
 #   * `a_reservation_outside_the_range_is_never_handed_back` built its port window relative to a
 #     port the allocator picks at RANDOM (`ORDER BY last_activity, random()`, and on a fresh
-#     database every pair ties), so roughly one run in eight the window fell outside the seeded
-#     rows. Measured at 5 in 40.
+#     database every pair ties), so some fraction of runs the window fell outside the seeded rows.
+#     Measured at 6 failures in 80 -- and the first 40 of those gave 5, which read as 12% and was
+#     an over-read of one small sample. Estimating a flake's rate needs more trials than feels
+#     necessary; that is a large part of why this job runs fifty times rather than five.
 #
 # Neither is visible in a single run, and both are worse than a plain failure: a pipeline that goes
 # green on a re-run is one people learn to re-run rather than diagnose.

@@ -538,12 +538,18 @@ async fn a_reservation_outside_the_range_is_never_handed_back() {
         // random()`, and on a fresh database every unbound pair ties at `-infinity` -- so `held` is
         // a uniformly random pair anywhere in dev's 5000. Whenever it landed in the top 300 the
         // window ran off the end of the seeded rows, no reservation existed inside it, and the
-        // allocator correctly answered `Exhausted`. About one run in sixteen, failing with the
-        // right answer to a question the test did not mean to ask.
+        // allocator correctly answered `Exhausted`: the right answer to a question the test did
+        // not mean to ask. Measured at 6 failures in 80 runs of the original.
         let (low, high) = common::port_range(&mut conn, "dev").await;
-        let _ = (low, high);
-        let (window_lo, window_hi) = (held + 100, held + 300);
-
+        let (window_lo, window_hi) = if held < low + (high - low) / 2 {
+            (high - 200, high)
+        } else {
+            (low, low + 200)
+        };
+        assert!(
+            !(window_lo..=window_hi).contains(&held),
+            "the window has to exclude the held port, or this asserts nothing"
+        );
 
         // Move the recorded range out from under the reservation WITHOUT reconciling the rows, so
         // the stale binding survives -- the state a mid-flight range change would leave behind.
