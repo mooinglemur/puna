@@ -529,6 +529,8 @@ mod tests {
             claim_token: Some("a-claim-token".into()),
             claimed_at: None,
             tracker_id: TrackerId::new(),
+            locked_at: None,
+            locked_by: None,
         }
     }
 

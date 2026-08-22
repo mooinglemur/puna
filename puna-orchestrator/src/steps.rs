@@ -478,6 +478,13 @@ pub(crate) async fn render_spec(
         slot_count: inputs.slot_count,
         save_interval_secs: inputs.save_interval_secs,
         use_embedded_options: inputs.use_embedded_options,
+        // Every slot Puna holds a password for, INCLUDING the locked ones -- which is what keeps a
+        // lock from moving the fingerprint. See `spec::room::Draft::credentialled_slots`.
+        credentialled_slots: slots
+            .iter()
+            .filter(|s| s.password.is_some())
+            .map(|s| s.slot_number)
+            .collect(),
     }
     .build(room.slot_auth, &secret);
 

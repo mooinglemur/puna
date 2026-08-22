@@ -912,3 +912,98 @@ async fn the_user_listing_reports_standing_and_what_it_would_touch() {
     })
     .await;
 }
+
+/// **Locking a slot withholds it from the room without touching its credential.**
+///
+/// The two are deliberately independent: the lock is expressed as an omission from
+/// `PAHOA_SLOT_PASSWORDS`, and the password stays in the row so unlocking restores the credential
+/// its holder already has rather than minting one somebody then has to deliver.
+#[tokio::test]
+async fn locking_a_slot_withholds_it_without_disturbing_its_password() {
+    with_db(|pool| async move {
+        let mut conn = pool.get().await.expect("connection");
+        users(&mut conn).await;
+        let generation = seed_generation(&mut conn, false).await;
+
+        let id = room::create(
+            &mut conn,
+            &NewRoom::direct(Environment::Dev, "lockable", generation, OWNER),
+        )
+        .await
+        .expect("create");
+        room::set_slot_auth(&mut conn, id, SlotAuth::PerSlot)
+            .await
+            .expect("per-slot mode");
+
+        let before = slot::get(&mut conn, id, 1)
+            .await
+            .expect("read")
+            .expect("slot");
+        assert!(!before.is_locked(), "a fresh slot is not locked");
+        assert!(before.password.is_some(), "per-slot mode mints a password");
+
+        assert!(
+            slot::set_locked(&mut conn, id, 1, true, OWNER)
+                .await
+                .expect("lock"),
+            "the first lock must report that the row moved"
+        );
+
+        let locked = slot::get(&mut conn, id, 1)
+            .await
+            .expect("read")
+            .expect("slot");
+        assert!(locked.is_locked());
+        assert_eq!(locked.locked_by, Some(OWNER));
+        assert_eq!(
+            locked.password, before.password,
+            "locking must not touch the credential -- unlocking restores what the holder has"
+        );
+
+        // Nobody else is disturbed: this is one slot's door, not the room's.
+        let others = slot::list(&mut conn, id).await.expect("list");
+        assert_eq!(
+            others.iter().filter(|s| s.is_locked()).count(),
+            1,
+            "locking one slot locked another"
+        );
+
+        // **Locking an already-locked slot keeps the ORIGINAL timestamp and actor.** Rewriting them
+        // to whoever pressed last would lose the answer to "who decided this", which is the whole
+        // reason these are a timestamp and an id rather than a boolean.
+        assert!(
+            !slot::set_locked(&mut conn, id, 1, true, PLAYER)
+                .await
+                .expect("lock again"),
+            "a repeat lock reported a change, so callers would rewrite the Secret for nothing"
+        );
+        let again = slot::get(&mut conn, id, 1)
+            .await
+            .expect("read")
+            .expect("slot");
+        assert_eq!(again.locked_at, locked.locked_at);
+        assert_eq!(again.locked_by, Some(OWNER), "the actor was overwritten");
+
+        // And unlocking gives the slot back its original credential, unchanged.
+        assert!(
+            slot::set_locked(&mut conn, id, 1, false, OWNER)
+                .await
+                .expect("unlock")
+        );
+        let unlocked = slot::get(&mut conn, id, 1)
+            .await
+            .expect("read")
+            .expect("slot");
+        assert!(!unlocked.is_locked());
+        assert_eq!(unlocked.locked_by, None);
+        assert_eq!(unlocked.password, before.password);
+
+        // A no-op unlock reports nothing moved, for the same reason a repeat lock does.
+        assert!(
+            !slot::set_locked(&mut conn, id, 1, false, OWNER)
+                .await
+                .expect("unlock again")
+        );
+    })
+    .await;
+}

@@ -109,12 +109,12 @@ impl RoomProbe for HttpsProbe {
             .map_err(|e| ProbeError::Malformed(e.to_string()))
     }
 
-    async fn rotate_password(
+    async fn set_slot_password(
         &self,
         endpoint: &RoomEndpoint,
         admin_token: &str,
         slot: i32,
-        password: &str,
+        password: Option<&str>,
     ) -> Result<(), ProbeError> {
         let path = SLOT_PASSWORD.replace("{slot}", &slot.to_string());
         let response = endpoint
@@ -122,6 +122,8 @@ impl RoomProbe for HttpsProbe {
             .await?
             .post(endpoint.url(&path))
             .bearer_auth(admin_token)
+            // `null` is a lock, not an omission: pahoa reads an absent key the same way, and
+            // sending the key explicitly is what makes the intent readable in a packet capture.
             .json(&serde_json::json!({ "password": password }))
             .send()
             .await

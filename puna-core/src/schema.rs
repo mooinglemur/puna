@@ -226,6 +226,8 @@ diesel::table! {
         claim_token -> Nullable<Text>,
         claimed_at -> Nullable<Timestamptz>,
         tracker_id -> Uuid,
+        locked_at -> Nullable<Timestamptz>,
+        locked_by -> Nullable<Int8>,
     }
 }
 
@@ -341,7 +343,6 @@ diesel::joinable!(room_invites -> rooms (room_id));
 diesel::joinable!(room_invites -> users (created_by));
 diesel::joinable!(room_members -> rooms (room_id));
 diesel::joinable!(room_slots -> rooms (room_id));
-diesel::joinable!(room_slots -> users (owner_id));
 diesel::joinable!(rooms -> generations (generation_id));
 diesel::joinable!(settings -> users (updated_by));
 

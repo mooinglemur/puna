@@ -51,12 +51,30 @@ pub struct Slot {
     pub claim_token: Option<String>,
     pub claimed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub tracker_id: TrackerId,
+    /// Set when staff barred this slot from connecting, which is expressed by **omitting it from
+    /// `PAHOA_SLOT_PASSWORDS`** — a map pahoa fails closed on, so a missing slot is refused.
+    ///
+    /// Independent of [`password`](Self::password), which is deliberately left in place: unlocking
+    /// then restores the credential the holder already has rather than minting one somebody has to
+    /// deliver. So a locked slot normally *has* a password and still cannot connect.
+    pub locked_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub locked_by: Option<i64>,
 }
 
 impl Slot {
     /// A spectator plays nothing, so it has no patch and no checks to report.
     pub fn is_spectator(&self) -> bool {
         self.kind == SlotKind::Spectator
+    }
+
+    /// Whether this slot is barred from connecting.
+    ///
+    /// A predicate rather than `locked_at.is_some()` at each call site, for the reason
+    /// `DesiredState::is_at_rest` exists: the Secret builder, the planner's spec hash and the page
+    /// all ask this question, and three spellings of it is how one of them ends up asking a
+    /// slightly different one.
+    pub fn is_locked(&self) -> bool {
+        self.locked_at.is_some()
     }
 }
 
@@ -82,6 +100,10 @@ struct SlotRow {
     claimed_at: Option<chrono::DateTime<chrono::Utc>>,
     #[diesel(sql_type = SqlUuid)]
     tracker_id: TrackerId,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    locked_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    locked_by: Option<i64>,
 }
 
 impl From<SlotRow> for Slot {
@@ -102,12 +124,15 @@ impl From<SlotRow> for Slot {
             claim_token: row.claim_token,
             claimed_at: row.claimed_at,
             tracker_id: row.tracker_id,
+            locked_at: row.locked_at,
+            locked_by: row.locked_by,
         }
     }
 }
 
 const SLOT_COLUMNS: &str = "room_id, slot_number, player_name, game, kind::text AS kind, \
-                            password, owner_id, claim_token, claimed_at, tracker_id";
+                            password, owner_id, claim_token, claimed_at, tracker_id, \
+                            locked_at, locked_by";
 
 /// Every slot of a room, in slot order.
 pub async fn list(
@@ -281,6 +306,49 @@ pub async fn rotate_password(
     Ok(password)
 }
 
+/// Bar one slot from connecting, or let it back in.
+///
+/// **Does not touch the password**, which is what makes unlocking free of any credential handling:
+/// the value stays in the row, out of `PAHOA_SLOT_PASSWORDS` while the lock stands, and back in it
+/// afterwards. The holder's password never changes and nobody has to be told anything.
+///
+/// Locking an already-locked slot keeps the **original** timestamp and actor rather than rewriting
+/// history to whoever pressed last — the same rule `room::pin` follows, and for the same reason:
+/// the useful question is who first decided this and when.
+///
+/// Returns whether the row moved, so a caller can tell a real change from a repeat and skip the
+/// Secret rewrite and the audit row for a no-op.
+pub async fn set_locked(
+    conn: &mut AsyncPgConnection,
+    room: RoomId,
+    slot_number: i32,
+    locked: bool,
+    by: i64,
+) -> Result<bool, diesel::result::Error> {
+    let changed = if locked {
+        diesel::sql_query(
+            "UPDATE room_slots SET locked_at = now(), locked_by = $3
+              WHERE room_id = $1 AND slot_number = $2 AND locked_at IS NULL",
+        )
+        .bind::<SqlUuid, _>(room)
+        .bind::<Integer, _>(slot_number)
+        .bind::<BigInt, _>(by)
+        .execute(conn)
+        .await?
+    } else {
+        diesel::sql_query(
+            "UPDATE room_slots SET locked_at = NULL, locked_by = NULL
+              WHERE room_id = $1 AND slot_number = $2 AND locked_at IS NOT NULL",
+        )
+        .bind::<SqlUuid, _>(room)
+        .bind::<Integer, _>(slot_number)
+        .execute(conn)
+        .await?
+    };
+
+    Ok(changed > 0)
+}
+
 /// The map that becomes `PAHOA_SLOT_PASSWORDS`.
 ///
 /// **Complete or empty, never partial.** Under pahoa's fail-closed rule a slot missing from a
@@ -329,6 +397,8 @@ mod tests {
             claim_token: None,
             claimed_at: None,
             tracker_id: TrackerId::new(),
+            locked_at: None,
+            locked_by: None,
         }
     }
 

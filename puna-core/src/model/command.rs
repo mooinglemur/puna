@@ -23,15 +23,16 @@
 //!
 //! ## What is deliberately not here
 //!
-//! **`rotate_password` IS a command here, and §6 says it should not be.** That section was written
-//! before the tier boundary existed: it assumed rotation would be `POST /admin/v1/slots/<n>/password`
-//! called directly, and the web tier has **no egress to room pods at all**. Only the orchestrator can
-//! reach a room, so asking it through this queue is the only shape available.
+//! **`rotate_password` and `lock_slot` ARE commands here, and §6 says the first should not be.**
+//! That section was written before the tier boundary existed: it assumed rotation would be
+//! `POST /admin/v1/slots/<n>/password` called directly, and the web tier has **no egress to room
+//! pods at all**. Only the orchestrator can reach a room, so asking it through this queue is the
+//! only shape available.
 //!
 //! Its stated objection is answered rather than ignored — the variant carries **no password**, only
 //! a slot number, so the audit trail records what was rotated and by whom without holding the value.
-//! What remains true is that it is *not a pahoa command*: the dispatcher handles it before the
-//! passthrough, because pahoa's own set is the eight others and it would answer `400`.
+//! What remains true is that neither is a *pahoa command*: the dispatcher handles both before the
+//! passthrough, because pahoa's own set is the fourteen others and it would answer `400`.
 //!
 //! **There is no room-wide password setter and there will not be one** (P18, settled): pahoa
 //! declined it because a change it cannot persist reverts at the next restart in every deployment.
@@ -72,6 +73,79 @@ pub enum RoomCommand {
         #[serde(default)]
         force: bool,
     },
+    /// Hint at what is *in* a location, where [`Hint`](Self::Hint) hints at where an item *is*.
+    ///
+    /// A separate verb rather than a flag, because that is how the reference names it and an
+    /// operator who knows `/hint_location` looks for that word. The location is in the target
+    /// slot's own world, so it resolves in **that slot's game** — which is also the game whose
+    /// name table an autocomplete must read.
+    HintLocation {
+        slot: i32,
+        location: String,
+        #[serde(default)]
+        force: bool,
+    },
+    /// **Check** a location, sending out whatever it holds — one step past hinting at it.
+    ///
+    /// The same distinction `!hint` and the reference's `/send_location` draw, and the reason this
+    /// is not a mode of [`HintLocation`](Self::HintLocation): one tells somebody where to look and
+    /// the other reaches in and takes it.
+    SendLocation {
+        slot: i32,
+        location: String,
+    },
+    /// Several copies of one item.
+    ///
+    /// **`amount` is required and pahoa caps it at 100**, deliberately: every copy is queued on
+    /// both of a slot's item streams and replayed from index zero on each reconnect, so a stray
+    /// extra digit is a room that never finishes sending. A default of one would make a
+    /// `send_multiple` that did a fraction of its job look like it worked, which is why there is no
+    /// default here either — `send_item` is the one-copy spelling.
+    SendMultiple {
+        slot: i32,
+        item: String,
+        amount: i64,
+    },
+    /// Exempt one slot from the room's `release_mode`, or return it to the mode.
+    ///
+    /// **An exemption, not a third permission level**, and the trap is the `false` case: it clears
+    /// the exemption and returns that slot to whatever the room's mode says — which may still
+    /// permit releasing. It does **not** forbid it. The reference spells these as two commands and
+    /// the second is called `/forbid_release`, which reads like a denial and is not one; pahoa made
+    /// it one command with a boolean for exactly that reason, and the UI has to carry the same
+    /// care. There is no collect equivalent, in pahoa or upstream.
+    AllowRelease {
+        slot: i32,
+        allowed: bool,
+    },
+    /// Set or clear **another** player's alias, which `!alias` only lets a player do for
+    /// themselves. Empty clears it; pahoa truncates to 16 characters as the chat command does.
+    Alias {
+        slot: i32,
+        alias: String,
+    },
+    /// Change one of the room's gameplay options on the **running** room.
+    ///
+    /// **The verb that changes what Puna can do**, and the only one here that is an organizer's.
+    /// Before it existed, a room's rules could be changed by a chat user holding the server
+    /// password and *not* by a token holder — which inverted the trust ordering, since the bearer
+    /// token is the stronger credential and the one Puna holds.
+    ///
+    /// **These changes PERSIST**, and that is the opposite of the password contract in §4: the save
+    /// is authoritative for gameplay options, so a restart restores what was set here over whatever
+    /// flag the room was started with. §7's "gameplay flags are an initial value, never a setting"
+    /// rule is unchanged by this — what changes is that Puna finally has a write path, which §7 said
+    /// a settings UI would need before Puna could store any of them.
+    ///
+    /// `value` is a string on the wire even for a number or a boolean. pahoa accepts all three and
+    /// parses from text either way, and a string keeps this type `Eq` — `serde_json::Value` is not,
+    /// because of floats. The two passwords are **recognized and refused by name** with an
+    /// explanation rather than an "unknown option", so sending one is an answer rather than a bug.
+    #[serde(rename = "option")]
+    SetOption {
+        name: String,
+        value: String,
+    },
     /// Push a slot's **already-rotated** password to the Secret and then to the running room.
     ///
     /// **The one variant that is not a pahoa command**, and the departure from §6 is deliberate.
@@ -90,6 +164,34 @@ pub enum RoomCommand {
     /// `/admin/v1/command` body it would be a `400`, since pahoa's command set is the eight above.
     RotatePassword {
         slot: i32,
+    },
+    /// Shut one slot out, or let it back in. **Durable**, not merely live.
+    ///
+    /// Reaches the running room through the endpoint [`RotatePassword`](Self::RotatePassword) uses
+    /// — `{"password": null}` to lock, the slot's stored password to unlock — and reaches the
+    /// room's *next start* through the Secret, which omits a locked slot from
+    /// `PAHOA_SLOT_PASSWORDS` entirely. Under pahoa's fail-closed rule a slot missing from that map
+    /// is **refused**, so the omission is the lock. §4 is emphatic that this is the opposite of
+    /// what "clear the password" suggests, which is why the control says *Lock*, never *Remove
+    /// password*.
+    ///
+    /// **Both halves are required and the order is the same as rotation's**: Secret first, then the
+    /// live push. The room's password endpoint persists nothing by design, so a lock pushed only
+    /// there would lapse at the next restart — silently, and restarts happen for reasons nobody
+    /// decided, like a reap or an image bump.
+    ///
+    /// **The stored password is left alone.** Locking omits the slot from the map; it does not
+    /// clear `room_slots.password`. So unlocking restores the credential the player already has
+    /// rather than forcing a rotation somebody then has to deliver.
+    ///
+    /// Not a pahoa command: like rotation, the dispatcher intercepts it before the passthrough.
+    LockSlot {
+        slot: i32,
+        /// `true` locks, `false` lets them back in. Spelled as a boolean on one command rather than
+        /// two verbs, for the reason pahoa gives for `allow_release`: `unlock` and `lock` as
+        /// separate rows would read as two unrelated events in a history that is trying to explain
+        /// one slot's story.
+        locked: bool,
     },
     Kick {
         slot: i32,
@@ -110,9 +212,16 @@ impl RoomCommand {
             Self::Release { .. } => "release",
             Self::Collect { .. } => "collect",
             Self::SendItem { .. } => "send_item",
+            Self::SendMultiple { .. } => "send_multiple",
             Self::Hint { .. } => "hint",
+            Self::HintLocation { .. } => "hint_location",
+            Self::SendLocation { .. } => "send_location",
+            Self::AllowRelease { .. } => "allow_release",
+            Self::Alias { .. } => "alias",
+            Self::SetOption { .. } => "option",
             Self::Kick { .. } => "kick",
             Self::RotatePassword { .. } => "rotate_password",
+            Self::LockSlot { .. } => "lock_slot",
         }
     }
 
@@ -133,13 +242,21 @@ impl RoomCommand {
     /// It stays a table rather than collapsing into a constant deliberately: a new pahoa command
     /// should have to be *given* a tier, and the day one wants `Organizer` this is where that is
     /// said. See `the_capability_table_matches_the_design`, which pins the current answer.
+    ///
+    /// **`option` is the day that came.** It is the first command that is not a helper's, and it is
+    /// the same line M20 drew everywhere else: a helper runs the multiworld, an organizer decides
+    /// whether it runs, *how it is configured*, and who is trusted with it. Every other verb here
+    /// acts on one slot's game; `option` changes the rules the whole room plays by, and — unlike
+    /// everything else on this list — it **persists into the save**, so it outlives the person who
+    /// set it.
     pub fn required_role(&self) -> RoomRole {
         match self {
             // Reads and speech. Nothing here changes a player's game.
             Self::Status | Self::Say { .. } | Self::Countdown { .. } => RoomRole::Helper,
             // `hint` costs the slot's points, and is still a helper's: that is the support action
             // the tier exists for -- a player stuck on a lost item asks, and a helper answers.
-            Self::Hint { .. } => RoomRole::Helper,
+            // `hint_location` is the same act pointed the other way round.
+            Self::Hint { .. } | Self::HintLocation { .. } => RoomRole::Helper,
             // These reach into somebody's game or end their session, and they are a helper's too:
             // each is a thing a player asks staff for, and none of them changes the room itself.
             // `kick` in particular is a disconnect rather than a ban -- the player may reconnect
@@ -147,11 +264,23 @@ impl RoomCommand {
             Self::Release { .. }
             | Self::Collect { .. }
             | Self::SendItem { .. }
+            | Self::SendMultiple { .. }
+            | Self::SendLocation { .. }
+            // Granting one slot an exemption from `release_mode` is strictly WEAKER than releasing
+            // for them, which is a helper's two lines up: this lets the player do it themselves.
+            // A tier that may do the thing must be able to permit it.
+            | Self::AllowRelease { .. }
+            // Renaming somebody who named themselves something the room should not have to read is
+            // moderation in its plainest form.
+            | Self::Alias { .. }
             | Self::Kick { .. }
-            // Rotating one slot's password is a credential change WITHIN a mode. Changing the
-            // mode is the organizer's decision, and it is a room restart, so it is a settings
-            // route rather than a command.
-            | Self::RotatePassword { .. } => RoomRole::Helper,
+            // Rotating one slot's password is a credential change WITHIN a mode, and locking a slot
+            // is the same endpoint saying nobody. Changing the MODE is the organizer's decision and
+            // is a room restart, so it is a settings route rather than a command.
+            | Self::RotatePassword { .. }
+            | Self::LockSlot { .. } => RoomRole::Helper,
+            // See the note above: the room's own rules, and they persist.
+            Self::SetOption { .. } => RoomRole::Organizer,
         }
     }
 
@@ -163,13 +292,22 @@ impl RoomCommand {
     /// from here.
     pub fn target_slot(&self) -> Option<i32> {
         match self {
-            Self::Status | Self::Say { .. } | Self::Countdown { .. } => None,
+            // `option` is room-wide, which is exactly what makes it the organizer's one.
+            Self::Status | Self::Say { .. } | Self::Countdown { .. } | Self::SetOption { .. } => {
+                None
+            }
             Self::Release { slot }
             | Self::Collect { slot }
             | Self::SendItem { slot, .. }
+            | Self::SendMultiple { slot, .. }
             | Self::Hint { slot, .. }
+            | Self::HintLocation { slot, .. }
+            | Self::SendLocation { slot, .. }
+            | Self::AllowRelease { slot, .. }
+            | Self::Alias { slot, .. }
             | Self::Kick { slot, .. }
-            | Self::RotatePassword { slot } => Some(*slot),
+            | Self::RotatePassword { slot }
+            | Self::LockSlot { slot, .. } => Some(*slot),
         }
     }
 }
@@ -232,61 +370,159 @@ impl Disposition {
 mod tests {
     use super::*;
 
-    fn every_command() -> Vec<RoomCommand> {
+    /// **pahoa's fourteen verbs, each beside the JSON pahoa's own parser reads.**
+    ///
+    /// One list rather than two, because the previous shape — a list of commands here and a series
+    /// of indexed assertions below — meant a command could be added to the set and quietly not
+    /// checked against the wire, which is the only thing this file is really for.
+    ///
+    /// Transcribed from `pahoa-net/src/http/command.rs`, **not** from the handoff's summary table:
+    /// the table omits that `allowed` defaults to true, that an empty `alias` clears, and that
+    /// `value` is accepted as a bare string.
+    fn the_pahoa_set() -> Vec<(RoomCommand, serde_json::Value)> {
+        use serde_json::json;
         vec![
-            RoomCommand::Status,
-            RoomCommand::Say { text: "hi".into() },
-            RoomCommand::Countdown { seconds: 10 },
-            RoomCommand::Release { slot: 3 },
-            RoomCommand::Collect { slot: 3 },
-            RoomCommand::SendItem {
-                slot: 3,
-                item: "Bow".into(),
-            },
-            RoomCommand::Hint {
-                slot: 3,
-                item: "Progressive Sword".into(),
-                force: false,
-            },
-            RoomCommand::Kick {
-                slot: 3,
-                reason: Some("afk".into()),
-            },
+            (RoomCommand::Status, json!({"command": "status"})),
+            (
+                RoomCommand::Say { text: "hi".into() },
+                json!({"command": "say", "text": "hi"}),
+            ),
+            (
+                RoomCommand::Countdown { seconds: 10 },
+                json!({"command": "countdown", "seconds": 10}),
+            ),
+            (
+                RoomCommand::Release { slot: 3 },
+                json!({"command": "release", "slot": 3}),
+            ),
+            (
+                RoomCommand::Collect { slot: 3 },
+                json!({"command": "collect", "slot": 3}),
+            ),
+            (
+                RoomCommand::SendItem {
+                    slot: 3,
+                    item: "Bow".into(),
+                },
+                json!({"command": "send_item", "slot": 3, "item": "Bow"}),
+            ),
+            (
+                RoomCommand::SendMultiple {
+                    slot: 3,
+                    item: "Rupee".into(),
+                    amount: 5,
+                },
+                json!({"command": "send_multiple", "slot": 3, "item": "Rupee", "amount": 5}),
+            ),
+            (
+                RoomCommand::Hint {
+                    slot: 3,
+                    item: "Progressive Sword".into(),
+                    force: false,
+                },
+                json!({
+                    "command": "hint", "slot": 3, "item": "Progressive Sword", "force": false
+                }),
+            ),
+            (
+                RoomCommand::HintLocation {
+                    slot: 3,
+                    location: "Attic".into(),
+                    force: false,
+                },
+                json!({
+                    "command": "hint_location", "slot": 3, "location": "Attic", "force": false
+                }),
+            ),
+            (
+                RoomCommand::SendLocation {
+                    slot: 3,
+                    location: "Attic".into(),
+                },
+                json!({"command": "send_location", "slot": 3, "location": "Attic"}),
+            ),
+            (
+                // Sent explicitly in both directions rather than omitted when true. pahoa defaults
+                // an absent `allowed` to true, so the two agree -- but this command's whole hazard
+                // is that `false` reads like a denial and is not one, and a body that says which
+                // way it meant is worth more than a byte saved.
+                RoomCommand::AllowRelease {
+                    slot: 3,
+                    allowed: true,
+                },
+                json!({"command": "allow_release", "slot": 3, "allowed": true}),
+            ),
+            (
+                RoomCommand::Alias {
+                    slot: 3,
+                    alias: "Organizer".into(),
+                },
+                json!({"command": "alias", "slot": 3, "alias": "Organizer"}),
+            ),
+            (
+                // A STRING, even for an integer option. pahoa accepts a string, a number or a
+                // boolean and parses from text either way -- and a string is what keeps this enum
+                // `Eq`, since `serde_json::Value` is not.
+                RoomCommand::SetOption {
+                    name: "hint_cost".into(),
+                    value: "20".into(),
+                },
+                json!({"command": "option", "name": "hint_cost", "value": "20"}),
+            ),
+            (
+                RoomCommand::Kick {
+                    slot: 3,
+                    reason: Some("afk".into()),
+                },
+                json!({"command": "kick", "slot": 3, "reason": "afk"}),
+            ),
         ]
     }
 
-    /// **`RotatePassword` is not one of pahoa's, and `every_command` above is the pahoa set.**
+    fn every_command() -> Vec<RoomCommand> {
+        the_pahoa_set().into_iter().map(|(c, _)| c).collect()
+    }
+
+    /// **The two Puna-side commands are not pahoa's, and `every_command` above is the pahoa set.**
     ///
-    /// The wire-shape test walks that list against pahoa's parser; this variant would fail it,
-    /// because pahoa has no such command and would answer `400`. It is a Puna instruction that
-    /// happens to travel on the same queue, and the dispatcher must intercept it before the
+    /// The wire-shape test walks that list against pahoa's parser; either of these would fail it,
+    /// because pahoa has no such command and would answer `400`. They are Puna instructions that
+    /// happen to travel on the same queue, and the dispatcher must intercept both before the
     /// passthrough — a source lint over `dispatch.rs` asserts that ordering, since getting it wrong
     /// is a `400` logged as "Puna generated a body the room could not read", which is true and
     /// unhelpful.
     ///
-    /// It still round-trips through the row, because it is stored there like any other.
+    /// They still round-trip through the row, because they are stored there like any other.
     #[test]
-    fn the_rotation_command_is_not_part_of_pahoas_set_but_still_round_trips() {
-        let rotate = RoomCommand::RotatePassword { slot: 3 };
-        assert!(
-            !every_command().contains(&rotate),
-            "the rotation command reached the list this crate walks against pahoa's wire format"
-        );
+    fn the_puna_side_commands_are_not_part_of_pahoas_set_but_still_round_trip() {
+        for command in [
+            RoomCommand::RotatePassword { slot: 3 },
+            RoomCommand::LockSlot {
+                slot: 3,
+                locked: true,
+            },
+        ] {
+            assert!(
+                !every_command().contains(&command),
+                "{} reached the list this crate walks against pahoa's wire format",
+                command.name()
+            );
 
-        let stored = serde_json::to_value(&rotate).expect("serializes");
-        assert_eq!(
-            serde_json::from_value::<RoomCommand>(stored).expect("parses"),
-            rotate
-        );
+            let stored = serde_json::to_value(&command).expect("serializes");
+            assert_eq!(
+                serde_json::from_value::<RoomCommand>(stored).expect("parses"),
+                command
+            );
 
-        // And it carries a slot and NO password: the value is in `room_slots`, and this row is read
-        // by anybody who can read the room's command history.
-        assert_eq!(rotate.target_slot(), Some(3));
-        let body = serde_json::to_string(&rotate).expect("serializes");
-        assert!(
-            !body.contains("\"password\":"),
-            "a credential reached the audit trail: {body}"
-        );
+            // Each carries a slot and NO password: the value is in `room_slots`, and this row is
+            // read by anybody who can read the room's command history.
+            assert_eq!(command.target_slot(), Some(3));
+            let body = serde_json::to_string(&command).expect("serializes");
+            assert!(
+                !body.contains("\"password\":"),
+                "a credential reached the audit trail: {body}"
+            );
+        }
     }
 
     /// **The wire format is pahoa's, and a mismatch is a `400` nothing on this side can anticipate.**
@@ -294,42 +530,14 @@ mod tests {
     /// side renames a field.
     #[test]
     fn commands_serialize_to_pahoas_wire_shape() {
-        let rendered: Vec<serde_json::Value> = every_command()
-            .iter()
-            .map(|c| serde_json::to_value(c).expect("serializes"))
-            .collect();
-
-        assert_eq!(rendered[0], serde_json::json!({"command": "status"}));
-        assert_eq!(
-            rendered[1],
-            serde_json::json!({"command": "say", "text": "hi"})
-        );
-        assert_eq!(
-            rendered[2],
-            serde_json::json!({"command": "countdown", "seconds": 10})
-        );
-        assert_eq!(
-            rendered[3],
-            serde_json::json!({"command": "release", "slot": 3})
-        );
-        assert_eq!(
-            rendered[4],
-            serde_json::json!({"command": "collect", "slot": 3})
-        );
-        assert_eq!(
-            rendered[5],
-            serde_json::json!({"command": "send_item", "slot": 3, "item": "Bow"})
-        );
-        assert_eq!(
-            rendered[6],
-            serde_json::json!({
-                "command": "hint", "slot": 3, "item": "Progressive Sword", "force": false
-            })
-        );
-        assert_eq!(
-            rendered[7],
-            serde_json::json!({"command": "kick", "slot": 3, "reason": "afk"})
-        );
+        for (command, expected) in the_pahoa_set() {
+            assert_eq!(
+                serde_json::to_value(&command).expect("serializes"),
+                expected,
+                "{} no longer matches pahoa's wire shape",
+                command.name()
+            );
+        }
 
         // A kick with no reason omits the key rather than sending null: pahoa treats absent and
         // null alike, but an omitted optional is the shape its parser documents.
@@ -340,6 +548,69 @@ mod tests {
             })
             .unwrap(),
             serde_json::json!({"command": "kick", "slot": 3})
+        );
+    }
+
+    /// **pahoa's set is fourteen verbs, and the count is asserted so a new one cannot arrive
+    /// untested.**
+    ///
+    /// The list above is hand-written, so a variant added to the enum and not to it would simply
+    /// never be checked against the wire — the failure this whole module exists to prevent, arriving
+    /// by omission rather than by error. Naming them individually is what makes the diff say which
+    /// one appeared.
+    #[test]
+    fn the_pahoa_command_set_is_the_fourteen_verbs_it_shipped() {
+        let names: Vec<&str> = every_command().iter().map(|c| c.name()).collect();
+        assert_eq!(
+            names,
+            [
+                "status",
+                "say",
+                "countdown",
+                "release",
+                "collect",
+                "send_item",
+                "send_multiple",
+                "hint",
+                "hint_location",
+                "send_location",
+                "allow_release",
+                "alias",
+                "option",
+                "kick",
+            ]
+        );
+    }
+
+    /// **`allow_release` false is an exemption being cleared, not a prohibition**, and the wire has
+    /// to say which way it meant rather than leaning on pahoa's default.
+    ///
+    /// Pinned separately because the hazard is semantic rather than syntactic: a reader who assumes
+    /// the reference's `/forbid_release` naming will expect `false` to forbid releasing, and it
+    /// returns the slot to `release_mode` — which may well still permit it.
+    #[test]
+    fn clearing_a_release_exemption_says_so_explicitly() {
+        assert_eq!(
+            serde_json::to_value(RoomCommand::AllowRelease {
+                slot: 3,
+                allowed: false
+            })
+            .unwrap(),
+            serde_json::json!({"command": "allow_release", "slot": 3, "allowed": false})
+        );
+    }
+
+    /// An empty `alias` is how a player's alias is cleared, so it must reach the wire as an empty
+    /// string rather than being dropped as though the field were optional.
+    #[test]
+    fn an_empty_alias_is_sent_rather_than_omitted() {
+        assert_eq!(
+            serde_json::to_value(RoomCommand::Alias {
+                slot: 3,
+                alias: String::new()
+            })
+            .unwrap(),
+            serde_json::json!({"command": "alias", "slot": 3, "alias": ""})
         );
     }
 
@@ -360,91 +631,92 @@ mod tests {
     fn the_capability_table_matches_the_design() {
         use RoomRole::{Helper, Organizer};
 
-        for (command, expected) in [
-            (RoomCommand::Status, Helper),
-            (
-                RoomCommand::Say {
-                    text: String::new(),
-                },
-                Helper,
-            ),
-            (RoomCommand::Countdown { seconds: 1 }, Helper),
-            (
-                RoomCommand::Hint {
-                    slot: 1,
-                    item: String::new(),
-                    force: false,
-                },
-                Helper,
-            ),
-            (RoomCommand::RotatePassword { slot: 1 }, Helper),
-            (RoomCommand::Release { slot: 1 }, Helper),
-            (RoomCommand::Collect { slot: 1 }, Helper),
-            (
-                RoomCommand::SendItem {
-                    slot: 1,
-                    item: String::new(),
-                },
-                Helper,
-            ),
-            (
-                RoomCommand::Kick {
-                    slot: 1,
-                    reason: None,
-                },
-                Helper,
-            ),
+        // Spelled out by name rather than derived from `required_role`, which would make this
+        // test agree with the code by construction and assert nothing.
+        for (name, expected) in [
+            ("status", Helper),
+            ("say", Helper),
+            ("countdown", Helper),
+            ("release", Helper),
+            ("collect", Helper),
+            ("send_item", Helper),
+            ("send_multiple", Helper),
+            ("hint", Helper),
+            ("hint_location", Helper),
+            ("send_location", Helper),
+            ("allow_release", Helper),
+            ("alias", Helper),
+            ("kick", Helper),
+            ("rotate_password", Helper),
+            ("lock_slot", Helper),
+            // The one that is not, and the only one that changes the room rather than a game
+            // inside it. See `required_role`.
+            ("option", Organizer),
         ] {
-            assert_eq!(
-                command.required_role(),
-                expected,
-                "{} changed tier",
-                command.name()
-            );
+            let command = every_command_including_punas()
+                .into_iter()
+                .find(|c| c.name() == name)
+                .unwrap_or_else(|| panic!("{name} is no longer a command"));
+            assert_eq!(command.required_role(), expected, "{name} changed tier");
         }
 
         // The ladder is `Ord`, so every check is `role >= required` -- an organizer may do
         // everything a helper may.
         assert!(Organizer >= Helper);
         assert!(
-            every_command()
+            every_command_including_punas()
                 .iter()
                 .all(|c| Organizer >= c.required_role())
         );
     }
 
-    /// **A helper may run every command, and that is the decision — not an accident of the table
-    /// being empty.**
+    /// Every command, pahoa's and Puna's own, for the tier and target tables.
+    fn every_command_including_punas() -> Vec<RoomCommand> {
+        let mut all = every_command();
+        all.push(RoomCommand::RotatePassword { slot: 3 });
+        all.push(RoomCommand::LockSlot {
+            slot: 3,
+            locked: true,
+        });
+        all
+    }
+
+    /// **A helper runs the multiworld; an organizer owns the room.** The split, asserted as a
+    /// property rather than left to the per-command table above.
     ///
-    /// Asserted as its own property because the loop above would keep passing if somebody quietly
-    /// raised one command back to `Organizer` *and* updated the expectation beside it in the same
-    /// edit, which is the shape a "just this one is dangerous" change takes. The console hides
-    /// nothing from a helper today, so a command that becomes an organizer's needs the console's
-    /// rendering revisited at the same time.
+    /// It reads as one exception because it is one: everything a helper is trusted with acts on a
+    /// single slot's game and can be undone by acting again, while `option` changes the rules the
+    /// whole room plays by **and persists into the save**, outliving whoever set it and the pod it
+    /// was set on.
     ///
-    /// The boundary a helper actually hits is elsewhere and is not expressible here: start, stop,
-    /// close, the password mode, and the roster are ordinary organizer-guarded routes.
+    /// The consequence for the UI is the reason this is its own test: the console offers its menu
+    /// unconditionally except here, so a command moving tier means a gate appearing or disappearing
+    /// in `console.html`. A control that is visible and refuses teaches people the tool is broken.
     #[test]
-    fn a_helper_may_run_the_whole_command_set() {
-        let withheld: Vec<&str> = every_command()
+    fn a_helper_runs_every_command_except_the_one_that_configures_the_room() {
+        let withheld: Vec<&str> = every_command_including_punas()
             .iter()
             .filter(|c| c.required_role() > RoomRole::Helper)
             .map(|c| c.name())
             .collect();
 
-        assert!(
-            withheld.is_empty(),
-            "these are no longer a helper's, so the console must stop offering them unconditionally: \
-             {withheld:?}"
+        assert_eq!(
+            withheld,
+            ["option"],
+            "the helper/organizer split moved, so the console's gating has to move with it"
         );
     }
 
     /// A targeted command that lost its target would act on nobody, or on pahoa's reserved slot 0.
     #[test]
     fn every_targeted_command_carries_its_target() {
-        for command in every_command() {
+        for command in every_command_including_punas() {
             match command {
-                RoomCommand::Status | RoomCommand::Say { .. } | RoomCommand::Countdown { .. } => {
+                // `option` is room-wide, which is what puts it on the other side of the tier line.
+                RoomCommand::Status
+                | RoomCommand::Say { .. }
+                | RoomCommand::Countdown { .. }
+                | RoomCommand::SetOption { .. } => {
                     assert_eq!(command.target_slot(), None, "{}", command.name());
                 }
                 _ => assert_eq!(

@@ -329,8 +329,12 @@ macro_rules! room_gauge {
 
 /// **Sockets, not players.** One player commonly holds three — game client, text client, tracker —
 /// so a dashboard that labels this "players online" is wrong, and an idle reaper built on it would
-/// never reap a room full of abandoned tracker tabs. `puna_room_idle_seconds` is the reaper's
-/// number.
+/// never reap a room full of abandoned tracker tabs.
+///
+/// **The reaper reads neither this nor `puna_room_idle_seconds`**, and that correction is the whole
+/// point of pahoa's P23: it reaps on `rooms.last_check_at`, the time a slot last registered a new
+/// location check, because both of these stay fresh in a room where everybody is talking and nobody
+/// is playing. See `Config::idle_timeout`.
 pub static ROOM_CLIENTS: LazyLock<IntGaugeVec> = room_gauge!(
     "puna_room_clients_connected",
     "Open client sockets per room, which is not a player count"
@@ -351,8 +355,13 @@ pub static ROOM_OUTBOUND_QUEUED_BYTES: LazyLock<IntGaugeVec> = room_gauge!(
 pub static ROOM_RESIDENT_BYTES: LazyLock<IntGaugeVec> =
     room_gauge!("puna_room_resident_bytes", "A room's resident set size");
 
-/// Seconds since any client last spoke. **The number an idle reaper reads**, and `null` until a
-/// client has spoken at all — which is absent here rather than zero.
+/// Seconds since any client last sent anything — chat, `Sync`, `Get`, a status update. `null` until
+/// one has, which is absent here rather than zero.
+///
+/// **Not the reaper's number**, despite what this comment said until 2026-08-21. It answers whether
+/// a room's sockets are alive, which is worth a gauge on its own; whether the room is being *played*
+/// is `last_check_at`, and conflating the two is exactly what P23 existed to end. Left under its own
+/// honest name rather than repointed, because the two questions are both real.
 pub static ROOM_IDLE_SECONDS: LazyLock<IntGaugeVec> = room_gauge!(
     "puna_room_idle_seconds",
     "Seconds since a room last heard from any client"

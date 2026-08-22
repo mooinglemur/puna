@@ -85,17 +85,17 @@ impl RoomProbe for TcpProbe {
         })
     }
 
-    async fn rotate_password(
+    async fn set_slot_password(
         &self,
         _endpoint: &RoomEndpoint,
         _admin_token: &str,
         _slot: i32,
-        _password: &str,
+        _password: Option<&str>,
     ) -> Result<(), ProbeError> {
-        // The rotation still lands in the database and in the Secret; what is lost under this probe
-        // is only the live push, so the new password takes effect at the room's next start.
+        // The change still lands in the database and in the Secret; what is lost under this probe
+        // is only the live push, so a rotation or a lock takes effect at the room's next start.
         Err(ProbeError::Unsupported {
-            what: "rotate a slot password on a running room",
+            what: "set a slot password on a running room",
         })
     }
 

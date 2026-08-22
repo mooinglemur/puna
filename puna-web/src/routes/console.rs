@@ -50,6 +50,21 @@ pub struct ConsoleTemplate {
     /// Set when the command outlived the request budget. **Not an error**: it is still running, and
     /// the history pane will show it.
     still_running: bool,
+    /// Set when a credential change landed in the database for a room that is not running, so there
+    /// was nothing to tell. Distinct from an error and from a refusal: it worked, and it takes
+    /// effect at the next start.
+    stored: bool,
+    /// Set when the room began starting while a credential change was being written, so whether the
+    /// pod read it is unknown. **Neither of the confident answers is available here**, and saying
+    /// one anyway is the failure this flag exists to avoid.
+    uncertain: bool,
+    /// Whether to offer `option`, which is the one command a helper may not run. Hidden rather than
+    /// disabled — a visible control that refuses teaches people the tool is broken — and the route
+    /// re-checks regardless, since it is reachable by anyone who can construct a POST.
+    is_organizer: bool,
+    /// Whether locking has a spelling in this room. It is expressed as an omission from the
+    /// per-slot password map, so outside that mode there is no map and nothing to omit from.
+    per_slot_passwords: bool,
 }
 
 /// One line of the console's history.
@@ -87,11 +102,13 @@ impl HistoryEntry {
 }
 
 /// The console pane.
-#[get("/room/<_id>/console?<ran>&<pending>")]
+#[get("/room/<_id>/console?<ran>&<pending>&<stored>&<uncertain>")]
 async fn show(
     _id: RoomParam,
     ran: Option<String>,
     pending: Option<bool>,
+    stored: Option<bool>,
+    uncertain: Option<bool>,
     access: RoomAccess<Helper>,
     pool: &State<Pool>,
 ) -> Result<ConsoleTemplate> {
@@ -122,6 +139,10 @@ async fn show(
         history: history.iter().map(HistoryEntry::from_row).collect(),
         outcome,
         still_running: pending.unwrap_or(false),
+        stored: stored.unwrap_or(false),
+        uncertain: uncertain.unwrap_or(false),
+        is_organizer: access.role() >= puna_core::model::member::RoomRole::Organizer,
+        per_slot_passwords: room.slot_auth == puna_core::model::room::SlotAuth::PerSlot,
     })
 }
 
@@ -136,9 +157,28 @@ pub struct CommandForm {
     slot: Option<i32>,
     text: Option<String>,
     item: Option<String>,
+    /// For `hint_location` and `send_location`. A separate field from `item` rather than one
+    /// "name" box, because they are looked up in different tables and an autocomplete has to know
+    /// which — and because pahoa matches **exactly**, so offering the wrong kind of name produces a
+    /// refusal rather than a near miss.
+    location: Option<String>,
     seconds: Option<i64>,
+    /// For `send_multiple`. **Required, with no default**: pahoa caps it at 100 and every copy is
+    /// replayed from index zero on each reconnect, so a default of one would make a command that
+    /// did a fraction of its job look like it worked.
+    amount: Option<i64>,
     #[field(default = false)]
     force: bool,
+    /// For `allow_release`. `Option<bool>` from a select rather than a checkbox, because both
+    /// answers are deliberate here: an unchecked box is indistinguishable from a box nobody read,
+    /// and `false` on this command means something specific and easy to mistake for a denial.
+    allowed: Option<bool>,
+    /// For `lock_slot`, and the same reasoning as `allowed`.
+    locked: Option<bool>,
+    /// For `alias`. **Not filtered for blankness**: empty is how an alias is cleared.
+    alias: Option<String>,
+    option_name: Option<String>,
+    option_value: Option<String>,
     reason: Option<String>,
 }
 
@@ -154,6 +194,13 @@ fn build(form: &CommandForm) -> std::result::Result<RoomCommand, String> {
             .filter(|i| !i.trim().is_empty())
             .map(str::to_string)
             .ok_or_else(|| "name an item".to_string())
+    };
+    let location = || {
+        form.location
+            .as_deref()
+            .filter(|l| !l.trim().is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| "name a location".to_string())
     };
 
     Ok(match form.kind.as_str() {
@@ -177,10 +224,64 @@ fn build(form: &CommandForm) -> std::result::Result<RoomCommand, String> {
             slot: slot()?,
             item: item()?,
         },
+        "send_multiple" => RoomCommand::SendMultiple {
+            slot: slot()?,
+            item: item()?,
+            // Bounded here as well as by pahoa, so the answer to a typo is a sentence rather than a
+            // round trip -- and the limit is named, because "too many" without the number is the
+            // kind of error that gets guessed at twice.
+            amount: match form.amount {
+                Some(amount) if (1..=100).contains(&amount) => amount,
+                Some(amount) => {
+                    return Err(format!("{amount} is not between 1 and 100 copies"));
+                }
+                None => return Err("how many copies?".to_string()),
+            },
+        },
         "hint" => RoomCommand::Hint {
             slot: slot()?,
             item: item()?,
             force: form.force,
+        },
+        "hint_location" => RoomCommand::HintLocation {
+            slot: slot()?,
+            location: location()?,
+            force: form.force,
+        },
+        "send_location" => RoomCommand::SendLocation {
+            slot: slot()?,
+            location: location()?,
+        },
+        "allow_release" => RoomCommand::AllowRelease {
+            slot: slot()?,
+            allowed: form.allowed.ok_or_else(|| {
+                "grant the exemption, or return the slot to the room's mode?".to_string()
+            })?,
+        },
+        "alias" => RoomCommand::Alias {
+            slot: slot()?,
+            // **Deliberately not filtered for blankness**, unlike every other text field here:
+            // empty is not a missing value, it is how an alias is cleared.
+            alias: form.alias.clone().unwrap_or_default(),
+        },
+        "option" => RoomCommand::SetOption {
+            name: form
+                .option_name
+                .as_deref()
+                .filter(|n| !n.trim().is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| "which option?".to_string())?,
+            value: form
+                .option_value
+                .as_deref()
+                .filter(|v| !v.trim().is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| "what value?".to_string())?,
+        },
+        "rotate_password" => RoomCommand::RotatePassword { slot: slot()? },
+        "lock_slot" => RoomCommand::LockSlot {
+            slot: slot()?,
+            locked: form.locked.ok_or_else(|| "lock, or unlock?".to_string())?,
         },
         "kick" => RoomCommand::Kick {
             slot: slot()?,
@@ -191,6 +292,160 @@ fn build(form: &CommandForm) -> std::result::Result<RoomCommand, String> {
                 .map(str::to_string),
         },
         other => return Err(format!("unknown command {other:?}")),
+    })
+}
+
+/// What the database half of a slot-credential command left behind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Prepared {
+    /// Not one of the two credential commands. Nothing was written.
+    NotApplicable,
+    /// Written, and the room is up: queue the command so the orchestrator makes it live.
+    Live(&'static str),
+    /// Written, and there is no process to tell. It takes effect the next time the room starts,
+    /// because a start renders the Secret from the row.
+    Stored(&'static str),
+    /// Written — and the room began starting while it was being written, so whether the pod read
+    /// the new map is a coin toss.
+    ///
+    /// **Reported as "we do not know" rather than as either outcome.** The tempting answers are
+    /// both wrong: "it worked" may be false, and "it takes effect at the next start" is false *by
+    /// construction*, because the start it would take effect on is the one already in flight.
+    Uncertain(&'static str),
+}
+
+impl Prepared {
+    /// The `room_events` kind, where something was written.
+    pub(crate) fn kind(self) -> Option<&'static str> {
+        match self {
+            Self::NotApplicable => None,
+            Self::Live(kind) | Self::Stored(kind) | Self::Uncertain(kind) => Some(kind),
+        }
+    }
+}
+
+/// The database half of a slot-credential command, which happens **before** the row is queued.
+///
+/// [`RoomCommand::RotatePassword`] and [`RoomCommand::LockSlot`] are the two commands that are not
+/// pahoa's: each writes `room_slots` here and then asks the orchestrator to make the room agree.
+/// The value never travels on the queue — the orchestrator reads the row — which is what keeps a
+/// credential out of the audit trail.
+///
+/// **`mark_secret_stale` is the durable half and is not optional.** Without it the change lives only
+/// in a running pod's memory and lapses at the next restart — silently, and restarts happen for
+/// reasons nobody decided, like a reap or an image bump.
+///
+/// ## A room in transition is refused, and nothing is written
+///
+/// The credential reaches a pod two ways: through the Secret, which the pod reads **once**, when its
+/// container starts; and through the live endpoint, which needs a room that is answering. A room
+/// that is `starting` has neither — the pod may have already read the old map, and it is not yet
+/// accepting requests — so there is no honest thing to say about a change made then. It would be
+/// stored and possibly not in force, with the page claiming it takes effect at a start that has
+/// already happened.
+///
+/// So that case refuses **before writing anything**, and says which state the room is in. Failing is
+/// an acceptable answer here; claiming a lock is in force when it may not be is not.
+pub(crate) async fn prepare_slot_credential(
+    conn: &mut diesel_async::AsyncPgConnection,
+    room: &puna_core::model::room::Room,
+    command: &RoomCommand,
+    by: i64,
+) -> Result<Prepared> {
+    use puna_core::model::room::SlotAuth;
+    use puna_core::model::{room, slot};
+
+    let (slot_number, locking) = match command {
+        RoomCommand::RotatePassword { slot } => (*slot, None),
+        RoomCommand::LockSlot { slot, locked } => (*slot, Some(*locked)),
+        _ => return Ok(Prepared::NotApplicable),
+    };
+
+    // The two states where a change is expressible. Everything else -- `starting`, `stopping`,
+    // `degraded`, `provisioning`, `deleting`, `integrity_fault` -- is a room whose pod exists or is
+    // about to, and cannot be told.
+    let at_rest = matches!(room.state.as_str(), "idle" | "failed");
+    if room.state != "running" && !at_rest {
+        return Err(crate::error::Error::new(
+            Status::Conflict,
+            anyhow::anyhow!(
+                "this room is {}, so a credential change can neither reach it now nor be \
+                 guaranteed to reach it when it comes up. Nothing was changed; try again once it \
+                 is running.",
+                room.state
+            ),
+        ));
+    }
+
+    // 404 rather than 400, matching the JSON route and pahoa itself: outside per-slot mode there is
+    // no such thing as this slot's password, so there is nothing to rotate and nothing to withhold.
+    // Locking is expressed *as* an omission from the password map, so without the map it has no
+    // spelling at all.
+    if room.slot_auth != SlotAuth::PerSlot {
+        return Err(crate::error::not_found(
+            "this room does not use per-slot passwords",
+        ));
+    }
+
+    let slots = slot::list(conn, room.id).await?;
+    if !slots.iter().any(|s| s.slot_number == slot_number) {
+        return Err(crate::error::not_found("no such slot"));
+    }
+
+    let kind = match locking {
+        None => {
+            slot::rotate_password(conn, room.id, slot_number).await?;
+            "slot_password_rotated"
+        }
+        Some(true) => {
+            // **Refused here rather than discovered later.** The Secret builder will not render an
+            // empty password map, so locking the last unlocked slot would leave the room unable to
+            // start at all -- and it would surface minutes later as a `failed` room with a Secret
+            // error, long after the person who caused it stopped looking. Locking everybody is
+            // closing the room, which has its own control and says what it does.
+            let unlocked = slots
+                .iter()
+                .filter(|s| !s.is_locked() && s.slot_number != slot_number)
+                .count();
+            if unlocked == 0 {
+                return Err(crate::error::Error::new(
+                    Status::Conflict,
+                    anyhow::anyhow!(
+                        "that is the last slot anyone can connect to. Locking every slot is \
+                         closing the room, which is on the room's own controls."
+                    ),
+                ));
+            }
+            if !slot::set_locked(conn, room.id, slot_number, true, by).await? {
+                return Ok(Prepared::NotApplicable);
+            }
+            "slot_locked"
+        }
+        Some(false) => {
+            if !slot::set_locked(conn, room.id, slot_number, false, by).await? {
+                return Ok(Prepared::NotApplicable);
+            }
+            "slot_unlocked"
+        }
+    };
+
+    room::mark_secret_stale(conn, room.id).await?;
+
+    if room.state == "running" {
+        return Ok(Prepared::Live(kind));
+    }
+
+    // **Read the state back**, because the one above came from the request guard and a room can
+    // begin starting in between. `start` renders the Secret from the row, so a start that read the
+    // row before this write produces a pod running the old map with the row saying otherwise —
+    // silently, which is the whole class of failure worth spending a query to avoid.
+    let moved = room::get(conn, room.id)
+        .await?
+        .is_none_or(|current| current.state != room.state);
+    Ok(if moved {
+        Prepared::Uncertain(kind)
+    } else {
+        Prepared::Stored(kind)
     })
 }
 
@@ -215,6 +470,39 @@ async fn run(
     }
 
     let mut conn = pool.get().await?;
+
+    // The two Puna-side commands write the row before the row is queued, so the orchestrator has
+    // something to push. Every other command passes straight through.
+    let prepared =
+        prepare_slot_credential(&mut conn, &access.room, &command, access.user_id()).await?;
+    if let Some(kind) = prepared.kind() {
+        puna_core::model::event::record(
+            &mut conn,
+            access.room.id,
+            puna_core::model::event::Actor::User(access.user_id()),
+            kind,
+            // The slot, never the value. This row is read by anyone who can read the room's
+            // history.
+            serde_json::json!({ "slot": command.target_slot() }),
+        )
+        .await?;
+    }
+
+    let room = access.room.id.to_string();
+
+    // **A room with no process to tell is told nothing, and that is not a failure.** The durable
+    // half has landed and a start renders the Secret from the row, so queueing would only produce a
+    // `rejected` row saying the room is down -- true, and nothing the operator needs to act on.
+    match prepared {
+        Prepared::Stored(_) => {
+            return Ok(Redirect::to(format!("/room/{room}/console?stored=true")));
+        }
+        Prepared::Uncertain(_) => {
+            return Ok(Redirect::to(format!("/room/{room}/console?uncertain=true")));
+        }
+        Prepared::NotApplicable | Prepared::Live(_) => {}
+    }
+
     let id = command::enqueue(
         &mut conn,
         access.room.id,
@@ -227,7 +515,6 @@ async fn run(
     .await?;
     drop(conn);
 
-    let room = access.room.id.to_string();
     match commands::wait_for(pool, waiters.inner(), id).await {
         Some(_) => Ok(Redirect::to(format!("/room/{room}/console?ran={id}"))),
         // Out of budget. The command is still running and the row is still readable, so this is a
@@ -289,9 +576,34 @@ mod tests {
             slot: None,
             text: None,
             item: None,
+            location: None,
             seconds: None,
+            amount: None,
             force: false,
+            allowed: None,
+            locked: None,
+            alias: None,
+            option_name: None,
+            option_value: None,
             reason: None,
+        }
+    }
+
+    /// A form with every optional field supplied, for asserting that each `kind` builds at all.
+    fn filled(kind: &str) -> CommandForm {
+        CommandForm {
+            slot: Some(1),
+            text: Some("x".into()),
+            item: Some("x".into()),
+            location: Some("x".into()),
+            seconds: Some(5),
+            amount: Some(5),
+            allowed: Some(true),
+            locked: Some(true),
+            alias: Some("x".into()),
+            option_name: Some("hint_cost".into()),
+            option_value: Some("20".into()),
+            ..form(kind)
         }
     }
 
@@ -329,6 +641,29 @@ mod tests {
         );
     }
 
+    /// Every `<option value>` the console's command menu offers, in the order it offers them.
+    ///
+    /// Read together they *are* the menu, and both tests below depend on that: one asserts each
+    /// builds, the other asserts each is offered to the right tier. A command added to
+    /// `console.html` and not here is one nobody checked either way.
+    const MENU: &[&str] = &[
+        "status",
+        "say",
+        "countdown",
+        "hint",
+        "hint_location",
+        "release",
+        "collect",
+        "send_item",
+        "send_multiple",
+        "send_location",
+        "allow_release",
+        "alias",
+        "kick",
+        "lock_slot",
+        "option",
+    ];
+
     /// The form covers the whole command set, and nothing else. An unknown `kind` is refused rather
     /// than silently doing nothing.
     #[test]
@@ -344,58 +679,55 @@ mod tests {
             }
         );
 
-        for kind in [
-            "status",
-            "say",
-            "countdown",
-            "release",
-            "collect",
-            "send_item",
-            "hint",
-            "kick",
-        ] {
-            let mut f = form(kind);
-            f.slot = Some(1);
-            f.text = Some("x".into());
-            f.item = Some("x".into());
-            f.seconds = Some(5);
-            assert!(build(&f).is_ok(), "{kind} does not build");
+        for kind in MENU {
+            assert!(build(&filled(kind)).is_ok(), "{kind} does not build");
         }
 
-        assert!(build(&form("rotate_password")).is_err(), "not a command");
+        // Not on the menu -- the room page's password column has its own control for it -- but
+        // buildable, because that control and the console share one route.
+        assert!(build(&filled("rotate_password")).is_ok());
+
         assert!(build(&form("drop_database")).is_err());
     }
 
-    /// **Every command this form can build is a helper's**, asserted through the form rather than
-    /// against the enum, so the route's check and the menu's contents are covered together.
+    /// **The console's menu and the capability table have to agree**, and the one command that is
+    /// an organizer's has to be the one the template gates.
     ///
-    /// The console offers its whole menu unconditionally now, which is only correct while this
-    /// holds. A command raised back to `Organizer` needs its `{% if %}` restored in
-    /// `console.html`, and this is the test that says so.
+    /// Asserted through the form rather than against the enum, so the route's check and the menu's
+    /// contents are covered together. `option` is gated by `{% if is_organizer %}` in
+    /// `console.html`; if another command moves tier, this fails and that gate has to move with it.
     #[test]
-    fn every_command_the_console_offers_is_a_helpers() {
-        // Exactly the `<option>` values in `console.html`, in order. Read together they are the
-        // menu; a command added there and not here is one nobody checked the tier of.
-        for kind in [
-            "status",
-            "say",
-            "countdown",
-            "hint",
-            "release",
-            "collect",
-            "send_item",
-            "kick",
-        ] {
-            let mut f = form(kind);
-            f.slot = Some(1);
-            f.text = Some("x".into());
-            f.item = Some("x".into());
-            f.seconds = Some(5);
-            assert_eq!(
-                build(&f).unwrap().required_role(),
-                RoomRole::Helper,
-                "{kind} is no longer a helper's -- console.html must gate it again"
-            );
-        }
+    fn the_console_offers_option_to_organizers_and_everything_else_to_helpers() {
+        let organizer_only: Vec<&str> = MENU
+            .iter()
+            .filter(|kind| build(&filled(kind)).unwrap().required_role() > RoomRole::Helper)
+            .copied()
+            .collect();
+
+        assert_eq!(
+            organizer_only,
+            ["option"],
+            "the menu's tiering moved; console.html's `{{% if is_organizer %}}` has to match"
+        );
+
+        let template = include_str!("../../templates/rooms/console.html");
+        assert!(
+            template.contains(r#"<option value="option">"#),
+            "the option command left the menu"
+        );
+        // The gate, and that it is the one *immediately* above the command it gates -- searched
+        // backwards from the option rather than forwards from the top, because the template has
+        // three `is_organizer` blocks and the naive `rfind` matched the last one on the page,
+        // which sits below this and would have passed with the gate deleted.
+        let at = template
+            .find(r#"<option value="option">"#)
+            .expect("checked above");
+        let gate = template[..at]
+            .rfind("{% if is_organizer %}")
+            .expect("the organizer gate is gone from console.html");
+        assert!(
+            !template[gate..at].contains("{% endif %}"),
+            "the option command is offered outside the organizer gate"
+        );
     }
 }

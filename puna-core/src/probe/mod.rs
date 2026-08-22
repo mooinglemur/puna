@@ -247,12 +247,18 @@ pub trait RoomProbe: Send + Sync {
     ///
     /// The password is a parameter rather than something this reads, for the same reason
     /// `admin_token` is: it must not be reachable from a `Debug` of anything that gets logged.
-    async fn rotate_password(
+    ///
+    /// **`None` sends `{"password": null}`, which BARS the slot rather than opening it.** That is
+    /// pahoa's fail-closed rule seen from the other end — a slot with no entry is refused — and it
+    /// is the opposite of what "clear the password" suggests, so every caller and every control
+    /// says *lock*. The durable half is the Secret, which omits a locked slot from the map; this is
+    /// what makes it take effect without waiting for a restart.
+    async fn set_slot_password(
         &self,
         endpoint: &RoomEndpoint,
         admin_token: &str,
         slot: i32,
-        password: &str,
+        password: Option<&str>,
     ) -> Result<(), ProbeError>;
 
     fn capabilities(&self) -> ProbeCapabilities;

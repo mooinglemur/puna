@@ -18,6 +18,24 @@ room page first.</p>
 appear below when it finishes.</p>
 {% endif %}
 
+{% if uncertain %}
+{# The one answer that is neither yes nor no, and it is deliberately not dressed up as either. The
+   room started while the change was being written, so the pod may have read the old password map
+   or the new one -- and "it takes effect at the next start" would be false by construction, since
+   the start it refers to is the one that just happened. #}
+<p class="warning">The room started while this was being applied, so it may not be in force yet. The
+change is recorded &mdash; check the slot now that the room is up, and run it again if it did not
+take.</p>
+{% endif %}
+
+{% if stored %}
+{# Not a refusal and not an error: the change landed in the database and in the room's Secret, and
+   there was simply no running process to tell. Said plainly, because the alternative is an operator
+   who thinks a lock did not take and locks again. #}
+<p class="notice">Stored. This room is not running, so there was nothing to tell &mdash; the change
+takes effect the next time it starts.</p>
+{% endif %}
+
 {% if let Some(result) = outcome %}
 <div class="{% if result.succeeded %}notice{% else %}warning{% endif %}">
 <p><strong>{{ result.kind }}</strong> &mdash; {{+ result.state }}</p>
@@ -34,18 +52,44 @@ appear below when it finishes.</p>
       <option value="say">say &mdash; announce to everyone</option>
       <option value="countdown">countdown</option>
       <option value="hint">hint &mdash; for a slot</option>
-      {# **Every command here is a helper's**, so nothing on this menu is conditional. It was, and
-         the branch is gone rather than left rendering `true` -- a condition that is always taken is
-         a condition nobody re-reads. If a command ever becomes an organizer's again it needs a gate
-         back, and `a_helper_may_run_the_whole_command_set` in `model::command` is what says so. #}
+      {# **All but one of these is a helper's**, so the menu is unconditional down to `option`,
+         which is gated below. The line is the room versus the game inside it: a helper runs the
+         multiworld, an organizer decides how it is configured. If another command changes tier,
+         `a_helper_runs_every_command_except_the_one_that_configures_the_room` in `model::command`
+         fails and the gate here has to move with it. #}
+      {# Its own verb rather than a mode of `hint`, because that is how the reference names it and
+         an operator who knows `/hint_location` looks for that word. Hints at what is IN a place,
+         where `hint` hints at where a THING is. #}
+      <option value="hint_location">hint location &mdash; what is in a place</option>
       <option value="release">release &mdash; send a slot&rsquo;s remaining items</option>
       <option value="collect">collect &mdash; gather a slot&rsquo;s own items</option>
       <option value="send_item">send item &mdash; give a slot an item</option>
+      <option value="send_multiple">send multiple &mdash; give a slot several of one item</option>
+      {# One step past hinting: this CHECKS the location and sends out whatever it holds. #}
+      <option value="send_location">send location &mdash; check a place and send what is there</option>
+      {# **An exemption, not a permission level**, and the wording matters: clearing it returns the
+         slot to the room's `release_mode`, which may well still permit releasing. It does not
+         forbid anything. The reference calls the second half `/forbid_release` and that name is
+         exactly the misreading this avoids. #}
+      <option value="allow_release">allow release &mdash; exempt one slot from the room&rsquo;s release mode</option>
+      {# Sets somebody ELSE's alias, which `!alias` cannot. Empty clears it. #}
+      <option value="alias">alias &mdash; rename a player, or clear their alias</option>
       {# **A disconnect, not a ban.** Every socket the slot holds closes, the reason is delivered as
          chat, and the client may reconnect immediately -- most do, automatically, within seconds.
          Measured: a kick here took the room from 4 connections to 5. The label says so because the
          alternative is somebody pressing it twice and concluding the console is broken. #}
       <option value="kick">kick &mdash; disconnect a slot (they can reconnect at once)</option>
+      {% if per_slot_passwords %}
+      {# Only where there is a password map to withhold a slot from: locking IS the omission, so
+         outside per-slot mode it has no spelling and the route answers 404. #}
+      <option value="lock_slot">lock &mdash; bar one slot from connecting, or let it back in</option>
+      {% endif %}
+      {% if is_organizer %}
+      {# **The one command a helper may not run**, and the only one that changes the room rather
+         than a game inside it -- see `RoomCommand::required_role`. Hidden rather than disabled: a
+         visible control that refuses teaches people the tool is broken. The route re-checks. #}
+      <option value="option">option &mdash; change one of the room&rsquo;s rules</option>
+      {% endif %}
     </select>
   </label>
 
@@ -59,18 +103,81 @@ appear below when it finishes.</p>
   </label>
 
   <label>Text <input type="text" name="text" placeholder="for say"></label>
-  <label>Item <input type="text" name="item" placeholder="for hint and send item"></label>
+  {# **Items and locations are separate boxes on purpose.** pahoa matches EXACTLY rather than
+     fuzzily -- the caller is a program, so a near miss should be a visible error rather than a
+     silent decision to act on something else -- and the two are looked up in different tables, so
+     one "name" box would offer the wrong suggestions half the time. #}
+  <label>Item <input type="text" name="item" placeholder="for hint, send item, send multiple"></label>
+  <label>Location <input type="text" name="location" placeholder="for hint location, send location"></label>
   <label>Seconds <input type="number" name="seconds" placeholder="for countdown"></label>
+  {# No default, deliberately: every copy is queued on both of a slot's item streams and replayed
+     from index zero on each reconnect, so a `send_multiple` that quietly sent one would look like
+     it worked. pahoa caps it at 100 and so does the form. #}
+  <label>Copies <input type="number" name="amount" min="1" max="100" placeholder="for send multiple"></label>
+  <label>Alias <input type="text" name="alias" placeholder="for alias &mdash; leave empty to clear"></label>
   <label>Reason <input type="text" name="reason" placeholder="for kick, optional"></label>
+
+  {# Both answers are spelled out rather than left to a checkbox, because `false` here does NOT
+     forbid releasing -- it returns the slot to whatever the room's mode says, which may still
+     permit it. An unchecked box would read as a denial. #}
+  <label>Release exemption
+    <select name="allowed">
+      <option value="">&mdash;</option>
+      <option value="true">grant &mdash; this slot may release whatever the room&rsquo;s mode says</option>
+      <option value="false">clear &mdash; return this slot to the room&rsquo;s mode</option>
+    </select>
+  </label>
+
+  {% if per_slot_passwords %}
+  <label>Lock
+    <select name="locked">
+      <option value="">&mdash;</option>
+      <option value="true">lock &mdash; this slot can no longer connect</option>
+      <option value="false">unlock &mdash; let this slot connect again</option>
+    </select>
+  </label>
+  {% endif %}
+
+  {% if is_organizer %}
+  {# The eight pahoa will set, transcribed from its `SETTABLE` table. A picker rather than a text
+     box because an unknown name is a refusal, and the value stays free text because the eight take
+     three different kinds -- a number, a mode word, a boolean. **The two passwords are absent**:
+     pahoa recognizes and refuses them by name, since the save carries no secret and a live change
+     would revert at the next restart. Where a room is configured is on the room page. #}
+  <label>Option
+    <select name="option_name">
+      <option value="">&mdash;</option>
+      <option value="hint_cost">hint_cost</option>
+      <option value="location_check_points">location_check_points</option>
+      <option value="release_mode">release_mode</option>
+      <option value="collect_mode">collect_mode</option>
+      <option value="remaining_mode">remaining_mode</option>
+      <option value="countdown_mode">countdown_mode</option>
+      <option value="item_cheat">item_cheat</option>
+      <option value="compatibility">compatibility</option>
+    </select>
+  </label>
+  <label>Value <input type="text" name="option_value" placeholder="a number, a mode word, or true/false"></label>
+  {% endif %}
 
   {# `force` grants the hint outright and spends nothing. The default charges the slot's own points
      as `!hint` would, and MAY GRANT FEWER THAN ASKED OR NONE -- so the answer below is the truth,
-     not this checkbox. #}
+     not this checkbox. Applies to `hint` and `hint location` alike. #}
   <label class="inline"><input type="checkbox" name="force" value="true"> Force the hint (grant it
   without spending the slot&rsquo;s points)</label>
 
   <button type="submit">Run</button>
 </form>
+
+{% if is_organizer %}
+{# Stated here rather than left to be discovered from a refusal. It is the one thing on this page
+   whose effect outlives the pod, and §7's "gameplay flags are only an initial value" rule is
+   exactly what makes that true: after the first save the room's own copy wins, so what is set here
+   survives a restart and what the manifest says does not. #}
+<p class="hint"><strong>An option change persists.</strong> The room&rsquo;s save is authoritative
+for its rules, so a restart restores what you set here rather than what the room was started
+with.</p>
+{% endif %}
 
 <h2>Recent commands</h2>
 {% if history.is_empty() %}

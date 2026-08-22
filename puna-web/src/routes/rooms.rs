@@ -287,6 +287,10 @@ async fn release_slot(
 /// A stopped room needs no command at all, and queueing one would be a rejection an organizer has
 /// to read past: §4 is explicit that for a room that is not running, writing the Secret alone is
 /// sufficient and correct.
+///
+/// **The database half is shared with the console**, which can build the same command — one
+/// implementation of "write the row, then mark the Secret stale", because that ordering is the
+/// whole correctness argument and two copies of it is how one of them loses a step.
 #[post("/room/<id>/slot/<n>/rotate-password")]
 async fn rotate_slot_password(
     id: RoomParam,
@@ -294,41 +298,33 @@ async fn rotate_slot_password(
     access: RoomAccess<Helper>,
     pool: &State<Pool>,
 ) -> Result<Redirect> {
-    if access.room.slot_auth != SlotAuth::PerSlot {
-        // 404 rather than 400, matching the JSON route and pahoa itself: outside per-slot mode
-        // there is no such thing as this slot's password, so there is nothing to rotate.
-        return Err(not_found("this room does not use per-slot passwords"));
-    }
-
     let mut conn = pool.get().await?;
-    slot::get(&mut conn, id.0, n)
-        .await?
-        .ok_or_else(|| not_found("no such slot"))?;
-    slot::rotate_password(&mut conn, id.0, n).await?;
-    room::mark_secret_stale(&mut conn, id.0).await?;
+    let command = RoomCommand::RotatePassword { slot: n };
+    let prepared = crate::routes::console::prepare_slot_credential(
+        &mut conn,
+        &access.room,
+        &command,
+        access.user_id(),
+    )
+    .await?;
 
     // Only for a room that could be told. The command would otherwise land `rejected` with "this
     // room is not running", which is true and is not something the organizer needs to act on.
-    if access.room.state == "running" {
-        command::enqueue(
+    if matches!(prepared, crate::routes::console::Prepared::Live(_)) {
+        command::enqueue(&mut conn, id.0, access.user_id(), access.role(), &command).await?;
+    }
+
+    if let Some(kind) = prepared.kind() {
+        event::record(
             &mut conn,
             id.0,
-            access.user_id(),
-            access.role(),
-            &RoomCommand::RotatePassword { slot: n },
+            event::Actor::User(access.user_id()),
+            kind,
+            // The slot, never the value. This row is read by anyone who can read the room's history.
+            serde_json::json!({ "slot": n }),
         )
         .await?;
     }
-
-    event::record(
-        &mut conn,
-        id.0,
-        event::Actor::User(access.user_id()),
-        "slot_password_rotated",
-        // The slot, never the value. This row is read by anyone who can read the room's history.
-        serde_json::json!({ "slot": n }),
-    )
-    .await?;
 
     tracing::info!(
         room = %id,
@@ -1242,6 +1238,8 @@ mod tests {
             claim_token: Some("a-claim-token".into()),
             claimed_at: None,
             tracker_id: puna_core::ids::TrackerId::new(),
+            locked_at: None,
+            locked_by: None,
         }
     }
 
