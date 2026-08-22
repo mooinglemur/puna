@@ -48,20 +48,6 @@ pub enum SecretError {
     #[error("room is in per-slot password mode but has no slots; that would lock the whole room")]
     NoSlots,
 
-    /// Every slot locked, which would also render `{}`.
-    ///
-    /// **Distinguished from [`NoSlots`](Self::NoSlots) because the operator can act on it**, and
-    /// distinguished from a legitimate lock because scale changes what it means: barring one slot
-    /// is moderation, and barring every slot is closing the room, which has its own control that
-    /// says so on the page and does not depend on a Secret rendering. `{}` stays unspellable either
-    /// way -- it is the shape a half-assembled slot list produces, and keeping it impossible is
-    /// worth more than serving an exotic case.
-    #[error(
-        "every slot in this room is locked, which would render an empty password map; \
-         unlock a slot, or close the room, which is what locking everybody means"
-    )]
-    EverySlotLocked,
-
     /// `room` mode with no room password, or a password outside `room` mode.
     ///
     /// The database's `room_password_matches_mode` CHECK already forbids this, so reaching it
@@ -112,17 +98,14 @@ pub fn build(
                 return Err(SecretError::NoSlots);
             }
 
-            // **The accident and the decision are now different things, and this is where they
-            // part.** A slot with no password is still the accident this check exists for -- under
-            // the fail-closed rule it is a player who cannot connect, with an `InvalidPassword`
-            // that is accurate and useless. A LOCKED slot is the same omission arrived at on
-            // purpose, so it is excluded from the check rather than from the rule.
-            //
-            // Note a locked slot normally still HAS a password: locking leaves the value in the row
-            // so unlocking restores it. The two conditions are independent and the filter says so.
+            // **A missing password is always the accident**, again. It briefly was not: while Puna
+            // expressed a lock by withholding a slot from this map, an omission could be either a
+            // mistake or a decision, and this filter had to tell them apart. pahoa shipped a native
+            // `lock` verb, so the map is back to meaning one thing -- who holds a credential -- and
+            // access control is not smuggled through it.
             let missing: Vec<i32> = slots
                 .iter()
-                .filter(|s| s.password.is_none() && !s.is_locked())
+                .filter(|s| s.password.is_none())
                 .map(|s| s.slot_number)
                 .collect();
             if !missing.is_empty() {
@@ -132,20 +115,10 @@ pub fn build(
                 });
             }
 
-            if slots.iter().all(Slot::is_locked) {
-                return Err(SecretError::EverySlotLocked);
-            }
-
             // JSON object keyed by slot number as a STRING, because JSON object keys are strings.
             // Pahoa parses exactly this shape.
-            //
-            // **The omission of a locked slot IS the lock**, and it is durable in a way the room's
-            // own password endpoint is not: that endpoint persists nothing, so a lock pushed only
-            // to the live process would lapse at the next restart -- silently, and restarts happen
-            // for reasons nobody decided, like a reap or an image bump.
             let map: BTreeMap<String, &str> = slots
                 .iter()
-                .filter(|s| !s.is_locked())
                 .filter_map(|s| Some((s.slot_number.to_string(), s.password.as_deref()?)))
                 .collect();
             data.insert(
@@ -280,65 +253,6 @@ mod tests {
         // Keys are strings, because JSON object keys are. Pahoa parses exactly this shape.
         assert!(raw.contains("\"4\":"), "{raw}");
         assert!(!data.contains_key("PAHOA_PASSWORD"));
-    }
-
-    /// **A locked slot is left out of the map, and that omission IS the lock.**
-    ///
-    /// The same shape the check below refuses, arrived at on purpose instead of by accident — which
-    /// is the whole reason `locked_at` exists as a column rather than the lock being a cleared
-    /// password. Everybody else's entry is untouched, so locking one player disturbs nobody.
-    #[test]
-    fn a_locked_slot_is_withheld_from_the_map_without_refusing_the_build() {
-        let mut slots = slots(Some("secret"));
-        slots[1].locked_at = Some(chrono::Utc::now());
-
-        let data = build(&room(SlotAuth::PerSlot, None), &secrets(None), &slots).expect("build");
-        let raw = data.get("PAHOA_SLOT_PASSWORDS").expect("the map");
-        let parsed: BTreeMap<String, String> = serde_json::from_str(raw).expect("json");
-
-        assert_eq!(parsed.len(), 3, "the locked slot is not in the map: {raw}");
-        assert!(!parsed.contains_key("2"), "slot 2 is locked: {raw}");
-        for slot_number in ["1", "3", "4"] {
-            assert_eq!(parsed.get(slot_number).map(String::as_str), Some("secret"));
-        }
-
-        // **The password stays in the row.** That is what makes unlocking free of any credential
-        // handling: the value is simply admitted to the map again, and the holder's password never
-        // changed. A lock that cleared it would mean a new one to deliver every time.
-        assert_eq!(slots[1].password.as_deref(), Some("secret"));
-    }
-
-    /// The accident guard survives the addition of the deliberate case, which is the risk in the
-    /// change that introduced locking: widening the filter to admit locked slots must not widen it
-    /// to admit an ordinary missing password.
-    #[test]
-    fn a_slot_that_is_merely_missing_a_password_still_refuses() {
-        let mut slots = slots(Some("secret"));
-        slots[3].password = None; // the spectator, and NOT locked
-
-        let err =
-            build(&room(SlotAuth::PerSlot, None), &secrets(None), &slots).expect_err("must refuse");
-        assert!(matches!(
-            err,
-            SecretError::IncompleteSlotPasswords { count: 1, .. }
-        ));
-    }
-
-    /// Locking everybody is closing the room, and the room has a control that says so.
-    ///
-    /// `{}` stays unspellable: it is the shape a half-assembled slot list produces, and keeping it
-    /// impossible is worth more than serving this case. The error names the alternative, because
-    /// the operator who did this had a goal and it is reachable another way.
-    #[test]
-    fn locking_every_slot_refuses_rather_than_rendering_an_empty_map() {
-        let mut slots = slots(Some("secret"));
-        for slot in &mut slots {
-            slot.locked_at = Some(chrono::Utc::now());
-        }
-
-        let err =
-            build(&room(SlotAuth::PerSlot, None), &secrets(None), &slots).expect_err("must refuse");
-        assert_eq!(err, SecretError::EverySlotLocked);
     }
 
     /// The failure this module exists for.

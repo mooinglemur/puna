@@ -247,13 +247,12 @@ unclaimed
 <td class="moderation" data-player="{{ slot.player_name }}" data-game="{{ slot.game }}">
 <div class="actions">
 
-{% if room.slot_auth == puna_core::model::room::SlotAuth::PerSlot %}
 {% if slot.is_locked %}
 {# An OPEN padlock: this slot is shut out, and the control lets it back in. Drawn as the state's
    remedy rather than its description, like every other control in this column. #}
-<a class="act" data-command="lock_slot" data-locked="false" data-slot="{{ slot.slot_number }}"
-   href="/room/{{ room.id }}/console?kind=lock_slot&amp;slot={{ slot.slot_number }}"
-   title="Unlock: let this slot connect again. Its password is unchanged."
+<a class="act" data-command="lock" data-locked="false" data-slot="{{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=lock&amp;slot={{ slot.slot_number }}"
+   title="Unlock: let this slot log in again."
    aria-label="Unlock slot {{+ slot.slot_number }}">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <rect x="3.2" y="7" width="9.6" height="7" rx="1.4" fill="none" stroke="currentColor"/>
@@ -261,19 +260,18 @@ unclaimed
 </svg>
 </a>
 {% else %}
-{# A SHUT padlock. Not "remove password": under pahoa's fail-closed rule clearing a slot's entry
-   bars it rather than opening it, which is the opposite of what "clear" suggests -- §4 is emphatic
-   that the control has to say lock. #}
-<a class="act" data-command="lock_slot" data-locked="true" data-slot="{{ slot.slot_number }}"
-   href="/room/{{ room.id }}/console?kind=lock_slot&amp;slot={{ slot.slot_number }}"
-   title="Lock: bar this slot from connecting. Its password is kept, so unlocking restores it."
+{# A SHUT padlock. **Bars the next login and disconnects nobody** -- the obvious reading of a lock
+   is that it ejects somebody, and it does not. An administrator dealing with a griefer wants lock
+   THEN kick, in that order: kicking first leaves a window in which they simply reconnect. #}
+<a class="act" data-command="lock" data-locked="true" data-slot="{{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=lock&amp;slot={{ slot.slot_number }}"
+   title="Lock: bar the next login. Nobody is disconnected -- kick does that, and lock first."
    aria-label="Lock slot {{+ slot.slot_number }}">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <rect x="3.2" y="7" width="9.6" height="7" rx="1.4" fill="none" stroke="currentColor"/>
 <path d="M5.4 7V4.9a2.6 2.6 0 0 1 5.2 0V7" fill="none" stroke="currentColor" stroke-linecap="round"/>
 </svg>
 </a>
-{% endif %}
 {% endif %}
 
 {# An arrow leaving a doorway. **A disconnect, not a ban** -- the client may reconnect at once, and

@@ -478,13 +478,6 @@ pub(crate) async fn render_spec(
         slot_count: inputs.slot_count,
         save_interval_secs: inputs.save_interval_secs,
         use_embedded_options: inputs.use_embedded_options,
-        // Every slot Puna holds a password for, INCLUDING the locked ones -- which is what keeps a
-        // lock from moving the fingerprint. See `spec::room::Draft::credentialled_slots`.
-        credentialled_slots: slots
-            .iter()
-            .filter(|s| s.password.is_some())
-            .map(|s| s.slot_number)
-            .collect(),
     }
     .build(room.slot_auth, &secret);
 
@@ -655,7 +648,83 @@ async fn mark_running(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outc
         .inc();
     event(&mut conn, action.room, "running", serde_json::json!({})).await?;
     tracing::info!(room = %action.room, "running");
+
+    reapply_locks(ctx, &mut conn, action.room).await;
     Ok(Outcome::Done)
+}
+
+/// Re-assert every locked slot on a room that has just come up.
+///
+/// **pahoa persists a lock in `room.save`, and Puna's row is the authority.** That split is
+/// deliberate: the save is the one thing a recovery might reset, and a PVC recreated or a save
+/// cleared to get a room started again would take every lock with it — silently, leaving somebody
+/// barred in Puna's own records and able to connect. The Secret-based lock this replaced survived
+/// that, because it lived in Puna's state; this is what buys the property back.
+///
+/// **Almost always a no-op**, which is what makes it affordable to run on every start: rooms with a
+/// locked slot are rare, and a room with none makes no calls at all. It is idempotent besides —
+/// locking an already-locked slot is the same answer twice.
+///
+/// Failures are logged and never propagated. The room *is* running, and refusing to record that
+/// because a moderation action could not be re-asserted would be the worse trade — but it is logged
+/// at ERROR rather than WARN, because the state it leaves is somebody who should be shut out and is
+/// not, and nothing else in the system will notice.
+async fn reapply_locks(ctx: &Context<'_>, conn: &mut AsyncPgConnection, room_id: RoomId) {
+    let locked: Vec<i32> = match puna_core::model::slot::list(conn, room_id).await {
+        Ok(slots) => slots
+            .iter()
+            .filter(|s| s.is_locked())
+            .map(|s| s.slot_number)
+            .collect(),
+        Err(e) => {
+            tracing::error!(room = %room_id, error = ?e, "could not read slots to re-apply locks");
+            return;
+        }
+    };
+    if locked.is_empty() {
+        return;
+    }
+
+    let (Ok(Some(base_port)), Ok(Some(secrets))) = (
+        port::reserved_pair(conn, room_id).await,
+        room::secrets(conn, room_id).await,
+    ) else {
+        tracing::error!(
+            room = %room_id,
+            slots = ?locked,
+            "could not reach this room to re-apply its locks; those slots may be able to connect"
+        );
+        return;
+    };
+
+    let endpoint = ctx.endpoint(room_id, base_port);
+    for slot in locked {
+        let command = puna_core::model::command::RoomCommand::LockSlot { slot, locked: true };
+        match ctx
+            .probe
+            .execute(&endpoint, &secrets.admin_token, &command)
+            .await
+        {
+            Ok(output) if output.ok => {
+                tracing::info!(room = %room_id, slot, "re-applied a lock after the room started");
+            }
+            // A refusal is an answer, and here it means the room disagrees about a slot Puna has
+            // barred -- worth the same volume as a transport failure, because the outcome is the
+            // same: somebody who should be shut out is not.
+            Ok(output) => tracing::error!(
+                room = %room_id,
+                slot,
+                answer = ?output.output,
+                "the room refused to re-apply a lock; that slot may be able to connect"
+            ),
+            Err(e) => tracing::error!(
+                room = %room_id,
+                slot,
+                error = %e,
+                "could not re-apply a lock; that slot may be able to connect"
+            ),
+        }
+    }
 }
 
 /// A sweep with no ready replica, and — on the third — the degraded state itself.

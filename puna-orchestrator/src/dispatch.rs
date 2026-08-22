@@ -49,37 +49,6 @@ const POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// timeout bounds at a few seconds. Anything older belongs to a dispatcher that went away.
 const STALE_AFTER: Duration = Duration::from_secs(120);
 
-/// Which of the three credential changes asked for a sync, **for the wording alone**.
-///
-/// The mechanism does not branch on this — [`Dispatcher::sync_slot_credential`] pushes whatever the
-/// row says either way — and that is the point of keeping it to a `&'static str`: an enum the
-/// operation itself read would be a second source of truth beside the row it exists to obey.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SlotChange {
-    Rotated,
-    Locked,
-    Unlocked,
-}
-
-impl SlotChange {
-    /// What happened, for the console line.
-    fn done(self) -> &'static str {
-        match self {
-            Self::Rotated => "password rotated",
-            Self::Locked => "locked; this slot can no longer connect",
-            Self::Unlocked => "unlocked; this slot can connect again",
-        }
-    }
-
-    /// What an old image could not do, for the degraded answer.
-    fn verb(self) -> &'static str {
-        match self {
-            Self::Rotated => "change a password",
-            Self::Locked | Self::Unlocked => "lock or unlock a slot",
-        }
-    }
-}
-
 pub struct Dispatcher {
     pool: Pool,
     prober: Arc<Prober>,
@@ -184,28 +153,24 @@ impl Dispatcher {
         }
     }
 
-    /// Make the running room agree with the row about one slot's credential: **Secret first, then
-    /// the running room.**
+    /// Push an already-rotated slot password: **Secret first, then the running room.**
     ///
     /// That order is the whole content of this function, and §4 is emphatic about why. The room's
     /// password endpoint changes the live process and **persists nothing** -- deliberately, because
     /// that is what stops a stale on-disk value shadowing the configured one. So a change pushed
-    /// only to the room reverts the next time it starts: a rotation would hand a player a password
-    /// that worked until the room bounced, and a lock would quietly lapse at a restart nobody
-    /// decided on, like a reap or an image bump.
+    /// only to the room reverts the next time it starts, handing a player a password that worked
+    /// until the room bounced.
     ///
-    /// **Rotation, locking and unlocking are one operation here**, and that is not a shortcut. The
-    /// web tier has already written what it wanted to `room_slots` -- a new password, or
-    /// `locked_at` -- and marked the Secret stale; all three then mean the same thing to this side,
-    /// which is *make the pod match the row*. The value that goes out is whatever the row now says:
-    /// `null` for a locked slot, and its password otherwise. One code path cannot disagree with
-    /// itself about which of the three it is doing.
-    async fn sync_slot_credential(
+    /// The web tier has already written the new value to `room_slots` and marked the Secret stale;
+    /// this makes it durable and then makes it live.
+    ///
+    /// **Locking used to travel this path too** and does not any more: pahoa shipped a native `lock`
+    /// verb, so barring a slot is an ordinary passthrough command with no Secret in it at all.
+    async fn rotate(
         &self,
         conn: &mut AsyncPgConnection,
         room_id: RoomId,
         slot_number: i32,
-        change: SlotChange,
         endpoint: &puna_core::room::RoomEndpoint,
         admin_token: &str,
     ) -> (&'static str, Option<CommandOutput>, Option<String>) {
@@ -243,40 +208,35 @@ impl Dispatcher {
         )
         .await
         {
-            // **Stop here.** Reaching the room now would make a change the next restart discards,
-            // which is worse than not making it: the player is told a password that works until it
-            // silently does not, or a locked slot lets somebody back in with nothing to say so.
-            return failed(format!("the change was not written to the Secret: {e}"));
+            // **Stop here.** Reaching the room now would set a password that the next restart
+            // discards, which is worse than not rotating: the player is told a value that works
+            // until it silently does not.
+            return failed(format!(
+                "the new password was not written to the Secret: {e}"
+            ));
         }
 
-        let Some(slot) = slots.iter().find(|s| s.slot_number == slot_number) else {
-            return failed("that slot is no longer part of this room".into());
-        };
-
-        // **The row decides, not the command.** A locked slot gets `null`, which pahoa reads as a
-        // refusal; anything else gets its stored password. Reading it back here rather than
-        // carrying a value through the queue is also what keeps a credential out of the audit
-        // trail.
-        let live = if slot.is_locked() {
-            None
-        } else {
-            match slot.password.as_deref() {
-                Some(password) => Some(password),
-                None => return failed("that slot has no password to push".into()),
-            }
+        // **Read from the row, not carried through the queue** -- which is what keeps a credential
+        // out of the audit trail.
+        let Some(password) = slots
+            .iter()
+            .find(|s| s.slot_number == slot_number)
+            .and_then(|s| s.password.clone())
+        else {
+            return failed("that slot has no password to push".into());
         };
 
         match self
             .prober
             .probe()
-            .set_slot_password(endpoint, admin_token, slot_number, live)
+            .set_slot_password(endpoint, admin_token, slot_number, Some(&password))
             .await
         {
             Ok(()) => (
                 "ok",
                 Some(CommandOutput {
                     ok: true,
-                    output: vec![format!("slot {slot_number}: {}", change.done())],
+                    output: vec![format!("slot {slot_number}: password rotated")],
                     affected_slots: vec![slot_number],
                 }),
                 None,
@@ -288,16 +248,16 @@ impl Dispatcher {
                 "ok",
                 Some(CommandOutput {
                     ok: false,
-                    output: vec![format!(
-                        "the change is stored and takes effect when the room next starts; \
-                         this room's image cannot {} on a running server",
-                        change.verb()
-                    )],
+                    output: vec![
+                        "the new password is stored and takes effect when the room next starts; \
+                         this room's image cannot change one on a running server"
+                            .into(),
+                    ],
                     affected_slots: vec![slot_number],
                 }),
                 None,
             ),
-            Err(e) => failed(format!("the room refused the change: {e}")),
+            Err(e) => failed(format!("the room refused the new password: {e}")),
         }
     }
 
@@ -329,30 +289,15 @@ impl Dispatcher {
 
         let endpoint = self.prober.endpoint(claimed.room_id, reachable.base_port);
 
-        // **Handled before the passthrough, because neither is a pahoa command.** Serialized into
-        // an `/admin/v1/command` body either would be a `400` -- pahoa's set is the other fourteen,
-        // and both of these are its slot-password endpoint wearing a queue row.
-        let credential_change = match claimed.command {
-            puna_core::model::command::RoomCommand::RotatePassword { slot } => {
-                Some((slot, SlotChange::Rotated))
-            }
-            puna_core::model::command::RoomCommand::LockSlot { slot, locked } => Some((
-                slot,
-                if locked {
-                    SlotChange::Locked
-                } else {
-                    SlotChange::Unlocked
-                },
-            )),
-            _ => None,
-        };
-        if let Some((slot, change)) = credential_change {
+        // **Handled before the passthrough, because it is not a pahoa command.** Serialized into an
+        // `/admin/v1/command` body it would be a `400` -- pahoa's set is the other fifteen, and this
+        // is its slot-password endpoint wearing a queue row.
+        if let puna_core::model::command::RoomCommand::RotatePassword { slot } = claimed.command {
             return self
-                .sync_slot_credential(
+                .rotate(
                     conn,
                     claimed.room_id,
                     slot,
-                    change,
                     &endpoint,
                     &reachable.admin_token,
                 )
@@ -445,53 +390,48 @@ async fn listen(database_url: String, wake: Arc<tokio::sync::Notify>) {
 
 #[cfg(test)]
 mod tests {
-    /// **Both Puna-side branches must come before the passthrough**, and this is a source lint
-    /// because the failure is not a panic: it is a `400` from pahoa, logged as "the room could not
+    /// **The rotation branch must come before the passthrough**, and this is a source lint because
+    /// the failure is not a panic: it is a `400` from pahoa, logged as "the room could not
     /// understand a command Puna generated", which is true and points at the wrong thing entirely.
     ///
-    /// Neither `RotatePassword` nor `LockSlot` is one of pahoa's fourteen commands — both are its
-    /// slot-password endpoint traveling on this queue. Serialized into an `/admin/v1/command` body
-    /// either is a shape the room has no parser for, so the intercept above is what makes them work
-    /// at all, and its position is the whole of that.
+    /// `RotatePassword` is not one of pahoa's fifteen commands — it is its slot-password endpoint
+    /// traveling on this queue. Serialized into an `/admin/v1/command` body it is a shape the room
+    /// has no parser for, so the intercept above is what makes it work at all, and its position is
+    /// the whole of that.
+    ///
+    /// **`LockSlot` was the second such command and must NOT be intercepted any more.** pahoa
+    /// shipped `lock`, so it is an ordinary passthrough; a branch for it here would divert it to
+    /// the slot-password endpoint, which would clear or set a password rather than lock anything —
+    /// a control that reports success and does something else entirely. Asserted in both
+    /// directions, because this is the change that removes it and nothing else would notice it
+    /// coming back.
     #[test]
-    fn the_puna_side_commands_are_intercepted_before_the_command_passthrough() {
+    fn rotation_is_intercepted_before_the_passthrough_and_locking_is_not() {
         let source = include_str!("dispatch.rs")
             .split("#[cfg(test)]")
             .next()
             .expect("the file has a non-test half");
 
-        // The match ARMS, not any mention of the variants. Anchoring on the bare type name matched
-        // the doc comment on the `cluster` field forty lines above the intercept, so the lint
-        // passed with the intercept deleted -- which is the exact failure a lint is for, found by
-        // mutating it.
+        // The `if let` itself, not any mention of the variant. Anchoring on the bare type name
+        // matched the doc comment on the `cluster` field forty lines above the intercept, so the
+        // lint passed with the intercept deleted -- which is the exact failure a lint is for, found
+        // by mutating it.
+        let intercept = source
+            .find("if let puna_core::model::command::RoomCommand::RotatePassword")
+            .expect("the dispatcher no longer intercepts the rotation command");
         let passthrough = source
             .find(".execute(&endpoint")
             .expect("the passthrough call was renamed; re-point this lint rather than deleting it");
 
-        for (arm, what) in [
-            (
-                "puna_core::model::command::RoomCommand::RotatePassword { slot } =>",
-                "rotation",
-            ),
-            (
-                "puna_core::model::command::RoomCommand::LockSlot { slot, locked } =>",
-                "locking",
-            ),
-        ] {
-            let intercept = source
-                .find(arm)
-                .unwrap_or_else(|| panic!("the dispatcher no longer intercepts {what}"));
-            assert!(
-                intercept < passthrough,
-                "the {what} command reaches pahoa's command endpoint, which has no such command"
-            );
-        }
+        assert!(
+            intercept < passthrough,
+            "the rotation command reaches pahoa's command endpoint, which has no such command"
+        );
 
-        // And the branch is actually taken before the passthrough runs, not merely written above
-        // it: the `if let` that consumes the match is what returns early.
-        let taken = source
-            .find("if let Some((slot, change)) = credential_change")
-            .expect("the intercept no longer returns before the passthrough");
-        assert!(taken < passthrough);
+        assert!(
+            !source.contains("RoomCommand::LockSlot"),
+            "the dispatcher handles `lock` itself; pahoa owns that verb, and diverting it here \
+             sends it to the password endpoint instead"
+        );
     }
 }

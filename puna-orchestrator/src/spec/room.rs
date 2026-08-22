@@ -19,14 +19,13 @@
 //! it can be told later.** The room-wide password is covered (pahoa reads `PAHOA_PASSWORD` at
 //! startup and has no live setter, deliberately). The admin token is covered (same, and a rotated
 //! token that has not reached the pod makes every console call fail with a `404` that reads as an
-//! old image). **Which slots Puna holds a password for** is covered, because a slot added to a
-//! per-slot room needs its password in the environment before anyone can use it.
+//! old image). The slot map's *keys* are covered, because a slot added to a per-slot room needs its
+//! password in the environment before anyone can use it.
 //!
-//! That last one is deliberately *not* the same as the keys of the rendered map, and the difference
-//! is a locked slot: locking withholds a slot from the map while its password stays in the row, and
-//! it reaches the running room over the same live endpoint a rotation does. So a lock is something
-//! pahoa can be told later, which by the rule above puts it outside the fingerprint — and keeps
-//! every locked room from reading as permanently drifted. See [`Draft::credentialled_slots`].
+//! Those keys briefly came from the draft rather than the map, while Puna expressed a lock by
+//! withholding a slot from it — a lock is something pahoa can be told later, so it had to stay out
+//! of the fingerprint. pahoa's native `lock` verb removed the conflation, so the map's keys mean
+//! exactly "who holds a credential" again and reading them here is honest.
 //!
 //! **It is deliberately not a hash of the rendered manifest.** That would be deterministic and
 //! wrong: a `k8s-openapi` upgrade that reordered one serialization would change every room's hash
@@ -64,21 +63,6 @@ pub struct Draft {
     pub slot_count: i32,
     pub save_interval_secs: i32,
     pub use_embedded_options: bool,
-    /// The slots Puna holds a password for, in any order — **not** the keys of the rendered map.
-    ///
-    /// The two are the same set except while a slot is locked, and that difference is the whole
-    /// reason this field exists. A locked slot is omitted from `PAHOA_SLOT_PASSWORDS` and still has
-    /// its password in the row, so hashing the *map's* keys would move the fingerprint on every
-    /// lock — and every locked room would then read as permanently drifted on `/admin/rooms`,
-    /// drowning the signal that column exists to carry.
-    ///
-    /// Hashing what Puna *holds* keeps the module's own rule: the hash covers what pahoa reads once
-    /// at startup and cannot be told later. Locking and unlocking are both pushed to the live room
-    /// over the password endpoint, so neither needs a restart and neither should move this. Adding
-    /// a genuinely new slot does, exactly as before.
-    ///
-    /// Today this equals the map's keys for every room, so **no existing room's hash moves**.
-    pub credentialled_slots: Vec<i32>,
 }
 
 impl Draft {
@@ -129,24 +113,13 @@ impl Draft {
         // why it is a BTreeMap rather than a HashMap.
         for (key, value) in env {
             match key.as_str() {
-                // The one exclusion, and the reason live rotation is live. Which SLOTS still
-                // counts: a slot added to a per-slot room cannot connect until its password is in
-                // the pod's environment, so the shape of the credential set has to be able to move
-                // the hash even though its contents must not.
-                //
-                // Taken from the draft rather than from the value, because the value omits locked
-                // slots and locking is a live operation that must not bounce a room. See
-                // `credentialled_slots`. The value itself is still never hashed.
+                // The one exclusion, and the reason live rotation is live. The KEYS still count: a
+                // slot added to a per-slot room cannot connect until its password is in the pod's
+                // environment, so the map's shape has to be able to move the hash even though its
+                // contents must not.
                 "PAHOA_SLOT_PASSWORDS" => {
-                    let mut slots = self.credentialled_slots.clone();
-                    // Sorted here rather than trusted from the caller: the caller reads a table,
-                    // and an `ORDER BY` somebody drops later would silently re-fingerprint every
-                    // room in the environment.
-                    slots.sort_unstable();
-                    slots.dedup();
-                    let slots: Vec<String> = slots.iter().map(i32::to_string).collect();
                     out.push_str("env=PAHOA_SLOT_PASSWORDS=slots:");
-                    out.push_str(&slots.join(","));
+                    out.push_str(&slot_numbers(value).join(","));
                     out.push('\n');
                 }
                 _ => {
@@ -160,6 +133,25 @@ impl Draft {
         }
 
         out
+    }
+}
+
+/// The slot numbers a `PAHOA_SLOT_PASSWORDS` map covers, in order, without its values.
+///
+/// A parse failure yields no numbers rather than an error: this is a fingerprint input, and the
+/// Secret builder has already refused every shape that could get here malformed. Returning the raw
+/// string instead would fold the passwords back into the hash, which is the one thing this function
+/// exists to prevent.
+fn slot_numbers(json: &str) -> Vec<String> {
+    match serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(json) {
+        Ok(map) => {
+            let mut keys: Vec<String> = map.into_iter().map(|(k, _)| k).collect();
+            // Numeric where possible, so "10" sorts after "9" -- the ordering only has to be
+            // stable, but one that reads correctly is easier to eyeball in a diff.
+            keys.sort_by_key(|k| (k.parse::<i64>().unwrap_or(i64::MAX), k.clone()));
+            keys
+        }
+        Err(_) => Vec::new(),
     }
 }
 
@@ -210,7 +202,6 @@ mod tests {
             slot_count: 96,
             save_interval_secs: 30,
             use_embedded_options: true,
-            credentialled_slots: vec![1, 2, 3],
         }
     }
 
@@ -258,7 +249,6 @@ mod tests {
             slot_count: 4,
             save_interval_secs: 30,
             use_embedded_options: true,
-            credentialled_slots: Vec::new(),
         };
         let env = env(&[("PAHOA_ADMIN_TOKEN", "token")]);
         assert_eq!(
@@ -345,19 +335,11 @@ mod tests {
         assert_ne!(room_mode, per_slot);
     }
 
-    /// The same draft with a different set of slots Puna holds a password for.
-    fn draft_holding(slots: &[i32]) -> Draft {
-        Draft {
-            credentialled_slots: slots.to_vec(),
-            ..draft()
-        }
-    }
-
     /// The one exclusion, and the whole reason `POST /admin/v1/slots/<n>/password` is worth having:
     /// rotating one player's password must not bounce everyone else's room.
     #[test]
     fn rotating_a_slot_password_does_not_move_the_hash() {
-        let draft = draft_holding(&[1, 2]);
+        let draft = draft();
         let before = hash(
             &draft,
             SlotAuth::PerSlot,
@@ -377,23 +359,12 @@ mod tests {
         assert_eq!(before, after);
     }
 
-    /// **Locking a slot must not move the hash either**, and this is the property that decides
-    /// where the slot set is read from.
-    ///
-    /// A lock is expressed by dropping the slot out of `PAHOA_SLOT_PASSWORDS`, so hashing the map's
-    /// keys — which is what this did until locking existed — would re-fingerprint the room on every
-    /// lock. Nothing would bounce, since drift alone plans no action, but every locked room would
-    /// read as permanently drifted on `/admin/rooms` and the column would stop meaning anything.
-    ///
-    /// It is also correct on its own terms: both locking and unlocking are pushed to the live room
-    /// over the password endpoint, so neither is something pahoa can only learn at startup, which
-    /// is the rule this whole fingerprint is built on.
+    /// ...but the map's shape does move it. A slot with no entry is refused under the fail-closed
+    /// rule, so its password has to reach the pod, and only a restart does that.
     #[test]
-    fn locking_a_slot_does_not_move_the_hash() {
-        // Puna holds a password for both slots in each case: locking does not clear the value, it
-        // only withholds it from the map.
-        let draft = draft_holding(&[1, 2]);
-        let unlocked = hash(
+    fn adding_a_slot_to_a_per_slot_room_moves_the_hash() {
+        let draft = draft();
+        let two = hash(
             &draft,
             SlotAuth::PerSlot,
             &env(&[
@@ -401,34 +372,26 @@ mod tests {
                 ("PAHOA_SLOT_PASSWORDS", r#"{"1":"a","2":"b"}"#),
             ]),
         );
-        let slot_two_locked = hash(
+        let three = hash(
             &draft,
             SlotAuth::PerSlot,
             &env(&[
                 ("PAHOA_ADMIN_TOKEN", "t"),
-                ("PAHOA_SLOT_PASSWORDS", r#"{"1":"a"}"#),
+                ("PAHOA_SLOT_PASSWORDS", r#"{"1":"a","2":"b","3":"c"}"#),
             ]),
         );
-        assert_eq!(unlocked, slot_two_locked);
-    }
-
-    /// ...but a slot Puna newly holds a password for does move it. That slot cannot connect until
-    /// its password is in the pod's environment, and only a restart puts it there.
-    #[test]
-    fn adding_a_slot_to_a_per_slot_room_moves_the_hash() {
-        let per_slot = &env(&[
-            ("PAHOA_ADMIN_TOKEN", "t"),
-            ("PAHOA_SLOT_PASSWORDS", r#"{"1":"a","2":"b"}"#),
-        ]);
-        let two = hash(&draft_holding(&[1, 2]), SlotAuth::PerSlot, per_slot);
-        let three = hash(&draft_holding(&[1, 2, 3]), SlotAuth::PerSlot, per_slot);
         assert_ne!(two, three);
 
-        // The order the caller happened to read the rows in must not matter -- only which slots
-        // are in the set is a fact about the room. Sorted inside `canonical` rather than trusted
-        // from the caller, because an `ORDER BY` dropped later would otherwise silently
-        // re-fingerprint every room in the environment.
-        let reordered = hash(&draft_holding(&[2, 1]), SlotAuth::PerSlot, per_slot);
+        // The map's own key order must not matter -- it is a JSON object, and only its membership
+        // is a fact about the room.
+        let reordered = hash(
+            &draft,
+            SlotAuth::PerSlot,
+            &env(&[
+                ("PAHOA_ADMIN_TOKEN", "t"),
+                ("PAHOA_SLOT_PASSWORDS", r#"{"2":"b","1":"a"}"#),
+            ]),
+        );
         assert_eq!(two, reordered);
     }
 
@@ -489,7 +452,7 @@ mod tests {
     /// rewriting how the line is built.
     #[test]
     fn no_slot_password_reaches_the_canonical_form() {
-        let canonical = draft_holding(&[1, 2]).canonical(
+        let canonical = draft().canonical(
             SlotAuth::PerSlot,
             &env(&[
                 ("PAHOA_ADMIN_TOKEN", "t"),

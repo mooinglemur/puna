@@ -62,9 +62,6 @@ pub struct ConsoleTemplate {
     /// disabled — a visible control that refuses teaches people the tool is broken — and the route
     /// re-checks regardless, since it is reachable by anyone who can construct a POST.
     is_organizer: bool,
-    /// Whether locking has a spelling in this room. It is expressed as an omission from the
-    /// per-slot password map, so outside that mode there is no map and nothing to omit from.
-    per_slot_passwords: bool,
     /// A command and a slot chosen in advance, from the room page's moderation controls.
     ///
     /// **This is the whole of the no-JavaScript path for that column.** Those controls are links
@@ -159,7 +156,6 @@ async fn show(
         preselect_kind: kind.filter(|k| MENU.contains(&k.as_str())),
         preselect_slot: slot,
         is_organizer: access.role() >= puna_core::model::member::RoomRole::Organizer,
-        per_slot_passwords: room.slot_auth == puna_core::model::room::SlotAuth::PerSlot,
     })
 }
 
@@ -184,7 +180,7 @@ const MENU: &[&str] = &[
     "allow_release",
     "alias",
     "kick",
-    "lock_slot",
+    "lock",
     "option",
 ];
 
@@ -215,7 +211,7 @@ pub struct CommandForm {
     /// answers are deliberate here: an unchecked box is indistinguishable from a box nobody read,
     /// and `false` on this command means something specific and easy to mistake for a denial.
     allowed: Option<bool>,
-    /// For `lock_slot`, and the same reasoning as `allowed`.
+    /// For `lock`, and the same reasoning as `allowed`.
     locked: Option<bool>,
     /// For `alias`. **Not filtered for blankness**: empty is how an alias is cleared.
     alias: Option<String>,
@@ -321,7 +317,7 @@ fn build(form: &CommandForm) -> std::result::Result<RoomCommand, String> {
                 .ok_or_else(|| "what value?".to_string())?,
         },
         "rotate_password" => RoomCommand::RotatePassword { slot: slot()? },
-        "lock_slot" => RoomCommand::LockSlot {
+        "lock" => RoomCommand::LockSlot {
             slot: slot()?,
             locked: form.locked.ok_or_else(|| "lock, or unlock?".to_string())?,
         },
@@ -392,18 +388,16 @@ pub(crate) async fn prepare_slot_credential(
     conn: &mut diesel_async::AsyncPgConnection,
     room: &puna_core::model::room::Room,
     command: &RoomCommand,
-    by: i64,
 ) -> Result<Prepared> {
     use puna_core::model::room::SlotAuth;
     use puna_core::model::{room, slot};
 
-    let (slot_number, locking) = match command {
-        RoomCommand::RotatePassword { slot } => (*slot, None),
-        RoomCommand::LockSlot { slot, locked } => (*slot, Some(*locked)),
-        _ => return Ok(Prepared::NotApplicable),
+    let RoomCommand::RotatePassword { slot: slot_number } = command else {
+        return Ok(Prepared::NotApplicable);
     };
+    let slot_number = *slot_number;
 
-    // The two states where a change is expressible. Everything else -- `starting`, `stopping`,
+    // The two states where a rotation is expressible. Everything else -- `starting`, `stopping`,
     // `degraded`, `provisioning`, `deleting`, `integrity_fault` -- is a room whose pod exists or is
     // about to, and cannot be told.
     let at_rest = matches!(room.state.as_str(), "idle" | "failed");
@@ -420,58 +414,20 @@ pub(crate) async fn prepare_slot_credential(
     }
 
     // 404 rather than 400, matching the JSON route and pahoa itself: outside per-slot mode there is
-    // no such thing as this slot's password, so there is nothing to rotate and nothing to withhold.
-    // Locking is expressed *as* an omission from the password map, so without the map it has no
-    // spelling at all.
+    // no such thing as this slot's password, so there is nothing to rotate.
     if room.slot_auth != SlotAuth::PerSlot {
         return Err(crate::error::not_found(
             "this room does not use per-slot passwords",
         ));
     }
 
-    let slots = slot::list(conn, room.id).await?;
-    if !slots.iter().any(|s| s.slot_number == slot_number) {
+    if slot::get(conn, room.id, slot_number).await?.is_none() {
         return Err(crate::error::not_found("no such slot"));
     }
 
-    let kind = match locking {
-        None => {
-            slot::rotate_password(conn, room.id, slot_number).await?;
-            "slot_password_rotated"
-        }
-        Some(true) => {
-            // **Refused here rather than discovered later.** The Secret builder will not render an
-            // empty password map, so locking the last unlocked slot would leave the room unable to
-            // start at all -- and it would surface minutes later as a `failed` room with a Secret
-            // error, long after the person who caused it stopped looking. Locking everybody is
-            // closing the room, which has its own control and says what it does.
-            let unlocked = slots
-                .iter()
-                .filter(|s| !s.is_locked() && s.slot_number != slot_number)
-                .count();
-            if unlocked == 0 {
-                return Err(crate::error::Error::new(
-                    Status::Conflict,
-                    anyhow::anyhow!(
-                        "that is the last slot anyone can connect to. Locking every slot is \
-                         closing the room, which is on the room's own controls."
-                    ),
-                ));
-            }
-            if !slot::set_locked(conn, room.id, slot_number, true, by).await? {
-                return Ok(Prepared::NotApplicable);
-            }
-            "slot_locked"
-        }
-        Some(false) => {
-            if !slot::set_locked(conn, room.id, slot_number, false, by).await? {
-                return Ok(Prepared::NotApplicable);
-            }
-            "slot_unlocked"
-        }
-    };
-
+    slot::rotate_password(conn, room.id, slot_number).await?;
     room::mark_secret_stale(conn, room.id).await?;
+    let kind = "slot_password_rotated";
 
     if room.state == "running" {
         return Ok(Prepared::Live(kind));
@@ -479,7 +435,7 @@ pub(crate) async fn prepare_slot_credential(
 
     // **Read the state back**, because the one above came from the request guard and a room can
     // begin starting in between. `start` renders the Secret from the row, so a start that read the
-    // row before this write produces a pod running the old map with the row saying otherwise —
+    // row before this write produces a pod running the old map with the row saying otherwise --
     // silently, which is the whole class of failure worth spending a query to avoid.
     let moved = room::get(conn, room.id)
         .await?
@@ -489,6 +445,46 @@ pub(crate) async fn prepare_slot_credential(
     } else {
         Prepared::Stored(kind)
     })
+}
+
+/// Record that staff barred a slot, or let it back in.
+///
+/// **Separate from [`prepare_slot_credential`] because locking is no longer a credential
+/// operation.** pahoa owns the verb now: `lock` is an ordinary passthrough command that reaches the
+/// running room and nothing else, so there is no Secret to write, no ordering to get right, and no
+/// per-slot mode requirement -- it works in every password mode.
+///
+/// What stays on this side is the **intent and the audit trail**. pahoa persists the lock in
+/// `room.save`, which goes with a save that is reset or a PVC that is recreated, and it records
+/// only the fact rather than who asked. `room_slots.locked_at` / `locked_by` is therefore the
+/// authority, and the orchestrator re-applies it whenever a room reaches `running`.
+///
+/// Returns the `room_events` kind, or `None` when the row did not move -- a repeat click, which
+/// should not write an event claiming something changed.
+async fn record_lock(
+    conn: &mut diesel_async::AsyncPgConnection,
+    room: &puna_core::model::room::Room,
+    command: &RoomCommand,
+    by: i64,
+) -> Result<Option<&'static str>> {
+    use puna_core::model::slot;
+
+    let RoomCommand::LockSlot { slot: n, locked } = command else {
+        return Ok(None);
+    };
+
+    if slot::get(conn, room.id, *n).await?.is_none() {
+        return Err(crate::error::not_found("no such slot"));
+    }
+    if !slot::set_locked(conn, room.id, *n, *locked, by).await? {
+        return Ok(None);
+    }
+
+    Ok(Some(if *locked {
+        "slot_locked"
+    } else {
+        "slot_unlocked"
+    }))
 }
 
 /// What a command run answers with: a page, or the same outcome as JSON.
@@ -575,9 +571,15 @@ async fn run_inner(
 
     // The two Puna-side commands write the row before the row is queued, so the orchestrator has
     // something to push. Every other command passes straight through.
-    let prepared =
-        prepare_slot_credential(&mut conn, &access.room, &command, access.user_id()).await?;
-    if let Some(kind) = prepared.kind() {
+    let prepared = prepare_slot_credential(&mut conn, &access.room, &command).await?;
+
+    // **Locking writes Puna's record and then travels on as an ordinary command.** Unlike a
+    // rotation there is nothing to prepare -- pahoa's `lock` needs no Secret and no password mode --
+    // but the intent belongs here, because pahoa's copy lives in a save that a reset would take with
+    // it and records nothing about who asked.
+    let locked_kind = record_lock(&mut conn, &access.room, &command, access.user_id()).await?;
+
+    if let Some(kind) = prepared.kind().or(locked_kind) {
         puna_core::model::event::record(
             &mut conn,
             access.room.id,
@@ -1048,30 +1050,8 @@ mod credential_tests {
         RoomCommand::LockSlot { slot, locked }
     }
 
-    /// A running room is the ordinary case: the row is written, the Secret is marked stale so the
-    /// change outlives the pod, and the caller is told to queue the command.
-    #[tokio::test]
-    async fn locking_a_running_room_writes_the_row_and_asks_for_a_live_push() {
-        with_db(|pool| async move {
-            let mut conn = pool.get().await.expect("connection");
-            let room = a_room(&mut conn, "running").await;
-
-            let prepared = prepare_slot_credential(&mut conn, &room, &lock(1, true), ACTOR)
-                .await
-                .expect("prepared");
-
-            assert_eq!(prepared, Prepared::Live("slot_locked"));
-            let stored = slot::get(&mut conn, room.id, 1)
-                .await
-                .expect("read")
-                .expect("slot");
-            assert!(stored.is_locked());
-            assert!(
-                secret_is_stale(&mut conn, room.id).await,
-                "the durable half was skipped, so this lock would lapse at the next restart"
-            );
-        })
-        .await;
+    fn rotate(slot: i32) -> RoomCommand {
+        RoomCommand::RotatePassword { slot }
     }
 
     /// **A room in transition is refused, and NOTHING is written.**
@@ -1093,7 +1073,7 @@ mod credential_tests {
             for state in ["starting", "stopping", "degraded", "provisioning"] {
                 let room = a_room(&mut conn, state).await;
 
-                let refused = prepare_slot_credential(&mut conn, &room, &lock(1, true), ACTOR)
+                let refused = prepare_slot_credential(&mut conn, &room, &rotate(1))
                     .await
                     .expect_err("a room in transition must refuse");
                 assert_eq!(refused.status, Status::Conflict, "{state}");
@@ -1128,11 +1108,15 @@ mod credential_tests {
 
             for state in ["idle", "failed"] {
                 let room = a_room(&mut conn, state).await;
-                let prepared = prepare_slot_credential(&mut conn, &room, &lock(1, true), ACTOR)
+                let prepared = prepare_slot_credential(&mut conn, &room, &rotate(1))
                     .await
                     .expect("prepared");
 
-                assert_eq!(prepared, Prepared::Stored("slot_locked"), "{state}");
+                assert_eq!(
+                    prepared,
+                    Prepared::Stored("slot_password_rotated"),
+                    "{state}"
+                );
                 assert!(secret_is_stale(&mut conn, room.id).await, "{state}");
             }
         })
@@ -1161,55 +1145,95 @@ mod credential_tests {
                 .await
                 .expect("the room starts");
 
-            let prepared =
-                prepare_slot_credential(&mut conn, &stale_snapshot, &lock(1, true), ACTOR)
-                    .await
-                    .expect("prepared");
+            let prepared = prepare_slot_credential(&mut conn, &stale_snapshot, &rotate(1))
+                .await
+                .expect("prepared");
 
-            assert_eq!(prepared, Prepared::Uncertain("slot_locked"));
+            assert_eq!(prepared, Prepared::Uncertain("slot_password_rotated"));
             // Written, and marked stale: the change is real, it is only its timing that is unknown.
             assert!(secret_is_stale(&mut conn, stale_snapshot.id).await);
         })
         .await;
     }
 
-    /// **Locking the last slot anyone can connect to would leave the room unable to start.**
-    ///
-    /// The Secret builder refuses an empty password map, so this would surface minutes later as a
-    /// `failed` room with a Secret error, long after whoever caused it stopped looking. Refused up
-    /// front, with the alternative named — locking everybody is closing the room.
+    /// **Locking records intent and nothing else.** No Secret, no password mode, no ordering — it is
+    /// an ordinary passthrough command now, and the row is what makes the intent durable across a
+    /// save that pahoa loses.
     #[tokio::test]
-    async fn locking_the_last_open_slot_is_refused_before_it_breaks_the_room() {
+    async fn locking_records_the_intent_and_leaves_the_secret_alone() {
         with_db(|pool| async move {
             let mut conn = pool.get().await.expect("connection");
             let room = a_room(&mut conn, "running").await;
 
-            prepare_slot_credential(&mut conn, &room, &lock(1, true), ACTOR)
+            let kind = record_lock(&mut conn, &room, &lock(1, true), ACTOR)
                 .await
-                .expect("the first lock is fine");
+                .expect("recorded");
+            assert_eq!(kind, Some("slot_locked"));
 
-            let refused = prepare_slot_credential(&mut conn, &room, &lock(2, true), ACTOR)
-                .await
-                .expect_err("locking the last open slot must refuse");
-            assert_eq!(refused.status, Status::Conflict);
-            assert!(
-                refused.source.to_string().contains("closing the room"),
-                "the refusal does not name the thing the operator actually wants: {refused}"
-            );
-
-            let still_open = slot::get(&mut conn, room.id, 2)
+            let stored = slot::get(&mut conn, room.id, 1)
                 .await
                 .expect("read")
                 .expect("slot");
-            assert!(!still_open.is_locked());
+            assert!(stored.is_locked());
+            assert_eq!(stored.locked_by, Some(ACTOR));
+            assert!(
+                stored.password.is_some(),
+                "locking must not disturb the credential -- the two stopped being the same thing"
+            );
+            assert!(
+                !secret_is_stale(&mut conn, room.id).await,
+                "locking asked for a Secret rewrite, which it no longer has any reason to do"
+            );
+
+            // A repeat is a no-op and must not write an event claiming something changed.
+            assert_eq!(
+                record_lock(&mut conn, &room, &lock(1, true), ACTOR)
+                    .await
+                    .expect("recorded"),
+                None
+            );
+
+            assert_eq!(
+                record_lock(&mut conn, &room, &lock(1, false), ACTOR)
+                    .await
+                    .expect("recorded"),
+                Some("slot_unlocked")
+            );
         })
         .await;
     }
 
-    /// Outside per-slot mode a lock has no spelling at all: it is an omission from a password map
-    /// that does not exist. 404 rather than 400, matching pahoa's own endpoint.
+    /// **In every password mode**, which is the whole reason for adopting pahoa's verb: the
+    /// omission trick it replaced needed per-slot mode to be in force.
     #[tokio::test]
-    async fn locking_is_refused_where_there_is_no_password_map() {
+    async fn locking_works_whatever_the_rooms_password_mode_is() {
+        with_db(|pool| async move {
+            let mut conn = pool.get().await.expect("connection");
+            insert_user(&mut conn, ACTOR).await;
+
+            for mode in ["none", "room", "per_slot"] {
+                let generation = insert_generation(&mut conn).await;
+                let id = insert_room(&mut conn, generation, "running", mode).await;
+                let password = (mode == "per_slot").then_some("aaaaa-bbbbb");
+                insert_slot(&mut conn, id, 1, password).await;
+                let room = room::get(&mut conn, id).await.expect("read").expect("room");
+
+                assert_eq!(
+                    record_lock(&mut conn, &room, &lock(1, true), ACTOR)
+                        .await
+                        .unwrap_or_else(|e| panic!("{mode}: {e}")),
+                    Some("slot_locked"),
+                    "{mode}: locking was refused"
+                );
+            }
+        })
+        .await;
+    }
+
+    /// A rotation still refuses everything but per-slot mode, and that asymmetry is the point: a
+    /// password mode is what a rotation acts *within*, where a lock is about access.
+    #[tokio::test]
+    async fn rotation_still_needs_a_password_mode_to_rotate_within() {
         with_db(|pool| async move {
             let mut conn = pool.get().await.expect("connection");
             insert_user(&mut conn, ACTOR).await;
@@ -1218,41 +1242,10 @@ mod credential_tests {
             insert_slot(&mut conn, id, 1, None).await;
             let room = room::get(&mut conn, id).await.expect("read").expect("room");
 
-            let refused = prepare_slot_credential(&mut conn, &room, &lock(1, true), ACTOR)
+            let refused = prepare_slot_credential(&mut conn, &room, &rotate(1))
                 .await
                 .expect_err("must refuse");
             assert_eq!(refused.status, Status::NotFound);
-        })
-        .await;
-    }
-
-    /// A repeat is a no-op, and must NOT mark the Secret stale: a rewrite for nothing is a wasted
-    /// apply on every duplicate click, and an event row claiming something changed.
-    #[tokio::test]
-    async fn locking_an_already_locked_slot_changes_nothing() {
-        with_db(|pool| async move {
-            let mut conn = pool.get().await.expect("connection");
-            let room = a_room(&mut conn, "running").await;
-
-            prepare_slot_credential(&mut conn, &room, &lock(1, true), ACTOR)
-                .await
-                .expect("the first lock");
-            // Clear the mark, so the assertion below is about the SECOND call rather than the first.
-            diesel::sql_query("UPDATE rooms SET secret_synced_at = now() WHERE id = $1")
-                .bind::<diesel::sql_types::Uuid, _>(room.id)
-                .execute(&mut conn)
-                .await
-                .expect("clear the mark");
-
-            let again = prepare_slot_credential(&mut conn, &room, &lock(1, true), ACTOR)
-                .await
-                .expect("prepared");
-
-            assert_eq!(again, Prepared::NotApplicable);
-            assert!(
-                !secret_is_stale(&mut conn, room.id).await,
-                "a repeat lock asked for a Secret rewrite that changes nothing"
-            );
         })
         .await;
     }
@@ -1265,14 +1258,10 @@ mod credential_tests {
             let mut conn = pool.get().await.expect("connection");
             let room = a_room(&mut conn, "running").await;
 
-            let prepared = prepare_slot_credential(
-                &mut conn,
-                &room,
-                &RoomCommand::RotatePassword { slot: 1 },
-                ACTOR,
-            )
-            .await
-            .expect("prepared");
+            let prepared =
+                prepare_slot_credential(&mut conn, &room, &RoomCommand::RotatePassword { slot: 1 })
+                    .await
+                    .expect("prepared");
 
             assert_eq!(prepared, Prepared::Live("slot_password_rotated"));
             let rotated = slot::get(&mut conn, room.id, 1)
@@ -1297,7 +1286,7 @@ mod credential_tests {
             let room = a_room(&mut conn, "starting").await;
 
             let prepared =
-                prepare_slot_credential(&mut conn, &room, &RoomCommand::Release { slot: 1 }, ACTOR)
+                prepare_slot_credential(&mut conn, &room, &RoomCommand::Release { slot: 1 })
                     .await
                     .expect("prepared");
 

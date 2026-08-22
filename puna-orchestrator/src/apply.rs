@@ -285,7 +285,6 @@ mod tests {
             slot_count: 96,
             save_interval_secs: 30,
             use_embedded_options: true,
-            credentialled_slots: Vec::new(),
         }
         .build(SlotAuth::None, &secret_data())
     }

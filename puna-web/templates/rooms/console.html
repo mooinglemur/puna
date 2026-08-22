@@ -79,11 +79,10 @@ takes effect the next time it starts.</p>
          Measured: a kick here took the room from 4 connections to 5. The label says so because the
          alternative is somebody pressing it twice and concluding the console is broken. #}
       <option value="kick"{% if preselect_kind.as_deref() == Some("kick") +%} selected{% endif %}>kick &mdash; disconnect a slot (they can reconnect at once)</option>
-      {% if per_slot_passwords %}
-      {# Only where there is a password map to withhold a slot from: locking IS the omission, so
-         outside per-slot mode it has no spelling and the route answers 404. #}
-      <option value="lock_slot"{% if preselect_kind.as_deref() == Some("lock_slot") +%} selected{% endif %}>lock &mdash; bar one slot from connecting, or let it back in</option>
-      {% endif %}
+      {# **Offered in every password mode**, since pahoa's own `lock` verb replaced the trick of
+         withholding a slot from the per-slot password map -- which needed that mode to exist at
+         all. It bars the next login and disconnects nobody; `kick` is the other half. #}
+      <option value="lock"{% if preselect_kind.as_deref() == Some("lock") +%} selected{% endif %}>lock &mdash; bar one slot from connecting, or let it back in</option>
       {% if is_organizer %}
       {# **The one command a helper may not run**, and the only one that changes the room rather
          than a game inside it -- see `RoomCommand::required_role`. Hidden rather than disabled: a
@@ -128,15 +127,13 @@ takes effect the next time it starts.</p>
     </select>
   </label>
 
-  {% if per_slot_passwords %}
   <label>Lock
     <select name="locked">
       <option value="">&mdash;</option>
-      <option value="true">lock &mdash; this slot can no longer connect</option>
+      <option value="true">lock &mdash; bars the next login; disconnects nobody</option>
       <option value="false">unlock &mdash; let this slot connect again</option>
     </select>
   </label>
-  {% endif %}
 
   {% if is_organizer %}
   {# The eight pahoa will set, transcribed from its `SETTABLE` table. A picker rather than a text

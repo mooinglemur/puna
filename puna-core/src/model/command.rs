@@ -23,16 +23,19 @@
 //!
 //! ## What is deliberately not here
 //!
-//! **`rotate_password` and `lock_slot` ARE commands here, and §6 says the first should not be.**
-//! That section was written before the tier boundary existed: it assumed rotation would be
+//! **`rotate_password` IS a command here, and §6 says it should not be.** That section was written
+//! before the tier boundary existed: it assumed rotation would be
 //! `POST /admin/v1/slots/<n>/password` called directly, and the web tier has **no egress to room
 //! pods at all**. Only the orchestrator can reach a room, so asking it through this queue is the
 //! only shape available.
 //!
 //! Its stated objection is answered rather than ignored — the variant carries **no password**, only
 //! a slot number, so the audit trail records what was rotated and by whom without holding the value.
-//! What remains true is that neither is a *pahoa command*: the dispatcher handles both before the
-//! passthrough, because pahoa's own set is the fourteen others and it would answer `400`.
+//! What remains true is that it is not a *pahoa command*: the dispatcher handles it before the
+//! passthrough, because pahoa's own set is the fifteen others and it would answer `400`.
+//!
+//! `lock` used to be the second such exception and is not any more — pahoa shipped the verb, so it
+//! is an ordinary passthrough. See [`RoomCommand::LockSlot`].
 //!
 //! **There is no room-wide password setter and there will not be one** (P18, settled): pahoa
 //! declined it because a change it cannot persist reverts at the next restart in every deployment.
@@ -165,32 +168,39 @@ pub enum RoomCommand {
     RotatePassword {
         slot: i32,
     },
-    /// Shut one slot out, or let it back in. **Durable**, not merely live.
+    /// Bar one slot from connecting, or let it back in.
     ///
-    /// Reaches the running room through the endpoint [`RotatePassword`](Self::RotatePassword) uses
-    /// — `{"password": null}` to lock, the slot's stored password to unlock — and reaches the
-    /// room's *next start* through the Secret, which omits a locked slot from
-    /// `PAHOA_SLOT_PASSWORDS` entirely. Under pahoa's fail-closed rule a slot missing from that map
-    /// is **refused**, so the omission is the lock. §4 is emphatic that this is the opposite of
-    /// what "clear the password" suggests, which is why the control says *Lock*, never *Remove
-    /// password*.
+    /// **pahoa's own verb since it shipped `lock`**, and an ordinary passthrough. Puna used to
+    /// achieve this by omitting the slot from `PAHOA_SLOT_PASSWORDS` and relying on the fail-closed
+    /// rule — which worked, and was worse on four counts: it needed per-slot mode to be in force at
+    /// all, it took a Secret write plus a live push with an ordering between them, it overloaded a
+    /// password map with an access decision, and it made "which slots have credentials" and "who is
+    /// barred" the same field. **Locking now works in every password mode.**
     ///
-    /// **Both halves are required and the order is the same as rotation's**: Secret first, then the
-    /// live push. The room's password endpoint persists nothing by design, so a lock pushed only
-    /// there would lapse at the next restart — silently, and restarts happen for reasons nobody
-    /// decided, like a reap or an image bump.
+    /// **It bars the next login and disconnects nobody.** Those are separate decisions and separate
+    /// commands, and the order matters: `lock` then [`Kick`](Self::Kick), because kicking first
+    /// leaves a window in which they reconnect. The obvious reading of a control called "Lock" is
+    /// that it ejects somebody, so anything offering it has to say otherwise.
     ///
-    /// **The stored password is left alone.** Locking omits the slot from the map; it does not
-    /// clear `room_slots.password`. So unlocking restores the credential the player already has
-    /// rather than forcing a rotation somebody then has to deliver.
+    /// **A locked slot is refused with `["InvalidSlot", "SlotLocked"]`** — both, in that order. The
+    /// protocol's reason list is closed and has nothing for this; `InvalidSlot` is what makes a
+    /// stock client stop cleanly instead of retrying on a doubling delay, and `SlotLocked` is what
+    /// lets a reader tell a lock from a typo. The accepted cost is that **a stock client tells a
+    /// locked player their slot name is invalid**, which staff need to know before somebody reports
+    /// it as a bug.
     ///
-    /// Not a pahoa command: like rotation, the dispatcher intercepts it before the passthrough.
+    /// **Puna's `room_slots.locked_at` stays the record of intent**, and that is deliberate rather
+    /// than redundant: pahoa persists the lock in `room.save`, so it goes with a save that is reset
+    /// or a PVC that is recreated — which the old Secret-based lock survived, because it lived in
+    /// Puna's own state. Puna keeps the intent and the audit trail (`locked_by`, `locked_at`, which
+    /// pahoa does not record), and re-applies it when a room starts.
+    #[serde(rename = "lock")]
     LockSlot {
         slot: i32,
-        /// `true` locks, `false` lets them back in. Spelled as a boolean on one command rather than
-        /// two verbs, for the reason pahoa gives for `allow_release`: `unlock` and `lock` as
-        /// separate rows would read as two unrelated events in a history that is trying to explain
-        /// one slot's story.
+        /// `true` locks, `false` lets them back in. pahoa defaults an absent `locked` to true; Puna
+        /// sends it either way, for the reason it does on `allow_release` — a body that says which
+        /// way it meant is worth more than a byte saved, on a command whose two directions are easy
+        /// to confuse.
         locked: bool,
     },
     Kick {
@@ -221,7 +231,7 @@ impl RoomCommand {
             Self::SetOption { .. } => "option",
             Self::Kick { .. } => "kick",
             Self::RotatePassword { .. } => "rotate_password",
-            Self::LockSlot { .. } => "lock_slot",
+            Self::LockSlot { .. } => "lock",
         }
     }
 
@@ -370,7 +380,7 @@ impl Disposition {
 mod tests {
     use super::*;
 
-    /// **pahoa's fourteen verbs, each beside the JSON pahoa's own parser reads.**
+    /// **pahoa's fifteen verbs, each beside the JSON pahoa's own parser reads.**
     ///
     /// One list rather than two, because the previous shape — a list of commands here and a series
     /// of indexed assertions below — meant a command could be added to the set and quietly not
@@ -476,6 +486,15 @@ mod tests {
                 },
                 json!({"command": "kick", "slot": 3, "reason": "afk"}),
             ),
+            (
+                // The tag is `lock`, not `lock_slot`: the Rust name says which noun it acts on,
+                // the wire name is pahoa's.
+                RoomCommand::LockSlot {
+                    slot: 3,
+                    locked: true,
+                },
+                json!({"command": "lock", "slot": 3, "locked": true}),
+            ),
         ]
     }
 
@@ -483,46 +502,40 @@ mod tests {
         the_pahoa_set().into_iter().map(|(c, _)| c).collect()
     }
 
-    /// **The two Puna-side commands are not pahoa's, and `every_command` above is the pahoa set.**
+    /// **`rotate_password` is not pahoa's, and `every_command` above is the pahoa set.**
     ///
-    /// The wire-shape test walks that list against pahoa's parser; either of these would fail it,
-    /// because pahoa has no such command and would answer `400`. They are Puna instructions that
-    /// happen to travel on the same queue, and the dispatcher must intercept both before the
-    /// passthrough — a source lint over `dispatch.rs` asserts that ordering, since getting it wrong
-    /// is a `400` logged as "Puna generated a body the room could not read", which is true and
-    /// unhelpful.
+    /// The wire-shape test walks that list against pahoa's parser; this one would fail it, because
+    /// pahoa has no such command and would answer `400`. It is a Puna instruction that happens to
+    /// travel on the same queue, and the dispatcher must intercept it before the passthrough — a
+    /// source lint over `dispatch.rs` asserts that ordering, since getting it wrong is a `400`
+    /// logged as "Puna generated a body the room could not read", which is true and unhelpful.
     ///
-    /// They still round-trip through the row, because they are stored there like any other.
+    /// **`lock` used to be the second one and is not any more.** pahoa shipped the verb, so it moved
+    /// into the list above and out of the intercept. It is asserted there rather than here.
+    ///
+    /// It still round-trips through the row, because it is stored there like any other.
     #[test]
-    fn the_puna_side_commands_are_not_part_of_pahoas_set_but_still_round_trip() {
-        for command in [
-            RoomCommand::RotatePassword { slot: 3 },
-            RoomCommand::LockSlot {
-                slot: 3,
-                locked: true,
-            },
-        ] {
-            assert!(
-                !every_command().contains(&command),
-                "{} reached the list this crate walks against pahoa's wire format",
-                command.name()
-            );
+    fn the_rotation_command_is_not_part_of_pahoas_set_but_still_round_trips() {
+        let command = RoomCommand::RotatePassword { slot: 3 };
+        assert!(
+            !every_command().contains(&command),
+            "the rotation command reached the list this crate walks against pahoa's wire format"
+        );
 
-            let stored = serde_json::to_value(&command).expect("serializes");
-            assert_eq!(
-                serde_json::from_value::<RoomCommand>(stored).expect("parses"),
-                command
-            );
+        let stored = serde_json::to_value(&command).expect("serializes");
+        assert_eq!(
+            serde_json::from_value::<RoomCommand>(stored).expect("parses"),
+            command
+        );
 
-            // Each carries a slot and NO password: the value is in `room_slots`, and this row is
-            // read by anybody who can read the room's command history.
-            assert_eq!(command.target_slot(), Some(3));
-            let body = serde_json::to_string(&command).expect("serializes");
-            assert!(
-                !body.contains("\"password\":"),
-                "a credential reached the audit trail: {body}"
-            );
-        }
+        // It carries a slot and NO password: the value is in `room_slots`, and this row is read by
+        // anybody who can read the room's command history.
+        assert_eq!(command.target_slot(), Some(3));
+        let body = serde_json::to_string(&command).expect("serializes");
+        assert!(
+            !body.contains("\"password\":"),
+            "a credential reached the audit trail: {body}"
+        );
     }
 
     /// **The wire format is pahoa's, and a mismatch is a `400` nothing on this side can anticipate.**
@@ -551,7 +564,7 @@ mod tests {
         );
     }
 
-    /// **pahoa's set is fourteen verbs, and the count is asserted so a new one cannot arrive
+    /// **pahoa's set is fifteen verbs, and the count is asserted so a new one cannot arrive
     /// untested.**
     ///
     /// The list above is hand-written, so a variant added to the enum and not to it would simply
@@ -559,7 +572,7 @@ mod tests {
     /// by omission rather than by error. Naming them individually is what makes the diff say which
     /// one appeared.
     #[test]
-    fn the_pahoa_command_set_is_the_fourteen_verbs_it_shipped() {
+    fn the_pahoa_command_set_is_the_fifteen_verbs_it_shipped() {
         let names: Vec<&str> = every_command().iter().map(|c| c.name()).collect();
         assert_eq!(
             names,
@@ -578,6 +591,7 @@ mod tests {
                 "alias",
                 "option",
                 "kick",
+                "lock",
             ]
         );
     }
@@ -647,8 +661,8 @@ mod tests {
             ("allow_release", Helper),
             ("alias", Helper),
             ("kick", Helper),
+            ("lock", Helper),
             ("rotate_password", Helper),
-            ("lock_slot", Helper),
             // The one that is not, and the only one that changes the room rather than a game
             // inside it. See `required_role`.
             ("option", Organizer),
@@ -674,10 +688,6 @@ mod tests {
     fn every_command_including_punas() -> Vec<RoomCommand> {
         let mut all = every_command();
         all.push(RoomCommand::RotatePassword { slot: 3 });
-        all.push(RoomCommand::LockSlot {
-            slot: 3,
-            locked: true,
-        });
         all
     }
 

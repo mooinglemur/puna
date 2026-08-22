@@ -308,13 +308,8 @@ async fn rotate_slot_password(
 ) -> Result<Redirect> {
     let mut conn = pool.get().await?;
     let command = RoomCommand::RotatePassword { slot: n };
-    let prepared = crate::routes::console::prepare_slot_credential(
-        &mut conn,
-        &access.room,
-        &command,
-        access.user_id(),
-    )
-    .await?;
+    let prepared =
+        crate::routes::console::prepare_slot_credential(&mut conn, &access.room, &command).await?;
 
     // Only for a room that could be told. The command would otherwise land `rejected` with "this
     // room is not running", which is true and is not something the organizer needs to act on.
@@ -2178,7 +2173,7 @@ mod tests {
         let staff_html = staff.render().expect("renders");
 
         for command in [
-            "lock_slot",
+            "lock",
             "kick",
             "hint",
             "hint_location",
@@ -2252,22 +2247,49 @@ mod tests {
         );
     }
 
-    /// Locking is expressed as an omission from the per-slot password map, so outside that mode it
-    /// has no spelling at all and the route answers 404. A control the route refuses is worse than
-    /// no control.
+    /// **Locking is offered in every password mode**, which is the whole point of adopting pahoa's
+    /// own verb: the trick it replaced — withholding a slot from `PAHOA_SLOT_PASSWORDS` — needed
+    /// per-slot mode to exist at all, so a room with no password or one shared password could not
+    /// bar anybody.
+    ///
+    /// Asserted against the mode that previously hid it, because "it works everywhere now" is the
+    /// claim, and the old gate would still pass a test that only looked at a per-slot room.
     #[test]
-    fn the_lock_control_appears_only_where_locking_means_something() {
+    fn the_lock_control_is_offered_in_every_password_mode() {
+        for mode in [SlotAuth::None, SlotAuth::Room, SlotAuth::PerSlot] {
+            let mut staff = page_as(true, false);
+            staff.room.slot_auth = mode;
+            staff.slots = vec![a_slot(false)];
+            let html = staff.render().expect("renders");
+
+            assert!(
+                html.contains(r#"data-command="lock""#),
+                "{mode:?}: the lock control is missing, and pahoa's verb needs no password mode"
+            );
+        }
+    }
+
+    /// **Lock bars the next login and disconnects nobody**, and the control has to say so: the
+    /// obvious reading of "Lock" is that it ejects somebody. The order that actually works against a
+    /// griefer is lock THEN kick — kicking first leaves a window to reconnect.
+    #[test]
+    fn the_lock_control_says_it_does_not_disconnect_anybody() {
         let mut staff = page_as(true, false);
-        staff.room.slot_auth = SlotAuth::None;
         staff.slots = vec![a_slot(false)];
         let html = staff.render().expect("renders");
 
+        let at = html
+            .find(r#"data-command="lock""#)
+            .expect("the lock control is gone");
+        let element = &html[at..at + 400.min(html.len() - at)];
         assert!(
-            !html.contains(r#"data-command="lock_slot""#),
-            "a room with no per-slot passwords offered a lock the route would refuse"
+            element.contains("disconnect"),
+            "the lock tooltip does not mention that it disconnects nobody:\n{element}"
         );
-        // The rest of the column is unaffected -- locking is the only mode-dependent one.
-        assert!(html.contains(r#"data-command="kick""#));
+        assert!(
+            element.contains("kick"),
+            "the lock tooltip does not point at kick, which is the half that ejects:\n{element}"
+        );
     }
 
     fn a_slot(locked: bool) -> SlotView {
@@ -2342,7 +2364,7 @@ mod tests {
 
         // Every command must have a title, including the two that never open a confirmation --
         // their spinner and answer use the same shared heading.
-        for command in ["lock_slot", "kick"] {
+        for command in ["lock", "kick"] {
             let at = script
                 .find(&format!("{command}: {{"))
                 .unwrap_or_else(|| panic!("{command} left the script"));

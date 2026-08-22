@@ -41,7 +41,7 @@
   var COMMANDS = {
     // The two that skip the confirmation still need a title and a target, because the dialog they
     // DO get -- the spinner, then the answer -- is the only thing that says who was acted on.
-    lock_slot: { confirm: false, title: "Lock", working: "Locking" },
+    lock: { confirm: false, title: "Lock", working: "Locking" },
     kick: { confirm: false, title: "Kick", working: "Kicking" },
     hint: {
       confirm: true,
@@ -96,7 +96,7 @@
   // The lock control is one command pointing two ways, and the wording has to follow, or a page
   // full of "Locking" while unlocking is the sort of thing nobody quite trusts afterwards.
   function describe(spec, link) {
-    if (link.dataset.command !== "lock_slot") return spec;
+    if (link.dataset.command !== "lock") return spec;
     var locking = link.dataset.locked === "true";
     return {
       confirm: false,
