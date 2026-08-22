@@ -675,10 +675,22 @@ fn every_table_scrolls_inside_a_wrapper() {
             // rather than anywhere in the file -- a page with one wrapped table and one bare one
             // would otherwise pass.
             let before = source[..at].trim_end();
-            if !before.ends_with("<div class=\"scroll-x\">") {
+            // **Two wrappers qualify, and they are different jobs.** `.scroll-x` scrolls one axis
+            // and pins the other shut, which is right for a table the page should grow to fit.
+            // `.table-scroll` scrolls both, for the tracker's two tables whose length nobody chose
+            // -- and it has to be a single element, because `position: sticky` resolves against the
+            // nearest scrollport and a header nested one wrapper deeper would slide away.
+            let wrapped = ["<div class=\"scroll-x\">", "<div class=\"table-scroll"]
+                .iter()
+                .any(|w| {
+                    before.rfind(w).is_some_and(|at| {
+                        before[at..].ends_with('>') && !before[at..].contains("</")
+                    })
+                });
+            if !wrapped {
                 let line = line_of(&source, at).unwrap_or_default();
                 offenders.push(format!(
-                    "{name}:{line}: <table> is not wrapped in <div class=\"scroll-x\">, so it will \
+                    "{name}:{line}: <table> is not wrapped in a scroll container, so it will \
                      overflow the page instead of scrolling itself"
                 ));
             }

@@ -1,5 +1,9 @@
 {% extends "base.html" %}
 {% block title %}{{ room_name +}} &mdash; tracker{% endblock %}
+{# Tables, not prose -- the same reason the admin pages and the room page opt out of the 62rem
+   measure. A slot's location list is two narrow columns and thousands of rows; holding it to a
+   paragraph's width helps nobody. #}
+{% block layout %}wide{% endblock %}
 {% block content %}
 
 {# NOTHING here links to the room or names its address. A tracker link is the one meant for broad
@@ -30,7 +34,11 @@ need to.</p>
   {# --- the slot table. On a slot's page this is one row: the same columns, the same code. --- #}
   <section class="table-block" data-view="slots">
     <h2>{% if slot.is_some() %}Slot{% else %}Slots{% endif %}</h2>
+    {# **Only on the multiworld view.** A slot's own page renders exactly one row here, so a filter
+       over it can do nothing but hide it. `tracker.js` guards on the box's absence already. #}
+    {% if slot.is_none() %}
     <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter slots">
+    {% endif %}
     <div class="table-scroll">
       <div class="scroll-x">
       <table>
@@ -56,8 +64,16 @@ need to.</p>
   <section class="table-block" data-view="locations">
     <h2>Locations</h2>
     <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter locations">
-    <div class="table-scroll">
-      <div class="scroll-x">
+    {# **Bounded, and ONE scroll container rather than two.** These two tables are the only ones on
+       the site whose length is unbounded by anything a person chose -- a slot's world can hold
+       thousands of locations -- so they scroll inside themselves instead of making the page
+       thousands of rows tall.
+
+       The inner `.scroll-x` is deliberately absent here: `position: sticky` resolves against the
+       NEAREST scrollport, so with a horizontal scroller nested inside a vertical one the header
+       would stick to a box that never scrolls vertically and slide away with the rows. One element
+       scrolling both axes is what makes the header stay. #}
+    <div class="table-scroll bounded">
       <table>
         <thead><tr>
           <th data-key="name">Location</th>
@@ -65,7 +81,6 @@ need to.</p>
         </tr></thead>
         <tbody></tbody>
       </table>
-      </div>
     </div>
     <p class="empty hint" hidden>No locations to show. This seed&rsquo;s names may not have been
     indexed yet.</p>
@@ -74,8 +89,16 @@ need to.</p>
   <section class="table-block" data-view="items">
     <h2>Items received</h2>
     <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter items">
-    <div class="table-scroll">
-      <div class="scroll-x">
+    {# **Bounded, and ONE scroll container rather than two.** These two tables are the only ones on
+       the site whose length is unbounded by anything a person chose -- a slot's world can hold
+       thousands of locations -- so they scroll inside themselves instead of making the page
+       thousands of rows tall.
+
+       The inner `.scroll-x` is deliberately absent here: `position: sticky` resolves against the
+       NEAREST scrollport, so with a horizontal scroller nested inside a vertical one the header
+       would stick to a box that never scrolls vertically and slide away with the rows. One element
+       scrolling both axes is what makes the header stay. #}
+    <div class="table-scroll bounded">
       <table>
         <thead><tr>
           <th data-key="order" data-type="number">#</th>
@@ -85,7 +108,6 @@ need to.</p>
         </tr></thead>
         <tbody></tbody>
       </table>
-      </div>
     </div>
     <p class="empty hint" hidden>Nothing received yet.</p>
   </section>

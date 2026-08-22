@@ -1143,4 +1143,95 @@ mod tests {
             Json::Body(_)
         ));
     }
+    /// Build a tracker page for one slot, or for the whole multiworld.
+    fn tracker_page(slot: Option<i32>) -> TrackerTemplate {
+        TrackerTemplate {
+            base: TplContext {
+                is_logged_in: false,
+                is_admin: false,
+                username: String::new(),
+                site_name: "puna",
+                version: "test",
+                static_version: "test",
+                view_as: None,
+            },
+            room_name: "Friday async".into(),
+            slot_name: slot.map(|_| "Troy".into()),
+            api_base: "/api/puna/tracker/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into(),
+            slot,
+        }
+    }
+
+    /// **A filter over a table that always has one row can only hide it.** A slot's own page renders
+    /// exactly one slot, so the box is offered on the multiworld view and nowhere else.
+    ///
+    /// Asserted by counting, because both pages carry several search boxes and "contains a search
+    /// box" is true either way -- the question is how many.
+    #[test]
+    fn the_one_row_slot_table_offers_no_filter() {
+        let multiworld = tracker_page(None).render().expect("renders");
+        let one_slot = tracker_page(Some(1)).render().expect("renders");
+
+        // Multiworld: slots + hints. One slot: locations + items + hints, and NOT slots.
+        assert_eq!(
+            multiworld.matches("table-search").count(),
+            2,
+            "the multiworld view lost a filter, or grew one"
+        );
+        assert_eq!(
+            one_slot.matches("table-search").count(),
+            3,
+            "the slot view's filter count is wrong -- the one-row slot table should have none"
+        );
+
+        assert!(
+            !one_slot.contains(r#"aria-label="Filter slots""#),
+            "a table with one row is offering a filter that can only hide it"
+        );
+        assert!(
+            multiworld.contains(r#"aria-label="Filter slots""#),
+            "the multiworld slot table lost its filter"
+        );
+    }
+
+    /// **The two unbounded tables scroll inside themselves, in ONE wrapper.**
+    ///
+    /// One because `position: sticky` resolves against the nearest scrollport: nest a horizontal
+    /// scroller inside a vertical one and the header sticks to a box that never scrolls vertically,
+    /// so it slides away with the rows. That failure is invisible in markup and only shows when
+    /// somebody scrolls a long list -- which is exactly the case these two exist for.
+    #[test]
+    fn a_slots_locations_and_items_scroll_inside_one_bounded_wrapper() {
+        let html = tracker_page(Some(1)).render().expect("renders");
+
+        assert_eq!(
+            html.matches(r#"class="table-scroll bounded""#).count(),
+            2,
+            "locations and items are the two tables nobody chose the length of"
+        );
+
+        // Each bounded wrapper holds a table DIRECTLY -- no second scroller in between.
+        for section in html.split(r#"<div class="table-scroll bounded">"#).skip(1) {
+            let head = section.split("<table").next().unwrap_or_default();
+            assert!(
+                !head.contains("<div"),
+                "a wrapper sits between the bounded scroller and its table, so the sticky header \
+                 will resolve against the inner one and scroll away:\n{head}"
+            );
+        }
+    }
+
+    /// Tables, not prose. The same opt-out the admin pages and the room page take.
+    #[test]
+    fn tracker_pages_are_not_held_to_the_prose_measure() {
+        for slot in [None, Some(1)] {
+            assert!(
+                tracker_page(slot)
+                    .render()
+                    .expect("renders")
+                    .contains("<body class=\"wide\">"),
+                "a tracker page is held to a measure meant for paragraphs"
+            );
+        }
+    }
 }
