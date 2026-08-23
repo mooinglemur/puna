@@ -86,7 +86,7 @@ takes effect the next time it starts.</p>
       {# **Irreversible, including by the player**: upstream refuses any status change away from
          goal, so declaring one is final. Still a helper's, because it acts on one slot's game and
          because the auto rules make it a release by another name -- see `required_role`. #}
-      <option value="set_status"{% if preselect_kind.as_deref() == Some("set_status") +%} selected{% endif %}>set status &mdash; declare a slot finished on its behalf</option>
+      <option value="set_status"{% if preselect_kind.as_deref() == Some("set_status") +%} selected{% endif %}>set status &mdash; set a slot&rsquo;s Archipelago status, such as Goaled</option>
       {% if is_organizer %}
       {# **The one command a helper may not run**, and the only one that changes the room rather
          than a game inside it -- see `RoomCommand::required_role`. Hidden rather than disabled: a

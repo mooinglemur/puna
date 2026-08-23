@@ -93,7 +93,7 @@
     },
     set_status: {
       confirm: true,
-      title: "Declare finished",
+      title: "Set as Goaled",
       // Both halves matter and the second is the surprising one: the auto rules mean declaring a
       // goal can empty the slot's world as a side effect, which is not what "mark them finished"
       // sounds like. pahoa's own answer names whatever fired, and the result pane shows it.
@@ -101,7 +101,7 @@
         "Marks this slot as having goaled, exactly as their own client would. Nobody can undo a " +
         "goal afterwards — not staff, and not the player. If the room releases or collects " +
         "automatically on goal, their world empties out too.",
-      working: "Declaring",
+      working: "Setting",
     },
   };
 

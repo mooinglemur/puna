@@ -296,3 +296,122 @@ async fn a_rooms_recent_commands_read_newest_first() {
     })
     .await;
 }
+
+/// A batch is enqueued whole, reads back in order, and belongs to its room.
+#[tokio::test]
+async fn a_batch_is_all_or_nothing_and_scoped_to_its_room() {
+    with_db(|pool| async move {
+        let mut conn = pool.get().await.expect("connection");
+        let room = a_room(&mut conn).await;
+        let generation = insert_generation(&mut conn).await;
+        let other = insert_room(&mut conn, generation, "running").await;
+
+        let commands: Vec<RoomCommand> =
+            (1..=3).map(|slot| RoomCommand::Release { slot }).collect();
+        let batch = command::enqueue_batch(&mut conn, room, TROY, RoomRole::Helper, &commands)
+            .await
+            .expect("enqueue")
+            .expect("a batch id for a non-empty batch");
+
+        let rows = command::batch(&mut conn, room, batch).await.expect("batch");
+        assert_eq!(rows.len(), 3);
+        assert_eq!(
+            rows.iter().map(|r| r.command.clone()).collect::<Vec<_>>(),
+            commands,
+            "staged order is the order they read back in"
+        );
+
+        // **A batch id is not a capability.** The same id asked for against another room answers
+        // nothing, or holding one would be a way to read commands the guard never authorized.
+        assert!(
+            command::batch(&mut conn, other, batch)
+                .await
+                .expect("batch")
+                .is_empty(),
+            "a batch must not be readable through a room it does not belong to"
+        );
+
+        // An empty stage mints no id: a page that exists and lists nothing is worse than the route
+        // saying there was nothing to do.
+        assert_eq!(
+            command::enqueue_batch(&mut conn, room, TROY, RoomRole::Helper, &[])
+                .await
+                .expect("empty"),
+            None
+        );
+    })
+    .await;
+}
+
+/// **Refused is not failed**, and the three buckets have to stay three.
+///
+/// The case is not hypothetical: a bulk `set_status` over a sync where some slots have already
+/// goaled produces refusals that are the correct answer, and rendering them as errors is how the
+/// bucket that matters gets ignored.
+#[tokio::test]
+async fn a_batchs_outcome_separates_a_refusal_from_a_failure() {
+    with_db(|pool| async move {
+        let mut conn = pool.get().await.expect("connection");
+        let room = a_room(&mut conn).await;
+
+        let commands: Vec<RoomCommand> =
+            (1..=4).map(|slot| RoomCommand::Release { slot }).collect();
+        let batch = command::enqueue_batch(&mut conn, room, TROY, RoomRole::Helper, &commands)
+            .await
+            .expect("enqueue")
+            .expect("a batch");
+
+        let staged = command::batch(&mut conn, room, batch).await.expect("batch");
+        let outcome = command::BatchOutcome::of(&staged);
+        assert_eq!(outcome.outstanding, 4, "nothing has run yet");
+        assert!(!outcome.is_finished());
+
+        let yes = CommandOutput {
+            ok: true,
+            output: vec!["done".into()],
+            ..Default::default()
+        };
+        let no = CommandOutput {
+            ok: false,
+            output: vec!["that slot has already goaled".into()],
+            ..Default::default()
+        };
+
+        command::finish(&mut conn, staged[0].id, "ok", Some(&yes), None)
+            .await
+            .expect("succeeded");
+        command::finish(&mut conn, staged[1].id, "ok", Some(&no), None)
+            .await
+            .expect("refused");
+        command::finish(&mut conn, staged[2].id, "failed", None, Some("no route"))
+            .await
+            .expect("failed");
+
+        let outcome =
+            command::BatchOutcome::of(&command::batch(&mut conn, room, batch).await.unwrap());
+        assert_eq!(outcome.succeeded, 1);
+        assert_eq!(
+            outcome.refused, 1,
+            "a 200 with ok:false is the room answering no, not a fault"
+        );
+        assert_eq!(outcome.failed, 1);
+        assert_eq!(outcome.outstanding, 1);
+        assert_eq!(outcome.total(), 4);
+        assert!(!outcome.is_finished(), "one is still in flight");
+
+        command::finish(
+            &mut conn,
+            staged[3].id,
+            "rejected",
+            None,
+            Some("not running"),
+        )
+        .await
+        .expect("rejected");
+        let outcome =
+            command::BatchOutcome::of(&command::batch(&mut conn, room, batch).await.unwrap());
+        assert!(outcome.is_finished());
+        assert_eq!(outcome.failed, 2, "a rejection is a failure, not a refusal");
+    })
+    .await;
+}

@@ -898,7 +898,7 @@ use diesel::sql_types::{BigInt, Jsonb, Nullable, Text, Timestamptz, Uuid as SqlU
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 
-use crate::ids::{CommandId, RoomId};
+use crate::ids::{BatchId, CommandId, RoomId};
 
 /// The channel the orchestrator wakes on, and the one the web tier waits on.
 pub const REQUEST_CHANNEL: &str = "puna_command";
@@ -1113,6 +1113,148 @@ pub async fn recent(
     .await?;
 
     Ok(rows.into_iter().filter_map(hydrate).collect())
+}
+
+/// Queue several commands as one batch, and wake the dispatcher once.
+///
+/// **One transaction for the whole batch**, which is what makes a bulk action all-or-nothing at the
+/// point of asking: an operator who stages two hundred slots and submits gets two hundred rows or
+/// none, never the first ninety because a connection dropped. What happens *afterwards* is
+/// per-command and partial by nature — that is what [`BatchOutcome`] is for — but the enqueue is
+/// not the place to introduce a second kind of partial.
+///
+/// **One `NOTIFY` rather than one per row**, because the dispatcher's wake-up is not a work list:
+/// it claims every pending command it can find, so a second notification would wake it to look at a
+/// queue it is already draining. Sent last, inside the transaction, for the same reason the single
+/// enqueue does it — a notification cannot precede the rows it announces.
+///
+/// Returns `None` for an empty list rather than minting an id for a batch with nothing in it: a
+/// page that exists and lists nothing is worse than the route saying there was nothing to do.
+pub async fn enqueue_batch(
+    conn: &mut AsyncPgConnection,
+    room: RoomId,
+    requested_by: i64,
+    requested_role: RoomRole,
+    commands: &[RoomCommand],
+) -> Result<Option<BatchId>, diesel::result::Error> {
+    if commands.is_empty() {
+        return Ok(None);
+    }
+
+    let batch = BatchId::new();
+    let bodies = commands
+        .iter()
+        .map(|command| {
+            serde_json::to_value(command).map_err(|e| {
+                diesel::result::Error::SerializationError(Box::new(std::io::Error::other(
+                    e.to_string(),
+                )))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    conn.transaction::<(), diesel::result::Error, _>(|conn| {
+        async move {
+            for body in bodies {
+                diesel::sql_query(
+                    "INSERT INTO room_commands
+                        (id, room_id, requested_by, requested_role, command, batch_id)
+                     VALUES ($1, $2, $3, $4::room_role, $5, $6)",
+                )
+                .bind::<SqlUuid, _>(CommandId::new())
+                .bind::<SqlUuid, _>(room)
+                .bind::<BigInt, _>(requested_by)
+                .bind::<Text, _>(requested_role.as_sql())
+                .bind::<Jsonb, _>(body)
+                .bind::<SqlUuid, _>(batch)
+                .execute(conn)
+                .await?;
+            }
+
+            diesel::sql_query("SELECT pg_notify($1, $2)")
+                .bind::<Text, _>(REQUEST_CHANNEL)
+                .bind::<Text, _>(batch.to_string())
+                .execute(conn)
+                .await?;
+
+            Ok(())
+        }
+        .scope_boxed()
+    })
+    .await?;
+
+    Ok(Some(batch))
+}
+
+/// Every command of one batch, oldest first — the order the panel staged them in.
+pub async fn batch(
+    conn: &mut AsyncPgConnection,
+    room: RoomId,
+    batch: BatchId,
+) -> Result<Vec<CommandRow>, diesel::result::Error> {
+    let rows: Vec<RawRow> = diesel::sql_query(format!(
+        // **Scoped to the room as well as the batch.** A batch id is not a capability: holding one
+        // must not read another room's commands, and the guard that authorized this request
+        // authorized it for one room.
+        "SELECT {COLUMNS} FROM room_commands
+          WHERE batch_id = $1 AND room_id = $2 ORDER BY requested_at"
+    ))
+    .bind::<SqlUuid, _>(batch)
+    .bind::<SqlUuid, _>(room)
+    .load(conn)
+    .await?;
+
+    Ok(rows.into_iter().filter_map(hydrate).collect())
+}
+
+/// How a batch went, in the three buckets that mean different things.
+///
+/// **Refused is not failed, and conflating them is the mistake this type exists to prevent.**
+/// `Disposition` already draws the line for a single command: a `200` with `ok: false` is the room
+/// *understanding and saying no*, which is a completed command with an answer, while `failed` is a
+/// transport error, a rate limit, or a command Puna generated that pahoa could not parse.
+///
+/// It matters immediately rather than in principle. A bulk **Set as Goaled** across a sync where
+/// thirty slots have already goaled produces thirty refusals — pahoa refuses a repeat goal rather
+/// than replaying the announcement and the auto-release — and every one of them is the correct,
+/// expected answer. Painting those as errors is how an operator learns to ignore the bucket that
+/// actually needs reading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BatchOutcome {
+    /// The room did it.
+    pub succeeded: usize,
+    /// The room understood and said no. An answer, not a fault.
+    pub refused: usize,
+    /// Transport, a rate limit, a rejected command, or a Puna bug.
+    pub failed: usize,
+    /// Not finished yet: still `pending` or `running`.
+    pub outstanding: usize,
+}
+
+impl BatchOutcome {
+    pub fn of(rows: &[CommandRow]) -> Self {
+        let mut out = Self::default();
+        for row in rows {
+            match row.state.as_str() {
+                // `ok` covers both answers, which is exactly why the result has to be consulted:
+                // the state says the command completed, and `result.ok` says what the room said.
+                "ok" if row.result.as_ref().is_some_and(|r| r.ok) => out.succeeded += 1,
+                "ok" => out.refused += 1,
+                "failed" | "rejected" => out.failed += 1,
+                _ => out.outstanding += 1,
+            }
+        }
+        out
+    }
+
+    pub fn total(&self) -> usize {
+        self.succeeded + self.refused + self.failed + self.outstanding
+    }
+
+    /// Whether anything is still moving, which is what a polling page asks.
+    pub fn is_finished(&self) -> bool {
+        self.outstanding == 0
+    }
 }
 
 /// Fail commands left `running` by a dispatcher that went away.

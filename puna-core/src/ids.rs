@@ -121,6 +121,15 @@ new_id_type!(
     CommandId
 );
 
+new_id_type!(
+    /// A set of commands enqueued together by one bulk action.
+    ///
+    /// **Not a capability.** It appears in a URL an operator is redirected to, but every read of a
+    /// batch is scoped to the room the guard already authorized — holding one must not be a way to
+    /// read another room's commands, for the same reason a [`CommandId`] is not.
+    BatchId
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

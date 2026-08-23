@@ -169,6 +169,7 @@ diesel::table! {
         requested_at -> Timestamptz,
         started_at -> Nullable<Timestamptz>,
         finished_at -> Nullable<Timestamptz>,
+        batch_id -> Nullable<Uuid>,
     }
 }
 
