@@ -242,6 +242,54 @@ td .actions form {
   [popover].sheet { display: none; }
 }
 
+/* --- the moderation column's overflow menu ------------------------------------------------------
+   A menu of actions rather than a form, so it is narrower than `.sheet` and has no backdrop: this
+   one is a choice, and dimming the page for it would overstate what opening it means.
+
+   The same two top-layer facts apply and for the same reasons, so they are repeated rather than
+   shared: `white-space: normal`, because the menu is still a DOM descendant of a `<td>` and would
+   otherwise inherit `nowrap` and grow a scrollbar around its own labels; and `display: none` where
+   `popover` is unsupported, because an ignored attribute leaves every row's menu open at once. */
+[popover].mod-menu {
+  width: max-content;
+  min-width: 12rem;
+  white-space: normal;
+  padding: 0.5rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 30px var(--float-shadow);
+}
+
+/* Who this menu belongs to. The glyph controls outside carry the slot in `aria-label` alone, which
+   is assistive-tech only -- once an action is behind a menu, the menu is where a misclick is
+   caught, so the target is on screen. */
+.mod-menu .hint {
+  margin: 0 0 0.4rem;
+  padding: 0 0.4rem;
+  font-size: 0.85rem;
+}
+
+/* Labelled, unlike the row outside it. A glyph works in a row where position teaches it; in a menu
+   opened once a week the word is what makes it choosable without hovering each one. */
+.mod-menu .act {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem;
+  border-radius: var(--radius);
+  text-decoration: none;
+  color: inherit;
+}
+
+.mod-menu .act:hover,
+.mod-menu .act:focus-visible { background: var(--bg); }
+
+@supports not selector(:popover-open) {
+  [popover].mod-menu { display: none; }
+}
+
 /* --- the moderation dialog -------------------------------------------------------------------
    A `<dialog>` rather than a `popover`, and the difference is the requirement rather than taste:
    `showModal()` makes the rest of the page inert, so an answer has to be dismissed before anything

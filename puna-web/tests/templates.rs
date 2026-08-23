@@ -209,11 +209,13 @@ fn a_glyph_only_control_names_itself_twice() {
     }
 
     // A source lint is the easiest kind to write vacuously, so say how much it must have seen.
-    // Twenty-six glyph controls exist today -- nine of them the room page's moderation column, which
-    // is why this number moves in steps. A change that leaves none is a change this lint stopped
-    // guarding. Raise it by reading the count this assertion prints, not by guessing.
+    // Twenty-five glyph controls exist today. The moderation column is why this number moves in
+    // steps, and it moved DOWN here: release and collect went into an overflow menu and gained
+    // written labels, so they are no longer glyph-only and no longer this lint's business, while
+    // the menu's own button is. A change that leaves none is a change this lint stopped guarding.
+    // Set it by reading the count this assertion prints, not by guessing.
     assert!(
-        examined >= 26,
+        examined >= 25,
         "only {examined} glyph-only controls found -- this lint is no longer looking at anything"
     );
     assert!(
@@ -1019,6 +1021,51 @@ fn the_tracker_summary_fills_every_cell_it_declares() {
         spanned, headings,
         "the summary spans {spanned} columns and the slot table declares {headings}; a footer that \
          drifts puts the check total under the wrong heading and reads as data"
+    );
+}
+
+/// **Every hook `moderation.js` reaches for has to exist in the markup.**
+///
+/// The script addresses the dialog entirely through `[data-mod-…]` attributes, and most of those
+/// reads are unguarded — `form.querySelector("[data-mod-status]").value = …` throws on `null`. So a
+/// renamed or dropped attribute does not degrade one field, it throws inside the click handler and
+/// **every control in the moderation column stops doing anything**, with the only evidence in a
+/// console nobody has open. The same contract-across-two-files shape as the `panel.dataset` lint,
+/// and the same failure mode.
+///
+/// Written the strict way round — the script is the authority, the template must satisfy it — since
+/// an unused attribute in the markup is harmless and a missing one is not.
+#[test]
+fn the_moderation_dialog_renders_every_hook_its_script_reaches_for() {
+    let script = std::fs::read_to_string(source("static/moderation.js")).expect("moderation.js");
+    let template =
+        std::fs::read_to_string(source_template("rooms/show.html")).expect("rooms/show.html");
+
+    let mut wanted: Vec<&str> = Vec::new();
+    let mut rest = script.as_str();
+    while let Some(at) = rest.find("[data-mod-") {
+        let after = &rest[at + 1..];
+        let name = after.split(']').next().unwrap_or_default();
+        if !name.is_empty() && !wanted.contains(&name) {
+            wanted.push(name);
+        }
+        rest = after;
+    }
+
+    assert!(
+        wanted.len() >= 8,
+        "only {} hooks found in moderation.js -- this lint is no longer looking at anything: {wanted:?}",
+        wanted.len()
+    );
+
+    let missing: Vec<&&str> = wanted
+        .iter()
+        .filter(|name| !template.contains(**name))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "moderation.js addresses these and rooms/show.html renders none of them, so the first \
+         click in the moderation column throws and every control there goes dead: {missing:?}"
     );
 }
 

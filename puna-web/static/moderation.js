@@ -91,6 +91,18 @@
         "moves forward, and this cannot be undone.",
       working: "Releasing",
     },
+    set_status: {
+      confirm: true,
+      title: "Declare finished",
+      // Both halves matter and the second is the surprising one: the auto rules mean declaring a
+      // goal can empty the slot's world as a side effect, which is not what "mark them finished"
+      // sounds like. pahoa's own answer names whatever fired, and the result pane shows it.
+      explain:
+        "Marks this slot as having goaled, exactly as their own client would. Nobody can undo a " +
+        "goal afterwards — not staff, and not the player. If the room releases or collects " +
+        "automatically on goal, their world empties out too.",
+      working: "Declaring",
+    },
   };
 
   // The lock control is one command pointing two ways, and the wording has to follow, or a page
@@ -116,6 +128,9 @@
     form.querySelector("[data-mod-slot]").value = link.dataset.slot;
     // Only meaningful for the lock command; empty otherwise, which `build()` reads as absent.
     form.querySelector("[data-mod-locked]").value = link.dataset.locked || "";
+    // Same shape for `set_status`: the control carries which status it means, so one verb serves
+    // however many the menu grows to offer rather than becoming a command per status.
+    form.querySelector("[data-mod-status]").value = link.dataset.status || "";
 
     var wanted = spec.fields || [];
     Array.prototype.forEach.call(form.querySelectorAll("[data-mod-field]"), function (row) {
@@ -269,6 +284,13 @@
     var spec = describe(COMMANDS[link.dataset.command], link);
     if (!spec) return;
     active = spec;
+
+    // **Close the menu this came from before opening the modal.** A `popover` does not light-dismiss
+    // for a `<dialog>` opening over it, so it would sit in the top layer underneath -- visible
+    // through nothing, but still there when the dialog closes, over a page that has just reloaded
+    // its own state. Guarded because most controls are not in a menu at all.
+    var menu = link.closest("[popover]");
+    if (menu && menu.hidePopover) menu.hidePopover();
 
     fill(link, spec);
     dialog.showModal();

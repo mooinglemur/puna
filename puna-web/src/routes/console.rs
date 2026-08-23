@@ -181,6 +181,7 @@ const MENU: &[&str] = &[
     "alias",
     "kick",
     "lock",
+    "set_status",
     "option",
 ];
 
@@ -213,6 +214,10 @@ pub struct CommandForm {
     allowed: Option<bool>,
     /// For `lock`, and the same reasoning as `allowed`.
     locked: Option<bool>,
+    /// For `set_status`. **No default**, though the only one anybody reaches for is `goal`:
+    /// defaulting it would let a malformed request declare somebody's game finished, and goal
+    /// cannot be undone by anyone including the player.
+    status: Option<String>,
     /// For `alias`. **Not filtered for blankness**: empty is how an alias is cleared.
     alias: Option<String>,
     option_name: Option<String>,
@@ -320,6 +325,26 @@ fn build(form: &CommandForm) -> std::result::Result<RoomCommand, String> {
         "lock" => RoomCommand::LockSlot {
             slot: slot()?,
             locked: form.locked.ok_or_else(|| "lock, or unlock?".to_string())?,
+        },
+        "set_status" => RoomCommand::SetStatus {
+            slot: slot()?,
+            // Parsed against the enum rather than passed through, so a typo is refused here with a
+            // list rather than at the far end as "unknown status" — and so the vocabulary has one
+            // definition. `goal` is the one anybody reaches for and is still not a default.
+            status: form
+                .status
+                .as_deref()
+                .and_then(puna_core::model::command::SlotStatus::parse)
+                .ok_or_else(|| {
+                    format!(
+                        "which status? one of {}",
+                        puna_core::model::command::SlotStatus::ALL
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                })?,
         },
         "kick" => RoomCommand::Kick {
             slot: slot()?,
@@ -846,6 +871,7 @@ mod tests {
             option_name: None,
             option_value: None,
             reason: None,
+            status: None,
         }
     }
 
@@ -863,6 +889,7 @@ mod tests {
             alias: Some("x".into()),
             option_name: Some("hint_cost".into()),
             option_value: Some("20".into()),
+            status: Some("goal".into()),
             ..form(kind)
         }
     }

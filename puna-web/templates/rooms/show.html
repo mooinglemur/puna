@@ -348,30 +348,80 @@ unclaimed
 </svg>
 </a>
 
+{# --- everything else, behind one control -------------------------------------------------------
+   **A menu rather than four more glyphs**, and the reason is what is coming rather than what is
+   here: this is where per-slot FILTERS will live -- blocking or scaling a slot's deathlinks, or
+   refusing traplinks from particular senders -- and those are configuration with values, not
+   one-click verbs. A row of icons has nowhere to put them, and eight glyphs is already two rows.
+
+   Release and collect moved in here rather than staying outside. They are the two that move items
+   in bulk, they are the two an operator reaches for least often, and neither is a snap decision --
+   so they belong behind a deliberate opening, next to the other bulk actions, rather than one
+   stray click from the lock.
+
+   **A `popover`, not the `<dialog>` below.** The menu is a choice, so light dismiss and Escape are
+   what it wants; the dialog is an ANSWER, which must be read before the page is usable again. The
+   platform gives this one the top layer -- so it escapes `.scroll-x`'s clipping -- plus mutual
+   exclusion, so two rows' menus cannot be open at once, with no script at all. #}
+<button type="button" class="act more" popovertarget="more-{{ slot.slot_number }}"
+        title="More actions: release, collect, declare finished"
+        aria-label="More actions for slot {{+ slot.slot_number }}">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<circle cx="3.2" cy="8" r="1.3" fill="currentColor"/>
+<circle cx="8" cy="8" r="1.3" fill="currentColor"/>
+<circle cx="12.8" cy="8" r="1.3" fill="currentColor"/>
+</svg>
+</button>
+
+<div popover id="more-{{ slot.slot_number }}" class="mod-menu"
+     aria-labelledby="more-label-{{ slot.slot_number }}">
+{# Who this menu acts on, on screen rather than only in an `aria-label`. Once an action is behind a
+   menu, the menu is the last place a misclick can be caught. #}
+<p class="hint" id="more-label-{{ slot.slot_number }}">Slot {{+ slot.slot_number +}} &mdash;
+{{+ slot.player_name }}</p>
+
 {# A tray with an arrow coming IN: gather this slot's own items from everywhere else. #}
 <a class="act" data-command="collect" data-slot="{{ slot.slot_number }}"
    href="/room/{{ room.id }}/console?kind=collect&amp;slot={{ slot.slot_number }}"
-   title="Collect: gather every item belonging to this slot that is still out in the multiworld."
-   aria-label="Collect for slot {{+ slot.slot_number }}">
+   title="Collect: gather every item belonging to this slot that is still out in the multiworld.">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <path d="M1.8 9.6v3.6h12.4V9.6" fill="none" stroke="currentColor" stroke-linejoin="round"/>
 <path d="M8 2v6.4M5.4 5.8 8 8.4l2.6-2.6" fill="none" stroke="currentColor" stroke-linecap="round"
       stroke-linejoin="round"/>
 </svg>
+<span>Collect</span>
 </a>
 
 {# The same tray with the arrow going OUT: send this slot's remaining items to whoever they belong
    to. The mirror of collect, and the pairing is the point -- one gathers in, one sends out. #}
 <a class="act" data-command="release" data-slot="{{ slot.slot_number }}"
    href="/room/{{ room.id }}/console?kind=release&amp;slot={{ slot.slot_number }}"
-   title="Release: send this slot's remaining items to the players they belong to."
-   aria-label="Release the items in slot {{+ slot.slot_number }}">
+   title="Release: send this slot's remaining items to the players they belong to.">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <path d="M1.8 9.6v3.6h12.4V9.6" fill="none" stroke="currentColor" stroke-linejoin="round"/>
 <path d="M8 8.4V2M5.4 4.6 8 2l2.6 2.6" fill="none" stroke="currentColor" stroke-linecap="round"
       stroke-linejoin="round"/>
 </svg>
+<span>Release</span>
 </a>
+
+{# A flag: this world is finished. **The status rides on the control**, the way `data-locked` does
+   on the lock, so the command stays one verb rather than becoming five.
+
+   Irreversible in a way nothing else in this column is -- upstream refuses every status change
+   away from goal, so not even the player can take it back -- and it may empty their world through
+   the room's auto-release rule. Both facts are in the confirmation rather than only here. #}
+<a class="act" data-command="set_status" data-status="goal" data-slot="{{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=set_status&amp;slot={{ slot.slot_number }}"
+   title="Declare finished: mark this slot goal, as their own client would. Cannot be undone.">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<path d="M4 14V2.6h7.6l-1.6 2.6 1.6 2.6H4" fill="none" stroke="currentColor"
+      stroke-linejoin="round"/>
+</svg>
+<span>Declare finished</span>
+</a>
+
+</div>
 
 </div>
 </td>
@@ -415,6 +465,7 @@ unclaimed
 <input type="hidden" name="kind" data-mod-kind value="">
 <input type="hidden" name="slot" data-mod-slot value="">
 <input type="hidden" name="locked" data-mod-locked value="">
+<input type="hidden" name="status" data-mod-status value="">
 
 {# The two name fields, and the reason they are separate rather than one box: an item and a
    location are looked up in different tables, and pahoa matches EXACTLY, so offering the wrong kind

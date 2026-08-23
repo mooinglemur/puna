@@ -32,7 +32,7 @@
 //! Its stated objection is answered rather than ignored — the variant carries **no password**, only
 //! a slot number, so the audit trail records what was rotated and by whom without holding the value.
 //! What remains true is that it is not a *pahoa command*: the dispatcher handles it before the
-//! passthrough, because pahoa's own set is the fifteen others and it would answer `400`.
+//! passthrough, because pahoa's own set is the sixteen others and it would answer `400`.
 //!
 //! `lock` used to be the second such exception and is not any more — pahoa shipped the verb, so it
 //! is an ordinary passthrough. See [`RoomCommand::LockSlot`].
@@ -210,6 +210,72 @@ pub enum RoomCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
+
+    /// Declare a slot's completion on its behalf — the third verb with no reference equivalent,
+    /// alongside `kick` and `lock`.
+    ///
+    /// **Why it has to exist.** Upstream's only external writer of a slot's status is that slot's
+    /// own `StatusUpdate` packet; there is no console command for it. So a player who has finished
+    /// but whose client cannot say so leaves an organizer with nothing to do about it.
+    ///
+    /// **It is not a bare write.** pahoa routes it through the same path a client's own
+    /// `StatusUpdate` takes, so the room announces it and the `collect_mode` / `release_mode` auto
+    /// rules fire exactly as they would otherwise — a world can empty out as a consequence, which
+    /// is why the response names what happened and why the console asks first.
+    ///
+    /// **Goal is monotonic and cannot be undone, including from here.** Upstream guards every
+    /// status change with `if current != CLIENT_GOAL` — not even the client that declared it may
+    /// take it back — and pahoa keeps that rather than carving out an operator exception. Declaring
+    /// an existing goal a second time is refused rather than silently ignored, so the announcement
+    /// and the auto-release are not replayed.
+    #[serde(rename = "set_status")]
+    SetStatus {
+        slot: i32,
+        /// Named rather than numbered, matching pahoa. `Unknown` and `Connected` are accepted
+        /// because a client may send them, but they are derived from the connection and the next
+        /// connect or disconnect overwrites them — pahoa's own response says so.
+        status: SlotStatus,
+    },
+}
+
+/// A slot's completion state, in pahoa's vocabulary.
+///
+/// An enum rather than a string for the reason the argv builder's mode values are: the spelling is
+/// a contract with another program, and a typo in it is a command that is refused at the far end
+/// with a message about an unknown value. A test pins the wire spelling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SlotStatus {
+    Unknown,
+    Connected,
+    Ready,
+    Playing,
+    Goal,
+}
+
+impl SlotStatus {
+    /// Every status, for a form to offer and a test to walk.
+    pub const ALL: &'static [Self] = &[
+        Self::Goal,
+        Self::Playing,
+        Self::Ready,
+        Self::Connected,
+        Self::Unknown,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Connected => "connected",
+            Self::Ready => "ready",
+            Self::Playing => "playing",
+            Self::Goal => "goal",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|s| s.as_str() == value)
+    }
 }
 
 impl RoomCommand {
@@ -232,6 +298,7 @@ impl RoomCommand {
             Self::Kick { .. } => "kick",
             Self::RotatePassword { .. } => "rotate_password",
             Self::LockSlot { .. } => "lock",
+            Self::SetStatus { .. } => "set_status",
         }
     }
 
@@ -288,7 +355,15 @@ impl RoomCommand {
             // is the same endpoint saying nobody. Changing the MODE is the organizer's decision and
             // is a room restart, so it is a settings route rather than a command.
             | Self::RotatePassword { .. }
-            | Self::LockSlot { .. } => RoomRole::Helper,
+            | Self::LockSlot { .. }
+            // **A helper's, though it cannot be undone**, which is the argument against and is
+            // answered by the tier line rather than by how severe it feels. Declaring a goal acts
+            // on one slot's game, which is what this tier is for -- and `release` two arms up is
+            // equally irreversible and already a helper's. It is also what a goal CAUSES under the
+            // auto rules, so an organizer-only `set_status` would be a gate a helper walks around
+            // by releasing manually: the same outcome, one step longer, and no record that it was
+            // meant as a goal.
+            | Self::SetStatus { .. } => RoomRole::Helper,
             // See the note above: the room's own rules, and they persist.
             Self::SetOption { .. } => RoomRole::Organizer,
         }
@@ -317,7 +392,8 @@ impl RoomCommand {
             | Self::Alias { slot, .. }
             | Self::Kick { slot, .. }
             | Self::RotatePassword { slot }
-            | Self::LockSlot { slot, .. } => Some(*slot),
+            | Self::LockSlot { slot, .. }
+            | Self::SetStatus { slot, .. } => Some(*slot),
         }
     }
 }
@@ -380,7 +456,7 @@ impl Disposition {
 mod tests {
     use super::*;
 
-    /// **pahoa's fifteen verbs, each beside the JSON pahoa's own parser reads.**
+    /// **pahoa's sixteen verbs, each beside the JSON pahoa's own parser reads.**
     ///
     /// One list rather than two, because the previous shape — a list of commands here and a series
     /// of indexed assertions below — meant a command could be added to the set and quietly not
@@ -495,7 +571,40 @@ mod tests {
                 },
                 json!({"command": "lock", "slot": 3, "locked": true}),
             ),
+            (
+                RoomCommand::SetStatus {
+                    slot: 3,
+                    status: SlotStatus::Goal,
+                },
+                json!({"command": "set_status", "slot": 3, "status": "goal"}),
+            ),
         ]
+    }
+
+    /// The spelling is a contract with another program, so it is pinned rather than derived.
+    ///
+    /// A renamed variant would serialize to something pahoa answers with "unknown status", and the
+    /// round trip alone would not notice: it only proves Puna agrees with itself.
+    #[test]
+    fn every_status_keeps_pahoas_spelling() {
+        assert_eq!(
+            SlotStatus::ALL
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>(),
+            ["goal", "playing", "ready", "connected", "unknown"],
+            "the wire vocabulary changed, or `ALL` no longer covers it"
+        );
+        for status in SlotStatus::ALL {
+            assert_eq!(
+                serde_json::to_value(status).expect("serialize"),
+                serde_json::Value::String(status.as_str().to_string()),
+                "`as_str` and the serde tag disagree for {status:?}, so a form and the wire would \
+                 spell the same status differently"
+            );
+            assert_eq!(SlotStatus::parse(status.as_str()), Some(*status));
+        }
+        assert_eq!(SlotStatus::parse("finished"), None);
     }
 
     fn every_command() -> Vec<RoomCommand> {
@@ -564,7 +673,7 @@ mod tests {
         );
     }
 
-    /// **pahoa's set is fifteen verbs, and the count is asserted so a new one cannot arrive
+    /// **pahoa's set is sixteen verbs, and the count is asserted so a new one cannot arrive
     /// untested.**
     ///
     /// The list above is hand-written, so a variant added to the enum and not to it would simply
@@ -572,7 +681,7 @@ mod tests {
     /// by omission rather than by error. Naming them individually is what makes the diff say which
     /// one appeared.
     #[test]
-    fn the_pahoa_command_set_is_the_fifteen_verbs_it_shipped() {
+    fn the_pahoa_command_set_is_the_sixteen_verbs_it_shipped() {
         let names: Vec<&str> = every_command().iter().map(|c| c.name()).collect();
         assert_eq!(
             names,
@@ -592,6 +701,7 @@ mod tests {
                 "option",
                 "kick",
                 "lock",
+                "set_status",
             ]
         );
     }
