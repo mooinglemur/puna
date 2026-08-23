@@ -1024,6 +1024,72 @@ fn the_tracker_summary_fills_every_cell_it_declares() {
     );
 }
 
+/// **The bulk panel's buttons and its action table have to name the same set.**
+///
+/// `ACTIONS` in `routes/bulk.rs` decides what the route will do; the buttons in `rooms/bulk.html`
+/// decide what an operator can ask for. Drift either way is silent in a different direction — an
+/// action in the table with no button is unreachable and looks like it was never built, and a button
+/// whose value is not in the table posts an action the route answers `400` to, from a control that
+/// looks exactly like the six beside it that work.
+///
+/// Also pins the field name, because the panel's whole submit mechanism rests on it: the staged
+/// `<select multiple>` **is** the form field, so a rename posts an empty slot list and every action
+/// answers "nothing was staged" with no error anywhere.
+#[test]
+fn the_bulk_panel_offers_exactly_the_actions_its_route_implements() {
+    let route = std::fs::read_to_string(source("src/routes/bulk.rs")).expect("bulk.rs");
+    let template =
+        std::fs::read_to_string(source_template("rooms/bulk.html")).expect("rooms/bulk.html");
+
+    let table = route
+        .split_once("const ACTIONS:")
+        .expect("bulk.rs no longer declares ACTIONS")
+        .1
+        .split_once("];")
+        .expect("unterminated ACTIONS")
+        .0;
+
+    // `("name", "Label")` — take the first string of each pair.
+    let declared: Vec<&str> = table
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("(\""))
+        .filter_map(|rest| rest.split('"').next())
+        .collect();
+
+    assert!(
+        declared.len() >= 5,
+        "only {} actions parsed out of ACTIONS -- this lint is no longer looking at anything: \
+         {declared:?}",
+        declared.len()
+    );
+
+    for action in &declared {
+        assert!(
+            template.contains(&format!("value=\"{action}\"")),
+            "`{action}` is in ACTIONS and has no button in rooms/bulk.html, so nobody can ask for \
+             it. Declared: {declared:?}"
+        );
+    }
+
+    // And the other direction: a button the route cannot serve.
+    let mut rest = template.as_str();
+    while let Some(at) = rest.find("name=\"action\" value=\"") {
+        let after = &rest[at + "name=\"action\" value=\"".len()..];
+        let value = after.split('"').next().unwrap_or_default();
+        assert!(
+            declared.contains(&value),
+            "rooms/bulk.html offers `{value}` and ACTIONS does not list it, so pressing it is a 400"
+        );
+        rest = after;
+    }
+
+    assert!(
+        template.contains("name=\"slots\""),
+        "the staged list is the form field; renaming it posts nothing and every action reports \
+         that nothing was staged"
+    );
+}
+
 /// **Every hook `moderation.js` reaches for has to exist in the markup.**
 ///
 /// The script addresses the dialog entirely through `[data-mod-…]` attributes, and most of those

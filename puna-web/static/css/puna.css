@@ -1129,3 +1129,59 @@ button:hover { border-color: var(--muted); }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* --- the bulk panel -------------------------------------------------------------------------------
+   Two lists and the controls between them. `align-items: end` so the transfer buttons sit against
+   the lists rather than centred against their labels. */
+.panes {
+  display: flex;
+  gap: 1rem;
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+.pane { flex: 1 1 20rem; }
+.pane label { display: block; margin-bottom: 0.3rem; }
+.pane select { width: 100%; box-sizing: border-box; }
+
+/* Stacked, and word-shaped rather than arrow glyphs: direction is the entire meaning of these two,
+   and a 15px arrow pair is exactly the confusion the roster's lock and unlock icons caused. */
+.transfer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding-bottom: 0.5rem;
+}
+
+.selector, .bulk-actions {
+  margin-top: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.8rem 1rem 1rem;
+}
+
+.selector { display: flex; gap: 0.8rem; align-items: end; flex-wrap: wrap; }
+.selector label { display: block; }
+.selector .hint { margin: 0 0 0 auto; }
+
+.bulk-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+/* --- a batch's answer -----------------------------------------------------------------------------
+   **Three buckets, three colors, and `refused` is deliberately not the failure color.** A refusal is
+   the room answering no, which for a bulk goal over a sync that has already finished is the correct
+   answer for every row -- painting those red is how the count that matters stops being read. */
+.batch-summary { margin: 0.5rem 0 1rem; }
+
+.tally {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  margin-right: 0.4rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+
+.tally.succeeded { border-color: light-dark(#2e7d32, #66bb6a); }
+.tally.refused   { border-color: light-dark(#b26a00, #ffb74d); }
+.tally.failed    { border-color: light-dark(#c62828, #ef5350); }
+.tally.outstanding { color: var(--muted); }

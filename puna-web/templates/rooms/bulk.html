@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}{{ room_name +}} &mdash; bulk actions{% endblock %}
+{# Two lists of hundreds of slots side by side. Nothing here is prose. #}
+{% block layout %}wide{% endblock %}
+{% block content %}
+
+<h1>{{ room_name }}</h1>
+<p class="hint"><a href="/room/{{ room_id }}">Back to the room</a> &mdash; bulk actions</p>
+
+{% if let Some(notice) = notice %}
+<p class="{{ notice.class }}">{{ notice.message }}</p>
+{% endif %}
+
+{% if room_state != "running" %}
+{# Stated rather than enforced by hiding the buttons, the same call the console makes. The one
+   exception is spelled out because it is genuinely different: rotation's durable half is Puna's
+   own, so it lands in the database and the Secret and takes effect at the next start. #}
+<p class="warning">This room is {{+ room_state }}. Room actions need a running room and will be
+refused &mdash; except <strong>Rotate Passwords</strong>, which is stored now and applies when the
+room next starts, and <strong>Release Claims</strong>, which never touches the room at all.</p>
+{% endif %}
+
+<noscript>
+<p class="warning">Staging slots needs JavaScript: the two lists below are moved between by script.
+The room page&rsquo;s per-slot controls work without it.</p>
+</noscript>
+
+<form method="post" action="/room/{{ room_id }}/bulk" id="bulk">
+
+{# --- the two panes ---------------------------------------------------------------------------
+   **The left list is every slot; the right is the staged set.** `>>` moves what is highlighted on
+   the left to the right and `<<` sends it back, so the right pane is a set somebody built rather
+   than a filter that happens to match -- which is the whole reason this is not the roster, where a
+   re-sort would silently change what a selection meant.
+
+   Only the RIGHT list's options are named `slots`, and only they are submitted: a `<select multiple>`
+   submits its selected options, so the script selects everything on the right at submit time. That
+   is what makes the staged set and the posted set the same thing by construction. #}
+<div class="panes">
+
+<div class="pane">
+<label for="available">All slots</label>
+<select id="available" multiple size="18">
+{% for slot in slots %}
+<option value="{{ slot.slot_number }}"
+        data-game="{{ slot.game }}"
+        data-claimed="{{ slot.claimed }}"
+        data-owner="{{ slot.owner_name.as_deref().unwrap_or_default() }}">{{ slot.slot_number +}}
+&mdash; {{+ slot.player_name +}} ({{ slot.game }})</option>
+{% endfor %}
+</select>
+</div>
+
+<div class="transfer">
+{# Words rather than glyphs: these are the two controls whose direction is the entire meaning, and
+   an arrow pair at 15px is exactly the confusion the lock and unlock icons caused on the roster. #}
+<button type="button" id="stage" title="Move the highlighted slots into Target Slots">&gt;&gt;</button>
+<button type="button" id="unstage" title="Take the highlighted slots out of Target Slots">&lt;&lt;</button>
+</div>
+
+<div class="pane">
+<label for="staged">Target Slots</label>
+<select id="staged" name="slots" multiple size="18"></select>
+</div>
+
+</div>
+
+{# --- the selector ----------------------------------------------------------------------------
+   **Apply REPLACES the highlight** rather than adding to it, which is the simpler rule and the one
+   that composes: to build "game X and game Y", apply X, press `>>`, apply Y, press `>>`. An
+   additive selection would need its own clearing control to do the same work.
+
+   It highlights in BOTH panes, so the same control adds to and removes from the staged set
+   depending on which arrow follows it. #}
+<fieldset class="selector">
+<legend>Select by</legend>
+
+<label>Selector
+<select id="selector">
+<option value="game">Slot&rsquo;s game is&hellip;</option>
+<option value="claimant">Slots claimed by&hellip;</option>
+<option value="unclaimed">Unclaimed slots</option>
+</select>
+</label>
+
+{# A text input with a `datalist` rather than a `<select>`: with a hundred games a list is something
+   to scroll, where typing filters by SUBSTRING and gets there in three characters. The list is the
+   same set the matcher compares against, so a suggestion can never fail to match. #}
+<label>Value
+<input type="text" id="selector-value" list="selector-options" autocomplete="off"
+       placeholder="type to filter">
+</label>
+<datalist id="selector-options"></datalist>
+
+<datalist id="games">{% for game in games %}<option value="{{ game }}"></option>{% endfor %}</datalist>
+<datalist id="claimants">{% for who in claimants %}<option value="{{ who }}"></option>{% endfor %}</datalist>
+
+<button type="button" id="apply-selection">Apply selection</button>
+<p class="hint" id="selection-count" role="status"></p>
+</fieldset>
+
+{# --- the actions -----------------------------------------------------------------------------
+   Each is a submit carrying its own name, so the button pressed IS the action and there is no
+   separate dropdown to disagree with it.
+
+   The destructive ones confirm, and the confirmation names the count -- a control whose blast
+   radius is "everything staged" should say how many that is in the sentence you click. #}
+<fieldset class="bulk-actions">
+<legend>Apply to Target Slots</legend>
+
+<button type="submit" name="action" value="rotate_passwords"
+        data-confirm="Rotate the password of every staged slot? Their current passwords stop working.">Rotate Passwords</button>
+
+{# **Not a room action.** It unbinds the owner and mints a fresh claim link; nobody is disconnected
+   and nothing in the game changes. Said on the control because it is the only button here that
+   does not reach the room, and an operator has no way to tell from the label. #}
+<button type="submit" name="action" value="release_claims"
+        title="Unbind these slots from their owners and issue fresh claim links. Does not touch the running room."
+        data-confirm="Release the claim on every staged slot? They become unclaimed and their claim links are reissued.">Release Claims</button>
+
+<button type="submit" name="action" value="lock"
+        title="Bar these slots from connecting. Nobody is disconnected — kick does that."
+        data-confirm="Lock every staged slot? They will be barred from logging in.">Lock</button>
+
+<button type="submit" name="action" value="kick"
+        title="Close these slots' connections. They can reconnect immediately."
+        data-confirm="Kick every staged slot? They can reconnect at once.">Kick</button>
+
+<button type="submit" name="action" value="release_items"
+        data-confirm="Release the remaining items in every staged slot? This cannot be undone.">Release Items</button>
+
+<button type="submit" name="action" value="collect_items"
+        data-confirm="Collect every staged slot's own items from the multiworld? This cannot be undone.">Collect Items</button>
+
+<button type="submit" name="action" value="set_goaled"
+        title="Mark these slots Goaled, as their own clients would. Cannot be undone."
+        data-confirm="Mark every staged slot as Goaled? Nobody can undo a goal — not staff, not the player — and the room may release or collect their worlds automatically.">Set as Goaled</button>
+</fieldset>
+
+</form>
+
+<script src="/static/bulk.js?v={{ base.static_version }}" defer></script>
+{% endblock %}

@@ -1,5 +1,6 @@
 //! Route modules. `main.rs` keeps only the routes both roles serve.
 
+pub mod bulk;
 pub mod console;
 pub mod downloads;
 pub mod fleet;

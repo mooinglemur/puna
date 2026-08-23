@@ -529,6 +529,9 @@ without spending this slot&rsquo;s points</label>
    never offered to somebody the route would refuse. The console itself shows only the commands
    the viewer's tier can run. #}
 <li><a href="/room/{{ room.id }}/console">Console</a> &mdash; hints, releases, announcements</li>
+{# Its own page rather than a control in the roster: a selection held in a table that filters and
+   sorts means something different after a re-sort, which is the failure the panel exists to avoid. #}
+<li><a href="/room/{{ room.id }}/bulk">Bulk actions</a> &mdash; one action across many slots</li>
 <li><a href="/room/{{ room.id }}/members">Members and invites</a></li>
 </ul>
 
