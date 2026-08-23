@@ -91,6 +91,25 @@
     );
   }
 
+  // **The one thing `Apply` cannot say on its own**, because it replaces rather than adds: "select
+  // everything except X" is apply-then-invert. Acting on both panes for the same reason `Apply`
+  // does — it is a selection operation, so which pane a slot happens to be sitting in is not part
+  // of the question.
+  function invertSelection() {
+    var total = 0;
+    [available, staged].forEach(function (list) {
+      Array.prototype.forEach.call(list.options, function (option) {
+        option.selected = !option.selected;
+        if (option.selected) total++;
+      });
+    });
+    report(
+      total === 0
+        ? "Everything was selected — nothing is now."
+        : total + " slot(s) selected across both lists."
+    );
+  }
+
   function report(message) {
     if (count) count.textContent = message;
   }
@@ -123,6 +142,7 @@
     move(staged, available);
   });
   document.getElementById("apply-selection").addEventListener("click", applySelection);
+  document.getElementById("invert-selection").addEventListener("click", invertSelection);
   selector.addEventListener("change", syncSelector);
   // Enter in the value box applies rather than submitting the form, which would run whichever
   // action happened to be the first button.

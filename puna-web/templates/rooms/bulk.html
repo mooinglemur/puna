@@ -36,11 +36,19 @@ The room page&rsquo;s per-slot controls work without it.</p>
    Only the RIGHT list's options are named `slots`, and only they are submitted: a `<select multiple>`
    submits its selected options, so the script selects everything on the right at submit time. That
    is what makes the staged set and the posted set the same thing by construction. #}
+{# A grid rather than a flex row, so the transfer buttons can be centred against the LISTS instead
+   of against the lists-plus-their-labels. Flexing centres the whole column and lands the buttons
+   half a label's height low, which is visible once you know to look. The named areas are what put
+   the buttons on the same row as the two selects. #}
 <div class="panes">
 
-<div class="pane">
-<label for="available">All slots</label>
-<select id="available" multiple size="18">
+<label class="pane-label-left" for="available">All slots</label>
+<label class="pane-label-right" for="staged">Target Slots</label>
+
+{# `size` is kept as the no-CSS answer, but the HEIGHT comes from the stylesheet: `size` measures
+   rows, and an empty list has none to measure, so the staged pane rendered noticeably shorter than
+   the populated one until the first slot moved into it. #}
+<select id="available" class="pane-list-left" multiple size="18">
 {% for slot in slots %}
 <option value="{{ slot.slot_number }}"
         data-game="{{ slot.game }}"
@@ -49,7 +57,6 @@ The room page&rsquo;s per-slot controls work without it.</p>
 &mdash; {{+ slot.player_name +}} ({{ slot.game }})</option>
 {% endfor %}
 </select>
-</div>
 
 <div class="transfer">
 {# Words rather than glyphs: these are the two controls whose direction is the entire meaning, and
@@ -58,10 +65,7 @@ The room page&rsquo;s per-slot controls work without it.</p>
 <button type="button" id="unstage" title="Take the highlighted slots out of Target Slots">&lt;&lt;</button>
 </div>
 
-<div class="pane">
-<label for="staged">Target Slots</label>
-<select id="staged" name="slots" multiple size="18"></select>
-</div>
+<select id="staged" class="pane-list-right" name="slots" multiple size="18"></select>
 
 </div>
 
@@ -96,6 +100,12 @@ The room page&rsquo;s per-slot controls work without it.</p>
 <datalist id="claimants">{% for who in claimants %}<option value="{{ who }}"></option>{% endfor %}</datalist>
 
 <button type="button" id="apply-selection">Apply selection</button>
+{# **Apply then invert is how "everything except" gets expressed**, which is the one shape the
+   replace-rather-than-add rule cannot say on its own: select the game, invert, stage. It acts on
+   both panes like Apply does, so it is a selection operation rather than a transfer one, and it
+   belongs beside the control whose result it flips. #}
+<button type="button" id="invert-selection"
+        title="Select everything that is not selected, in both lists.">Invert current selection</button>
 <p class="hint" id="selection-count" role="status"></p>
 </fieldset>
 
