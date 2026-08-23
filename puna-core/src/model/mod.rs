@@ -2,6 +2,7 @@
 
 pub mod command;
 pub mod event;
+pub mod filter;
 pub mod fleet;
 pub mod generation;
 pub mod member;
