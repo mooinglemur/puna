@@ -99,6 +99,22 @@ impl RoomProbe for TcpProbe {
         })
     }
 
+    async fn set_filter(
+        &self,
+        _endpoint: &RoomEndpoint,
+        _admin_token: &str,
+        _slot: Option<i32>,
+        _rules: Option<&[crate::model::filter::Rule]>,
+    ) -> Result<(), ProbeError> {
+        // Same bargain as the password above: the intent is stored either way, and what this probe
+        // cannot do is push it at a room that is already running. A room pinned to an image without
+        // the filter resource is the case this exists for, and there the answer is honest rather
+        // than a call that would 404.
+        Err(ProbeError::Unsupported {
+            what: "set a traffic filter on a running room",
+        })
+    }
+
     fn capabilities(&self) -> ProbeCapabilities {
         ProbeCapabilities {
             status: false,

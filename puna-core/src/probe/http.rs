@@ -23,6 +23,8 @@ const SHUTDOWN: &str = "/admin/v1/shutdown";
 const COMMAND: &str = "/admin/v1/command";
 /// Formatted with the slot number; pahoa spells this one per slot rather than taking it in a body.
 const SLOT_PASSWORD: &str = "/admin/v1/slots/{slot}/password";
+const ROOM_FILTER: &str = "/admin/v1/filter";
+const SLOT_FILTER: &str = "/admin/v1/slots/{slot}/filter";
 
 #[async_trait::async_trait]
 impl RoomProbe for HttpsProbe {
@@ -137,6 +139,45 @@ impl RoomProbe for HttpsProbe {
         //
         // The caller checks the mode before queueing, which is what keeps this rare; it is recorded
         // because the message would otherwise be actively misleading in the one case it appears.
+        if let Some(e) = classify(&response) {
+            return Err(e.into());
+        }
+        Ok(())
+    }
+
+    async fn set_filter(
+        &self,
+        endpoint: &RoomEndpoint,
+        admin_token: &str,
+        slot: Option<i32>,
+        rules: Option<&[crate::model::filter::Rule]>,
+    ) -> Result<(), ProbeError> {
+        let path = match slot {
+            Some(n) => SLOT_FILTER.replace("{slot}", &n.to_string()),
+            None => ROOM_FILTER.to_string(),
+        };
+        let client = endpoint.client().await?;
+
+        // **`PUT` replaces and `DELETE` removes, and the two are different states rather than one
+        // with an empty value.** On a slot, no ruleset means "follow the room's" and an empty one
+        // means "filtered by nothing at all" -- so sending `[]` where a delete was meant leaves a
+        // slot exempt from a filter it was supposed to inherit, silently and in the direction that
+        // reads as the filter simply not working.
+        // **The token is applied in BOTH arms rather than once on the joined builder**, which is
+        // duplication on purpose: `every_request_authenticates` counts request builders against
+        // `.bearer_auth` calls, and it is right to. A single call covering two branches makes the
+        // property hold by argument rather than by construction, and the argument is exactly what
+        // stops holding when somebody adds a third arm.
+        let request = match rules {
+            Some(rules) => client
+                .put(endpoint.url(&path))
+                .bearer_auth(admin_token)
+                .json(rules),
+            None => client.delete(endpoint.url(&path)).bearer_auth(admin_token),
+        };
+
+        let response = request.send().await.map_err(crate::room::RoomError::from)?;
+
         if let Some(e) = classify(&response) {
             return Err(e.into());
         }

@@ -261,6 +261,30 @@ pub trait RoomProbe: Send + Sync {
         password: Option<&str>,
     ) -> Result<(), ProbeError>;
 
+    /// Assert a traffic filter on the **running** room, room-wide or for one slot.
+    ///
+    /// **`PUT` and `DELETE`, never `PATCH`**, which is what makes this an assertion rather than an
+    /// edit: Puna holds the whole intended ruleset, so replacing wholesale converges on it whatever
+    /// the room currently believes. `PATCH` would merge into whatever is already there, and a
+    /// re-assert loop that merges cannot ever *remove* a rule.
+    ///
+    /// `rules` of `None` means **delete the ruleset**, and for a slot that is a third state rather
+    /// than a spelling of empty: no ruleset makes a slot follow the room's, where an empty one
+    /// exempts it from everything. `Some(&[])` is that exemption and is sent as `[]`.
+    ///
+    /// **The durable half is Puna's tables.** This changes the live room and pahoa persists it into
+    /// `room.save` — which a save reset takes with it, and which records nothing about who asked —
+    /// so `room_filters` / `room_slot_filters` stay the authority and this is what makes them
+    /// take effect without waiting for a restart.
+    async fn set_filter(
+        &self,
+        endpoint: &RoomEndpoint,
+        admin_token: &str,
+        // `None` addresses the room-wide filter rather than a slot's.
+        slot: Option<i32>,
+        rules: Option<&[crate::model::filter::Rule]>,
+    ) -> Result<(), ProbeError>;
+
     fn capabilities(&self) -> ProbeCapabilities;
 }
 

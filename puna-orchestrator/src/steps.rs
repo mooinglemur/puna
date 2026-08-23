@@ -822,6 +822,7 @@ async fn mark_running(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outc
     tracing::info!(room = %action.room, "running");
 
     reapply_locks(ctx, &mut conn, action.room).await;
+    reapply_filters(ctx, &mut conn, action.room).await;
     Ok(Outcome::Done)
 }
 
@@ -897,6 +898,103 @@ async fn reapply_locks(ctx: &Context<'_>, conn: &mut AsyncPgConnection, room_id:
             ),
         }
     }
+}
+
+/// Push Puna's traffic filters at a room that has just come up.
+///
+/// **The same reasoning as [`reapply_locks`] and a stronger case for it.** pahoa persists filters
+/// into `room.save`, so a save reset or a recreated PVC takes every one of them silently — and
+/// unlike a lock, a filter that has quietly stopped applying is invisible from every angle: the
+/// room looks healthy, the slot is connected, and only the traffic is different.
+///
+/// `PUT` rather than `PATCH`, so this converges on Puna's intent whatever the room currently
+/// believes. `PATCH` merges, and a re-assert loop that merges can never remove a rule.
+///
+/// **What it deliberately does NOT do: scrub filters Puna does not know about.** A slot Puna
+/// believes follows the room gets no call, so a ruleset set directly through pahoa's API — which
+/// that API exists to allow — survives here. Scrubbing would cost one call per slot on every start
+/// of every room, to undo something nobody has yet done by accident. If it ever bites, the cheap
+/// version is `/admin/v1/status`'s per-slot `filtered` flag, provided it reports a slot's OWN state
+/// rather than its effective one.
+///
+/// Failures log at ERROR rather than WARN, for the reason locks do: the state they leave is a room
+/// carrying traffic somebody decided it should not carry.
+async fn reapply_filters(ctx: &Context<'_>, conn: &mut AsyncPgConnection, room_id: RoomId) {
+    use puna_core::model::filter;
+
+    let (room_rules, slots) = match (
+        filter::room_filter(conn, room_id).await,
+        filter::slot_filters(conn, room_id).await,
+    ) {
+        (Ok(room_rules), Ok(slots)) => (room_rules, slots),
+        _ => {
+            tracing::error!(room = %room_id, "could not read filters to re-apply them");
+            return;
+        }
+    };
+
+    // Nothing to say, so nothing is said -- and no call is made on the overwhelmingly common start
+    // of a room that has never been filtered.
+    if room_rules.is_none() && slots.is_empty() {
+        return;
+    }
+
+    let (Ok(Some(base_port)), Ok(Some(secrets))) = (
+        port::reserved_pair(conn, room_id).await,
+        room::secrets(conn, room_id).await,
+    ) else {
+        tracing::error!(
+            room = %room_id,
+            "could not reach this room to re-apply its filters; it may be carrying traffic it \
+             was configured to drop"
+        );
+        return;
+    };
+
+    let endpoint = ctx.endpoint(room_id, base_port);
+
+    // The room's, first. A `None` here is a DELETE rather than an empty PUT: for a room the two
+    // mean the same thing, and the delete also clears whatever a reset save left behind.
+    let outcome = ctx
+        .probe
+        .set_filter(&endpoint, &secrets.admin_token, None, room_rules.as_deref())
+        .await;
+    if let Err(e) = outcome {
+        tracing::error!(
+            room = %room_id,
+            error = %e,
+            "could not re-apply the room's filter; the room may be carrying traffic it was \
+             configured to drop"
+        );
+    }
+
+    for (slot, state) in slots {
+        // **The three states, and `Follows` is not in this list.** Only divergent slots have rows,
+        // so every entry here is either its own ruleset or an explicit exemption -- and `to_stored`
+        // is what turns the exemption into the `[]` that means "filtered by nothing", rather than
+        // the delete that would make it follow the room again.
+        let rules = state.to_stored();
+        if let Err(e) = ctx
+            .probe
+            .set_filter(
+                &endpoint,
+                &secrets.admin_token,
+                Some(slot),
+                rules.as_deref(),
+            )
+            .await
+        {
+            tracing::error!(
+                room = %room_id,
+                slot,
+                error = %e,
+                "could not re-apply a slot's filter; that slot's traffic may not match what was \
+                 configured"
+            );
+        }
+    }
+
+    tracing::info!(room = %room_id, "re-applied traffic filters after the room started");
 }
 
 /// A sweep with no ready replica, and — on the third — the degraded state itself.
