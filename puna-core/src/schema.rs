@@ -185,6 +185,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    room_filters (room_id) {
+        room_id -> Uuid,
+        rules -> Jsonb,
+        set_by -> Nullable<Int8>,
+        set_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     use diesel::sql_types::*;
     use super::sql_types::RoomRole;
 
@@ -209,6 +218,16 @@ diesel::table! {
         role -> RoomRole,
         added_by -> Nullable<Int8>,
         added_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    room_slot_filters (room_id, slot_number) {
+        room_id -> Uuid,
+        slot_number -> Int4,
+        rules -> Jsonb,
+        set_by -> Nullable<Int8>,
+        set_at -> Timestamptz,
     }
 }
 
@@ -340,9 +359,12 @@ diesel::joinable!(port_reservations -> rooms (room_id));
 diesel::joinable!(room_commands -> rooms (room_id));
 diesel::joinable!(room_commands -> users (requested_by));
 diesel::joinable!(room_events -> rooms (room_id));
+diesel::joinable!(room_filters -> rooms (room_id));
+diesel::joinable!(room_filters -> users (set_by));
 diesel::joinable!(room_invites -> rooms (room_id));
 diesel::joinable!(room_invites -> users (created_by));
 diesel::joinable!(room_members -> rooms (room_id));
+diesel::joinable!(room_slot_filters -> users (set_by));
 diesel::joinable!(room_slots -> rooms (room_id));
 diesel::joinable!(rooms -> generations (generation_id));
 diesel::joinable!(settings -> users (updated_by));
@@ -359,8 +381,10 @@ diesel::allow_tables_to_appear_in_same_query!(
     port_reservations,
     room_commands,
     room_events,
+    room_filters,
     room_invites,
     room_members,
+    room_slot_filters,
     room_slots,
     rooms,
     settings,

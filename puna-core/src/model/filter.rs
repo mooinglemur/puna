@@ -23,11 +23,16 @@
 //! Absent means always, so an omitted `p` is `1.0` and a plain rule drops everything it matches. To
 //! leave a quarter of DeathLinks getting through, `p` is **0.75**, not 0.25.
 //!
-//! Worth stating this loudly because pahoa's handoff carries an example whose comment reads the
-//! other way round ("thin what this slot SENDS to a quarter" against `p: 0.25`) while its prose
-//! gives the rule above. A UI label built on the wrong reading produces filters that do the
-//! opposite of what was asked, so [`Rule::describe`] spells out the effect rather than printing the
+//! Worth stating loudly rather than assuming, because the two readings are equally natural and
+//! nothing on screen distinguishes them: a label built on the wrong one produces filters that do
+//! the opposite of what was asked, at the setting an operator is least likely to re-check. Taken
+//! from pahoa's `Filter::drops`, which is the authority -- `dropped` iff `roll() < p` -- rather
+//! than from prose either side. [`Rule::describe`] spells out the effect instead of printing the
 //! number and hoping.
+//!
+//! An example in pahoa's README and its handoff read the other way round for a while (`p: 0.25`
+//! annotated "thin to a quarter"); that is being corrected on their side. The reason it is recorded
+//! here at all is that the ambiguity is inherent to the parameter, not to the sentence.
 
 use serde::{Deserialize, Serialize};
 
@@ -357,6 +362,199 @@ pub fn rules_lost_by_diverging(room: &[Rule]) -> Vec<Rule> {
 /// subtraction that adds something, because the room's rules are waiting underneath.
 pub fn rules_gained_by_following(room: &[Rule]) -> Vec<Rule> {
     room.to_vec()
+}
+
+// --- storage -------------------------------------------------------------------------------------
+//
+// Rules are stored as the JSON pahoa reads, validated on the way in. Reading them back is a parse
+// that can fail -- a row written by a future Puna, or hand-edited -- and every read here degrades to
+// "no rules" rather than failing the page, because a roster that will not render is a worse answer
+// than a chip that is missing. The one exception is the re-assert path, which must not push a
+// half-understood ruleset at a room; that reads through `parse_strict`.
+
+use diesel::sql_types::{BigInt, Integer, Jsonb, Uuid as SqlUuid};
+use diesel_async::{AsyncPgConnection, RunQueryDsl};
+
+use crate::ids::RoomId;
+
+#[derive(diesel::QueryableByName)]
+struct RulesRow {
+    #[diesel(sql_type = Jsonb)]
+    rules: serde_json::Value,
+}
+
+#[derive(diesel::QueryableByName)]
+struct SlotRulesRow {
+    #[diesel(sql_type = Integer)]
+    slot_number: i32,
+    #[diesel(sql_type = Jsonb)]
+    rules: serde_json::Value,
+}
+
+/// Read a stored ruleset, treating anything unparseable as empty.
+///
+/// **Lossy on purpose at the read side.** A rule Puna cannot parse is one it cannot render or edit,
+/// and refusing to draw the room page over it helps nobody; the room keeps filtering either way,
+/// because pahoa holds its own copy. `parse_strict` is what the re-assert path uses, where silently
+/// pushing fewer rules than are stored would be a real change nobody asked for.
+fn parse_lossy(value: &serde_json::Value) -> Vec<Rule> {
+    serde_json::from_value(value.clone()).unwrap_or_default()
+}
+
+/// Read a stored ruleset, or say why it cannot be read.
+pub fn parse_strict(value: &serde_json::Value) -> Result<Vec<Rule>, String> {
+    serde_json::from_value(value.clone()).map_err(|e| format!("stored filter is unreadable: {e}"))
+}
+
+/// The room-wide ruleset, or `None` when the room does not filter.
+///
+/// A room needs no third state: with nothing above it to inherit from, an empty ruleset and no
+/// ruleset mean the same thing, so the row is simply absent when it does not filter.
+pub async fn room_filter(
+    conn: &mut AsyncPgConnection,
+    room: RoomId,
+) -> Result<Option<Vec<Rule>>, diesel::result::Error> {
+    let rows: Vec<RulesRow> =
+        diesel::sql_query("SELECT rules FROM room_filters WHERE room_id = $1")
+            .bind::<SqlUuid, _>(room)
+            .load(conn)
+            .await?;
+
+    // `into_iter().next()`, not `first()`: diesel's `RunQueryDsl` is in scope and brings its own
+    // `first` along, which resolves ahead of the slice method and produces an unreadable error.
+    Ok(rows.into_iter().next().map(|row| parse_lossy(&row.rules)))
+}
+
+/// Replace the room's ruleset. An empty slice removes it, because for a room the two are one thing.
+pub async fn set_room_filter(
+    conn: &mut AsyncPgConnection,
+    room: RoomId,
+    rules: &[Rule],
+    by: i64,
+) -> Result<(), diesel::result::Error> {
+    if rules.is_empty() {
+        return clear_room_filter(conn, room).await;
+    }
+
+    let body = serde_json::to_value(rules).map_err(|e| {
+        diesel::result::Error::SerializationError(Box::new(std::io::Error::other(e.to_string())))
+    })?;
+
+    diesel::sql_query(
+        "INSERT INTO room_filters (room_id, rules, set_by, set_at)
+         VALUES ($1, $2, $3, now())
+         ON CONFLICT (room_id) DO UPDATE
+            SET rules = EXCLUDED.rules, set_by = EXCLUDED.set_by, set_at = now()",
+    )
+    .bind::<SqlUuid, _>(room)
+    .bind::<Jsonb, _>(body)
+    .bind::<BigInt, _>(by)
+    .execute(conn)
+    .await?;
+
+    Ok(())
+}
+
+pub async fn clear_room_filter(
+    conn: &mut AsyncPgConnection,
+    room: RoomId,
+) -> Result<(), diesel::result::Error> {
+    diesel::sql_query("DELETE FROM room_filters WHERE room_id = $1")
+        .bind::<SqlUuid, _>(room)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+/// One slot's state. An absent row is [`SlotFilter::Follows`], which is the whole reason this
+/// returns a state rather than an `Option<Vec<Rule>>`.
+pub async fn slot_filter(
+    conn: &mut AsyncPgConnection,
+    room: RoomId,
+    slot: i32,
+) -> Result<SlotFilter, diesel::result::Error> {
+    let rows: Vec<RulesRow> = diesel::sql_query(
+        "SELECT rules FROM room_slot_filters WHERE room_id = $1 AND slot_number = $2",
+    )
+    .bind::<SqlUuid, _>(room)
+    .bind::<Integer, _>(slot)
+    .load(conn)
+    .await?;
+
+    Ok(SlotFilter::from_stored(
+        rows.into_iter().next().map(|row| parse_lossy(&row.rules)),
+    ))
+}
+
+/// Every slot that has a state of its own, in slot order.
+///
+/// **This is also the room-filter warning.** Editing the room's filter does not reach any slot in
+/// this list, because each has replaced or opted out of it — so the same query answers "what does
+/// the roster chip say" and "who will this change miss", and the two cannot disagree.
+///
+/// **One query for the whole roster**, because the alternative is a read per row on a page that may
+/// carry hundreds. Slots absent from the map follow the room, which is [`SlotFilter::Follows`] and
+/// is why this returns only the divergent ones rather than a row per slot.
+pub async fn slot_filters(
+    conn: &mut AsyncPgConnection,
+    room: RoomId,
+) -> Result<Vec<(i32, SlotFilter)>, diesel::result::Error> {
+    let rows: Vec<SlotRulesRow> = diesel::sql_query(
+        "SELECT slot_number, rules FROM room_slot_filters WHERE room_id = $1 ORDER BY slot_number",
+    )
+    .bind::<SqlUuid, _>(room)
+    .load(conn)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.slot_number,
+                SlotFilter::from_stored(Some(parse_lossy(&row.rules))),
+            )
+        })
+        .collect())
+}
+
+/// Set one slot's state, including removing its ruleset entirely.
+///
+/// [`SlotFilter::Follows`] deletes the row; [`SlotFilter::Exempt`] stores `[]`. Those are different
+/// writes for different states, which is the point of taking a state rather than a rule list.
+pub async fn set_slot_filter(
+    conn: &mut AsyncPgConnection,
+    room: RoomId,
+    slot: i32,
+    state: &SlotFilter,
+    by: i64,
+) -> Result<(), diesel::result::Error> {
+    let Some(rules) = state.to_stored() else {
+        diesel::sql_query("DELETE FROM room_slot_filters WHERE room_id = $1 AND slot_number = $2")
+            .bind::<SqlUuid, _>(room)
+            .bind::<Integer, _>(slot)
+            .execute(conn)
+            .await?;
+        return Ok(());
+    };
+
+    let body = serde_json::to_value(&rules).map_err(|e| {
+        diesel::result::Error::SerializationError(Box::new(std::io::Error::other(e.to_string())))
+    })?;
+
+    diesel::sql_query(
+        "INSERT INTO room_slot_filters (room_id, slot_number, rules, set_by, set_at)
+         VALUES ($1, $2, $3, $4, now())
+         ON CONFLICT (room_id, slot_number) DO UPDATE
+            SET rules = EXCLUDED.rules, set_by = EXCLUDED.set_by, set_at = now()",
+    )
+    .bind::<SqlUuid, _>(room)
+    .bind::<Integer, _>(slot)
+    .bind::<Jsonb, _>(body)
+    .bind::<BigInt, _>(by)
+    .execute(conn)
+    .await?;
+
+    Ok(())
 }
 
 #[cfg(test)]
