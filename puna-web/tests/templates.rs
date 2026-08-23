@@ -946,6 +946,82 @@ fn every_column_has_a_heading() {
     );
 }
 
+/// **The tracker's summary row is filled by class, so the two files have to agree on the names.**
+///
+/// `tracker.js` returns an object from `summary` and looks each key up as `tfoot .KEY`; the template
+/// renders the cells. Rename one on either side and the lookup answers `null`, which `renderSummary`
+/// steps over deliberately — so the row still appears, still spans the right columns, and one cell
+/// is silently blank. Nothing errors and nothing logs, which is the same shape as the
+/// `panel.dataset` and `popovertarget` lints.
+///
+/// It also counts the footer against the header. A `colspan` that stops matching the column count is
+/// the M26 failure in a new place: a summary drifting one column left puts the check total under
+/// "Status" and looks like data rather than like a bug.
+#[test]
+fn the_tracker_summary_fills_every_cell_it_declares() {
+    let script = std::fs::read_to_string(source("static/tracker.js")).expect("tracker.js");
+    let template =
+        std::fs::read_to_string(source_template("tracker/show.html")).expect("tracker/show.html");
+
+    // The keys the script will look for: the `return { ... }` inside `summary`.
+    let body = script
+        .split_once("summary: (rows) => {")
+        .expect("tracker.js no longer declares a `summary` builder")
+        .1;
+    let returned = body
+        .split_once("return {")
+        .expect("`summary` no longer returns an object literal")
+        .1
+        .split_once("};")
+        .expect("unterminated `summary` return")
+        .0;
+
+    let keys: Vec<&str> = returned
+        .lines()
+        .filter_map(|line| line.trim().split_once(':').map(|(key, _)| key.trim()))
+        .filter(|key| !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric()))
+        .collect();
+
+    // A source lint that matches nothing passes. This one has a known set to find.
+    assert!(
+        keys.len() >= 3,
+        "expected the summary to declare at least three cells, found {keys:?}"
+    );
+
+    for key in &keys {
+        assert!(
+            template.contains(&format!("class=\"{key}\"")),
+            "`tracker.js` fills `tfoot .{key}` and tracker/show.html renders no such cell, so that \
+             column of the summary would be blank with nothing reporting it. Found: {keys:?}"
+        );
+    }
+
+    // The footer has to span exactly the columns its OWN table declares -- scoped to the slots
+    // section, since this template holds four tables and a whole-file count would be meaningless.
+    let slots = template
+        .split_once("data-view=\"slots\"")
+        .expect("the slots table is gone")
+        .1
+        .split_once("</section>")
+        .expect("unterminated slots section")
+        .0;
+    let headings = slots.matches("<th data-key=").count();
+    let foot = slots
+        .split_once("<tfoot")
+        .expect("the multiworld summary row is gone")
+        .1
+        .split_once("</tfoot>")
+        .expect("unterminated <tfoot>")
+        .0;
+    // Each `colspan="2"` covers one column beyond the cell it sits on.
+    let spanned = foot.matches("<td").count() + foot.matches("colspan=\"2\"").count();
+    assert_eq!(
+        spanned, headings,
+        "the summary spans {spanned} columns and the slot table declares {headings}; a footer that \
+         drifts puts the check total under the wrong heading and reads as data"
+    );
+}
+
 /// **A filter box that scripting has not reached must not look usable.**
 ///
 /// Three files have to agree and each spells the contract differently, so no grep in one finds the

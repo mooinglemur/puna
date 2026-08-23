@@ -56,6 +56,37 @@
         r.spectator ? dash : String(r.hints),
         age(r.last_activity_ms_ago),
       ],
+      // **Checks sort by COMPLETION, not by count**, which is what the column means: 400/2000 is
+      // behind 12/12 however the raw numbers compare, and sorting on the count puts the biggest
+      // world first and calls it the furthest along. The header keeps `data-key="checks_done"`
+      // because that is the column's identity — and because a remembered sort or a shared link
+      // already carries that key, so renaming it would silently leave old links on the old
+      // behavior rather than failing visibly.
+      //
+      // A slot with nothing to check has no answer, so it is `null` and sorts last in BOTH
+      // directions — the same rule `last seen` follows for a slot that has never acted.
+      sortValues: {
+        checks_done: (r) => (r.checks_total ? r.checks_done / r.checks_total : null),
+      },
+      // The footer, computed from the rows CURRENTLY DISPLAYED rather than from the server's
+      // `totals`. With no filter the two agree exactly; with one, this describes the table it sits
+      // beneath — which is the property that cannot be wrong. A summary contradicting the rows
+      // above it is worse than no summary, and "how far along is everyone playing this game" is a
+      // question worth being able to ask.
+      //
+      // Spectators are out of the goal denominator: they cannot goal, so counting them would make
+      // a finished multiworld read as permanently short.
+      summary: (rows) => {
+        const done = sum(rows, "checks_done");
+        const total = sum(rows, "checks_total");
+        const players = rows.filter((r) => !r.spectator);
+        const goaled = players.filter((r) => r.status === "goal").length;
+        return {
+          checks: `${done} / ${total}${percent({ checks_done: done, checks_total: total })}`,
+          goals: `${goaled} / ${players.length} goaled`,
+          hints: String(sum(rows, "hints")),
+        };
+      },
       // Only on the multiworld page, and built from the id already in this URL rather than from
       // anything the server sent: a slot's own tracker id is deliberately never in the JSON.
       href: (r) => (slotQuery ? null : `/tracker/${idFromApi()}/0/${r.slot}`),
@@ -111,6 +142,12 @@
     if (!r.checks_total) return "";
     const pct = Math.min(100, Math.round((r.checks_done * 100) / r.checks_total));
     return ` (${pct}%)`;
+  }
+
+  // `|| 0` rather than assuming the field is there: a spectator carries no meaningful check or hint
+  // count, and a missing one must not turn the whole total into `NaN`.
+  function sum(rows, key) {
+    return rows.reduce((running, row) => running + (row[key] || 0), 0);
   }
 
   // `null` is NEVER, and never is not 1970 -- rendering an epoch date is the classic way to make an
@@ -170,6 +207,9 @@
       this.view = section.dataset.view;
       this.config = VIEWS[this.view];
       this.tbody = section.querySelector("tbody");
+      // Absent on a slot's page, where a summary of one row would be noise. `renderSummary` guards
+      // on that rather than the template and the script each knowing which pages have one.
+      this.tfoot = section.querySelector("tfoot");
       this.empty = section.querySelector(".empty");
       this.search = section.querySelector(".table-search");
       this.toggle = section.querySelector("[data-toggle]");
@@ -327,11 +367,34 @@
       if (this.sort) {
         const { key, dir } = this.sort;
         const type = this.typeOf(key);
-        rows = rows.slice().sort((a, b) => compare(a[key], b[key], type) * (dir === "asc" ? 1 : -1));
+        // A column may sort by something other than the field it displays -- see `sortValues`.
+        const valueOf =
+          (this.config.sortValues && this.config.sortValues[key]) || ((row) => row[key]);
+        rows = rows
+          .slice()
+          .sort((a, b) => compare(valueOf(a), valueOf(b), type) * (dir === "asc" ? 1 : -1));
       }
 
       this.tbody.replaceChildren(...rows.map((row) => this.rowElement(row)));
       if (this.empty) this.empty.hidden = rows.length > 0;
+      this.renderSummary(rows);
+    }
+
+    // Fill the footer from whatever is on screen.
+    renderSummary(rows) {
+      if (!this.tfoot || !this.config.summary) return;
+      // Hidden while there is nothing to summarize, so a table waiting on its first fetch shows no
+      // row rather than a line of zeros -- which reads as a finished multiworld holding nothing.
+      this.tfoot.hidden = rows.length === 0;
+      if (!rows.length) return;
+
+      const summary = this.config.summary(rows);
+      Object.keys(summary).forEach((key) => {
+        const cell = this.tfoot.querySelector(`.${key}`);
+        // `textContent`: these are numbers Puna computed, but the rule holds everywhere in this
+        // file so there is no cell anybody has to think about.
+        if (cell) cell.textContent = summary[key];
+      });
     }
 
     typeOf(key) {

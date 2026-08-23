@@ -741,6 +741,29 @@ th {
 
 tbody tr:hover { background: var(--surface); }
 
+/* --- a summary row --------------------------------------------------------------------------------
+   Reads as a rule beneath the data rather than as another row of it: a heavier top border, no bottom
+   one, and no hover. `tbody tr:hover` above is scoped to the body, so a footer row is already inert;
+   the border is what stops it looking like a slot called "Total".
+
+   Not sticky. It belongs to the end of the table, and the tracker's location and item tables already
+   scroll inside themselves against a sticky HEAD -- a second sticky edge in the same scrollport is
+   how `position: sticky` starts resolving against a box nobody expected. */
+tfoot td {
+  border-bottom: none;
+  border-top: 2px solid var(--border);
+  font-weight: 600;
+}
+
+tfoot .label {
+  text-align: right;
+  color: var(--muted);
+  font-weight: normal;
+  text-transform: uppercase;
+  font-size: 0.85rem;
+  letter-spacing: 0.03em;
+}
+
 /* --- the tracker's client-rendered tables --------------------------------------------------------- */
 
 /* Each block is a heading, a filter box and a table. The table already scrolls itself (above), so
