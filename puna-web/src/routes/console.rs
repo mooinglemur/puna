@@ -472,6 +472,52 @@ pub(crate) async fn prepare_slot_credential(
     })
 }
 
+/// Everything **Puna itself** must write before a command is queued, and the audit row for it.
+///
+/// **The single entry point, and it is single because it was not.** The console called
+/// [`prepare_slot_credential`] and [`record_lock`] one after the other; the bulk panel reimplemented
+/// that sequence and called only the first, so a bulk lock reached pahoa and left
+/// `room_slots.locked_at` unwritten. The visible symptom was a roster with no "locked" chip. The
+/// worse one was invisible: that column is what `steps::reapply_locks` re-asserts on every
+/// transition to `running`, so those slots would have quietly let their holders back in at the next
+/// restart -- pahoa's own copy lives in `room.save`, which a save reset takes with it.
+///
+/// So this is not tidying. **Two callers deciding independently which side effects a command needs
+/// is the bug**, and one function they both go through is the fix: a command that grows a Puna-side
+/// half later gets it in both places or neither.
+///
+/// Returns the credential [`Prepared`] state, which is the one thing a caller still has to branch
+/// on -- a rotation against a room that is not running has landed durably and must not be queued.
+pub(crate) async fn prepare_command(
+    conn: &mut diesel_async::AsyncPgConnection,
+    room: &puna_core::model::room::Room,
+    command: &RoomCommand,
+    by: i64,
+) -> Result<Prepared> {
+    // Rotation: writes the slot's password and marks the Secret stale, so the orchestrator has
+    // something to push. Refuses outright against a room mid-transition.
+    let prepared = prepare_slot_credential(conn, room, command).await?;
+
+    // Locking: writes Puna's record of intent and then travels on as an ordinary command. Nothing
+    // to prepare -- pahoa's `lock` needs no Secret and no password mode -- but the intent belongs
+    // here, because pahoa's copy records neither who asked nor survives a save reset.
+    let locked_kind = record_lock(conn, room, command, by).await?;
+
+    if let Some(kind) = prepared.kind().or(locked_kind) {
+        puna_core::model::event::record(
+            conn,
+            room.id,
+            puna_core::model::event::Actor::User(by),
+            kind,
+            // The slot, never the value. This row is read by anyone who can read the room's history.
+            serde_json::json!({ "slot": command.target_slot() }),
+        )
+        .await?;
+    }
+
+    Ok(prepared)
+}
+
 /// Record that staff barred a slot, or let it back in.
 ///
 /// **Separate from [`prepare_slot_credential`] because locking is no longer a credential
@@ -594,28 +640,7 @@ async fn run_inner(
 
     let mut conn = pool.get().await?;
 
-    // The two Puna-side commands write the row before the row is queued, so the orchestrator has
-    // something to push. Every other command passes straight through.
-    let prepared = prepare_slot_credential(&mut conn, &access.room, &command).await?;
-
-    // **Locking writes Puna's record and then travels on as an ordinary command.** Unlike a
-    // rotation there is nothing to prepare -- pahoa's `lock` needs no Secret and no password mode --
-    // but the intent belongs here, because pahoa's copy lives in a save that a reset would take with
-    // it and records nothing about who asked.
-    let locked_kind = record_lock(&mut conn, &access.room, &command, access.user_id()).await?;
-
-    if let Some(kind) = prepared.kind().or(locked_kind) {
-        puna_core::model::event::record(
-            &mut conn,
-            access.room.id,
-            puna_core::model::event::Actor::User(access.user_id()),
-            kind,
-            // The slot, never the value. This row is read by anyone who can read the room's
-            // history.
-            serde_json::json!({ "slot": command.target_slot() }),
-        )
-        .await?;
-    }
+    let prepared = prepare_command(&mut conn, &access.room, &command, access.user_id()).await?;
 
     let room = access.room.id.to_string();
 

@@ -294,42 +294,50 @@ async fn apply(
         ));
     }
 
-    // Rotation's Puna-side half, per slot, before anything is queued.
+    // **Puna's own half of every command, through the console's single entry point.**
     //
-    // The room-level refusals inside `prepare_slot_credential` — a room mid-transition, a room not
-    // in per-slot mode — fail identically for every slot, so hitting one on the first slot fails
-    // the request before any password has moved. A later failure would leave some slots rotated:
-    // recoverable, since staff can see every password on the room page and the action is safe to
-    // repeat, and rare enough not to be worth a nested transaction.
-    if form.action == "rotate_passwords" {
-        let mut stored_only = false;
-        for command in &commands {
-            match crate::routes::console::prepare_slot_credential(&mut conn, &access.room, command)
-                .await?
-            {
-                crate::routes::console::Prepared::Live(_) => {}
-                _ => stored_only = true,
-            }
-        }
-        puna_core::model::event::record(
+    // Not a rotation special case, which is what this was and what made it wrong: it called only
+    // the credential half, so a bulk lock reached pahoa with `room_slots.locked_at` unwritten --
+    // no "locked" chip on the roster, and the lock silently gone at the next restart, because that
+    // column is what `reapply_locks` re-asserts. `prepare_command` is the one place that decides
+    // which side effects a command needs, so a verb that grows a Puna-side half later gets it here
+    // for free.
+    //
+    // A room-level refusal inside it -- a room mid-transition, a rotation outside per-slot mode --
+    // fails identically for every slot, so hitting one fails the request on the first command
+    // before anything has moved. A later failure would leave the batch half-prepared: recoverable,
+    // since every one of these actions is safe to repeat, and rare enough not to be worth nesting a
+    // transaction inside `enqueue_batch`'s.
+    let mut stored_only = false;
+    for command in &commands {
+        match crate::routes::console::prepare_command(
             &mut conn,
-            access.room.id,
-            puna_core::model::event::Actor::User(access.user_id()),
-            "slot_password_rotated",
-            serde_json::json!({ "slots": form.slots }),
+            &access.room,
+            command,
+            access.user_id(),
         )
-        .await?;
-
-        if stored_only {
-            return Ok(Flash::success(
-                Redirect::to(back),
-                format!(
-                    "Rotated {} password(s). This room is not running, so there was nothing to \
-                     tell — they take effect the next time it starts.",
-                    commands.len()
-                ),
-            ));
+        .await?
+        {
+            // `NotApplicable` is every passthrough command, and it is not "stored": those need the
+            // room, and a room that is not running was refused above.
+            crate::routes::console::Prepared::NotApplicable
+            | crate::routes::console::Prepared::Live(_) => {}
+            _ => stored_only = true,
         }
+    }
+
+    // A durable change with no process to tell is not a failure, and queueing it would only
+    // produce rows saying the room is down. Same call the console makes for one command.
+    if stored_only {
+        return Ok(Flash::success(
+            Redirect::to(back),
+            format!(
+                "{} applied to {} slot(s) and stored. This room is not running, so there was \
+                 nothing to tell — it takes effect the next time it starts.",
+                label_for(&form.action),
+                commands.len()
+            ),
+        ));
     }
 
     let batch = command::enqueue_batch(
@@ -481,5 +489,79 @@ mod tests {
     #[test]
     fn an_unknown_action_becomes_nothing() {
         assert!(command_for("delete_everything", 1).is_none());
+    }
+}
+
+#[cfg(test)]
+mod db_tests {
+    use super::*;
+    use crate::testdb::{ACTOR, insert_generation, insert_room, insert_slot, insert_user, with_db};
+    use puna_core::model::{room, slot};
+
+    /// **A bulk lock has to write Puna's own record, not only reach pahoa.**
+    ///
+    /// This is the bug this test was written for. The panel built `LockSlot` commands and queued
+    /// them without ever calling `record_lock`, so the slots locked in the room and
+    /// `room_slots.locked_at` stayed `NULL`. Two consequences, and the second is the serious one:
+    /// the roster showed no "locked" chip, because `slot_views` reads that column — and
+    /// `steps::reapply_locks` re-asserts locks from that column on every transition to `running`,
+    /// so the lock would have quietly lapsed at the next restart. pahoa's own copy lives in
+    /// `room.save`, which a save reset takes with it.
+    ///
+    /// Asserted through `prepare_command`, which is the single entry point both routes now share —
+    /// so this covers the console's path and the panel's at once, and any command that grows a
+    /// Puna-side half later is covered by adding it there rather than here.
+    #[tokio::test]
+    async fn a_bulk_lock_records_the_lock_puna_itself_is_the_authority_for() {
+        with_db(|pool| async move {
+            let mut conn = pool.get().await.expect("connection");
+            insert_user(&mut conn, ACTOR).await;
+            let generation = insert_generation(&mut conn).await;
+            let id = insert_room(&mut conn, generation, "running", "per_slot").await;
+            for n in 1..=3 {
+                insert_slot(&mut conn, id, n, Some("aaaaa-bbbbb")).await;
+            }
+            let the_room = room::get(&mut conn, id).await.expect("read").expect("room");
+
+            // Exactly what `apply` does for a staged set, through the shared entry point.
+            for n in [1, 3] {
+                crate::routes::console::prepare_command(
+                    &mut conn,
+                    &the_room,
+                    &RoomCommand::LockSlot {
+                        slot: n,
+                        locked: true,
+                    },
+                    ACTOR,
+                )
+                .await
+                .expect("prepare");
+            }
+
+            let slots = slot::list(&mut conn, id).await.expect("slots");
+            let locked: Vec<i32> = slots
+                .iter()
+                .filter(|s| s.is_locked())
+                .map(|s| s.slot_number)
+                .collect();
+            assert_eq!(
+                locked,
+                vec![1, 3],
+                "a bulk lock must write `locked_at`, or the roster shows nothing and the next \
+                 restart lets them back in"
+            );
+
+            // The audit trail names who, which is the half pahoa does not keep at all.
+            let by: Vec<Option<i64>> = slots
+                .iter()
+                .filter(|s| s.is_locked())
+                .map(|s| s.locked_by)
+                .collect();
+            assert!(
+                by.iter().all(|who| *who == Some(ACTOR)),
+                "the lock records who decided it"
+            );
+        })
+        .await;
     }
 }
