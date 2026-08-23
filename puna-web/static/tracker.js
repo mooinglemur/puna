@@ -85,6 +85,9 @@
           checks: `${done} / ${total}${percent({ checks_done: done, checks_total: total })}`,
           goals: `${goaled} / ${players.length} goaled`,
           hints: String(sum(rows, "hints")),
+          // Through `age` like every other cell in this column, so it carries the same shorthand,
+          // the same absolute-time tooltip, and the same "never" when nobody has acted.
+          seen: age(mostRecent(rows)),
         };
       },
       // Only on the multiworld page, and built from the id already in this URL rather than from
@@ -142,6 +145,22 @@
     if (!r.checks_total) return "";
     const pct = Math.min(100, Math.round((r.checks_done * 100) / r.checks_total));
     return ` (${pct}%)`;
+  }
+
+  // The freshest activity among `rows`, as an age — so the **smallest** number, not the largest.
+  //
+  // **`null` is never, and is excluded rather than compared.** Treating a slot that has never acted
+  // as `0` would make it the most recent thing in the multiworld and pin the total at "just now"
+  // forever, which is the same 1970 mistake in the other direction. All-null answers `null`, which
+  // `age` renders as "never".
+  //
+  // `reduce` rather than `Math.min(...ages)`: a 2000-slot room would spread 2000 arguments onto the
+  // stack for no reason.
+  function mostRecent(rows) {
+    const ages = rows
+      .map((row) => row.last_activity_ms_ago)
+      .filter((ms) => ms !== null && ms !== undefined);
+    return ages.length ? ages.reduce((a, b) => (b < a ? b : a)) : null;
   }
 
   // `|| 0` rather than assuming the field is there: a spectator carries no meaningful check or hint
@@ -391,9 +410,17 @@
       const summary = this.config.summary(rows);
       Object.keys(summary).forEach((key) => {
         const cell = this.tfoot.querySelector(`.${key}`);
-        // `textContent`: these are numbers Puna computed, but the rule holds everywhere in this
-        // file so there is no cell anybody has to think about.
-        if (cell) cell.textContent = summary[key];
+        if (!cell) return;
+        // **Reset before rebuilding**, because this cell is reused on every render while
+        // `appendCell` only ever adds: a `hint` class or a `title` left from a render when "last
+        // seen" read "never" would stay on a real value afterwards, muted and carrying the wrong
+        // tooltip. The class IS the key by construction, so restoring it is the whole reset.
+        cell.className = key;
+        cell.removeAttribute("title");
+        cell.replaceChildren();
+        // The same path a body cell takes, so a summary can carry a title or the `hint` class
+        // exactly as a row does rather than needing a second cell renderer.
+        appendCell(cell, summary[key], null);
       });
     }
 
