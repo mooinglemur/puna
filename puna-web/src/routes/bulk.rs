@@ -103,6 +103,7 @@ const ACTIONS: &[(&str, &str)] = &[
     ("rotate_passwords", "Rotate Passwords"),
     ("release_claims", "Release Claims"),
     ("lock", "Lock"),
+    ("unlock", "Unlock"),
     ("kick", "Kick"),
     ("release_items", "Release Items"),
     ("collect_items", "Collect Items"),
@@ -114,6 +115,13 @@ fn command_for(action: &str, slot: i32) -> Option<RoomCommand> {
     Some(match action {
         "rotate_passwords" => RoomCommand::RotatePassword { slot },
         "lock" => RoomCommand::LockSlot { slot, locked: true },
+        // The same verb pointed the other way, which is why it is a second ACTION rather
+        // than a checkbox: the panel's buttons ARE the action, so a direction carried in a
+        // field beside them would be one more thing that can disagree with the one pressed.
+        "unlock" => RoomCommand::LockSlot {
+            slot,
+            locked: false,
+        },
         "kick" => RoomCommand::Kick { slot, reason: None },
         "release_items" => RoomCommand::Release { slot },
         "collect_items" => RoomCommand::Collect { slot },
@@ -486,6 +494,66 @@ mod tests {
         }
     }
 
+    /// **Every action's mapping, spelled out.** Four of these carry nothing but a slot, so a
+    /// swapped pair compiles, runs, reports success and does the opposite thing: `release_items`
+    /// for `collect_items` empties a world instead of filling it, and `unlock` built with
+    /// `locked: true` locks the slots an operator was trying to let back in. None of that is
+    /// visible in a type, so it is written down.
+    #[test]
+    fn every_action_maps_to_the_command_it_names() {
+        let expected = [
+            ("rotate_passwords", RoomCommand::RotatePassword { slot: 3 }),
+            (
+                "lock",
+                RoomCommand::LockSlot {
+                    slot: 3,
+                    locked: true,
+                },
+            ),
+            (
+                "unlock",
+                RoomCommand::LockSlot {
+                    slot: 3,
+                    locked: false,
+                },
+            ),
+            (
+                "kick",
+                RoomCommand::Kick {
+                    slot: 3,
+                    reason: None,
+                },
+            ),
+            ("release_items", RoomCommand::Release { slot: 3 }),
+            ("collect_items", RoomCommand::Collect { slot: 3 }),
+            (
+                "set_goaled",
+                RoomCommand::SetStatus {
+                    slot: 3,
+                    status: SlotStatus::Goal,
+                },
+            ),
+        ];
+
+        let named: Vec<&str> = expected.iter().map(|(a, _)| *a).collect();
+        for (action, want) in expected {
+            assert_eq!(
+                command_for(action, 3),
+                Some(want),
+                "`{action}` builds the wrong command"
+            );
+        }
+
+        // Every ACTION is covered above, or a new one could be added and mapped wrongly with
+        // nothing here noticing.
+        for (action, _) in ACTIONS {
+            assert!(
+                *action == "release_claims" || named.contains(action),
+                "`{action}` is offered and its mapping is not asserted"
+            );
+        }
+    }
+
     #[test]
     fn an_unknown_action_becomes_nothing() {
         assert!(command_for("delete_everything", 1).is_none());
@@ -512,7 +580,7 @@ mod db_tests {
     /// so this covers the console's path and the panel's at once, and any command that grows a
     /// Puna-side half later is covered by adding it there rather than here.
     #[tokio::test]
-    async fn a_bulk_lock_records_the_lock_puna_itself_is_the_authority_for() {
+    async fn a_bulk_lock_and_unlock_keep_the_record_puna_is_the_authority_for() {
         with_db(|pool| async move {
             let mut conn = pool.get().await.expect("connection");
             insert_user(&mut conn, ACTOR).await;
@@ -560,6 +628,34 @@ mod db_tests {
             assert!(
                 by.iter().all(|who| *who == Some(ACTOR)),
                 "the lock records who decided it"
+            );
+
+            // **And the mirror, which fails the same way pointing the other direction.** If unlock
+            // reached pahoa without clearing `locked_at`, `reapply_locks` would put the lock back
+            // on the next transition to `running` -- an operator who unlocked would watch the slot
+            // re-lock itself with nothing in the room's history to explain it.
+            crate::routes::console::prepare_command(
+                &mut conn,
+                &the_room,
+                &RoomCommand::LockSlot {
+                    slot: 1,
+                    locked: false,
+                },
+                ACTOR,
+            )
+            .await
+            .expect("unlock");
+
+            let after = slot::list(&mut conn, id).await.expect("slots");
+            let still_locked: Vec<i32> = after
+                .iter()
+                .filter(|s| s.is_locked())
+                .map(|s| s.slot_number)
+                .collect();
+            assert_eq!(
+                still_locked,
+                vec![3],
+                "unlock must clear the record, or the next start locks them again"
             );
         })
         .await;
