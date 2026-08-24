@@ -1220,3 +1220,17 @@ button:hover { border-color: var(--muted); }
 .tally.refused   { border-color: light-dark(#b26a00, #ffb74d); }
 .tally.failed    { border-color: light-dark(#c62828, #ef5350); }
 .tally.outstanding { color: var(--muted); }
+
+/* A slot that diverges from the room's filter. Deliberately a link rather than a bare tag: the chip
+   answers "is something different here", and the next question is always "what", which is one click
+   away rather than a hover the keyboard cannot reach. */
+.tag.filter {
+  text-decoration: none;
+  border-color: light-dark(#7a4c00, #f0c86a);
+}
+
+/* Rules read as sentences rather than as data, because that is what `describe()` produces -- the
+   effect in words, never the bare probability. */
+.rules { margin: 0.3rem 0 0.9rem; padding-left: 1.2rem; }
+.rules li { margin-bottom: 0.2rem; }
+.filter-state { margin-bottom: 1rem; }

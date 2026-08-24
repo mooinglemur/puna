@@ -236,6 +236,7 @@ fn build(
             .mount("/", routes::generations::routes())
             .mount("/", routes::console::routes())
             .mount("/", routes::bulk::routes())
+            .mount("/", routes::filters::routes())
             .mount("/", routes::gates::routes())
             .mount("/", routes::fleet::routes())
             .mount("/", routes::users::routes())

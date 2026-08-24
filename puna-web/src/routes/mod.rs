@@ -3,6 +3,7 @@
 pub mod bulk;
 pub mod console;
 pub mod downloads;
+pub mod filters;
 pub mod fleet;
 pub mod gates;
 pub mod generations;

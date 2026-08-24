@@ -117,7 +117,13 @@
    "who is shut out?" is this one, and the glyph over there is only the control that changes it.
    Staff-only, because `slot_views` decides `is_locked` from the viewer's role: this page is public,
    and whether somebody has been barred is not a fact for everyone holding the link. #}
-{% if slot.is_locked %}<span class="tag locked">locked</span>{% endif %}</td>
+{% if slot.is_locked %}<span class="tag locked">locked</span>{% endif %}
+{# **Divergence from the room's filter, not "is filtered".** A room filter applies to every slot, so
+   a chip meaning that would be on every row and say nothing about any of them. `title` carries the
+   effective rules, which is the "at a glance" Troy asked for -- and the link is where they get
+   changed. #}
+{% if let Some(chip) = slot.filter_chip %}<a class="tag filter" href="/room/{{ room.id }}/slot/{{ slot.slot_number }}/filter"
+   title="{{ slot.filter_summary }}">{{ chip }}</a>{% endif %}</td>
 <td>
 {{ slot.game }}
 {% if slot.is_spectator %}<span class="tag">spectator</span>{% endif %}
@@ -532,6 +538,11 @@ without spending this slot&rsquo;s points</label>
 {# Its own page rather than a control in the roster: a selection held in a table that filters and
    sorts means something different after a re-sort, which is the failure the panel exists to avoid. #}
 <li><a href="/room/{{ room.id }}/bulk">Bulk actions</a> &mdash; one action across many slots</li>
+{% if is_organizer %}
+{# Organizer-only, because a room-wide filter configures the room and persists into its save -- the
+   `option` argument. A SLOT's filter is a helper's, and is reached from the roster chip. #}
+<li><a href="/room/{{ room.id }}/filter">Room filter</a> &mdash; drop or thin traffic for everyone</li>
+{% endif %}
 <li><a href="/room/{{ room.id }}/members">Members and invites</a></li>
 </ul>
 

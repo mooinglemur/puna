@@ -157,8 +157,27 @@ pub struct SlotView {
     /// Shown to staff only, with the rest of the moderation column: it is a fact about a sanction
     /// rather than about the game, and `GET /room/<id>` is public.
     pub is_locked: bool,
+    /// **Divergence from the room's filter, not "is filtered".** With a room filter in force every
+    /// slot is filtered, so a chip meaning that would land on every row and distinguish nothing.
+    /// `filtered` is a slot with rules of its own; `unfiltered` is one deliberately exempt from
+    /// rules everybody else has — opposite facts, so one word for both would be worse than none.
+    /// Staff only, for the same reason `is_locked` is: it means nothing to a player and this page
+    /// is public.
+    pub filter_chip: Option<&'static str>,
+    /// What is actually in effect for this slot, as a hover. **The rules in words, not the
+    /// probabilities**: `p` is the fraction dropped and the opposite reading is equally natural, so
+    /// a tooltip printing numbers would be a tooltip that misleads at a glance.
+    pub filter_summary: String,
 }
 
+// Eight, and the honest fix is a context struct rather than this attribute -- deferred rather than
+// dismissed, because it is nine call sites of churn for no behavior change. Worth doing next time
+// this signature grows: the arguments most at risk of being transposed are the two `bool`s, and a
+// struct is what makes that unspellable.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a context struct is the right fix and is deliberately deferred; see the note above"
+)]
 fn slot_views(
     slots: Vec<Slot>,
     viewer: Option<i64>,
@@ -167,10 +186,37 @@ fn slot_views(
     per_slot_passwords: bool,
     owner_names: &std::collections::HashMap<i64, String>,
     may_see_roster: bool,
+    filters: &std::collections::HashMap<i32, puna_core::model::filter::SlotFilter>,
 ) -> Vec<SlotView> {
     slots
         .into_iter()
         .map(|s| SlotView {
+            filter_summary: match filters.get(&s.slot_number) {
+                Some(puna_core::model::filter::SlotFilter::Exempt) => {
+                    "Exempt: nothing is filtered for this slot, including the room's filter".into()
+                }
+                Some(puna_core::model::filter::SlotFilter::Own(rules)) => {
+                    // Its OWN rules, and the room's are deliberately absent -- which is the fact
+                    // this hover exists to make visible without opening the editor.
+                    let mut summary = String::from("Its own rules, instead of the room's: ");
+                    summary.push_str(
+                        &rules
+                            .iter()
+                            .map(|r| r.describe())
+                            .collect::<Vec<_>>()
+                            .join("; "),
+                    );
+                    summary
+                }
+                _ => String::new(),
+            },
+            filter_chip: match (role.is_some(), filters.get(&s.slot_number)) {
+                (true, Some(puna_core::model::filter::SlotFilter::Exempt)) => Some("unfiltered"),
+                (true, Some(_)) => Some("filtered"),
+                // A slot that follows the room gets no chip: whatever the room does is not a fact
+                // about this row, and the room's own filter is stated once above the table.
+                _ => None,
+            },
             owner_name: match (may_see_roster, s.owner_id) {
                 (true, Some(owner)) => owner_names.get(&owner).cloned(),
                 _ => None,
@@ -508,6 +554,18 @@ async fn show(
         Default::default()
     };
 
+    // Only for staff, and only the divergent slots have rows -- one query for the whole roster
+    // rather than a read per line on a page that may carry hundreds.
+    let slot_filters: std::collections::HashMap<i32, puna_core::model::filter::SlotFilter> =
+        if role.is_some() {
+            puna_core::model::filter::slot_filters(&mut conn, room.id)
+                .await?
+                .into_iter()
+                .collect()
+        } else {
+            Default::default()
+        };
+
     let slots = slot_views(
         room_slots,
         session.user_id,
@@ -516,6 +574,7 @@ async fn show(
         room.slot_auth == SlotAuth::PerSlot,
         &owner_names,
         may_see_roster,
+        &slot_filters,
     );
     let siblings = room::siblings(&mut conn, room.id, room.generation_id).await?;
     let message = event::latest(&mut conn, room.id)
@@ -1268,6 +1327,7 @@ mod tests {
             true,
             &Default::default(),
             false,
+            &Default::default(),
         );
         assert!(views[0].password.is_some(), "own slot: password expected");
         assert!(
@@ -1288,6 +1348,7 @@ mod tests {
             true,
             &Default::default(),
             false,
+            &Default::default(),
         );
         assert!(
             views.iter().all(|v| v.password.is_none()),
@@ -1303,6 +1364,7 @@ mod tests {
             true,
             &Default::default(),
             false,
+            &Default::default(),
         );
         assert!(views.iter().all(|v| v.password.is_some()));
 
@@ -1316,6 +1378,7 @@ mod tests {
             false,
             &Default::default(),
             false,
+            &Default::default(),
         );
         assert!(
             views.iter().all(|v| v.password.is_none()),
@@ -1349,6 +1412,7 @@ mod tests {
             false,
             &names,
             true,
+            &Default::default(),
         );
         assert_eq!(views[0].owner_name.as_deref(), Some("alice"));
         assert!(
@@ -1361,7 +1425,16 @@ mod tests {
         );
 
         // Not entitled: somebody holding the link and nothing else.
-        let views = slot_views(slots, None, None, &Default::default(), false, &names, false);
+        let views = slot_views(
+            slots,
+            None,
+            None,
+            &Default::default(),
+            false,
+            &names,
+            false,
+            &Default::default(),
+        );
         assert!(
             views
                 .iter()
@@ -1402,6 +1475,7 @@ mod tests {
                 false,
                 &Default::default(),
                 false,
+                &Default::default(),
             );
             assert!(
                 views.iter().all(|v| !v.can_release),
@@ -1418,6 +1492,7 @@ mod tests {
                 false,
                 &Default::default(),
                 false,
+                &Default::default(),
             );
             assert!(views[0].can_release, "{role:?} may release a claimed slot");
             assert!(!views[1].can_release, "nobody holds slot 2");
@@ -1431,6 +1506,7 @@ mod tests {
             false,
             &Default::default(),
             false,
+            &Default::default(),
         );
         assert!(views[0].can_release, "a claimed slot can be released");
         assert!(
@@ -1460,6 +1536,7 @@ mod tests {
             true,
             &Default::default(),
             false,
+            &Default::default(),
         );
         assert!(views[0].tracker_id.is_some(), "own slot: link expected");
         assert!(
@@ -1478,6 +1555,7 @@ mod tests {
             true,
             &Default::default(),
             false,
+            &Default::default(),
         );
         assert!(
             views.iter().all(|v| v.tracker_id.is_none()),
@@ -1493,6 +1571,7 @@ mod tests {
             true,
             &Default::default(),
             false,
+            &Default::default(),
         );
         assert!(views.iter().all(|v| v.tracker_id.is_none()));
     }
@@ -1633,6 +1712,8 @@ mod tests {
         let mut helper = page_as(true, false);
         helper.room.slot_auth = SlotAuth::PerSlot;
         helper.slots = vec![SlotView {
+            filter_chip: None,
+            filter_summary: String::new(),
             slot_number: 1,
             player_name: "Kai".into(),
             game: "A Link to the Past".into(),
@@ -2359,6 +2440,7 @@ mod tests {
             false,
             &Default::default(),
             false,
+            &Default::default(),
         );
         assert!(staff_view[0].is_locked, "staff cannot see who is barred");
 
@@ -2370,6 +2452,7 @@ mod tests {
             false,
             &Default::default(),
             false,
+            &Default::default(),
         );
         assert!(
             !public_view[0].is_locked,
@@ -2402,6 +2485,8 @@ mod tests {
 
     fn a_slot(locked: bool) -> SlotView {
         SlotView {
+            filter_chip: None,
+            filter_summary: String::new(),
             slot_number: 1,
             player_name: "Kai".into(),
             game: "A Link to the Past".into(),
