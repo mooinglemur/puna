@@ -210,8 +210,13 @@ pub struct FilterTemplate {
     /// Slots the room's filter does not reach, for the room editor's warning.
     missed: Vec<MissedSlot>,
     directions: Vec<(&'static str, &'static str)>,
-    /// `(wire value, the name a person reads, what it narrows with)` — see `Vocabulary::kinds`.
-    kinds: Vec<(&'static str, &'static str, Option<&'static str>)>,
+    /// See `Vocabulary::kinds` for what each element is.
+    kinds: Vec<(
+        &'static str,
+        &'static str,
+        Option<&'static str>,
+        &'static str,
+    )>,
     tag_suggestions: Vec<&'static str>,
     subtype_suggestions: Vec<&'static str>,
     /// `(wire value, the name a person reads, why it cannot be filtered)`.
@@ -392,10 +397,20 @@ pub(crate) fn slot_state_from(
 /// gains appears in the picker by being added once.
 pub(crate) struct Vocabulary {
     pub directions: Vec<(&'static str, &'static str)>,
-    /// `(wire value, the name a person reads, what it narrows with)`. The middle one is
-    /// [`Kind::label`] — a picker offering `print_json` names it in a spelling only pahoa's filter
-    /// API uses, where every client log and the protocol document say `PrintJSON`.
-    pub kinds: Vec<(&'static str, &'static str, Option<&'static str>)>,
+    /// `(wire value, the name a person reads, what it narrows with, the directions it can travel)`.
+    ///
+    /// The second is [`Kind::label`] — a picker offering `print_json` names it in a spelling only
+    /// pahoa's filter API uses, where every client log and the protocol document say `PrintJSON`.
+    ///
+    /// The last is space-separated, and it is what stops the editor building a rule that can never
+    /// match: most kinds travel one way only, so offering both directions was offering a rule pahoa
+    /// answers `400` to.
+    pub kinds: Vec<(
+        &'static str,
+        &'static str,
+        Option<&'static str>,
+        &'static str,
+    )>,
     pub tag_suggestions: Vec<&'static str>,
     pub subtype_suggestions: Vec<&'static str>,
     pub refused: Vec<(&'static str, &'static str, &'static str)>,
@@ -409,7 +424,7 @@ pub(crate) fn vocabulary() -> Vocabulary {
             .collect(),
         kinds: Kind::ALL
             .iter()
-            .map(|k| (k.as_str(), k.label(), k.narrows_with()))
+            .map(|k| (k.as_str(), k.label(), k.narrows_with(), k.travels_text()))
             .collect(),
         tag_suggestions: filter::BOUNCE_TAGS.to_vec(),
         subtype_suggestions: filter::PRINT_JSON_SUBTYPES.to_vec(),
@@ -733,9 +748,20 @@ mod tests {
         Some(value.to_string())
     }
 
+    /// A row for `kind`, travelling a direction that kind can actually travel.
+    ///
+    /// **Derived rather than hardcoded, and the first version was not**: it said `from_slot` for
+    /// everything, so `row("print_json", …)` built the very pairing pahoa refuses — and once
+    /// `validate` learned to refuse it too, these tests started asserting against a rule no editor
+    /// can produce. An unknown kind keeps `from_slot`, since those are refused before direction is
+    /// ever considered.
     fn row(kind: &str, tag: Option<&str>, percent: Option<&str>) -> RuleFields {
+        let direction = Kind::parse(kind)
+            .and_then(|k| k.directions().first().copied())
+            .map(Direction::as_str)
+            .unwrap_or("from_slot");
         RuleFields {
-            direction: field("from_slot"),
+            direction: field(direction),
             kind: field(kind),
             tag: tag.map(str::to_string),
             subtype: None,

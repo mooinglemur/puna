@@ -82,6 +82,11 @@ impl Direction {
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     Bounce,
+    /// A slot's outgoing chat line. **The other half of chat from `PrintJson`**, and the two are
+    /// easy to confuse: dropping a `Say` stops a slot being *heard*, dropping a `PrintJson`/`Chat`
+    /// stops it *hearing*. One silences a spammer for everybody; the other spares one client a feed
+    /// it cannot cope with.
+    Say,
     PrintJson,
     Set,
     SetReply,
@@ -90,8 +95,11 @@ pub enum Kind {
 }
 
 impl Kind {
+    /// Ordered as the picker shows them, with the chat pair adjacent: what a slot says, then what
+    /// reaches it. `ALL` drives that list, so this order is a UI decision as well as a list.
     pub const ALL: &'static [Self] = &[
         Self::Bounce,
+        Self::Say,
         Self::PrintJson,
         Self::Set,
         Self::SetReply,
@@ -102,6 +110,7 @@ impl Kind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Bounce => "bounce",
+            Self::Say => "say",
             Self::PrintJson => "print_json",
             Self::Set => "set",
             Self::SetReply => "set_reply",
@@ -120,6 +129,7 @@ impl Kind {
     pub fn label(self) -> &'static str {
         match self {
             Self::Bounce => "Bounce",
+            Self::Say => "Say",
             Self::PrintJson => "PrintJSON",
             Self::Set => "Set",
             Self::SetReply => "SetReply",
@@ -128,9 +138,55 @@ impl Kind {
         }
     }
 
+    /// **Whether this kind travels this way at all**, transcribed from pahoa's `Kind::travels`.
+    ///
+    /// Most of these are one-way: a `Set` is something a slot sends and a `PrintJSON` is something
+    /// it receives, so only a `Bounce` — the relay, which exists in both directions — can be either.
+    ///
+    /// pahoa refuses the impossible pairing rather than storing a rule that never fires, and its
+    /// reason is the one that matters here too: **a rule that cannot match looks exactly like a
+    /// filter that is not working.** Which is precisely what happened — a `from_slot` `PrintJSON`
+    /// rule for chat was accepted by Puna, stored, pushed, and refused by the room with a `400`,
+    /// while the page went on showing it as the room's filter.
+    pub fn travels(self, direction: Direction) -> bool {
+        match self {
+            Self::Bounce => true,
+            Self::Say | Self::Set | Self::StatusUpdate => direction == Direction::FromSlot,
+            Self::PrintJson | Self::SetReply | Self::Retrieved => direction == Direction::ToSlot,
+        }
+    }
+
+    /// The same answer as [`Kind::travels`], space-separated, for a markup attribute.
+    ///
+    /// **Written out rather than built from `directions()`**, because a `&'static str` for a
+    /// computed value costs either a leak or an allocation on a path that runs per request — and
+    /// `vocabulary()` runs on every page view. `travels_text_agrees_with_travels` is what keeps the
+    /// two in step, so this being a second copy is checked rather than trusted.
+    pub fn travels_text(self) -> &'static str {
+        match self {
+            Self::Bounce => "from_slot to_slot",
+            Self::Say | Self::Set | Self::StatusUpdate => "from_slot",
+            Self::PrintJson | Self::SetReply | Self::Retrieved => "to_slot",
+        }
+    }
+
+    /// The directions this kind can travel, for a picker that offers only what can work.
+    pub fn directions(self) -> Vec<Direction> {
+        Direction::ALL
+            .iter()
+            .copied()
+            .filter(|d| self.travels(*d))
+            .collect()
+    }
+
     /// Whether this kind takes a `tag` (bounce) or a `subtype` (print_json). Everything else takes
     /// neither, and offering a narrowing box that does nothing is how a filter gets written that
     /// matches more than its author meant.
+    ///
+    /// **`Say` takes neither, and it is the one that invites the question**: it carries `text`, but
+    /// that is a chat line rather than a key out of a closed set, and pahoa matches a narrowing
+    /// exactly. A box that looked like "drop lines containing…" and behaved like an exact match on
+    /// the whole message would be worse than no box. Thin a noisy slot with `p` instead.
     pub fn narrows_with(self) -> Option<&'static str> {
         match self {
             Self::Bounce => Some("tag"),
@@ -336,6 +392,25 @@ impl Rule {
             return Err(format!(
                 "a probability is between 0 and 1, and {p} is not. It is the fraction DROPPED, so \
                  0.75 leaves a quarter getting through."
+            ));
+        }
+        // **An impossible direction, refused here rather than at the room.** pahoa answers `400`,
+        // and until this existed that arrived as "the room answered 400" over a rule the page was
+        // still displaying as the room's filter — which is how a chat filter came to be set,
+        // stored, and silently not in force.
+        if !self.kind.travels(self.direction) {
+            let sends = self.kind.travels(Direction::FromSlot);
+            return Err(format!(
+                "a {} cannot travel {} — it is something a slot {}, so this rule could never \
+                 match. Use {} instead.",
+                self.kind.label(),
+                self.direction.as_str(),
+                if sends { "sends" } else { "receives" },
+                if sends {
+                    Direction::FromSlot.as_str()
+                } else {
+                    Direction::ToSlot.as_str()
+                }
             ));
         }
         // A narrowing field on a kind that does not take one matches nothing at the room and reads
@@ -682,6 +757,7 @@ mod tests {
             Kind::ALL.iter().map(|k| k.as_str()).collect::<Vec<_>>(),
             [
                 "bounce",
+                "say",
                 "print_json",
                 "set",
                 "set_reply",
@@ -807,6 +883,91 @@ mod tests {
             assert!(
                 !label.contains('_') && label.starts_with(|c: char| c.is_ascii_uppercase()),
                 "{} is shown to people as {label}",
+                kind.as_str()
+            );
+        }
+    }
+
+    /// **The pairing that shipped broken.** A chat filter was written as `from_slot` `PrintJSON`,
+    /// which Puna accepted and stored and pahoa answered `400` to — so the room page showed a
+    /// filter the room had never taken, and every chat line went on getting through.
+    ///
+    /// Transcribed from pahoa's `Kind::travels`, which is the authority. The table is written out
+    /// rather than derived, because deriving it from the same function it is checking would assert
+    /// nothing.
+    #[test]
+    fn a_kind_that_cannot_travel_that_way_is_refused_before_the_room_sees_it() {
+        let one_way = [
+            (Kind::PrintJson, Direction::ToSlot),
+            (Kind::SetReply, Direction::ToSlot),
+            (Kind::Retrieved, Direction::ToSlot),
+            // `Say` is a slot's own chat line going up, so it is the mirror of `PrintJson` — and
+            // the pair is exactly the confusion this table exists to pin.
+            (Kind::Say, Direction::FromSlot),
+            (Kind::Set, Direction::FromSlot),
+            (Kind::StatusUpdate, Direction::FromSlot),
+        ];
+
+        for (kind, works) in one_way {
+            let wrong = if works == Direction::ToSlot {
+                Direction::FromSlot
+            } else {
+                Direction::ToSlot
+            };
+            let rule = Rule {
+                direction: wrong,
+                kind,
+                tag: None,
+                subtype: None,
+                p: None,
+            };
+            let message = rule.validate().expect_err(&format!(
+                "{} travelling {} is a rule that can never match",
+                kind.as_str(),
+                wrong.as_str()
+            ));
+            assert!(message.contains(kind.label()), "{message}");
+            // It says which direction to use instead, because the answer is always the other one.
+            assert!(message.contains(works.as_str()), "{message}");
+
+            assert!(
+                Rule {
+                    direction: works,
+                    kind,
+                    ..rule
+                }
+                .validate()
+                .is_ok(),
+                "{} should travel {}",
+                kind.as_str(),
+                works.as_str()
+            );
+        }
+
+        // A bounce is the relay and exists in both directions — the only kind with a real choice.
+        for direction in Direction::ALL {
+            assert!(Kind::Bounce.travels(*direction));
+        }
+        assert_eq!(Kind::Bounce.directions().len(), 2);
+        assert_eq!(Kind::PrintJson.directions(), vec![Direction::ToSlot]);
+    }
+
+    /// **The second copy, checked rather than trusted.** `travels_text` is hardcoded so the picker
+    /// can carry it in an attribute without allocating per request; if it drifts from `travels`, the
+    /// editor offers a direction the room refuses and the refusal arrives as a `400`.
+    #[test]
+    fn travels_text_agrees_with_travels() {
+        for kind in Kind::ALL {
+            let derived = kind
+                .directions()
+                .iter()
+                .map(|d| d.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert_eq!(
+                kind.travels_text(),
+                derived,
+                "{} advertises directions it cannot travel",
                 kind.as_str()
             );
         }

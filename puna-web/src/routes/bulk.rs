@@ -73,8 +73,13 @@ pub struct BulkTemplate {
     /// The rule vocabulary, for the shared `rooms/_rule_table.html`. Sent from the model's own
     /// `ALL` lists so the panel offers exactly what the per-slot editor does.
     directions: Vec<(&'static str, &'static str)>,
-    /// `(wire value, the name a person reads, what it narrows with)` — see `Vocabulary::kinds`.
-    kinds: Vec<(&'static str, &'static str, Option<&'static str>)>,
+    /// See `Vocabulary::kinds` for what each element is.
+    kinds: Vec<(
+        &'static str,
+        &'static str,
+        Option<&'static str>,
+        &'static str,
+    )>,
     tag_suggestions: Vec<&'static str>,
     subtype_suggestions: Vec<&'static str>,
     /// **Always just the blank row, and that is the whole difference from the per-slot editor.**

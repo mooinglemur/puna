@@ -80,6 +80,17 @@ pub enum RoomError {
     /// reason, so it reads as "the Secret is missing" rather than "the token is wrong".
     #[error("the room answered {status}")]
     Status { status: u16 },
+
+    /// The room answered, said no, **and said why** — its own words, carried through.
+    ///
+    /// A `400` from pahoa is a Puna bug by construction (§6: the body is serialized from a typed
+    /// enum, so the room failing to parse it means the two have drifted), and pahoa states the
+    /// reason in `{"error": …}`. Discarding it cost real time: a chat filter written `from_slot`
+    /// `PrintJSON` — a pairing pahoa refuses because it can never match — reached an operator as
+    /// *"could not apply the filter: the room answered 400"*, over a page still showing the filter
+    /// as the room's. The room had said "a print_json cannot travel from_slot" all along.
+    #[error("the room answered {status}: {detail}")]
+    Refused { status: u16, detail: String },
 }
 
 impl RoomError {
@@ -92,8 +103,36 @@ impl RoomError {
         match self {
             Self::Transport(_) | Self::Resolve { .. } => true,
             Self::RateLimited { .. } => false,
-            Self::Status { status } => *status >= 500,
+            // One rule for both, because carrying the room's explanation must not change whether
+            // the call is retried — a `400` with a reason is the same non-transient Puna bug a
+            // `400` without one is.
+            Self::Status { status } | Self::Refused { status, .. } => *status >= 500,
         }
+    }
+}
+
+/// A room's error, with its own explanation attached when it gave one.
+///
+/// `classify` deliberately takes `&Response` and cannot read a body, so this is the async half:
+/// only reached on a failure, so a healthy call pays nothing. pahoa answers `{"error": …}`; anything
+/// else — an empty body, a proxy's HTML — leaves the error exactly as it was rather than pasting
+/// something unhelpful into an operator's face.
+pub async fn explain(error: RoomError, response: reqwest::Response) -> RoomError {
+    let RoomError::Status { status } = error else {
+        return error;
+    };
+    let detail = response
+        .json::<serde_json::Value>()
+        .await
+        .ok()
+        .and_then(|body| {
+            body.get("error")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        });
+    match detail {
+        Some(detail) if !detail.trim().is_empty() => RoomError::Refused { status, detail },
+        _ => RoomError::Status { status },
     }
 }
 

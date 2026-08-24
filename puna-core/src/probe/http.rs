@@ -178,8 +178,12 @@ impl RoomProbe for HttpsProbe {
 
         let response = request.send().await.map_err(crate::room::RoomError::from)?;
 
+        // **Carry the room's own reason.** A `400` here means the rule Puna built is one pahoa
+        // refuses — an impossible direction, a narrowing that does not apply — and it says which in
+        // its body. Without this the operator gets "the room answered 400" over a page that is
+        // still showing the filter as though it had been taken.
         if let Some(e) = classify(&response) {
-            return Err(e.into());
+            return Err(crate::room::explain(e, response).await.into());
         }
         Ok(())
     }

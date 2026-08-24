@@ -1291,6 +1291,21 @@ fn the_rule_table_renders_every_hook_and_field_name_its_readers_expect() {
         "filters.js renumbers added rows by this prefix; if it stops matching, two rows share an \
          index and Rocket silently merges them into one rule"
     );
+    // **The direction constraint, which is a three-file contract like the rest.** `travels_text`
+    // renders into `data-travels`, `filters.js` reads it to hide the impossible directions, and
+    // `Rule::validate` refuses one that gets through anyway. Break the attribute and the editor
+    // silently goes back to offering a `from_slot` `PrintJSON` — a rule the room answers `400` to,
+    // over a page still showing it as saved.
+    assert!(
+        template.contains("data-travels="),
+        "the kind picker no longer carries which directions it can travel, so the editor offers \
+         pairings the room refuses"
+    );
+    assert!(
+        script.contains("dataset.travels"),
+        "filters.js no longer reads `data-travels`, so nothing narrows the direction picker"
+    );
+
     assert!(
         template.contains("name=\"state\""),
         "the empty table's meaning is posted as `state`; renaming it makes every emptied table an \

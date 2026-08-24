@@ -401,9 +401,16 @@ impl Dispatcher {
 
             Err(e) => {
                 let disposition = match &e {
-                    ProbeError::Room(puna_core::room::RoomError::Status { status }) => {
-                        Disposition::from_status(*status)
-                    }
+                    // **Both status cases, and the wildcard below is why this needs saying.**
+                    // `Refused` is a `Status` that also carries the room's explanation, so it must
+                    // land in the same disposition — a `400` is a Puna bug whether or not the room
+                    // told us what was wrong with it. Adding the variant compiled silently and
+                    // would have demoted every explained refusal to a plain `Failed`, losing the
+                    // "this is a Puna bug, alert" path exactly when the room had said why.
+                    ProbeError::Room(
+                        puna_core::room::RoomError::Status { status }
+                        | puna_core::room::RoomError::Refused { status, .. },
+                    ) => Disposition::from_status(*status),
                     ProbeError::Room(puna_core::room::RoomError::RateLimited { .. }) => {
                         Disposition::RateLimited
                     }

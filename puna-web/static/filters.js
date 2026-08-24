@@ -84,10 +84,52 @@
     subtype.parentNode.classList.toggle("inapplicable", subtype.disabled);
   }
 
+  // **Offer only the directions this kind can actually travel.**
+  //
+  // Most kinds are one-way — a `Set` is something a slot sends, a `PrintJSON` something it receives
+  // — and pahoa refuses the impossible pairing outright, because a rule that cannot match looks
+  // exactly like a filter that is not working. Which is what happened: a chat filter written
+  // `from_slot` `PrintJSON` was accepted here, stored, pushed, and answered `400`, while the room
+  // page went on showing it as the room's filter.
+  //
+  // The route refuses it too. This is so it cannot be typed, which is the better place to stop it.
+  function steer(row) {
+    var kind = row.querySelector("[data-rule-kind]");
+    var direction = row.querySelector("[data-rule-direction]");
+    if (!kind || !direction) return;
+
+    var chosen = kind.options[kind.selectedIndex];
+    var travels = chosen ? (chosen.dataset.travels || "").split(" ") : [];
+    // No kind chosen yet: both stay on offer, because the row is not a rule yet.
+    var open = !kind.value || travels.length === 0;
+
+    var allowed = null;
+    Array.prototype.forEach.call(direction.options, function (option) {
+      var ok = open || travels.indexOf(option.value) !== -1;
+      // Hidden AND disabled: `hidden` on an `<option>` is not honored everywhere, and a disabled
+      // option cannot be selected wherever it is still drawn.
+      option.hidden = !ok;
+      option.disabled = !ok;
+      if (ok && allowed === null) allowed = option.value;
+    });
+
+    // If the direction on the row is now impossible, move it to the one that works. Silent because
+    // there is nothing to choose between: a one-way kind has exactly one answer, and leaving the
+    // old value would submit the rule this whole function exists to prevent.
+    if (allowed !== null && travels.length && travels.indexOf(direction.value) === -1) {
+      direction.value = allowed;
+    }
+    // **Deliberately NOT greyed the way an inapplicable tag cell is.** A one-way kind leaves nothing
+    // to choose, but the direction still applies and is still submitted — dimming it would say the
+    // opposite, which is what `.inapplicable` means two columns over. A picker holding one option
+    // says "no choice here" on its own.
+  }
+
   function refresh(form) {
     var live = 0;
     form.querySelectorAll(".rule-row").forEach(function (row) {
       narrow(row);
+      steer(row);
       if (isLive(row)) live++;
     });
 

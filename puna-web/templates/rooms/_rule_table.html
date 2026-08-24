@@ -51,7 +51,7 @@
 <td><select name="rules[{{ row.index }}].kind" data-rule-kind aria-label="What to drop">
 <option value="">&mdash; choose &mdash;</option>
 {% for k in kinds %}
-<option value="{{ k.0 }}"{% if let Some(narrow) = k.2 +%} data-narrows="{{ narrow }}"{% endif %}{% if row.kind == k.0 +%} selected{% endif %}>{{ k.1 }}</option>
+<option value="{{ k.0 }}" data-travels="{{ k.3 }}"{% if let Some(narrow) = k.2 +%} data-narrows="{{ narrow }}"{% endif %}{% if row.kind == k.0 +%} selected{% endif %}>{{ k.1 }}</option>
 {% endfor %}
 </select></td>
 {# The cell is greyed by the SERVER as well as disabled, so the table reads correctly before any
