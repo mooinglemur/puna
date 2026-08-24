@@ -1179,6 +1179,96 @@ fn the_moderation_dialog_renders_every_hook_its_script_reaches_for() {
     );
 }
 
+/// **The rule table's hooks and its field names, across three files that never mention each other.**
+///
+/// `filters.js` addresses everything through `[data-…]` attributes and renames fields with
+/// `/^rules\[(\d+)\]/`; `rooms/_rule_table.html` renders both; and `routes/filters.rs` reads the
+/// submission back as `rules[N].field`. Every break here is silent in its own way, which is why
+/// this is a lint rather than a comment:
+///
+/// * A renamed `data-rule-*` hook makes `narrow()` return early, so the tag and subtype cells stop
+///   following the kind — and a tag left on a row that is no longer a bounce is then submitted and
+///   refused, in a form that looked fine.
+/// * A renamed `data-empty-meaning` leaves the radios enabled and `required` while hidden, and the
+///   browser then refuses to submit the form with a validation bubble it cannot point at anything.
+/// * A field named anything but `rules[N].…` still posts, and Rocket reads **nothing** — the route
+///   sees an empty table and clears the filter that was on screen a moment ago.
+///
+/// The template is checked against the script, and the field names against both.
+#[test]
+fn the_rule_table_renders_every_hook_and_field_name_its_readers_expect() {
+    let script = std::fs::read_to_string(source("static/filters.js")).expect("filters.js");
+    let template = std::fs::read_to_string(source_template("rooms/_rule_table.html"))
+        .expect("rooms/_rule_table.html");
+
+    let mut wanted: Vec<&str> = Vec::new();
+    let mut rest = script.as_str();
+    while let Some(at) = rest.find("[data-") {
+        let after = &rest[at + 1..];
+        let name = after.split(']').next().unwrap_or_default();
+        if !name.is_empty() && !wanted.contains(&name) {
+            wanted.push(name);
+        }
+        rest = after;
+    }
+
+    assert!(
+        wanted.len() >= 8,
+        "only {} hooks found in filters.js -- this lint is no longer looking at anything: {wanted:?}",
+        wanted.len()
+    );
+
+    // `data-rule-form` is the one the script looks for on the FORM, which the table itself does not
+    // render — the two callers do, and both are checked below.
+    let missing: Vec<&&str> = wanted
+        .iter()
+        .filter(|name| **name != "data-rule-form" && !template.contains(**name))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "filters.js addresses these and rooms/_rule_table.html renders none of them, so the editor \
+         silently stops narrowing, striking out or asking what an empty table means: {missing:?}"
+    );
+
+    for host in ["rooms/filter.html", "rooms/bulk.html"] {
+        let source = std::fs::read_to_string(source_template(host)).expect(host);
+        assert!(
+            source.contains("data-rule-form"),
+            "{host} includes the rule table and does not mark its form, so filters.js binds \
+             nothing on that page"
+        );
+        assert!(
+            source.contains("filters.js"),
+            "{host} includes the rule table and does not load filters.js"
+        );
+    }
+
+    // The field names, which are a contract with Rocket rather than with the script — and the one
+    // whose failure looks like the room clearing its own filter.
+    for field in ["direction", "kind", "tag", "subtype", "percent", "remove"] {
+        assert!(
+            template.contains(&format!("].{field}\"")),
+            "rooms/_rule_table.html no longer renders a `rules[N].{field}` field, so the route \
+             reads it as absent on every save"
+        );
+    }
+    assert!(
+        template.contains("name=\"rules["),
+        "the table's fields are indexed under `rules[N]`; anything else parses as an empty table \
+         and clears the filter being edited"
+    );
+    assert!(
+        script.contains("^rules\\[(\\d+)\\]"),
+        "filters.js renumbers added rows by this prefix; if it stops matching, two rows share an \
+         index and Rocket silently merges them into one rule"
+    );
+    assert!(
+        template.contains("name=\"state\""),
+        "the empty table's meaning is posted as `state`; renaming it makes every emptied table an \
+         unanswerable question"
+    );
+}
+
 /// **A filter box that scripting has not reached must not look usable.**
 ///
 /// Three files have to agree and each spells the contract differently, so no grep in one finds the

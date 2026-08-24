@@ -25,7 +25,7 @@ room next starts, and <strong>Release Claims</strong>, which never touches the r
 The room page&rsquo;s per-slot controls work without it.</p>
 </noscript>
 
-<form method="post" action="/room/{{ room_id }}/bulk" id="bulk">
+<form method="post" action="/room/{{ room_id }}/bulk" id="bulk" data-rule-form>
 
 {# --- the two panes ---------------------------------------------------------------------------
    **The left list is every slot; the right is the staged set.** `>>` moves what is highlighted on
@@ -156,35 +156,35 @@ The room page&rsquo;s per-slot controls work without it.</p>
 </fieldset>
 
 {# --- filters ---------------------------------------------------------------------------------
-   **The same knobs as a slot's own page**, from one include, so a rule typed here and a rule typed
-   there mean the same thing. One rule across many slots, which is the case filters exist for: a
-   malformed message type crashing a set of clients.
+   **The same table as a slot's own page**, from one include and read back by the same code, so a
+   ruleset built here and one built there are the same thing.
 
    It REPLACES whatever each staged slot had rather than merging, so every one of them ends up
    identical -- which is what "identically per affected slot" means and is the only outcome a bulk
-   action can honestly promise. A multi-rule set is built on a slot's own page. #}
-<fieldset class="selector filters">
+   action can honestly promise, since adding to each would leave them in different end states
+   depending on where they started.
+
+   An EMPTY table is the other two things this used to have buttons for: the radios under it say
+   whether the staged slots follow the room's filter or are exempt from every filter. One button,
+   and the table says what it does. #}
+<fieldset class="filters">
 <legend>Filter the target slots</legend>
-{% include "rooms/_rule_fields.html" %}
-<button type="submit" name="action" value="filter_set"
-        data-confirm="Replace the filter on every staged slot with this one rule? Whatever they had is discarded.">Apply this filter</button>
-<button type="submit" name="action" value="filter_exempt"
-        title="These slots are filtered by nothing at all, including the room's filter."
-        data-confirm="Exempt every staged slot from all filtering, including the room's?">Exempt from all filters</button>
-<button type="submit" name="action" value="filter_follow"
-        title="Remove these slots' own filters so the room's applies to them again."
-        data-confirm="Remove the filter from every staged slot? The room's filter applies to them again.">Follow the room filter</button>
+{% include "rooms/_rule_table.html" %}
 {% if room_filters %}
 {# Both directions of the replacement hazard, shown only when a room filter exists to be lost or
    gained -- the same rule the per-slot editor follows, because a warning that is always there is
    not read. #}
-<p class="warning">This room has a filter of its own. <strong>Apply</strong> and
-<strong>Exempt</strong> stop it reaching the staged slots; <strong>Follow</strong> makes it apply to
-them again, at once. See the <a href="/room/{{ room_id }}/filter">room filter</a>.</p>
+<p class="warning">This room has a filter of its own. Rules here, and
+<strong>exempt from every filter</strong>, stop it reaching the staged slots;
+<strong>follows the room&rsquo;s filter</strong> makes it apply to them again, at once. See the
+<a href="/room/{{ room_id }}/filter">room filter</a>.</p>
 {% endif %}
+<button type="submit" name="action" value="filter"
+        data-confirm="Set the filter on every staged slot to exactly what is shown above? Whatever each of them had is discarded.">Set the filter</button>
 </fieldset>
 
 </form>
 
 <script src="/static/bulk.js?v={{ base.static_version }}" defer></script>
+<script src="/static/filters.js?v={{ base.static_version }}" defer></script>
 {% endblock %}

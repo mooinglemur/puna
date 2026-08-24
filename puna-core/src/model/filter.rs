@@ -151,6 +151,45 @@ pub const REFUSED_KINDS: &[(&str, &str)] = &[
     ),
 ];
 
+/// **Bounce tags an operator is likely to want**, as suggestions and nothing more.
+///
+/// The set is genuinely open — a bounce carries whatever tags its sender chose, and pahoa's own
+/// comment calls the list "a convention rather than a schema, with `TrapLink` already the second
+/// entry and not the last". So this is autocomplete, never validation: a tag typed by hand and not
+/// on this list is an ordinary rule, because the next link type will exist before this constant
+/// hears about it.
+///
+/// Transcribed from upstream's senders rather than invented: `CommonClient.py:743` sends
+/// `["DeathLink"]`, and `worlds/smw/Client.py` sends `["TrapLink"]` and `["RingLink"]`.
+pub const BOUNCE_TAGS: &[&str] = &["DeathLink", "TrapLink", "RingLink"];
+
+/// **`print_json` subtypes, which unlike tags ARE a closed set.**
+///
+/// Transcribed from pahoa's `PrintJsonType` (`crates/pahoa-proto/src/server.rs`), whose `as_text`
+/// is documented as "the wire spelling, which is also what a filter rule's `subtype` names" — so
+/// this is the same list the room matches against, in the same spelling.
+///
+/// Still offered as suggestions rather than a picker: pahoa matches case-insensitively and a value
+/// it does not recognize is a rule that matches nothing rather than an error, and a client the
+/// reference gains a subtype for should be filterable here before Puna is rebuilt.
+pub const PRINT_JSON_SUBTYPES: &[&str] = &[
+    "ItemSend",
+    "ItemCheat",
+    "Hint",
+    "Join",
+    "Part",
+    "Chat",
+    "ServerChat",
+    "Tutorial",
+    "TagsChanged",
+    "CommandResult",
+    "AdminCommandResult",
+    "Goal",
+    "Release",
+    "Collect",
+    "Countdown",
+];
+
 /// One rule: what to drop, which way, and how often.
 ///
 /// **`PartialEq` but not `Eq`**, because `p` is a float. That is why [`Matcher`] exists separately —

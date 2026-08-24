@@ -1,10 +1,14 @@
 {% extends "base.html" %}
-{% block title %}{{ room_name +}} &mdash; filter{% endblock %}
+{% block title %}{{ scope +}} &mdash; {{+ room_name }}{% endblock %}
 {% block content %}
 
-<h1>{{ room_name }}</h1>
-<p class="hint"><a href="/room/{{ room_id }}">Back to the room</a> &mdash;
-{%+ if let Some(n) = slot %}filter for slot {{+ n +}} ({{ slot_player }}){% else %}room filter{% endif %}</p>
+{# **The scope is the heading, not a footnote under it.** The room name is the bold thing on the
+   page and a reader's eye stops there, so a slot named only in dimmed text below it gets skipped —
+   reported after the first look at this page, where somebody read the whole thing and still did not
+   know which slot they were editing. It sits inside the `<h1>` rather than beside it so the page
+   still has exactly one top-level heading and a screen reader announces both halves together. #}
+<h1>{{ room_name }}<span class="scope">{{ scope }}</span></h1>
+<p class="hint"><a href="/room/{{ room_id }}">Back to the room</a></p>
 
 {% if let Some(notice) = notice %}
 <p class="{{ notice.class }}">{{ notice.message }}</p>
@@ -28,72 +32,39 @@ This slot has no rules of its own, so it follows whatever the room does.</p>
 </ul>
 {% endif %}
 
-{% if let Some(n) = slot %}
-{# --- the slot's own state ---------------------------------------------------------------------
-   **Three mutually exclusive states, so radio-shaped controls rather than a rules box with a
-   hidden mode.** The word "instead" is where the replacement gets stated: pahoa replaces rather
-   than merges, and nothing about a rule being typed hints at that. #}
-<h2>This slot</h2>
-<form method="post" action="/room/{{ room_id }}/slot/{{ n }}/filter" class="filter-state">
-<p>
-{% if slot_state == Some("follows") %}<strong>Follows the room&rsquo;s filter.</strong>
-{% else if slot_state == Some("exempt") %}<strong>Exempt from every filter</strong>, including the room&rsquo;s.
-{% else %}<strong>Uses its own rules instead of the room&rsquo;s.</strong>{% endif %}
-</p>
-
-{% if !room_rules.is_empty() %}
-{# The whole hazard, in the two directions it runs, shown only when a room filter exists to be
-   lost or gained. Silent otherwise, because a warning that is always there is not read. #}
+{% if slot.is_some() && !room_rules.is_empty() %}
+{# The whole hazard, in the two directions it runs, shown only when a room filter exists to be lost
+   or gained. Silent otherwise, because a warning that is always there is not read. #}
 {% if slot_state == Some("follows") %}
 <p class="warning">Giving this slot rules of its own <strong>stops the room&rsquo;s filter reaching
-it</strong> &mdash; the room&rsquo;s rules are not added to what you write here, they are replaced by it.
-The room currently drops:</p>
+it</strong> &mdash; the room&rsquo;s rules are not added to what you write here, they are replaced by
+it. The room currently drops:</p>
+{% else %}
+<p class="warning">Emptying this table and choosing <strong>follows the room&rsquo;s filter</strong>
+makes these apply to this slot <strong>at once</strong>:</p>
+{% endif %}
 <ul class="rules">
 {% for rule in room_rules %}
 <li>{{ rule.describes }}</li>
 {% endfor %}
 </ul>
-{% else %}
-<p class="warning">Returning this slot to the room&rsquo;s filter makes these apply to it
-<strong>at once</strong>:</p>
-<ul class="rules">
-{% for rule in room_rules %}
-<li>{{ rule.describes }}</li>
-{% endfor %}
-</ul>
-{% endif %}
 {% endif %}
 
-<button type="submit" name="action" value="follow">Follow the room&rsquo;s filter</button>
-<button type="submit" name="action" value="exempt">Exempt from every filter</button>
-</form>
-{% endif %}
+{# --- the editor ------------------------------------------------------------------------------
+   One table, edited in place, saved in one go. `rooms/_rule_table.html` is the whole of it and is
+   shared with the bulk panel, so the knobs cannot differ between the two. #}
+<h2>{% if slot.is_some() %}This slot&rsquo;s own rules{% else %}This room&rsquo;s rules{% endif %}</h2>
+<form method="post" data-rule-form
+      action="{% if let Some(n) = slot %}/room/{{ room_id }}/slot/{{ n }}/filter{% else %}/room/{{ room_id }}/filter{% endif %}">
 
-{# --- the rules stored at this scope ---------------------------------------------------------- #}
-<h2>{% if slot.is_some() %}This slot&rsquo;s own rules{% else %}Rules{% endif %}</h2>
-{% if rules.is_empty() %}
-<p class="hint">None.</p>
-{% else %}
-<div class="scroll-x">
-<table>
-<thead><tr><th>Direction</th><th>Effect</th><th>Actions</th></tr></thead>
-<tbody>
-{% for rule in rules %}
-<tr>
-<td>{{ rule.direction }}</td>
-<td>{{ rule.describes }}</td>
-<td>
-<form method="post" action="{% if let Some(n) = slot %}/room/{{ room_id }}/slot/{{ n }}/filter{% else %}/room/{{ room_id }}/filter{% endif %}">
-<input type="hidden" name="index" value="{{ rule.index }}">
-<button type="submit" name="action" value="remove">Remove</button>
+{% include "rooms/_rule_table.html" %}
+
+<p class="form-actions"><button type="submit">Save these rules</button>
+<a class="cancel" href="/room/{{ room_id }}">Cancel</a></p>
 </form>
-</td>
-</tr>
-{% endfor %}
-</tbody>
-</table>
-</div>
-{% endif %}
+
+<p class="hint">These cannot be filtered, because dropping one desynchronizes the client:
+{%+ for r in refused %}<code>{{ r.0 }}</code>{% if !loop.last %},{% endif %}{% endfor %}.</p>
 
 {# --- the room editor's warning ------------------------------------------------------------------
    **Named, not counted.** "This does not reach 3 slots" sends somebody to work out which three;
@@ -110,24 +81,5 @@ opted out of the room&rsquo;s filter:</p>
 </ul>
 {% endif %}
 
-{# --- adding one ------------------------------------------------------------------------------
-   One rule per submission, and no scripting: every state here is a plain POST. A dynamic
-   multi-rule editor would be a better experience and a worse first cut. #}
-<h2>Add a rule</h2>
-<form method="post" action="{% if let Some(n) = slot %}/room/{{ room_id }}/slot/{{ n }}/filter{% else %}/room/{{ room_id }}/filter{% endif %}" class="console">
-
-{% include "rooms/_rule_fields.html" %}
-
-<button type="submit" name="action" value="add">Add rule</button>
-</form>
-
-<p class="hint">These cannot be filtered, because dropping one desynchronizes the client:
-{%+ for r in refused %}<code>{{ r.0 }}</code>{% if !loop.last %},{% endif %}{% endfor %}.</p>
-
-{% if slot.is_none() && !rules.is_empty() %}
-<form method="post" action="/room/{{ room_id }}/filter">
-<button type="submit" name="action" value="clear">Remove the room&rsquo;s filter entirely</button>
-</form>
-{% endif %}
-
+<script src="/static/filters.js?v={{ base.static_version }}" defer></script>
 {% endblock %}

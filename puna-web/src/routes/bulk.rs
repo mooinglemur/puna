@@ -70,10 +70,23 @@ pub struct BulkTemplate {
     /// than derived in the browser so the suggestions are the same set the selectors match against.
     games: Vec<String>,
     claimants: Vec<String>,
-    /// The rule vocabulary, for the shared `_rule_fields.html`. Sent from the model's own `ALL`
-    /// lists so the panel offers exactly what the per-slot editor does.
+    /// The rule vocabulary, for the shared `rooms/_rule_table.html`. Sent from the model's own
+    /// `ALL` lists so the panel offers exactly what the per-slot editor does.
     directions: Vec<(&'static str, &'static str)>,
     kinds: Vec<(&'static str, Option<&'static str>)>,
+    tag_suggestions: Vec<&'static str>,
+    subtype_suggestions: Vec<&'static str>,
+    /// **Always just the blank row, and that is the whole difference from the per-slot editor.**
+    /// The panel builds a ruleset to impose rather than editing one that exists, because the staged
+    /// slots do not share a filter to start from — showing any one of theirs would be showing a
+    /// state most of them are not in.
+    rules: Vec<crate::routes::filters::RuleRow>,
+    has_rules: bool,
+    empty_means_choice: bool,
+    empty_choice: Option<&'static str>,
+    /// False, unlike the editors: this form carries eight other action buttons and a `required`
+    /// control blocks every submit in its form, not only the one it belongs to.
+    empty_choice_required: bool,
     /// Whether this room filters at all — the panel says what a slot filter costs only when there
     /// is something to lose, the same rule the per-slot editor follows.
     room_filters: bool,
@@ -115,17 +128,21 @@ const ACTIONS: &[(&str, &str)] = &[
     ("release_items", "Release Items"),
     ("collect_items", "Collect Items"),
     ("set_goaled", "Set as Goaled"),
-    // **Filters, which are not commands and not the roster write either.** Each one sets the same
-    // state on every staged slot and then queues an `ApplyFilters` per slot so the running room
-    // hears about it -- so the batch page reports them exactly like any other bulk action.
-    ("filter_set", "Apply this filter"),
-    ("filter_exempt", "Exempt from all filters"),
-    ("filter_follow", "Follow the room filter"),
+    // **Filters, which are not commands and not the roster write either.** This sets the same state
+    // on every staged slot and then queues an `ApplyFilters` per slot so the running room hears
+    // about it -- so the batch page reports it exactly like any other bulk action.
+    //
+    // **One action rather than three.** It used to be Apply / Exempt / Follow, because a single
+    // rule was typed into a row of fields and the two ways of saying "no rules" had nowhere to
+    // live but their own buttons. With the table here, an empty table IS those two cases and the
+    // radios under it are the choice between them -- so the button says what it does and the table
+    // says what it does it with, and the panel offers exactly what a slot's own page does.
+    ("filter", "Set the filter"),
 ];
 
 /// Whether an action sets a slot's traffic filter rather than sending a command.
 fn is_filter_action(action: &str) -> bool {
-    action.starts_with("filter_")
+    action == "filter"
 }
 
 /// The command one action produces for one slot, or `None` when it is not a room action.
@@ -151,6 +168,19 @@ fn command_for(action: &str, slot: i32) -> Option<RoomCommand> {
         // caller rather than silently doing nothing.
         _ => return None,
     })
+}
+
+/// What setting this state did, as a sentence's opening.
+///
+/// The three cases are genuinely different outcomes rather than three spellings of one, so they are
+/// reported as what happened rather than as the label of the button that covers all three.
+fn describe_state(state: &puna_core::model::filter::SlotFilter) -> &'static str {
+    use puna_core::model::filter::SlotFilter;
+    match state {
+        SlotFilter::Own(_) => "Filtered",
+        SlotFilter::Exempt => "Exempted from every filter",
+        SlotFilter::Follows => "Returned to the room's filter",
+    }
 }
 
 fn label_for(action: &str) -> &str {
@@ -198,6 +228,7 @@ async fn show(
     claimants.sort();
     claimants.dedup();
 
+    let vocabulary = crate::routes::filters::vocabulary();
     Ok(BulkTemplate {
         base: TplContext::new(access.session.session()),
         room_id: room.id.to_string(),
@@ -206,14 +237,15 @@ async fn show(
         slots,
         games,
         claimants,
-        directions: puna_core::model::filter::Direction::ALL
-            .iter()
-            .map(|d| (d.as_str(), d.label()))
-            .collect(),
-        kinds: puna_core::model::filter::Kind::ALL
-            .iter()
-            .map(|k| (k.as_str(), k.narrows_with()))
-            .collect(),
+        directions: vocabulary.directions,
+        kinds: vocabulary.kinds,
+        tag_suggestions: vocabulary.tag_suggestions,
+        subtype_suggestions: vocabulary.subtype_suggestions,
+        rules: crate::routes::filters::editor_rows(&[]),
+        has_rules: false,
+        empty_means_choice: true,
+        empty_choice: None,
+        empty_choice_required: false,
         room_filters: !puna_core::model::filter::room_filter(&mut conn, room.id)
             .await?
             .unwrap_or_default()
@@ -225,14 +257,13 @@ async fn show(
 #[derive(FromForm)]
 pub struct BulkForm {
     action: String,
-    /// For `filter_set`, and the same five knobs the per-slot editor takes — one rule across many
-    /// slots, which is the case filters exist for: a malformed message type crashing a set of
-    /// clients.
-    direction: Option<String>,
-    kind: Option<String>,
-    tag: Option<String>,
-    subtype: Option<String>,
-    percent: Option<String>,
+    /// For `filter`: the same table the per-slot editor renders, read by the same code. Several
+    /// rules rather than the one the first cut allowed, so a set built here and a set built on a
+    /// slot's own page are the same thing.
+    rules: Vec<crate::routes::filters::RuleFields>,
+    /// What an empty table means, when it is empty. Not `required` in the markup here, because
+    /// this form carries eight other action buttons and a required control blocks all of them.
+    state: Option<String>,
     /// The staged slots. A repeated field rather than a delimited string, so the browser and Rocket
     /// agree about the shape without a parser in between.
     slots: Vec<i32>,
@@ -303,31 +334,15 @@ async fn apply(
     // hears it.** Set apart from the command actions above because the durable half is Puna's own
     // tables — the command carries only a scope and the dispatcher reads them back.
     if is_filter_action(&form.action) {
-        use puna_core::model::filter::SlotFilter;
-
-        let state = match form.action.as_str() {
-            // One rule across many slots, which is the case the feature exists for. A multi-rule
-            // set is built on a slot's own page; here the whole point is that every staged slot
-            // ends up identical, so this REPLACES whatever each had rather than merging into it.
-            "filter_set" => match crate::routes::filters::rule_from_parts(
-                form.direction.as_deref(),
-                form.kind.as_deref(),
-                form.tag.as_deref(),
-                form.subtype.as_deref(),
-                form.percent.as_deref(),
-            ) {
-                Ok(rule) => SlotFilter::Own(vec![rule]),
+        // **The same table, read by the same code as a slot's own page.** Every staged slot ends up
+        // identical, so this REPLACES whatever each of them had rather than merging into it —
+        // which is what "identically per affected slot" can honestly promise, since adding to each
+        // would leave them in different end states depending on where they started.
+        let state =
+            match crate::routes::filters::slot_state_from(&form.rules, form.state.as_deref()) {
+                Ok(state) => state,
                 Err(message) => return Ok(Flash::error(Redirect::to(back), message)),
-            },
-            "filter_exempt" => SlotFilter::Exempt,
-            "filter_follow" => SlotFilter::Follows,
-            other => {
-                return Err(Error::new(
-                    Status::BadRequest,
-                    anyhow::anyhow!("no such filter action: {other}"),
-                ));
-            }
-        };
+            };
 
         for slot in &form.slots {
             puna_core::model::filter::set_slot_filter(
@@ -344,9 +359,14 @@ async fn apply(
             access.room.id,
             puna_core::model::event::Actor::User(access.user_id()),
             "slot_filter_changed",
-            serde_json::json!({ "slots": form.slots, "action": form.action }),
+            serde_json::json!({ "slots": form.slots, "state": describe_state(&state) }),
         )
         .await?;
+
+        // **What was done, not which button was pressed.** One button now covers three outcomes,
+        // and "Set the filter applied to 12 slots" would leave the reader to remember what was in
+        // the table -- which is the thing they were about to check.
+        let did = format!("{} {} slot(s)", describe_state(&state), form.slots.len());
 
         // Nothing to tell a room that is not running: `reapply_filters` asserts everything at the
         // next start, and queueing would only produce rows saying the room is down.
@@ -354,10 +374,8 @@ async fn apply(
             return Ok(Flash::success(
                 Redirect::to(back),
                 format!(
-                    "{} applied to {} slot(s) and stored. This room is not running, so it takes \
-                     effect the next time it starts.",
-                    label_for(&form.action),
-                    form.slots.len()
+                    "{did}, and stored. This room is not running, so it takes effect the next time \
+                     it starts."
                 ),
             ));
         }
@@ -379,11 +397,7 @@ async fn apply(
         return Ok(match batch {
             Some(batch) => Flash::success(
                 Redirect::to(format!("/room/{room_id}/bulk/{batch}")),
-                format!(
-                    "{} applied to {} slot(s).",
-                    label_for(&form.action),
-                    pushes.len()
-                ),
+                format!("{did}."),
             ),
             None => Flash::warning(
                 Redirect::to(back),

@@ -1188,7 +1188,7 @@ button:hover { border-color: var(--muted); }
   .panes select { height: 18rem; }
 }
 
-.selector, .bulk-actions {
+.selector, .bulk-actions, .filters {
   margin-top: 1rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1233,4 +1233,59 @@ button:hover { border-color: var(--muted); }
    effect in words, never the bare probability. */
 .rules { margin: 0.3rem 0 0.9rem; padding-left: 1.2rem; }
 .rules li { margin-bottom: 0.2rem; }
-.filter-state { margin-bottom: 1rem; }
+
+/* --- the filter editor -------------------------------------------------------------------------
+   **The scope belongs to the heading.** The room name is the boldest thing on the page and a
+   reader's eye stops there, so a slot named only in the dimmed line underneath gets skipped -- as
+   it was, by somebody who read the whole page and still did not know which slot they had open. It
+   sits inside the `<h1>` so the document keeps one top-level heading, and it is set at `h2` size
+   because that is the weight of the section headings it has to compete with. */
+h1 .scope {
+  display: block;
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin-top: 0.2rem;
+}
+
+/* A row of controls rather than a row of readings, so the cells are tighter than a data table's and
+   every field fills the width its column was given. */
+.rule-table td { padding: 0.35rem 0.5rem; }
+.rule-table select,
+.rule-table input[type="text"] { width: 100%; min-width: 7.5rem; }
+.rule-table input[type="number"] { width: 6rem; }
+.rule-table td.remove { text-align: center; }
+
+/* **The cell for the narrowing this kind does not use.** The input inside is `disabled`, which is
+   what stops it being submitted; this is what makes that visible, because a disabled control alone
+   is easy to miss in a dense table and the cell is what the reader is looking at. Rendered by the
+   server from `Kind::narrows_with` and kept in step by `filters.js`, so it is right before any
+   script runs. */
+.rule-table td.inapplicable {
+  background: light-dark(#f1f1ef, #202329);
+}
+
+/* Struck out, applied on save. Dimmed rather than lined through, since every cell holds a form
+   control and `text-decoration` does not reach inside one -- and the checkbox itself stays at full
+   strength, because un-ticking it is the way back. */
+.rule-row.removing td > * { opacity: 0.4; }
+.rule-row.removing td.remove > * { opacity: 1; }
+
+.rule-add { margin: 0.5rem 0 1rem; }
+
+/* The question an empty table asks. A fieldset rather than two loose radios, because the legend is
+   the half that says what the choice is about. */
+.empty-meaning {
+  margin: 0 0 1rem;
+  border: 1px solid var(--warn-fg);
+  border-radius: var(--radius);
+  padding: 0.6rem 1rem 0.8rem;
+}
+
+.empty-meaning label {
+  display: block;
+  margin-top: 0.4rem;
+}
+
+.form-actions { display: flex; gap: 0.8rem; align-items: center; }
+
+.form-actions .cancel { color: var(--muted); }

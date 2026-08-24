@@ -1,0 +1,119 @@
+{# The rule editor: one table of rules, edited in place and saved in one go.
+
+   **One definition, three callers** — the room's filter, one slot's, and the bulk panel — which is
+   what Troy asked for and is also the only way the three stay the same: a rule typed on the panel
+   and a rule typed on a slot's page have to mean the same thing, and three copies of these knobs
+   would drift the first time pahoa gains a matcher.
+
+   The caller supplies `rules`, `directions`, `kinds`, `tag_suggestions`, `subtype_suggestions`,
+   `empty_means_choice` and `empty_choice`, and puts its own submit buttons immediately after this,
+   so the unsaved-changes notice below sits between the table and them.
+
+   **It works with scripting off.** A trailing blank row is always rendered, so one rule can be
+   added per save; removal is a checkbox applied on save rather than a link that needs a handler;
+   and every state below that JavaScript toggles is also rendered correctly by the server. What the
+   script adds is more rows at once, live narrowing of the tag/subtype cells, and the notice. #}
+
+<div class="scroll-x">
+<table class="rule-table">
+<thead>
+<tr>
+<th>Direction</th>
+<th>What to drop</th>
+{# Two columns rather than one "narrows by", because they are two fields and only one of them
+   applies to any given kind. The irrelevant one is DISABLED rather than merely dimmed: a disabled
+   control is not submitted, so a tag left over from a rule that used to be a bounce cannot ride
+   along and be refused. #}
+<th title="Only a bounce is narrowed by a tag. Leave it blank to match every bounce.">Tag</th>
+<th title="Only a print_json is narrowed by a subtype. Leave it blank to match every print_json.">Subtype</th>
+{# **The percentage DROPPED**, said in the heading rather than left to the reader. `p` is equally
+   readable as "how much survives", and a control built on the wrong reading produces a filter that
+   does the opposite of what was asked, at the one setting nobody re-checks. #}
+<th title="How much of what this rule matches is thrown away. Blank drops all of it; 75 leaves a quarter getting through.">Percent dropped</th>
+<th>Remove</th>
+</tr>
+</thead>
+<tbody data-rules>
+{# **One loop, including the blank trailing row.** The blank one was separate markup at first,
+   differing only in a `value=` and which cells started disabled — and a mutation showed the price
+   at once: renaming a field in one copy left the other spelling it right, so a lint asserting the
+   name still passed while every real row posted something the route does not read. The server
+   builds the blank row now (`editor_rows`), so there is one set of field names on the page. #}
+{% for row in rules %}
+<tr class="rule-row{% if row.is_new +%} rule-new{% endif %}">
+<td><select name="rules[{{ row.index }}].direction" data-rule-direction aria-label="Direction">
+{% for d in directions %}
+<option value="{{ d.0 }}"{% if row.direction == d.0 +%} selected{% endif %}>{{ d.1 }}</option>
+{% endfor %}
+</select></td>
+{# `data-narrows` carries the model's own `narrows_with`, so the script learns which cell a kind
+   uses from the same place the server does rather than from a list of its own. #}
+<td><select name="rules[{{ row.index }}].kind" data-rule-kind aria-label="What to drop">
+<option value="">&mdash; choose &mdash;</option>
+{% for k in kinds %}
+<option value="{{ k.0 }}"{% if let Some(narrow) = k.1 +%} data-narrows="{{ narrow }}"{% endif %}{% if row.kind == k.0 +%} selected{% endif %}>{{ k.0 }}</option>
+{% endfor %}
+</select></td>
+{# The cell is greyed by the SERVER as well as disabled, so the table reads correctly before any
+   script runs; `filters.js` keeps the class in step from there. #}
+<td{% if !row.tag_enabled +%} class="inapplicable"{% endif %}><input type="text" name="rules[{{ row.index }}].tag" value="{{ row.tag }}" list="bounce-tags"
+           data-rule-tag aria-label="Tag" placeholder="any"{% if !row.tag_enabled +%} disabled{% endif %}></td>
+<td{% if !row.subtype_enabled +%} class="inapplicable"{% endif %}><input type="text" name="rules[{{ row.index }}].subtype" value="{{ row.subtype }}" list="print-json-subtypes"
+           data-rule-subtype aria-label="Subtype" placeholder="any"{% if !row.subtype_enabled +%} disabled{% endif %}></td>
+<td><input type="number" name="rules[{{ row.index }}].percent" value="{{ row.percent }}" min="0" max="100" step="any"
+           data-rule-percent aria-label="Percent dropped" placeholder="100"></td>
+{# A checkbox applied on save rather than a per-row submit button, for two reasons. A submit button
+   here would be the form's DEFAULT button — first in tree order — so Enter pressed in any field
+   would delete the first rule, which is M20's lesson in a new place. And a tick is undoable before
+   saving, which "apply them all at once" ought to mean. #}
+<td class="remove"><input type="checkbox" name="rules[{{ row.index }}].remove" value="true"
+           data-rule-remove title="Remove this rule when you save" aria-label="Remove this rule"></td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+
+{# **Suggestions, never a picker.** A tag is whatever its sender chose — pahoa calls the list a
+   convention rather than a schema — so the next link type has to be typeable before Puna hears
+   about it. Subtypes are a closed set and are still offered this way, because a value the room does
+   not recognize is a rule that matches nothing rather than an error. #}
+<datalist id="bounce-tags">
+{% for tag in tag_suggestions %}
+<option value="{{ tag }}"></option>
+{% endfor %}
+</datalist>
+<datalist id="print-json-subtypes">
+{% for subtype in subtype_suggestions %}
+<option value="{{ subtype }}"></option>
+{% endfor %}
+</datalist>
+
+<p class="rule-add"><button type="button" data-add-rule hidden>Add another rule</button></p>
+
+{% if empty_means_choice %}
+{# **An empty table is ambiguous here, and the ambiguity is the whole feature.** No rules can mean
+   "this slot follows whatever the room does" or "this slot is filtered by nothing at all, even
+   though the room filters" — the only way to say "everybody except this one". So an empty table
+   has to be told apart, and a state already chosen is pre-selected while a table just emptied by
+   hand is not: `required` then does real work in exactly the case that is genuinely unanswered. #}
+<fieldset class="empty-meaning" data-empty-meaning{% if has_rules +%} hidden{% endif %}>
+<legend>With no rules, this slot&hellip;</legend>
+{# **`required` only where this form has one submit button.** The bulk panel is a single form with
+   eight other action buttons in it, and a required control blocks EVERY submit in its form — so
+   marking these required there would make Lock and Kick silently refuse to submit whenever the
+   filter table happened to be empty, which it always is. There it is refused by the route instead,
+   with a sentence. #}
+<label><input type="radio" name="state" value="follow"{% if empty_choice_required +%} required{% endif %}{% if empty_choice == Some("follow") +%} checked{% endif %}{% if has_rules +%} disabled{% endif %}> <strong>follows the room&rsquo;s filter</strong> &mdash; whatever the room drops is dropped here too.</label>
+<label><input type="radio" name="state" value="exempt"{% if empty_choice_required +%} required{% endif %}{% if empty_choice == Some("exempt") +%} checked{% endif %}{% if has_rules +%} disabled{% endif %}> <strong>is exempt from every filter</strong> &mdash; nothing is dropped here, not even what the room drops.</label>
+</fieldset>
+{% else %}
+<p class="notice" data-empty-notice{% if has_rules +%} hidden{% endif %}>With no rules, this
+room has no filter at all. Saving an empty table removes it.</p>
+{% endif %}
+
+{# The dirty notice, between the table and whatever submit the caller puts after this. Revealed by
+   the script on the first edit; with no script every change is already a submit, so there is
+   nothing unsaved for it to warn about. #}
+<p class="warning" data-dirty-notice hidden><strong>Unsaved changes.</strong> Nothing above has
+reached the room yet.</p>
