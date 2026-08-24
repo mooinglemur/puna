@@ -195,7 +195,28 @@ pub struct RoomStatus {
     /// Puna claiming to know a schema it does not own and would have to track through pahoa's
     /// releases. Render it; never compare it against what Puna passed.
     pub options: Option<serde_json::Value>,
+    /// What the room's traffic filters are actually doing.
+    pub filters: FilterStatus,
     pub slots: Vec<SlotStatus>,
+}
+
+/// The `filters` block: how much a room's filters are discarding.
+///
+/// **`dropped_to_slots` is counted per RECIPIENT, not per broadcast** — one chat line filtered for
+/// forty slots is forty. pahoa names it as the number worth alerting on, because *a filter quietly
+/// discarding far more than an operator intended is the failure mode this feature introduces*, and
+/// per-recipient counting is what makes a room-wide rule's cost visible at all.
+///
+/// `None` throughout for a room on an image that predates filters, which is the honest reading:
+/// absent is not zero, and a room that cannot report is not a room dropping nothing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FilterStatus {
+    /// Slots a filter applies to, **effective** rather than divergent: with a room-wide filter in
+    /// force this is the whole roster, because pahoa's per-slot `filtered` falls back to the room's.
+    pub slots_filtered: Option<i64>,
+    /// Cumulative, so [`crate::metrics::publish_room`] re-exports it by difference.
+    pub dropped_from_slots: Option<i64>,
+    pub dropped_to_slots: Option<i64>,
 }
 
 #[async_trait::async_trait]

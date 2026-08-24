@@ -9,8 +9,8 @@
 use chrono::{DateTime, Utc};
 
 use super::{
-    ActivityStatus, NetStatus, ProbeCapabilities, ProbeError, RoomProbe, RoomStatus, SaveStatus,
-    SlotStatus,
+    ActivityStatus, FilterStatus, NetStatus, ProbeCapabilities, ProbeError, RoomProbe, RoomStatus,
+    SaveStatus, SlotStatus,
 };
 use crate::model::command::{CommandOutput, RoomCommand};
 use crate::room::{RoomEndpoint, classify};
@@ -247,6 +247,17 @@ pub fn parse(document: &serde_json::Value) -> RoomStatus {
             }),
 
         options: document.get("options").filter(|v| !v.is_null()).cloned(),
+
+        // Absent on a room predating filters, and absent is not zero: `FilterStatus::default` is
+        // `None` throughout, so `publish_room` removes the series rather than asserting that a room
+        // it cannot ask is a room dropping nothing.
+        filters: document
+            .get("filters")
+            .map_or_else(FilterStatus::default, |filters| FilterStatus {
+                slots_filtered: number(filters, "slots_filtered"),
+                dropped_from_slots: number(filters, "dropped_from_slots"),
+                dropped_to_slots: number(filters, "dropped_to_slots"),
+            }),
 
         slots: document
             .get("slots")

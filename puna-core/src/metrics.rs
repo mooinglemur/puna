@@ -425,10 +425,67 @@ pub static ROOM_LAG_DISCONNECTS: LazyLock<IntCounterVec> = LazyLock::new(|| {
     )
 });
 
-/// Rooms with series published, and the last cumulative counter value seen for each.
+/// Slots this room is filtering, as the room counts them.
+///
+/// **pahoa's `filtered` is the EFFECTIVE state**, so a room-wide filter makes this the whole roster
+/// rather than only the slots with rules of their own. That is the honest reading of "how many
+/// slots have traffic being dropped", and it is deliberately not the same question the roster's
+/// divergence chips answer.
+pub static ROOM_SLOTS_FILTERED: LazyLock<IntGaugeVec> = room_gauge!(
+    "puna_room_slots_filtered",
+    "Slots in this room whose traffic a filter applies to"
+);
+
+/// Messages dropped because a filter matched what a slot **sent**.
+pub static ROOM_FILTERED_FROM_SLOTS: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register!(
+        IntCounterVec::new(
+            Opts::new(
+                "puna_room_filtered_from_slots_total",
+                "Messages dropped by a filter on what a slot sent, per room"
+            ),
+            &["room"],
+        )
+        .unwrap()
+    )
+});
+
+/// Messages dropped because a filter matched what a slot would **receive**.
+///
+/// **Counted per RECIPIENT, not per broadcast** — one chat line filtered for forty slots is forty,
+/// which pahoa states explicitly and which makes this the number worth watching. Their words:
+/// *a filter quietly discarding far more than an operator intended is the failure mode this feature
+/// introduces.* An alert belongs on its **rate**, not its value: the total only ever climbs, and a
+/// room that has been filtering correctly for a week has a large one.
+pub static ROOM_FILTERED_TO_SLOTS: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register!(
+        IntCounterVec::new(
+            Opts::new(
+                "puna_room_filtered_to_slots_total",
+                "Messages dropped by a filter on their way to a slot, per room. Per recipient: one \
+                 broadcast filtered for forty slots is forty"
+            ),
+            &["room"],
+        )
+        .unwrap()
+    )
+});
+
+/// The cumulative totals last polled from a room, one per counter re-exported from it.
+///
+/// A struct rather than a bare `i64` because there are three of these now, and they share a
+/// lifetime: a room leaves all of them at the same moment.
+#[derive(Debug, Clone, Copy, Default)]
+struct Cumulative {
+    lag_disconnects: i64,
+    filtered_from_slots: i64,
+    filtered_to_slots: i64,
+}
+
+/// Rooms with series published, and the last cumulative counter values seen for each.
 ///
 /// Two jobs in one map because they have the same lifetime: a room leaves both at the same moment.
-static ROOM_SERIES: LazyLock<Mutex<HashMap<String, i64>>> =
+static ROOM_SERIES: LazyLock<Mutex<HashMap<String, Cumulative>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Publish one room's numbers.
@@ -455,28 +512,58 @@ pub fn publish_room(room: &str, status: &crate::probe::RoomStatus) {
     );
     set(&ROOM_RESIDENT_BYTES, room, status.net.resident_bytes);
     set(&ROOM_IDLE_SECONDS, room, status.activity.idle_seconds);
+    set(&ROOM_SLOTS_FILTERED, room, status.filters.slots_filtered);
 
-    let Ok(mut series) = ROOM_SERIES.lock() else {
-        return;
-    };
-    let previous = series.get(room).copied();
-    series.insert(room.to_string(), status.net.lag_disconnects.unwrap_or(0));
-
-    if let Some(total) = status.net.lag_disconnects {
-        // **`total < previous` means the ROOM restarted** and began its counters again at zero, so
-        // the delta is the new total rather than a negative. On the first sighting the whole total
-        // is added: the room may have been running before this orchestrator was, and the process's
-        // own counter started at zero, so this is what makes the series mean what its name says.
+    /// Advance a re-exported counter by the difference since the last poll.
+    ///
+    /// **`total < previous` means the ROOM restarted** and began its counters again at zero, so the
+    /// delta is the new total rather than a negative. On the first sighting the whole total is
+    /// added: the room may have been running before this orchestrator was, and the process's own
+    /// counter started at zero, so this is what makes the series mean what its name says.
+    fn advance(vec: &IntCounterVec, room: &str, total: Option<i64>, previous: Option<i64>) {
+        let Some(total) = total else {
+            return;
+        };
         let delta = match previous {
             Some(previous) if total >= previous => total - previous,
             _ => total,
         };
         if delta > 0 {
-            ROOM_LAG_DISCONNECTS
-                .with_label_values(&[room])
-                .inc_by(delta as u64);
+            vec.with_label_values(&[room]).inc_by(delta as u64);
         }
     }
+
+    let Ok(mut series) = ROOM_SERIES.lock() else {
+        return;
+    };
+    let previous = series.get(room).copied();
+    series.insert(
+        room.to_string(),
+        Cumulative {
+            lag_disconnects: status.net.lag_disconnects.unwrap_or(0),
+            filtered_from_slots: status.filters.dropped_from_slots.unwrap_or(0),
+            filtered_to_slots: status.filters.dropped_to_slots.unwrap_or(0),
+        },
+    );
+
+    advance(
+        &ROOM_LAG_DISCONNECTS,
+        room,
+        status.net.lag_disconnects,
+        previous.map(|p| p.lag_disconnects),
+    );
+    advance(
+        &ROOM_FILTERED_FROM_SLOTS,
+        room,
+        status.filters.dropped_from_slots,
+        previous.map(|p| p.filtered_from_slots),
+    );
+    advance(
+        &ROOM_FILTERED_TO_SLOTS,
+        room,
+        status.filters.dropped_to_slots,
+        previous.map(|p| p.filtered_to_slots),
+    );
 }
 
 /// Drop every series for a room that is no longer live.
@@ -503,10 +590,17 @@ pub fn retain_rooms(live: &std::collections::HashSet<String>) {
             &*ROOM_OUTBOUND_QUEUED_BYTES,
             &*ROOM_RESIDENT_BYTES,
             &*ROOM_IDLE_SECONDS,
+            &*ROOM_SLOTS_FILTERED,
         ] {
             let _ = vec.remove_label_values(&[room]);
         }
-        let _ = ROOM_LAG_DISCONNECTS.remove_label_values(&[room]);
+        for vec in [
+            &*ROOM_LAG_DISCONNECTS,
+            &*ROOM_FILTERED_FROM_SLOTS,
+            &*ROOM_FILTERED_TO_SLOTS,
+        ] {
+            let _ = vec.remove_label_values(&[room]);
+        }
         false
     });
 }
@@ -645,6 +739,9 @@ pub const ORCHESTRATOR_FAMILIES: &[&str] = &[
     "puna_room_resident_bytes",
     "puna_room_idle_seconds",
     "puna_room_lag_disconnects_total",
+    "puna_room_slots_filtered",
+    "puna_room_filtered_from_slots_total",
+    "puna_room_filtered_to_slots_total",
 ];
 
 /// Families that are REGISTERED but do not appear until something writes a series.
@@ -675,6 +772,9 @@ pub const DEFERRED_FAMILIES: &[&str] = &[
     "puna_room_resident_bytes",
     "puna_room_idle_seconds",
     "puna_room_lag_disconnects_total",
+    "puna_room_slots_filtered",
+    "puna_room_filtered_from_slots_total",
+    "puna_room_filtered_to_slots_total",
 ];
 
 /// The families `component` registers, shared ones included.
@@ -741,6 +841,9 @@ fn init_orchestrator() {
     LazyLock::force(&ROOM_RESIDENT_BYTES);
     LazyLock::force(&ROOM_IDLE_SECONDS);
     LazyLock::force(&ROOM_LAG_DISCONNECTS);
+    LazyLock::force(&ROOM_SLOTS_FILTERED);
+    LazyLock::force(&ROOM_FILTERED_FROM_SLOTS);
+    LazyLock::force(&ROOM_FILTERED_TO_SLOTS);
     LazyLock::force(&ROOM_START_SECONDS);
     LazyLock::force(&PORTS_CAPACITY);
     LazyLock::force(&PORTS_BOUND);
@@ -1010,6 +1113,88 @@ mod tests {
         // never backwards and never by a negative that would panic or wrap.
         publish_room(room, &status(Some(1), None, Some(2)));
         assert_eq!(total(), 11, "a room restart must not stall or underflow");
+
+        retain_rooms(&std::collections::HashSet::new());
+    }
+
+    /// **The three re-exported counters keep SEPARATE baselines.**
+    ///
+    /// They used to share one `i64` per room, because there was only one of them. Widening that to
+    /// a struct is the kind of change that compiles either way: with a shared baseline, a room
+    /// filtering steadily while dropping nobody for lag would credit the lag counter with the
+    /// filter's total — a counter climbing for a reason that has nothing to do with its name, on
+    /// the one metric an operator reaches for when clients are being dropped.
+    #[test]
+    fn each_re_exported_counter_advances_on_its_own_baseline() {
+        let _guard = exclusive();
+        let room = "55555555-5555-5555-5555-555555555555";
+        let count = |vec: &IntCounterVec| {
+            vec.get_metric_with_label_values(&[room])
+                .expect("the child")
+                .get()
+        };
+
+        let filtering = |from: i64, to: i64, lag: i64| crate::probe::RoomStatus {
+            net: NetStatus {
+                clients_connected: Some(1),
+                lag_disconnects: Some(lag),
+                ..Default::default()
+            },
+            filters: crate::probe::FilterStatus {
+                slots_filtered: Some(4),
+                dropped_from_slots: Some(from),
+                dropped_to_slots: Some(to),
+            },
+            ..Default::default()
+        };
+
+        // **Every total moves, and by wildly different amounts**, which is what makes a crossed
+        // baseline visible. An earlier version of this test held lag at zero — true under the bug
+        // as well as under the fix, so it proved nothing.
+        publish_room(room, &filtering(10, 400, 5));
+        assert_eq!(count(&ROOM_FILTERED_FROM_SLOTS), 10);
+        assert_eq!(count(&ROOM_FILTERED_TO_SLOTS), 400);
+        assert_eq!(count(&ROOM_LAG_DISCONNECTS), 5);
+
+        // The filters do most of the work; one more client lags out. Each counter advances against
+        // its own last reading, so lag goes up by one and not by the filter's five hundred.
+        publish_room(room, &filtering(12, 900, 6));
+        assert_eq!(count(&ROOM_FILTERED_FROM_SLOTS), 12);
+        assert_eq!(count(&ROOM_FILTERED_TO_SLOTS), 900);
+        assert_eq!(
+            count(&ROOM_LAG_DISCONNECTS),
+            6,
+            "a crossed baseline credits lag with traffic the filter dropped"
+        );
+
+        // `slots_filtered` is a gauge and follows the same null-is-not-zero rule as the rest.
+        assert!(
+            ROOM_SLOTS_FILTERED
+                .get_metric_with_label_values(&[room])
+                .is_ok()
+        );
+        publish_room(
+            room,
+            &crate::probe::RoomStatus {
+                net: NetStatus {
+                    clients_connected: Some(1),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        let published = prometheus::core::Collector::collect(&*ROOM_SLOTS_FILTERED)
+            .iter()
+            .flat_map(prometheus::proto::MetricFamily::get_metric)
+            .any(|m| {
+                m.get_label()
+                    .iter()
+                    .any(|l| l.name() == "room" && l.value() == room)
+            });
+        assert!(
+            !published,
+            "a room that cannot report its filters is not a room filtering nothing"
+        );
 
         retain_rooms(&std::collections::HashSet::new());
     }

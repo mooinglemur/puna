@@ -634,7 +634,10 @@ async fn show(
             .map(|r| r.describe(puna_core::model::filter::Subject::AnySlot))
             .collect::<Vec<_>>()
             .join("; ");
-        format!("This room drops: {listed}")
+        // **"This room's filter:", not "This room drops:"** — every sentence `describe()` produces
+        // already begins with a verb ("drop 95% of…"), so a prefix ending in one reads "drops:
+        // drop". The prefix names what is being listed and lets the rules speak for themselves.
+        format!("This room's filter: {listed}")
     });
 
     let slots = slot_views(
@@ -1742,7 +1745,7 @@ mod tests {
             // Set only where a room filter is what the test is about; `slot_views` decides the
             // per-slot chips and this decides the room's, so neither is a template's call.
             room_filter: if is_staff {
-                Some("This room drops: drop every PrintJSON Chat sent by any slot".into())
+                Some("This room's filter: drop every PrintJSON Chat sent by any slot".into())
             } else {
                 None
             },
@@ -2661,7 +2664,10 @@ mod tests {
         // The hover carries what it drops, in the room's own words rather than a bare `p`.
         for page in [&organizer, &helper] {
             assert!(
-                page.contains("This room drops: drop every PrintJSON Chat"),
+                // Matched from `filter:` rather than the whole prefix: askama escapes the
+                // apostrophe in "room's" to `&#x27;` inside the attribute, which is correct and
+                // which an assertion on the plain sentence would fail on for the wrong reason.
+                page.contains("filter: drop every PrintJSON Chat"),
                 "the chip has no hover summary, so it says something is filtered and not what"
             );
         }
