@@ -57,6 +57,13 @@ makes these apply to this slot <strong>at once</strong>:</p>
 <form method="post" data-rule-form
       action="{% if let Some(n) = slot %}/room/{{ room_id }}/slot/{{ n }}/filter{% else %}/room/{{ room_id }}/filter{% endif %}">
 
+{# **The form's default button, claimed deliberately.** Enter in any field activates the first
+   submit button in tree order, and the first one below is a row's remove — so without this, Enter
+   in the tag box would delete rule 1. It carries no name, so activating it is exactly Save, which
+   is what Enter should do here. Never rendered and never focusable: it is the shape of a keystroke,
+   not a control. #}
+<button type="submit" hidden aria-hidden="true" tabindex="-1"></button>
+
 {% include "rooms/_rule_table.html" %}
 
 <p class="form-actions"><button type="submit">Save these rules</button>

@@ -1264,11 +1264,27 @@ h1 .scope {
   background: light-dark(#f1f1ef, #202329);
 }
 
-/* Struck out, applied on save. Dimmed rather than lined through, since every cell holds a form
-   control and `text-decoration` does not reach inside one -- and the checkbox itself stays at full
-   strength, because un-ticking it is the way back. */
-.rule-row.removing td > * { opacity: 0.4; }
-.rule-row.removing td.remove > * { opacity: 1; }
+/* **Muted until it is pointed at, which is the whole affordance.** A row of crosses down a table
+   reads as decoration or as error state; one that takes color under the pointer reads as a control.
+   Red on hover for the same reason `.rename .cancel` is: this is the destructive half of the pair,
+   and the accent is spoken for by the confirming one. */
+.rule-table .remove-row {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3rem;
+  color: var(--muted);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.rule-table .remove-row:hover { color: var(--err-fg); }
+.rule-table .remove-row:focus-visible {
+  color: var(--err-fg);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 
 .rule-add { margin: 0.5rem 0 1rem; }
 

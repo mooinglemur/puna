@@ -62,12 +62,25 @@
            data-rule-subtype aria-label="Subtype" placeholder="any"{% if !row.subtype_enabled +%} disabled{% endif %}></td>
 <td><input type="number" name="rules[{{ row.index }}].percent" value="{{ row.percent }}" min="0" max="100" step="any"
            data-rule-percent aria-label="Percent dropped" placeholder="100"></td>
-{# A checkbox applied on save rather than a per-row submit button, for two reasons. A submit button
-   here would be the form's DEFAULT button — first in tree order — so Enter pressed in any field
-   would delete the first rule, which is M20's lesson in a new place. And a tick is undoable before
-   saving, which "apply them all at once" ought to mean. #}
-<td class="remove"><input type="checkbox" name="rules[{{ row.index }}].remove" value="true"
-           data-rule-remove title="Remove this rule when you save" aria-label="Remove this rule"></td>
+{# **The row goes when this is clicked, not when the form is saved.** Submitting means "the table
+   now reads exactly as I want it to take effect", so a row still sitting there with a tick against
+   it is the table saying two things at once.
+
+   A **submit button carrying its own field**, which is the part worth knowing: only the clicked
+   submit contributes its `name`/`value`, so `rules[N].remove=true` names the row that was pressed
+   with no index plumbing anywhere. With scripting it never submits at all — the row is taken out of
+   the table and the change goes with the next save.
+
+   It is a submit button, so it would be the form's DEFAULT button and Enter in any field would
+   delete the first rule — M20's lesson in a new place. Each host form puts an inert submit ahead of
+   the table to take that role. #}
+<td class="remove"><button type="submit" class="remove-row" name="rules[{{ row.index }}].remove" value="true"
+        data-rule-remove title="Remove this rule" aria-label="Remove this rule">
+<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false">
+<path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="2"
+      stroke-linecap="round"/>
+</svg>
+</button></td>
 </tr>
 {% endfor %}
 </tbody>

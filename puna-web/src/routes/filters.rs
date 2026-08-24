@@ -38,9 +38,11 @@
 //!   asks which, and refuses to save until it is answered. That question used to be two buttons
 //!   that were reachable whatever the table held; now it is asked exactly when it is ambiguous.
 //! * **Nothing here needs JavaScript.** A blank row is always rendered, so a rule can be added per
-//!   save; removal is a checkbox applied on save; and the disabled state of the tag and subtype
+//!   save; a row's remove button is a submit carrying its own `rules[N].remove` field, so the
+//!   clicked row names itself with no index plumbing; and the disabled state of the tag and subtype
 //!   cells is rendered by the server from the same `Kind::narrows_with` the script reads. What the
-//!   script adds is several rows at once and the unsaved-changes notice.
+//!   script adds is several rows at once, removal without a round trip, and the unsaved-changes
+//!   notice.
 
 use puna_core::db::Pool;
 use puna_core::model::filter::{self, Direction, Effective, Kind, Rule, SlotFilter};
@@ -222,7 +224,12 @@ pub struct FilterTemplate {
 /// One row of the rule table.
 ///
 /// Every field is optional because a blank trailing row is always rendered and an untouched one has
-/// to cost nothing. `remove` is the per-row checkbox, applied when the form is saved.
+/// to cost nothing.
+///
+/// `remove` comes from the row's remove **button**, which is a submit carrying this field as its own
+/// `name`/`value` — only the clicked submit contributes those, so the pressed row names itself and
+/// nothing has to carry an index. With scripting the button never submits: the row leaves the table
+/// and simply is not in the next save.
 #[derive(FromForm, Default)]
 pub struct RuleFields {
     direction: Option<String>,

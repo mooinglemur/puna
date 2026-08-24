@@ -27,6 +27,14 @@ The room page&rsquo;s per-slot controls work without it.</p>
 
 <form method="post" action="/room/{{ room_id }}/bulk" id="bulk" data-rule-form>
 
+{# **A DISABLED default button, which is how Enter is made to do nothing here.**
+   Enter in a text field activates the form's first submit button, and this form's first was
+   `rotate_passwords` — so pressing Enter in the selector's value box rotated every staged slot's
+   password. A disabled default button prevents implicit submission outright, which is what this
+   form wants: there is no benign action to fall back to, and every button here says what it does
+   before it does it. The filter table below adds four more text fields, which is what turned this
+   from a latent bug into one somebody would hit. #}
+<button type="submit" disabled hidden aria-hidden="true" tabindex="-1"></button>
 {# --- the two panes ---------------------------------------------------------------------------
    **The left list is every slot; the right is the staged set.** `>>` moves what is highlighted on
    the left to the right and `<<` sends it back, so the right pane is a set somebody built rather

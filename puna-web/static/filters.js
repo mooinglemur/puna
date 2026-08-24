@@ -4,10 +4,13 @@
 //
 // Every state this file touches is also rendered by `rooms/_rule_table.html`, and the page works
 // with this script absent: a blank row is always present so one rule can be added per save, the
-// remove control is a checkbox applied on save rather than a link needing a handler, and the
-// tag/subtype cells arrive disabled or enabled to match the kind each row already has.
+// remove control is a real submit button that posts `rules[N].remove=true` for the row it sits in,
+// and the tag/subtype cells arrive disabled or enabled to match the kind each row already has.
 //
 // So this is not the editor — it is the difference between one round trip per rule and none:
+//
+// * **removal in place.** The button's default action is suppressed and the row simply goes, so the
+//   table always reads as what the next save will mean rather than as a list with marks against it.
 //
 // * **more rows at once**, by revealing an Add button that is `hidden` in the markup. Hidden there
 //   rather than styled away behind a root class, so a script that fails to load leaves no dead
@@ -51,13 +54,12 @@
     return highest;
   }
 
-  // A row counts as a rule when it names something to drop and is not struck out. This is the same
-  // question the server asks of a submission, and the two have to agree or the empty-table choice
-  // appears at a different moment from the one it applies to.
+  // A row counts as a rule when it names something to drop. This is the same question the server
+  // asks of a submission, and the two have to agree or the empty-table choice appears at a
+  // different moment from the one it applies to.
   function isLive(row) {
     var kind = row.querySelector("[data-rule-kind]");
-    var remove = row.querySelector("[data-rule-remove]");
-    return !!(kind && kind.value && !(remove && remove.checked));
+    return !!(kind && kind.value);
   }
 
   // Enable the cell this row's kind narrows with, disable the other.
@@ -83,12 +85,9 @@
   }
 
   function refresh(form) {
-    var rows = form.querySelectorAll(".rule-row");
     var live = 0;
-    rows.forEach(function (row) {
+    form.querySelectorAll(".rule-row").forEach(function (row) {
       narrow(row);
-      var remove = row.querySelector("[data-rule-remove]");
-      row.classList.toggle("removing", !!(remove && remove.checked));
       if (isLive(row)) live++;
     });
 
@@ -135,6 +134,27 @@
         if (kind) kind.focus();
       });
     }
+
+    // **The remove button is a submit, and this is what stops it submitting.** Without a script it
+    // posts `rules[N].remove=true` and the server drops that row; with one, the row simply goes and
+    // the change travels with the next save — which is what "the table is what I want in effect"
+    // means. Delegated, because rows arrive after this runs.
+    form.addEventListener("click", function (event) {
+      var button = event.target.closest("[data-rule-remove]");
+      if (!button) return;
+      event.preventDefault();
+      var row = button.closest(".rule-row");
+      if (!row) return;
+      // Focus would otherwise land on `<body>` and lose the keyboard's place in the table.
+      var next = row.nextElementSibling || row.previousElementSibling;
+      row.remove();
+      if (next) {
+        var landing = next.querySelector("[data-rule-remove]");
+        if (landing) landing.focus();
+      }
+      refresh(form);
+      markDirty(form);
+    });
 
     // One delegated listener rather than one per control, because rows arrive after this runs.
     form.addEventListener("change", function (event) {

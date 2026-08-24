@@ -195,6 +195,14 @@ fn a_glyph_only_control_names_itself_twice() {
                 if renders_text(content) {
                     continue;
                 }
+                // **Not a control for anybody, so not this lint's business.** A form's default
+                // button — the one that claims what Enter does, so a row's remove button cannot —
+                // is never painted, never announced and never reachable by tab. Both conditions
+                // are required together on purpose: `aria-hidden` alone would be a way to silence
+                // this lint on a control people can still see and press.
+                if open.contains("aria-hidden=\"true\"") && open.contains("tabindex=\"-1\"") {
+                    continue;
+                }
                 examined += 1;
                 for attribute in ["title=", "aria-label="] {
                     if !open.contains(attribute) {
@@ -1231,15 +1239,36 @@ fn the_rule_table_renders_every_hook_and_field_name_its_readers_expect() {
     );
 
     for host in ["rooms/filter.html", "rooms/bulk.html"] {
-        let source = std::fs::read_to_string(source_template(host)).expect(host);
+        let page = std::fs::read_to_string(source_template(host)).expect(host);
         assert!(
-            source.contains("data-rule-form"),
+            page.contains("data-rule-form"),
             "{host} includes the rule table and does not mark its form, so filters.js binds \
              nothing on that page"
         );
         assert!(
-            source.contains("filters.js"),
+            page.contains("filters.js"),
             "{host} includes the rule table and does not load filters.js"
+        );
+
+        // **The first submit button in a form is what Enter presses.** Every row of the rule table
+        // ends in one, so whichever host form does not claim that role first has an Enter key that
+        // deletes rule 1 — and on the bulk panel, before this was claimed, one that rotated every
+        // staged slot's password. Nothing about the page looks wrong either way.
+        let form = page
+            .split_once("<form")
+            .unwrap_or_else(|| panic!("{host} has no form"))
+            .1;
+        let first_submit = form
+            .split_once("type=\"submit\"")
+            .unwrap_or_else(|| panic!("{host} has no submit button"))
+            .1
+            .split_once('>')
+            .unwrap()
+            .0;
+        assert!(
+            first_submit.contains("aria-hidden=\"true\""),
+            "{host}'s first submit button is a real one, so Enter in any text field activates it \
+             instead of the inert default: {first_submit}"
         );
     }
 
