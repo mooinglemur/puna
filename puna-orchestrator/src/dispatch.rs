@@ -166,6 +166,75 @@ impl Dispatcher {
     ///
     /// **Locking used to travel this path too** and does not any more: pahoa shipped a native `lock`
     /// verb, so barring a slot is an ordinary passthrough command with no Secret in it at all.
+    /// Assert Puna's stored filter on the running room.
+    ///
+    /// **Reads the tables rather than the command**, which is why the variant carries only a scope:
+    /// a ruleset on the queue row could be stale by the time it is claimed, and would then be a
+    /// second source of truth that the room believes over the one the UI shows.
+    ///
+    /// `PUT` or `DELETE` per [`puna_core::probe::RoomProbe::set_filter`] — and for a slot the two
+    /// are different states rather than one with an empty value, which `SlotFilter::to_stored`
+    /// decides. Getting that backwards leaves a slot exempt from a filter it was meant to inherit.
+    async fn push_filter(
+        &self,
+        conn: &mut AsyncPgConnection,
+        room_id: RoomId,
+        slot: Option<i32>,
+        endpoint: &puna_core::room::RoomEndpoint,
+        admin_token: &str,
+    ) -> (&'static str, Option<CommandOutput>, Option<String>) {
+        use puna_core::model::filter;
+
+        let failed = |why: String| ("failed", None, Some(why));
+
+        let rules = match slot {
+            None => match filter::room_filter(conn, room_id).await {
+                Ok(rules) => rules,
+                Err(e) => return failed(format!("could not read the room's filter: {e}")),
+            },
+            Some(n) => match filter::slot_filter(conn, room_id, n).await {
+                Ok(state) => state.to_stored(),
+                Err(e) => return failed(format!("could not read slot {n}'s filter: {e}")),
+            },
+        };
+
+        match self
+            .prober
+            .probe()
+            .set_filter(endpoint, admin_token, slot, rules.as_deref())
+            .await
+        {
+            Ok(()) => {
+                let what = match (slot, &rules) {
+                    (None, None) => "The room's filter was removed.".to_string(),
+                    (None, Some(rules)) => {
+                        format!("The room's filter is now {} rule(s).", rules.len())
+                    }
+                    (Some(n), None) => {
+                        format!("Slot {n} now follows the room's filter.")
+                    }
+                    (Some(n), Some(rules)) if rules.is_empty() => {
+                        format!("Slot {n} is now exempt from every filter.")
+                    }
+                    (Some(n), Some(rules)) => format!(
+                        "Slot {n} now has {} rule(s) of its own, instead of the room's.",
+                        rules.len()
+                    ),
+                };
+                (
+                    "ok",
+                    Some(CommandOutput {
+                        ok: true,
+                        output: vec![what],
+                        ..Default::default()
+                    }),
+                    None,
+                )
+            }
+            Err(e) => failed(format!("could not apply the filter: {e}")),
+        }
+    }
+
     async fn rotate(
         &self,
         conn: &mut AsyncPgConnection,
@@ -304,6 +373,22 @@ impl Dispatcher {
                 .await;
         }
 
+        // **Also before the passthrough, and for the same reason.** A filter is a REST resource on
+        // pahoa, not one of its verbs -- and this variant carries no rules at all, only a scope, so
+        // what it actually does is read Puna's own tables and assert them. That is what makes the
+        // audit row and the stored ruleset unable to disagree.
+        if let puna_core::model::command::RoomCommand::ApplyFilters { slot } = claimed.command {
+            return self
+                .push_filter(
+                    conn,
+                    claimed.room_id,
+                    slot,
+                    &endpoint,
+                    &reachable.admin_token,
+                )
+                .await;
+        }
+
         match self
             .prober
             .probe()
@@ -419,6 +504,13 @@ mod tests {
         let intercept = source
             .find("if let puna_core::model::command::RoomCommand::RotatePassword")
             .expect("the dispatcher no longer intercepts the rotation command");
+        // **The second Puna-only command, and the same hazard.** A filter is a REST resource on
+        // pahoa, so `apply_filters` sent to `/admin/v1/command` is a `400` -- which the dispatcher
+        // reports as "the room could not understand a command Puna generated", true and pointing at
+        // entirely the wrong thing.
+        let filters = source
+            .find("if let puna_core::model::command::RoomCommand::ApplyFilters")
+            .expect("the dispatcher no longer intercepts the filter command");
         let passthrough = source
             .find(".execute(&endpoint")
             .expect("the passthrough call was renamed; re-point this lint rather than deleting it");
@@ -426,6 +518,10 @@ mod tests {
         assert!(
             intercept < passthrough,
             "the rotation command reaches pahoa's command endpoint, which has no such command"
+        );
+        assert!(
+            filters < passthrough,
+            "the filter command reaches pahoa's command endpoint, which has no such command"
         );
 
         assert!(

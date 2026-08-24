@@ -211,6 +211,25 @@ pub enum RoomCommand {
         reason: Option<String>,
     },
 
+    /// Push Puna's stored traffic filter at the **running** room — its own, or one slot's.
+    ///
+    /// **Not a pahoa command**, like [`Self::RotatePassword`]: filters are a REST resource, and this
+    /// serialized into an `/admin/v1/command` body would be a `400`. The dispatcher intercepts it
+    /// before the passthrough.
+    ///
+    /// It exists because the **web tier has no egress to room pods at all**, so the editor that
+    /// writes `room_filters` cannot also tell the room — and a filter that only takes effect at the
+    /// next restart is useless for the case it was built for, which is a client crashing right now.
+    ///
+    /// It carries **no rules**, only a scope: the dispatcher reads Puna's tables, so the audit row
+    /// records what was pushed and when without duplicating a ruleset that could then disagree with
+    /// the one stored.
+    #[serde(rename = "apply_filters")]
+    ApplyFilters {
+        /// `None` is the room-wide filter. **The tier follows this field** — see `required_role`.
+        slot: Option<i32>,
+    },
+
     /// Declare a slot's completion on its behalf — the third verb with no reference equivalent,
     /// alongside `kick` and `lock`.
     ///
@@ -299,6 +318,7 @@ impl RoomCommand {
             Self::RotatePassword { .. } => "rotate_password",
             Self::LockSlot { .. } => "lock",
             Self::SetStatus { .. } => "set_status",
+            Self::ApplyFilters { .. } => "apply_filters",
         }
     }
 
@@ -364,6 +384,15 @@ impl RoomCommand {
             // by releasing manually: the same outcome, one step longer, and no record that it was
             // meant as a goal.
             | Self::SetStatus { .. } => RoomRole::Helper,
+            // **The only command whose tier depends on its own field**, and it has to: a slot's
+            // filter is one slot's traffic, which is a helper's by the same argument as `lock`,
+            // while the ROOM's changes what every player experiences and persists into the save --
+            // the `option` argument. Two variants would have been the alternative, and would have
+            // split the dispatcher's one intercept into two that can drift.
+            Self::ApplyFilters { slot } => match slot {
+                Some(_) => RoomRole::Helper,
+                None => RoomRole::Organizer,
+            },
             // See the note above: the room's own rules, and they persist.
             Self::SetOption { .. } => RoomRole::Organizer,
         }
@@ -394,6 +423,8 @@ impl RoomCommand {
             | Self::RotatePassword { slot }
             | Self::LockSlot { slot, .. }
             | Self::SetStatus { slot, .. } => Some(*slot),
+            // Already an `Option`, and `None` genuinely means room-wide here.
+            Self::ApplyFilters { slot } => *slot,
         }
     }
 }
@@ -579,6 +610,39 @@ mod tests {
                 json!({"command": "set_status", "slot": 3, "status": "goal"}),
             ),
         ]
+    }
+
+    /// **The one command whose tier depends on its own field.**
+    ///
+    /// Not covered by the capability table above, which walks pahoa's set — this is a Puna-only
+    /// command, so nothing else would notice if both scopes collapsed to one tier. Getting it
+    /// backwards would let a helper reconfigure what every player in the room can see.
+    #[test]
+    fn a_room_wide_filter_is_an_organizers_and_a_slots_is_not() {
+        assert_eq!(
+            RoomCommand::ApplyFilters { slot: None }.required_role(),
+            RoomRole::Organizer,
+            "the room's filter changes every player's experience and persists into the save"
+        );
+        assert_eq!(
+            RoomCommand::ApplyFilters { slot: Some(3) }.required_role(),
+            RoomRole::Helper,
+            "one slot's traffic is moderation, the same argument as `lock`"
+        );
+        assert_eq!(
+            RoomCommand::ApplyFilters { slot: Some(3) }.target_slot(),
+            Some(3)
+        );
+        assert_eq!(RoomCommand::ApplyFilters { slot: None }.target_slot(), None);
+
+        // Not one of pahoa's verbs: serialized into an `/admin/v1/command` body it would be a 400,
+        // which is why the dispatcher intercepts it before the passthrough.
+        assert!(
+            !the_pahoa_set()
+                .iter()
+                .any(|(c, _)| c.name() == "apply_filters"),
+            "apply_filters is Puna's own and must not be in the passthrough set"
+        );
     }
 
     /// The spelling is a contract with another program, so it is pinned rather than derived.

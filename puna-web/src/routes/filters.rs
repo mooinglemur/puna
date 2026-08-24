@@ -234,6 +234,37 @@ fn vocabulary() -> Vocabulary {
     }
 }
 
+/// Tell the running room, if there is one.
+///
+/// **The web tier cannot reach a room pod at all**, so this queues `ApplyFilters` and the
+/// orchestrator does the pushing — the same shape a password rotation takes, and for the same
+/// reason. The command carries only the scope; the dispatcher reads the tables this request has
+/// just written, so the queue row cannot hold a ruleset that disagrees with the stored one.
+///
+/// A room that is not running is told nothing and that is not a failure: `reapply_filters` asserts
+/// everything at the next start, so the durable half has already landed. Queueing anyway would
+/// produce a `rejected` row saying the room is down — true, and nothing to act on.
+async fn tell_the_room(
+    conn: &mut diesel_async::AsyncPgConnection,
+    room: &puna_core::model::room::Room,
+    role: puna_core::model::member::RoomRole,
+    by: i64,
+    slot: Option<i32>,
+) -> Result<bool> {
+    if room.state != "running" {
+        return Ok(false);
+    }
+    puna_core::model::command::enqueue(
+        conn,
+        room.id,
+        by,
+        role,
+        &puna_core::model::command::RoomCommand::ApplyFilters { slot },
+    )
+    .await?;
+    Ok(true)
+}
+
 #[get("/room/<_id>/filter")]
 async fn show_room(
     _id: RoomParam,
@@ -320,11 +351,25 @@ async fn edit_room(
 
     // The count is in the sentence because the warning above the form is easy to read past, and
     // this is the moment it becomes true rather than hypothetical.
+    let told = tell_the_room(
+        &mut conn,
+        &access.room,
+        access.role(),
+        access.user_id(),
+        None,
+    )
+    .await?;
+
     let missed = filter::slot_filters(&mut conn, access.room.id).await?.len();
     Ok(Flash::success(
         Redirect::to(back),
         if missed == 0 {
-            "Saved. It takes effect on the running room at once.".to_string()
+            if told {
+                "Saved, and applied to the running room.".to_string()
+            } else {
+                "Saved. This room is not running, so it applies the next time it starts."
+                    .to_string()
+            }
         } else {
             format!(
                 "Saved, and it does not reach {missed} slot(s) that have a filter of their own — \
@@ -429,6 +474,15 @@ async fn edit_slot(
     // **The consequence, said at the moment it happens.** Neither direction is visible in the rule
     // that was just edited, and both surprise people: rules of its own cut the room's off, and
     // removing them turns the room's back on.
+    let told = tell_the_room(
+        &mut conn,
+        &access.room,
+        access.role(),
+        access.user_id(),
+        Some(n),
+    )
+    .await?;
+
     let room_filters = !filter::room_filter(&mut conn, access.room.id)
         .await?
         .unwrap_or_default()
@@ -451,7 +505,17 @@ async fn edit_slot(
         (SlotFilter::Own(_), false) => "Saved.",
     };
 
-    Ok(Flash::success(Redirect::to(back), message.to_string()))
+    // Said plainly rather than left to be discovered: the durable half always lands, and whether
+    // the room heard about it now is a different fact.
+    let tail = if told {
+        " Applied to the running room."
+    } else {
+        " This room is not running, so it applies the next time it starts."
+    };
+    Ok(Flash::success(
+        Redirect::to(back),
+        format!("{message}{tail}"),
+    ))
 }
 
 pub fn routes() -> Vec<rocket::Route> {
