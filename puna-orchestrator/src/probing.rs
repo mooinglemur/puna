@@ -70,6 +70,8 @@ struct Target {
     id: RoomId,
     base_port: u16,
     admin_token: String,
+    /// For `puna_room_info` alone. Nothing dials a room with it.
+    name: String,
 }
 
 pub struct Prober {
@@ -146,6 +148,13 @@ impl Prober {
         let live: std::collections::HashSet<String> =
             targets.iter().map(|t| t.id.to_string()).collect();
         puna_core::metrics::retain_rooms(&live);
+
+        // Every live room, including one that is backing off: it is still a room, and the name is
+        // read from the row rather than from the probe, so a room Puna cannot currently reach still
+        // has a legible label on the series it already published.
+        for target in &targets {
+            puna_core::metrics::publish_room_info(&target.id.to_string(), &target.name);
+        }
 
         let now = Utc::now();
         let (ready, waiting): (Vec<_>, Vec<_>) =
@@ -312,10 +321,12 @@ async fn live_rooms(
         base_port: i32,
         #[diesel(sql_type = Text)]
         admin_token: String,
+        #[diesel(sql_type = Text)]
+        name: String,
     }
 
     let rows: Vec<Row> = diesel::sql_query(
-        "SELECT r.id, p.base_port, r.admin_token
+        "SELECT r.id, p.base_port, r.admin_token, r.name
            FROM rooms r
            JOIN port_reservations p ON p.room_id = r.id
           WHERE r.environment = $1::puna_environment
@@ -332,6 +343,7 @@ async fn live_rooms(
                 id: row.id,
                 base_port: u16::try_from(row.base_port).ok()?,
                 admin_token: row.admin_token,
+                name: row.name,
             })
         })
         .collect())

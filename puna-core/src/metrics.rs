@@ -473,6 +473,59 @@ pub static ROOM_FILTERED_TO_SLOTS: LazyLock<IntCounterVec> = LazyLock::new(|| {
     )
 });
 
+/// A room's name, as an **info metric**: always `1`, carrying the label.
+///
+/// Every other series here is keyed by the room's uuid, which is correct — it is the identity, it
+/// never changes, and a rename must not fork a counter into a new time series. It is also unusable
+/// on a dashboard, where the reader wants "Thursday Sync" and not `9f3c…`.
+///
+/// This is the standard way out: one series per room joined at query time —
+/// `… * on(room) group_left(name) puna_room_info` — so the name reaches a legend or a variable
+/// without being carried on the ~28,000 series the proxy publishes, where a rename would fork every
+/// one of them.
+///
+/// **No new disclosure.** `/room/<id>` renders the room name to anybody holding the link, so this
+/// is already public where the slot names on the proxied series were a deliberate widening.
+pub static ROOM_INFO: LazyLock<IntGaugeVec> = LazyLock::new(|| {
+    register!(
+        IntGaugeVec::new(
+            Opts::new(
+                "puna_room_info",
+                "Always 1. Carries a room's name for joining onto its uuid-keyed series"
+            ),
+            &["room", "name"],
+        )
+        .unwrap()
+    )
+});
+
+/// The name last published for each room, so a rename can retract the old series.
+///
+/// **`remove_label_values` needs the FULL label set**, so removing `(room, name)` requires knowing
+/// the name that was published — which the caller no longer has once the room has been renamed.
+/// Without this, renaming a room leaves its old name asserting `1` forever and the dropdown grows
+/// an entry for a room that no longer goes by it. Same trap `retain_rooms` exists for, one label
+/// deeper.
+static ROOM_NAMES: LazyLock<Mutex<HashMap<String, String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Publish (or re-publish) a room's name.
+pub fn publish_room_info(room: &str, name: &str) {
+    let Ok(mut names) = ROOM_NAMES.lock() else {
+        return;
+    };
+    match names.get(room) {
+        // Unchanged: the gauge already says this, and re-setting it every tick is noise.
+        Some(previous) if previous == name => return,
+        Some(previous) => {
+            let _ = ROOM_INFO.remove_label_values(&[room, previous]);
+        }
+        None => {}
+    }
+    names.insert(room.to_string(), name.to_string());
+    ROOM_INFO.with_label_values(&[room, name]).set(1);
+}
+
 /// How many series this room's own exposition currently contributes, per room.
 ///
 /// The cardinality of the proxy, per room, which is the number worth having when it turns out to
@@ -641,6 +694,18 @@ pub fn retain_rooms(live: &std::collections::HashSet<String>) {
         false
     });
 
+    // The name gauge keys on `(room, name)`, so it needs the name that was published rather than
+    // the one the room currently has -- see `ROOM_NAMES`.
+    if let Ok(mut names) = ROOM_NAMES.lock() {
+        names.retain(|room, name| {
+            if live.contains(room) {
+                return true;
+            }
+            let _ = ROOM_INFO.remove_label_values(&[room, name]);
+            false
+        });
+    }
+
     // **Reconciled against `live` in its own right, not swept alongside the map above.** The
     // proxied families are keyed by `(room, slot, cmd, ...)`, so a room left behind does not
     // strand one stale reading but every series it ever had -- and driving that off `ROOM_SERIES`
@@ -792,6 +857,7 @@ pub const ORCHESTRATOR_FAMILIES: &[&str] = &[
     // _declared_here` in `tests/metrics_proxy.rs` for why that is the design rather than a gap.
     "puna_room_metrics_series",
     "puna_room_metrics_dropped_total",
+    "puna_room_info",
 ];
 
 /// Families that are REGISTERED but do not appear until something writes a series.
@@ -826,6 +892,7 @@ pub const DEFERRED_FAMILIES: &[&str] = &[
     "puna_room_filtered_from_slots_total",
     "puna_room_filtered_to_slots_total",
     "puna_room_metrics_series",
+    "puna_room_info",
 ];
 
 /// The families `component` registers, shared ones included.
@@ -897,6 +964,7 @@ fn init_orchestrator() {
     LazyLock::force(&ROOM_FILTERED_TO_SLOTS);
     LazyLock::force(&ROOM_METRICS_SERIES);
     LazyLock::force(&ROOM_METRICS_DROPPED);
+    LazyLock::force(&ROOM_INFO);
     LazyLock::force(&ROOM_START_SECONDS);
     LazyLock::force(&PORTS_CAPACITY);
     LazyLock::force(&PORTS_BOUND);
@@ -1335,6 +1403,49 @@ mod tests {
         for capability in ProbeCapabilities::NAMES {
             PROBE_CAPABILITY.with_label_values(&[capability]).set(0);
         }
+    }
+
+    /// **A rename must retract the old series**, and this is the whole reason `ROOM_NAMES` exists.
+    ///
+    /// `remove_label_values` needs the full label set, so retracting `(room, name)` needs the name
+    /// that was published — which the caller no longer has once the room has been renamed. Without
+    /// the map, a renamed room asserts `1` under both names forever: the join then multiplies every
+    /// series it touches, and a dropdown built from this grows an entry for a name nothing goes by.
+    #[test]
+    fn renaming_a_room_retracts_the_name_it_was_published_under() {
+        let _guard = exclusive();
+        let room = "renamed-room";
+
+        publish_room_info(room, "Thursday Sync");
+        assert_eq!(
+            ROOM_INFO
+                .get_metric_with_label_values(&[room, "Thursday Sync"])
+                .expect("the child")
+                .get(),
+            1
+        );
+
+        publish_room_info(room, "Friday Sync");
+        assert_eq!(published_names(room), vec!["Friday Sync".to_string()]);
+
+        // And it goes entirely when the room does.
+        retain_rooms(&std::collections::HashSet::new());
+        assert!(published_names(room).is_empty());
+    }
+
+    /// Names currently published for a room, read out of the rendered exposition.
+    ///
+    /// Through `gather` rather than through the gauge, because a retracted child is *absent* rather
+    /// than zero, and asking the vec for a child it does not have would create one.
+    fn published_names(room: &str) -> Vec<String> {
+        gather()
+            .lines()
+            .filter(|line| line.starts_with("puna_room_info{"))
+            .filter(|line| line.contains(&format!("room=\"{room}\"")))
+            .filter_map(|line| line.split_once("name=\""))
+            .filter_map(|(_, rest)| rest.split_once('"'))
+            .map(|(name, _)| name.to_string())
+            .collect()
     }
 
     /// The pairs and the names are one list, so a capability added to the struct cannot be
