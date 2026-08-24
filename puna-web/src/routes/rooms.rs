@@ -2329,6 +2329,17 @@ mod tests {
             "the dialog is missing"
         );
 
+        // **Reachable for a slot that has NO filter yet**, which is the whole point and is what was
+        // missing: the chip beside a player's name links here too, and it renders only once a slot
+        // already diverges -- so the editor was reachable for exactly the slots that did not need
+        // it, and a slot's first filter could only be set from the bulk panel or by typing a URL.
+        // The fixture slot has no filter, so this assertion fails if the link goes back behind the
+        // chip.
+        assert!(
+            staff_html.contains("/slot/1/filter"),
+            "staff cannot reach a slot's filter editor unless the slot already has one"
+        );
+
         // A player: the same room, the same slot, none of it.
         let mut player = page_as(false, false);
         player.room.slot_auth = SlotAuth::PerSlot;
@@ -2342,6 +2353,10 @@ mod tests {
         assert!(
             !player_html.contains("id=\"moderate\""),
             "the moderation dialog reached a public page"
+        );
+        assert!(
+            !player_html.contains("/filter"),
+            "a filter control reached a public page"
         );
         // The width is the same for everybody: it is a property of the page, not of the viewer.
         assert!(player_html.contains("<body class=\"wide\">"));
