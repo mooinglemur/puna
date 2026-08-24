@@ -115,11 +115,22 @@ impl RoomProbe for TcpProbe {
         })
     }
 
+    async fn metrics(
+        &self,
+        _endpoint: &RoomEndpoint,
+        _admin_token: &str,
+    ) -> Result<String, ProbeError> {
+        Err(ProbeError::Unsupported {
+            what: "read a room's own metrics",
+        })
+    }
+
     fn capabilities(&self) -> ProbeCapabilities {
         ProbeCapabilities {
             status: false,
             commands: false,
             graceful_shutdown: false,
+            metrics: false,
         }
     }
 }

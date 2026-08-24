@@ -78,6 +78,11 @@ reqwest = { version = "0.13", default-features = false, features = [
 ] }
 chrono = { version = "0.4", features = ["serde"] }
 prometheus = { version = "0.14", default-features = false }
+# Reads a ROOM's exposition so the orchestrator can re-export it with `room` attached. Parsing
+# rather than rewriting lines is what keeps a room from being able to break the orchestrator's own
+# `/metrics`: whatever comes back is turned into structured samples and re-emitted, so a malformed
+# document costs that room its series and nothing else. See `puna_core::metrics::proxy`.
+prometheus-parse = "0.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"

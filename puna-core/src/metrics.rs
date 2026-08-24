@@ -36,6 +36,8 @@
 //! actually prevents it -- `puna-core` has no `kube` and no reconcile loop, so there is no code in
 //! the web binary that could reach `K8S_REQUESTS` for a reason.
 
+pub mod proxy;
+
 use std::sync::LazyLock;
 
 use std::collections::HashMap;
@@ -471,6 +473,41 @@ pub static ROOM_FILTERED_TO_SLOTS: LazyLock<IntCounterVec> = LazyLock::new(|| {
     )
 });
 
+/// How many series this room's own exposition currently contributes, per room.
+///
+/// The cardinality of the proxy, per room, which is the number worth having when it turns out to
+/// be too large: `slots × message types` is the product pahoa's handoff costed at ~28,000 for a
+/// 2000-slot sync, and this says which room is producing it rather than that the total is high.
+pub static ROOM_METRICS_SERIES: LazyLock<IntGaugeVec> = LazyLock::new(|| {
+    register!(
+        IntGaugeVec::new(
+            Opts::new(
+                "puna_room_metrics_series",
+                "Series re-exported from a room's own /admin/v1/metrics"
+            ),
+            &["room"],
+        )
+        .unwrap()
+    )
+});
+
+/// Samples a room offered that were refused. See [`proxy`] for each reason.
+///
+/// Sitting at zero is the answer this is for: the proxy passes through names Puna does not choose,
+/// so "nothing was dropped" is what says the pass-through is total rather than quietly partial.
+pub static ROOM_METRICS_DROPPED: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register!(
+        IntCounterVec::new(
+            Opts::new(
+                "puna_room_metrics_dropped_total",
+                "Samples from a room's own metrics that were not re-exported"
+            ),
+            &["reason"],
+        )
+        .unwrap()
+    )
+});
+
 /// The cumulative totals last polled from a room, one per counter re-exported from it.
 ///
 /// A struct rather than a bare `i64` because there are three of these now, and they share a
@@ -603,6 +640,14 @@ pub fn retain_rooms(live: &std::collections::HashSet<String>) {
         }
         false
     });
+
+    // **Reconciled against `live` in its own right, not swept alongside the map above.** The
+    // proxied families are keyed by `(room, slot, cmd, ...)`, so a room left behind does not
+    // strand one stale reading but every series it ever had -- and driving that off `ROOM_SERIES`
+    // would make it depend on the status publisher having seen the same room, which is true today
+    // and is not a property either side states. Found by a test that published metrics for a room
+    // and no status: the room was dropped from every gauge and kept re-exporting.
+    proxy::retain(live);
 }
 
 /// Which capabilities the room probe currently has. Makes a room stuck on an old pahoa image
@@ -742,6 +787,11 @@ pub const ORCHESTRATOR_FAMILIES: &[&str] = &[
     "puna_room_slots_filtered",
     "puna_room_filtered_from_slots_total",
     "puna_room_filtered_to_slots_total",
+    // The proxy's own bookkeeping. The families it PROXIES are deliberately not listed here and
+    // cannot be -- their names come from pahoa, not from Puna. See `proxied_families_are_not
+    // _declared_here` in `tests/metrics_proxy.rs` for why that is the design rather than a gap.
+    "puna_room_metrics_series",
+    "puna_room_metrics_dropped_total",
 ];
 
 /// Families that are REGISTERED but do not appear until something writes a series.
@@ -775,6 +825,7 @@ pub const DEFERRED_FAMILIES: &[&str] = &[
     "puna_room_slots_filtered",
     "puna_room_filtered_from_slots_total",
     "puna_room_filtered_to_slots_total",
+    "puna_room_metrics_series",
 ];
 
 /// The families `component` registers, shared ones included.
@@ -844,6 +895,8 @@ fn init_orchestrator() {
     LazyLock::force(&ROOM_SLOTS_FILTERED);
     LazyLock::force(&ROOM_FILTERED_FROM_SLOTS);
     LazyLock::force(&ROOM_FILTERED_TO_SLOTS);
+    LazyLock::force(&ROOM_METRICS_SERIES);
+    LazyLock::force(&ROOM_METRICS_DROPPED);
     LazyLock::force(&ROOM_START_SECONDS);
     LazyLock::force(&PORTS_CAPACITY);
     LazyLock::force(&PORTS_BOUND);
@@ -877,6 +930,14 @@ fn init_orchestrator() {
     for conflict in PORT_CONFLICTS {
         PORT_REFUSALS.with_label_values(&[conflict]).reset();
     }
+    // Seeded, so "the proxy is passing everything through" is a row of zeros rather than a family
+    // that has not appeared yet — the same reason `puna_integrity_faults` is seeded.
+    for reason in proxy::DROP_REASONS {
+        ROOM_METRICS_DROPPED.with_label_values(&[reason]).reset();
+    }
+    // Registered last, and only here: it is the one collector in this process with no descriptors,
+    // and a second would silently fail to register. See `metrics::proxy`.
+    proxy::register(&REGISTRY);
     // Seeded to zero so a cold orchestrator renders every capability rather than none, and from
     // the SAME vocabulary the publisher uses -- the two diverging is exactly what went wrong.
     for capability in crate::probe::ProbeCapabilities::NAMES {
@@ -1286,6 +1347,7 @@ mod tests {
             status: true,
             commands: true,
             graceful_shutdown: true,
+            metrics: true,
         };
         let named: Vec<&str> = all.as_pairs().iter().map(|(n, _)| *n).collect();
 

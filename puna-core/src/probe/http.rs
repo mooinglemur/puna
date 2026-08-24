@@ -25,6 +25,7 @@ const COMMAND: &str = "/admin/v1/command";
 const SLOT_PASSWORD: &str = "/admin/v1/slots/{slot}/password";
 const ROOM_FILTER: &str = "/admin/v1/filter";
 const SLOT_FILTER: &str = "/admin/v1/slots/{slot}/filter";
+const METRICS: &str = "/admin/v1/metrics";
 
 #[async_trait::async_trait]
 impl RoomProbe for HttpsProbe {
@@ -188,13 +189,78 @@ impl RoomProbe for HttpsProbe {
         Ok(())
     }
 
+    async fn metrics(
+        &self,
+        endpoint: &RoomEndpoint,
+        admin_token: &str,
+    ) -> Result<String, ProbeError> {
+        let response = endpoint
+            .client()
+            .await?
+            .get(endpoint.url(METRICS))
+            .bearer_auth(admin_token)
+            .send()
+            .await
+            .map_err(crate::room::RoomError::from)?;
+
+        if let Some(e) = classify(&response) {
+            return Err(e.into());
+        }
+
+        read_bounded(response, METRICS_LIMIT).await
+    }
+
     fn capabilities(&self) -> ProbeCapabilities {
         ProbeCapabilities {
             status: true,
             commands: true,
             graceful_shutdown: true,
+            metrics: true,
         }
     }
+}
+
+/// The most exposition Puna will hold from one room.
+///
+/// pahoa's own arithmetic puts a 2000-slot sync near 28,000 series, which is a few megabytes of
+/// text; 16 MiB leaves that room several times over and still bounds what one room can make the
+/// orchestrator allocate. A room over the cap loses its series and says so, rather than being
+/// truncated into a document that would parse into something half true.
+const METRICS_LIMIT: usize = 16 * 1024 * 1024;
+
+/// Read a response body, refusing past `limit` **without buffering the rest**.
+///
+/// Streamed rather than `.bytes()`-then-check, which is the whole point: checking afterwards means
+/// the allocation already happened, and the case this guards is a room that is wrong about how much
+/// it has to say. `Content-Length` is checked first when the room offers one, so the usual refusal
+/// costs no transfer at all.
+async fn read_bounded(response: reqwest::Response, limit: usize) -> Result<String, ProbeError> {
+    let too_big = |seen: usize| {
+        ProbeError::Malformed(format!(
+            "the room's metrics are larger than the {limit} byte limit ({seen} bytes and counting)"
+        ))
+    };
+
+    if let Some(declared) = response.content_length()
+        && declared > limit as u64
+    {
+        return Err(too_big(declared as usize));
+    }
+
+    let mut response = response;
+    let mut body: Vec<u8> = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(crate::room::RoomError::from)?
+    {
+        if body.len() + chunk.len() > limit {
+            return Err(too_big(body.len() + chunk.len()));
+        }
+        body.extend_from_slice(&chunk);
+    }
+
+    String::from_utf8(body).map_err(|e| ProbeError::Malformed(e.to_string()))
 }
 
 /// Read what is there, ignore what is not.

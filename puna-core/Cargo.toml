@@ -22,6 +22,7 @@ diesel_migrations.workspace = true
 futures-util.workspace = true
 pahoa-multidata.workspace = true
 prometheus.workspace = true
+prometheus-parse.workspace = true
 # Already in the graph via rocket_oauth2 and uuid; named here because `secret.rs` depends on it
 # being a CSPRNG, which is a property of `rand`'s default `ThreadRng` and not of "some rand crate".
 rand = "0.8"

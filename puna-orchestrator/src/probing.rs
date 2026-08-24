@@ -53,6 +53,9 @@ const CONCURRENCY: usize = 8;
 /// extending the lockout that is already in force.
 const DEFAULT_BACKOFF: Duration = Duration::from_secs(60);
 
+/// What the metrics scrape returned, or `None` when it was not attempted.
+type Exposition = Option<Result<String, ProbeError>>;
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ProbeReport {
     pub probed: usize,
@@ -153,17 +156,34 @@ impl Prober {
         // Concurrent, but the RESULTS are applied serially: they share one connection, and a
         // per-room connection would be a pool the size of the room count for work that is not
         // urgent.
-        let answers: Vec<(RoomId, Result<RoomStatus, ProbeError>)> = stream::iter(ready)
-            .map(|target| async move {
-                let endpoint = self.endpoint(target.id, target.base_port);
-                let answer = self.probe.status(&endpoint, &target.admin_token).await;
-                (target.id, answer)
-            })
-            .buffer_unordered(CONCURRENCY)
-            .collect()
-            .await;
+        let answers: Vec<(RoomId, Result<RoomStatus, ProbeError>, Exposition)> =
+            stream::iter(ready)
+                .map(|target| async move {
+                    let endpoint = self.endpoint(target.id, target.base_port);
+                    let answer = self.probe.status(&endpoint, &target.admin_token).await;
+                    // **Sequential within the room, not beside the status call.** Two requests at once
+                    // doubles the connection burst against a room this pass exists only to *observe*,
+                    // and nothing here is urgent enough to pay that. Concurrency across rooms is what
+                    // makes the pass finish.
+                    //
+                    // A room that answered the status and not this one is not a failure: an image
+                    // predating the counters answers `404`, and a room that stopped between the two
+                    // calls answers nothing. Either way the numbers are simply not refreshed.
+                    let exposition = match answer {
+                        Ok(_) => Some(self.probe.metrics(&endpoint, &target.admin_token).await),
+                        // Not asked at all when the status failed: the same lockout, timeout or
+                        // teardown would produce the same answer, and a `429` earned twice is a
+                        // backoff window entered twice.
+                        Err(_) => None,
+                    };
+                    (target.id, answer, exposition)
+                })
+                .buffer_unordered(CONCURRENCY)
+                .collect()
+                .await;
 
-        for (room, answer) in answers {
+        for (room, answer, exposition) in answers {
+            self.absorb_exposition(room, exposition);
             match answer {
                 Ok(status) => {
                     report.answered += 1;
@@ -203,6 +223,36 @@ impl Prober {
         }
 
         report
+    }
+
+    /// Re-export one room's own exposition, or stop re-exporting it.
+    ///
+    /// **A room that did not answer loses its proxied series**, which is the same rule the gauges
+    /// follow and matters more here: these are keyed by `(room, slot, cmd, …)`, so a room left
+    /// behind does not strand one stale reading but every series it ever had — and a counter frozen
+    /// at its last value reads as a room that has gone completely quiet rather than one Puna cannot
+    /// reach.
+    fn absorb_exposition(&self, room: RoomId, exposition: Exposition) {
+        let key = room.to_string();
+        match exposition {
+            Some(Ok(text)) => {
+                let published = puna_core::metrics::proxy::publish(&key, &text);
+                if published.dropped > 0 {
+                    tracing::warn!(
+                        %room,
+                        series = published.series,
+                        dropped = published.dropped,
+                        "some of a room's metrics were not re-exported; see \
+                         puna_room_metrics_dropped_total for why"
+                    );
+                }
+            }
+            Some(Err(e)) => {
+                tracing::debug!(%room, error = %e, "a room did not answer for its metrics");
+                puna_core::metrics::proxy::forget(&key);
+            }
+            None => puna_core::metrics::proxy::forget(&key),
+        }
     }
 
     /// Publish what this probe can do, once at startup.
@@ -388,7 +438,8 @@ mod tests {
             ProbeCapabilities {
                 status: true,
                 commands: true,
-                graceful_shutdown: true
+                graceful_shutdown: true,
+                metrics: true
             }
         );
     }

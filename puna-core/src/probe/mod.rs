@@ -81,6 +81,9 @@ pub struct ProbeCapabilities {
     pub commands: bool,
     /// Quiesce-and-save, rather than deleting the Deployment and relying on SIGTERM.
     pub graceful_shutdown: bool,
+    /// The room's own exposition, for re-export. Without it a fleet's per-message-type panels are
+    /// simply empty, which looks like quiet rooms rather than a probe that cannot ask.
+    pub metrics: bool,
 }
 
 impl ProbeCapabilities {
@@ -95,14 +98,16 @@ impl ProbeCapabilities {
     ///
     /// Deriving both the seeding and the publishing from [`Self::as_pairs`] is what makes a third
     /// divergence impossible rather than unlikely.
-    pub const NAMES: &'static [&'static str] = &["status", "commands", "graceful_shutdown"];
+    pub const NAMES: &'static [&'static str] =
+        &["status", "commands", "graceful_shutdown", "metrics"];
 
     /// Each capability and whether this probe has it, in [`Self::NAMES`] order.
-    pub fn as_pairs(&self) -> [(&'static str, bool); 3] {
+    pub fn as_pairs(&self) -> [(&'static str, bool); 4] {
         [
             ("status", self.status),
             ("commands", self.commands),
             ("graceful_shutdown", self.graceful_shutdown),
+            ("metrics", self.metrics),
         ]
     }
 }
@@ -305,6 +310,22 @@ pub trait RoomProbe: Send + Sync {
         slot: Option<i32>,
         rules: Option<&[crate::model::filter::Rule]>,
     ) -> Result<(), ProbeError>;
+
+    /// The room's own Prometheus exposition, **verbatim**.
+    ///
+    /// Text rather than anything parsed, and that is the contract: Puna adds `room` and
+    /// republishes, so pahoa's names, help text and types carry through without agreement — a
+    /// label or a metric they add later needs no release here. See [`crate::metrics::proxy`].
+    ///
+    /// Bounded, because this is the one room response whose size is a function of a *seed*: slots
+    /// times message types, which pahoa costed at ~28,000 series for a 2000-slot sync. A room is
+    /// not an attacker, but a room with a bug is still able to hand the orchestrator more than it
+    /// should hold, and the orchestrator is the singleton.
+    async fn metrics(
+        &self,
+        endpoint: &RoomEndpoint,
+        admin_token: &str,
+    ) -> Result<String, ProbeError>;
 
     fn capabilities(&self) -> ProbeCapabilities;
 }
