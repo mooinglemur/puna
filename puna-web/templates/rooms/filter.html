@@ -1,4 +1,8 @@
 {% extends "base.html" %}
+{# The prose measure is wrong for six columns of controls — it cut the direction picker off mid-word,
+   where the word is the whole point of carrying pahoa's `from_slot` / `to_slot` with their gloss
+   attached. Same opt-out the bulk panel and the admin tables take. #}
+{% block layout %}wide{% endblock %}
 {% block title %}{{ scope +}} &mdash; {{+ room_name }}{% endblock %}
 {% block content %}
 
@@ -40,7 +44,7 @@ This slot has no rules of its own, so it follows whatever the room does.</p>
 it</strong> &mdash; the room&rsquo;s rules are not added to what you write here, they are replaced by
 it. The room currently drops:</p>
 {% else %}
-<p class="warning">Emptying this table and choosing <strong>follows the room&rsquo;s filter</strong>
+<p class="warning">Emptying this table and choosing <strong>Follow the room&rsquo;s filter</strong>
 makes these apply to this slot <strong>at once</strong>:</p>
 {% endif %}
 <ul class="rules">
@@ -71,7 +75,7 @@ makes these apply to this slot <strong>at once</strong>:</p>
 </form>
 
 <p class="hint">These cannot be filtered, because dropping one desynchronizes the client:
-{%+ for r in refused %}<code>{{ r.0 }}</code>{% if !loop.last %},{% endif %}{% endfor %}.</p>
+{%+ for r in refused %}<code>{{ r.1 }}</code>{% if !loop.last %},{% endif %}{% endfor %}.</p>
 
 {# --- the room editor's warning ------------------------------------------------------------------
    **Named, not counted.** "This does not reach 3 slots" sends somebody to work out which three;

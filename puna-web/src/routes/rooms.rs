@@ -52,6 +52,14 @@ pub struct RoomTemplate {
     /// an authorization comparison anyway.
     is_staff: bool,
     is_organizer: bool,
+    /// The room's own filter as a hover summary, or `None` when there is none — or when the viewer
+    /// is not staff, which is decided here rather than in markup for the reason `SlotView`'s note
+    /// gives: a template cannot prove it did not render something.
+    ///
+    /// **A room-wide filter is otherwise invisible from every page a player or a helper looks at**,
+    /// which turns "why did my DeathLinks stop" into a mystery with no thread to pull. The chip is
+    /// the thread; the hover is the answer.
+    room_filter: Option<String>,
     siblings: Vec<Room>,
     /// From `room::may_see_spoiler`, so the link and the download route answer the same question.
     /// A page that offers a link the route refuses is a bug report; one that hides a link the route
@@ -170,6 +178,26 @@ pub struct SlotView {
     pub filter_summary: String,
 }
 
+/// What the roster needs to know about filtering: the room's state, and the slots that diverge.
+///
+/// **Both, because neither answers the question alone.** A slot with rules of its own is remarkable
+/// for a different reason depending on whether the room filters — with a room filter it is *not
+/// running the room's*, and without one it is simply the only filtered slot. So this is one
+/// parameter rather than a ninth, which is the context struct the note below wants, arriving one
+/// field at a time.
+#[derive(Default)]
+pub struct Filters {
+    pub room_filters: bool,
+    /// Only the divergent slots have entries; a slot that follows the room is absent.
+    pub slots: std::collections::HashMap<i32, puna_core::model::filter::SlotFilter>,
+}
+
+impl Filters {
+    fn of(&self, slot: i32) -> Option<&puna_core::model::filter::SlotFilter> {
+        self.slots.get(&slot)
+    }
+}
+
 // Eight, and the honest fix is a context struct rather than this attribute -- deferred rather than
 // dismissed, because it is nine call sites of churn for no behavior change. Worth doing next time
 // this signature grows: the arguments most at risk of being transposed are the two `bool`s, and a
@@ -186,23 +214,32 @@ fn slot_views(
     per_slot_passwords: bool,
     owner_names: &std::collections::HashMap<i64, String>,
     may_see_roster: bool,
-    filters: &std::collections::HashMap<i32, puna_core::model::filter::SlotFilter>,
+    filters: &Filters,
 ) -> Vec<SlotView> {
     slots
         .into_iter()
         .map(|s| SlotView {
-            filter_summary: match filters.get(&s.slot_number) {
-                Some(puna_core::model::filter::SlotFilter::Exempt) => {
+            filter_summary: match filters.of(s.slot_number) {
+                Some(puna_core::model::filter::SlotFilter::Exempt) if filters.room_filters => {
                     "Exempt: nothing is filtered for this slot, including the room's filter".into()
+                }
+                Some(puna_core::model::filter::SlotFilter::Exempt) => {
+                    "Exempt: nothing is filtered for this slot".into()
                 }
                 Some(puna_core::model::filter::SlotFilter::Own(rules)) => {
                     // Its OWN rules, and the room's are deliberately absent -- which is the fact
-                    // this hover exists to make visible without opening the editor.
-                    let mut summary = String::from("Its own rules, instead of the room's: ");
+                    // this hover exists to make visible without opening the editor. Said only when
+                    // there IS a room filter to be replacing; otherwise it names a thing that does
+                    // not exist and reads as though something were being lost.
+                    let mut summary = String::from(if filters.room_filters {
+                        "Its own rules, instead of the room's: "
+                    } else {
+                        "Its own rules: "
+                    });
                     summary.push_str(
                         &rules
                             .iter()
-                            .map(|r| r.describe())
+                            .map(|r| r.describe(puna_core::model::filter::Subject::ThisSlot))
                             .collect::<Vec<_>>()
                             .join("; "),
                     );
@@ -210,8 +247,18 @@ fn slot_views(
                 }
                 _ => String::new(),
             },
-            filter_chip: match (role.is_some(), filters.get(&s.slot_number)) {
+            filter_chip: match (role.is_some(), filters.of(s.slot_number)) {
                 (true, Some(puna_core::model::filter::SlotFilter::Exempt)) => Some("unfiltered"),
+                // **The override, and it only exists when there is something to override.** With a
+                // room filter in force, a slot with rules of its own is not running the room's --
+                // pahoa replaces rather than merges -- and "filtered" would say the opposite of the
+                // thing worth knowing, since every other slot is filtered too. With no room filter,
+                // there is nothing to diverge from and the plain word is the honest one.
+                (true, Some(puna_core::model::filter::SlotFilter::Own(_)))
+                    if filters.room_filters =>
+                {
+                    Some("overrides room filter")
+                }
                 (true, Some(_)) => Some("filtered"),
                 // A slot that follows the room gets no chip: whatever the room does is not a fact
                 // about this row, and the room's own filter is stated once above the table.
@@ -554,17 +601,41 @@ async fn show(
         Default::default()
     };
 
-    // Only for staff, and only the divergent slots have rows -- one query for the whole roster
-    // rather than a read per line on a page that may carry hundreds.
-    let slot_filters: std::collections::HashMap<i32, puna_core::model::filter::SlotFilter> =
-        if role.is_some() {
-            puna_core::model::filter::slot_filters(&mut conn, room.id)
+    // Staff only, and two reads for the whole page: the divergent slots (only those have rows) and
+    // the room's own rules. Both feed the chips, and the room's is needed for the SLOT chips too --
+    // a slot with rules of its own reads differently depending on whether there is a room filter it
+    // is not running.
+    let room_rules = if role.is_some() {
+        puna_core::model::filter::room_filter(&mut conn, room.id)
+            .await?
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let slot_filters = if role.is_some() {
+        Filters {
+            room_filters: !room_rules.is_empty(),
+            slots: puna_core::model::filter::slot_filters(&mut conn, room.id)
                 .await?
                 .into_iter()
-                .collect()
-        } else {
-            Default::default()
-        };
+                .collect(),
+        }
+    } else {
+        Filters::default()
+    };
+
+    // The chip beside the room's name, with what it drops on hover.
+    let room_filter = slot_filters.room_filters.then(|| {
+        // `AnySlot`, because a room-wide rule is about everybody — the same sentence the room's own
+        // filter page renders, from the same function, so the chip and the page cannot describe one
+        // rule two ways.
+        let listed = room_rules
+            .iter()
+            .map(|r| r.describe(puna_core::model::filter::Subject::AnySlot))
+            .collect::<Vec<_>>()
+            .join("; ");
+        format!("This room drops: {listed}")
+    });
 
     let slots = slot_views(
         room_slots,
@@ -594,6 +665,7 @@ async fn show(
         slots,
         is_staff: role.is_some(),
         is_organizer: role.is_some_and(|r| r >= RoomRole::Organizer),
+        room_filter,
         siblings,
         can_see_spoiler,
         can_see_tracker,
@@ -1667,6 +1739,13 @@ mod tests {
             slots: Vec::new(),
             is_staff,
             is_organizer,
+            // Set only where a room filter is what the test is about; `slot_views` decides the
+            // per-slot chips and this decides the room's, so neither is a template's call.
+            room_filter: if is_staff {
+                Some("This room drops: drop every PrintJSON Chat sent by any slot".into())
+            } else {
+                None
+            },
             siblings: Vec::new(),
             can_see_spoiler: false,
             can_see_tracker: true,
@@ -2473,6 +2552,119 @@ mod tests {
             !public_view[0].is_locked,
             "a public page would name somebody as barred"
         );
+    }
+
+    /// **The same slot state means two different things, and the chip has to say which.**
+    ///
+    /// A slot with rules of its own is *not running the room's* — pahoa replaces rather than merges
+    /// — and that is the fact worth a chip. But it is only a fact when there IS a room filter: with
+    /// none, "overrides room filter" names something that does not exist, and the slot is simply the
+    /// only filtered one. So the word depends on the room, which is why `slot_views` takes the
+    /// room's state alongside the slots'.
+    #[test]
+    fn a_slot_chip_says_whether_it_is_overriding_anything() {
+        use puna_core::model::filter::{Direction, Kind, Rule, SlotFilter};
+
+        let own = || {
+            let mut slots = std::collections::HashMap::new();
+            slots.insert(
+                1,
+                SlotFilter::Own(vec![Rule {
+                    direction: Direction::FromSlot,
+                    kind: Kind::Bounce,
+                    tag: Some("DeathLink".into()),
+                    subtype: None,
+                    p: None,
+                }]),
+            );
+            slots
+        };
+
+        let chip = |room_filters: bool, slots| {
+            slot_views(
+                vec![slot(1, Some(77))],
+                Some(77),
+                Some(RoomRole::Helper),
+                &Default::default(),
+                false,
+                &Default::default(),
+                true,
+                &Filters {
+                    room_filters,
+                    slots,
+                },
+            )
+            .remove(0)
+        };
+
+        let overriding = chip(true, own());
+        assert_eq!(overriding.filter_chip, Some("overrides room filter"));
+        assert!(
+            overriding.filter_summary.contains("instead of the room's"),
+            "{}",
+            overriding.filter_summary
+        );
+
+        // No room filter, so there is nothing to be overriding and nothing to be instead of.
+        let alone = chip(false, own());
+        assert_eq!(alone.filter_chip, Some("filtered"));
+        assert!(
+            !alone.filter_summary.contains("instead of"),
+            "the hover names a room filter that does not exist: {}",
+            alone.filter_summary
+        );
+
+        // Exempt reads the same either way — "unfiltered" already says it is not doing what the
+        // room does, and with no room filter it is still a deliberate state worth marking.
+        let mut exempt = std::collections::HashMap::new();
+        exempt.insert(1, SlotFilter::Exempt);
+        assert_eq!(chip(true, exempt.clone()).filter_chip, Some("unfiltered"));
+        assert_eq!(chip(false, exempt).filter_chip, Some("unfiltered"));
+
+        // And a slot that follows the room gets no chip at all, whatever the room does: it is not a
+        // fact about that row.
+        assert_eq!(chip(true, Default::default()).filter_chip, None);
+    }
+
+    /// **A room-wide filter has to be visible from the room, and to a helper as well.**
+    ///
+    /// Nothing on this page said one existed, so a room quietly dropping every DeathLink looked
+    /// exactly like a room where DeathLink was broken — and the helper fielding that question is
+    /// the person least equipped to find out, because the editor is an organizer's.
+    ///
+    /// So the chip is shown to both and is a **link for an organizer only**. A helper following it
+    /// would meet a 403, which is the "control that exists and cannot be used" failure wearing its
+    /// other face.
+    #[test]
+    fn a_room_filter_is_visible_to_staff_and_only_an_organizer_can_follow_it() {
+        let organizer = page_as(true, true).render().expect("renders");
+        let helper = page_as(true, false).render().expect("renders");
+        let player = page_as(false, false).render().expect("renders");
+
+        assert!(
+            organizer.contains(r#"<a class="tag filter" href="/room/"#),
+            "an organizer gets no way through to the room filter"
+        );
+        assert!(
+            helper.contains("room filtered"),
+            "a helper cannot tell the room is filtering at all"
+        );
+        assert!(
+            !helper.contains(r#"<a class="tag filter""#),
+            "a helper is offered a link to a page that answers 403"
+        );
+        assert!(
+            !player.contains("room filtered"),
+            "a public page names a filter that explains nothing to a player"
+        );
+
+        // The hover carries what it drops, in the room's own words rather than a bare `p`.
+        for page in [&organizer, &helper] {
+            assert!(
+                page.contains("This room drops: drop every PrintJSON Chat"),
+                "the chip has no hover summary, so it says something is filtered and not what"
+            );
+        }
     }
 
     /// **Lock bars the next login and disconnects nobody**, and the control has to say so: the

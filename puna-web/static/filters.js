@@ -156,6 +156,35 @@
       markDirty(form);
     });
 
+    // **Open the suggestions when an empty tag or subtype box is entered.**
+    //
+    // A `datalist` is otherwise invisible: nothing on the control says it has suggestions, so the
+    // closed set of `PrintJSON` subtypes goes unread and people type from memory. Popping it open
+    // on an EMPTY field only — once there is text, the browser filters as you type and forcing the
+    // list back open would fight the typing.
+    //
+    // `showPicker()` requires transient user activation, which a click grants and a Tab does not,
+    // and it is not everywhere yet — so both are caught and the field degrades to what it does
+    // today: suggestions on the down arrow.
+    function suggest(field) {
+      if (!field || field.disabled || field.value !== "") return;
+      if (typeof field.showPicker !== "function") return;
+      try {
+        field.showPicker();
+      } catch (e) {
+        // No user activation, or no support for a datalist picker here. Nothing is lost.
+      }
+    }
+
+    form.addEventListener("focusin", function (event) {
+      suggest(event.target.closest("[data-rule-tag], [data-rule-subtype]"));
+    });
+    // Also on click, because focus arriving by Tab carries no activation and a click on an
+    // already-focused field would otherwise do nothing.
+    form.addEventListener("click", function (event) {
+      suggest(event.target.closest("[data-rule-tag], [data-rule-subtype]"));
+    });
+
     // One delegated listener rather than one per control, because rows arrive after this runs.
     form.addEventListener("change", function (event) {
       if (!event.target.closest(".rule-row")) return;

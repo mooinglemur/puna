@@ -60,10 +60,15 @@ impl Direction {
     }
 
     /// The API's word, glossed. The word stays; the ambiguity does not.
+    ///
+    /// **"a slot", not "this slot"**, because one picker is rendered at three scopes — a room's
+    /// filter, one slot's, and the bulk panel's. The gloss exists to say which end of the wire a
+    /// direction names, and it does that without claiming a subject the page it is on may not have.
+    /// [`Rule::describe`] is where the subject belongs, and it takes one.
     pub fn label(self) -> &'static str {
         match self {
-            Self::FromSlot => "from_slot — what this slot sends",
-            Self::ToSlot => "to_slot — what reaches this slot",
+            Self::FromSlot => "from_slot — what a slot sends",
+            Self::ToSlot => "to_slot — what reaches a slot",
         }
     }
 
@@ -105,6 +110,24 @@ impl Kind {
         }
     }
 
+    /// **The packet's own name, as upstream and pahoa spell it**, for anything a person reads.
+    ///
+    /// The wire spelling is snake_case because that is what pahoa's filter API takes, and it is the
+    /// wrong thing to show: an organizer reaching for a filter knows these as `PrintJSON` and
+    /// `SetReply` from the network protocol document and from every client's log, and `print_json`
+    /// is a name only this API uses. Transcribed from `ServerPacket`/`ClientPacket` — note
+    /// **`PrintJSON`**, which is the one that is not plain PascalCase.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Bounce => "Bounce",
+            Self::PrintJson => "PrintJSON",
+            Self::Set => "Set",
+            Self::SetReply => "SetReply",
+            Self::Retrieved => "Retrieved",
+            Self::StatusUpdate => "StatusUpdate",
+        }
+    }
+
     /// Whether this kind takes a `tag` (bounce) or a `subtype` (print_json). Everything else takes
     /// neither, and offering a narrowing box that does nothing is how a filter gets written that
     /// matches more than its author meant.
@@ -130,23 +153,31 @@ impl Kind {
 /// Checked here as well as at the room for the same reason `spec::args` refuses forbidden flags by
 /// name: an answer that arrives before the round trip is worth more, and pahoa's own wording is
 /// what gets shown either way.
-pub const REFUSED_KINDS: &[(&str, &str)] = &[
+///
+/// Each entry is `(wire name, the packet's own name, why)`. The middle one is what a page shows,
+/// for the reason [`Kind::label`] gives — these are read beside the kinds that ARE offered, and one
+/// list in two spellings reads as two different vocabularies.
+pub const REFUSED_KINDS: &[(&str, &str, &str)] = &[
     (
         "received_items",
+        "ReceivedItems",
         "dropping an item delivery desynchronizes the slot: the room advances its send index as it \
          sends, so the client would never learn what it missed",
     ),
     (
         "connected",
+        "Connected",
         "the slot would never complete its handshake, so it could not play at all",
     ),
     (
         "location_info",
+        "LocationInfo",
         "this answers a scout the client asked for, so dropping it leaves the request unanswered \
          forever",
     ),
     (
         "room_update",
+        "RoomUpdate",
         "the client would stop learning what the room has done, and drift out of step with it",
     ),
 ];
@@ -212,6 +243,30 @@ pub struct Rule {
     pub p: Option<f64>,
 }
 
+/// Who a rule's sentence is about, which is decided by the scope reading it rather than by the rule.
+///
+/// The same stored rule is described on two pages. On a slot's, `this slot` is exact. On the
+/// **room's**, it is wrong in the way that matters — the page is about a rule applying to everybody,
+/// and a sentence saying "sent by this slot" over a room-wide rule reads as though one slot were
+/// singled out. The room's page names its own exceptions underneath, in the "does not reach these
+/// slots" warning, so `any slot` is not an overclaim there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Subject {
+    /// One slot's page, and the roster's per-slot chip.
+    ThisSlot,
+    /// The room's own filter, which applies to everybody it reaches.
+    AnySlot,
+}
+
+impl Subject {
+    fn who(self) -> &'static str {
+        match self {
+            Self::ThisSlot => "this slot",
+            Self::AnySlot => "any slot",
+        }
+    }
+}
+
 /// A rule's identity: everything but `p`.
 ///
 /// **Rules are a set keyed on this, not an ordered list**, which is pahoa's design and what makes
@@ -249,15 +304,17 @@ impl Rule {
     /// **`p` is the drop probability**, so `p: 0.75` leaves a quarter getting through — the exact
     /// reading pahoa's own example comment contradicts. Printing "p = 0.75" invites the reader to
     /// supply whichever meaning they arrived with; saying what survives does not.
-    pub fn describe(&self) -> String {
+    /// **The packet's own name**, not the wire spelling, for the reason [`Kind::label`] gives.
+    pub fn describe(&self, subject: Subject) -> String {
         let what = match (&self.tag, &self.subtype) {
-            (Some(tag), _) => format!("{} {tag}", self.kind.as_str()),
-            (_, Some(subtype)) => format!("{} {subtype}", self.kind.as_str()),
-            _ => self.kind.as_str().to_string(),
+            (Some(tag), _) => format!("{} {tag}", self.kind.label()),
+            (_, Some(subtype)) => format!("{} {subtype}", self.kind.label()),
+            _ => self.kind.label().to_string(),
         };
+        let who = subject.who();
         let way = match self.direction {
-            Direction::FromSlot => "sent by this slot",
-            Direction::ToSlot => "reaching this slot",
+            Direction::FromSlot => format!("sent by {who}"),
+            Direction::ToSlot => format!("reaching {who}"),
         };
         match self.p {
             None => format!("drop every {what} {way}"),
@@ -674,28 +731,85 @@ mod tests {
     /// number on screen would give it away.
     #[test]
     fn a_description_says_what_gets_through_rather_than_printing_p() {
-        let thinned = bounce("DeathLink", Some(0.75)).describe();
+        let thinned = bounce("DeathLink", Some(0.75)).describe(Subject::ThisSlot);
         assert!(
             thinned.contains("drop 75%") && thinned.contains("25% still get through"),
             "p is the drop fraction, so 0.75 leaves a quarter: {thinned}"
         );
         assert!(
             bounce("DeathLink", None)
-                .describe()
+                .describe(Subject::ThisSlot)
                 .starts_with("drop every")
         );
         assert!(
             bounce("DeathLink", Some(1.0))
-                .describe()
+                .describe(Subject::ThisSlot)
                 .starts_with("drop every"),
             "p = 1 is the same as absent"
         );
         assert!(
             bounce("DeathLink", Some(0.0))
-                .describe()
+                .describe(Subject::ThisSlot)
                 .contains("nothing"),
             "a rule that drops nothing should say so rather than reading as active"
         );
+    }
+
+    /// **The scope decides who the sentence is about**, and the room's page is the one that was
+    /// wrong: a room-wide rule described as "sent by this slot" reads as though one slot had been
+    /// singled out, on a page with no slot on it.
+    #[test]
+    fn a_rule_is_described_against_the_scope_reading_it() {
+        let rule = bounce("DeathLink", None);
+        assert!(
+            rule.describe(Subject::ThisSlot)
+                .ends_with("sent by this slot"),
+            "{}",
+            rule.describe(Subject::ThisSlot)
+        );
+        assert!(
+            rule.describe(Subject::AnySlot)
+                .ends_with("sent by any slot"),
+            "{}",
+            rule.describe(Subject::AnySlot)
+        );
+
+        let inbound = Rule {
+            direction: Direction::ToSlot,
+            ..bounce("DeathLink", None)
+        };
+        assert!(
+            inbound
+                .describe(Subject::AnySlot)
+                .contains("reaching any slot")
+        );
+    }
+
+    /// **A person reads the packet's name, never the wire spelling.** `print_json` is a name only
+    /// pahoa's filter API uses; `PrintJSON` is what the protocol document, every client log and
+    /// every organizer already calls it.
+    #[test]
+    fn a_description_names_the_packet_the_way_upstream_does() {
+        let chat = Rule {
+            direction: Direction::FromSlot,
+            kind: Kind::PrintJson,
+            tag: None,
+            subtype: Some("Chat".into()),
+            p: None,
+        };
+        let sentence = chat.describe(Subject::AnySlot);
+        assert!(sentence.contains("PrintJSON Chat"), "{sentence}");
+        assert!(!sentence.contains("print_json"), "{sentence}");
+
+        // And every kind has one, so a kind pahoa adds cannot reach a page as snake_case.
+        for kind in Kind::ALL {
+            let label = kind.label();
+            assert!(
+                !label.contains('_') && label.starts_with(|c: char| c.is_ascii_uppercase()),
+                "{} is shown to people as {label}",
+                kind.as_str()
+            );
+        }
     }
 
     #[test]
@@ -786,7 +900,7 @@ mod tests {
     /// The refusals are the ones pahoa names, with reasons rather than "unknown kind".
     #[test]
     fn progression_kinds_are_refused_by_name() {
-        let names: Vec<&str> = REFUSED_KINDS.iter().map(|(name, _)| *name).collect();
+        let names: Vec<&str> = REFUSED_KINDS.iter().map(|(name, _, _)| *name).collect();
         assert_eq!(
             names,
             [
@@ -797,12 +911,17 @@ mod tests {
             ]
         );
         // None of them is also a valid kind, or the refusal would be unreachable.
-        for (name, reason) in REFUSED_KINDS {
+        for (name, label, reason) in REFUSED_KINDS {
             assert!(
                 Kind::parse(name).is_none(),
                 "{name} is both valid and refused"
             );
             assert!(!reason.is_empty(), "{name} is refused with no reason");
+            // Shown beside the kinds that ARE offered, so it is spelled the way they are.
+            assert!(
+                !label.contains('_') && label.starts_with(|c: char| c.is_ascii_uppercase()),
+                "{name} is shown to people as {label}"
+            );
         }
     }
 }

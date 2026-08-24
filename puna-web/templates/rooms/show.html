@@ -20,6 +20,21 @@
    form's first submit button, so the checkmark has to precede the cancel or Enter would cancel. #}
 <div class="titlebar">
 <h1>{{ room.name }}</h1>
+{# **A room-wide filter is invisible from every other page, which is how it becomes a mystery.**
+   Somebody asks why their DeathLinks stopped arriving, and nothing on the room page says the room
+   is dropping them. Staff-only, because it explains nothing to a player and a filter is not part of
+   what a room advertises.
+
+   **A helper sees it and cannot follow it.** The editor is organizer-tier — a room filter is
+   configuration, and it persists into the save — but a helper fielding that question needs to know
+   one exists, so they get the chip and its hover without a link that would answer 403. #}
+{% if let Some(summary) = room_filter %}
+{% if is_organizer %}
+<a class="tag filter" href="/room/{{ room.id }}/filter" title="{{ summary }}">room filtered</a>
+{% else %}
+<span class="tag filter" title="{{ summary }}">room filtered</span>
+{% endif %}
+{% endif %}
 {% if is_organizer %}
 <details class="rename">
 <summary title="Rename this room" aria-label="Rename this room">

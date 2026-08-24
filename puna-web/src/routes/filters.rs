@@ -45,7 +45,7 @@
 //!   notice.
 
 use puna_core::db::Pool;
-use puna_core::model::filter::{self, Direction, Effective, Kind, Rule, SlotFilter};
+use puna_core::model::filter::{self, Direction, Effective, Kind, Rule, SlotFilter, Subject};
 use rocket::form::Form;
 use rocket::request::FlashMessage;
 use rocket::response::{Flash, Redirect};
@@ -71,11 +71,14 @@ pub struct RuleView {
     pub describes: String,
 }
 
-fn views(rules: &[Rule]) -> Vec<RuleView> {
+/// **The subject comes from the scope, not from the rule.** A room-wide rule described as "sent by
+/// this slot" reads as though one slot had been singled out, on a page with no slot on it — and the
+/// room's page names its own exceptions underneath, so "any slot" is not an overclaim there.
+fn views(rules: &[Rule], subject: Subject) -> Vec<RuleView> {
     rules
         .iter()
         .map(|rule| RuleView {
-            describes: rule.describe(),
+            describes: rule.describe(subject),
         })
         .collect()
 }
@@ -207,10 +210,12 @@ pub struct FilterTemplate {
     /// Slots the room's filter does not reach, for the room editor's warning.
     missed: Vec<MissedSlot>,
     directions: Vec<(&'static str, &'static str)>,
-    kinds: Vec<(&'static str, Option<&'static str>)>,
+    /// `(wire value, the name a person reads, what it narrows with)` — see `Vocabulary::kinds`.
+    kinds: Vec<(&'static str, &'static str, Option<&'static str>)>,
     tag_suggestions: Vec<&'static str>,
     subtype_suggestions: Vec<&'static str>,
-    refused: Vec<(&'static str, &'static str)>,
+    /// `(wire value, the name a person reads, why it cannot be filtered)`.
+    refused: Vec<(&'static str, &'static str, &'static str)>,
     /// Whether an empty table is a question (a slot) or a statement (a room).
     empty_means_choice: bool,
     /// Which answer to that question is already true, so a state somebody already chose is not
@@ -265,11 +270,11 @@ fn build_rule(fields: &RuleFields) -> std::result::Result<Rule, String> {
     // **Refused by name, with pahoa's reason.** These parse and are things an operator genuinely
     // reaches for while trying to help a broken client, so "unknown kind" would send them looking
     // for a spelling mistake instead of telling them why it cannot work.
-    if let Some((_, why)) = filter::REFUSED_KINDS
+    if let Some((_, label, why)) = filter::REFUSED_KINDS
         .iter()
-        .find(|(name, _)| *name == kind_name)
+        .find(|(name, _, _)| *name == kind_name)
     {
-        return Err(format!("\"{kind_name}\" cannot be filtered: {why}"));
+        return Err(format!("{label} cannot be filtered: {why}"));
     }
 
     let kind = Kind::parse(&kind_name).ok_or_else(|| format!("no such kind: {kind_name}"))?;
@@ -387,10 +392,13 @@ pub(crate) fn slot_state_from(
 /// gains appears in the picker by being added once.
 pub(crate) struct Vocabulary {
     pub directions: Vec<(&'static str, &'static str)>,
-    pub kinds: Vec<(&'static str, Option<&'static str>)>,
+    /// `(wire value, the name a person reads, what it narrows with)`. The middle one is
+    /// [`Kind::label`] — a picker offering `print_json` names it in a spelling only pahoa's filter
+    /// API uses, where every client log and the protocol document say `PrintJSON`.
+    pub kinds: Vec<(&'static str, &'static str, Option<&'static str>)>,
     pub tag_suggestions: Vec<&'static str>,
     pub subtype_suggestions: Vec<&'static str>,
-    pub refused: Vec<(&'static str, &'static str)>,
+    pub refused: Vec<(&'static str, &'static str, &'static str)>,
 }
 
 pub(crate) fn vocabulary() -> Vocabulary {
@@ -401,7 +409,7 @@ pub(crate) fn vocabulary() -> Vocabulary {
             .collect(),
         kinds: Kind::ALL
             .iter()
-            .map(|k| (k.as_str(), k.narrows_with()))
+            .map(|k| (k.as_str(), k.label(), k.narrows_with()))
             .collect(),
         tag_suggestions: filter::BOUNCE_TAGS.to_vec(),
         subtype_suggestions: filter::PRINT_JSON_SUBTYPES.to_vec(),
@@ -482,7 +490,8 @@ async fn show_room(
         room_name: room.name.clone(),
         scope: "Room filter".to_string(),
         slot: None,
-        effective: views(&rules),
+        // The room's own page, which is about everybody rather than about a slot.
+        effective: views(&rules, Subject::AnySlot),
         effective_from_room: false,
         rules: editor_rows(&rules),
         has_rules: !rules.is_empty(),
@@ -602,9 +611,11 @@ async fn show_slot(
             SlotFilter::Exempt => "exempt",
             SlotFilter::Own(_) => "own",
         }),
-        effective: views(&effective.rules),
+        // A slot's page, where both lists are about what happens to THIS slot — including the
+        // room's rules, which are shown here as what they would do to it.
+        effective: views(&effective.rules, Subject::ThisSlot),
         effective_from_room: effective.from_room,
-        room_rules: views(&room_rules),
+        room_rules: views(&room_rules, Subject::ThisSlot),
         missed: Vec::new(),
         directions: vocabulary.directions,
         kinds: vocabulary.kinds,
@@ -749,9 +760,10 @@ mod tests {
         let rule = build_rule(&row("bounce", Some("DeathLink"), Some("75"))).expect("builds");
         assert_eq!(rule.p, Some(0.75));
         assert!(
-            rule.describe().contains("25% still get through"),
+            rule.describe(Subject::ThisSlot)
+                .contains("25% still get through"),
             "the page says what survives: {}",
-            rule.describe()
+            rule.describe(Subject::ThisSlot)
         );
 
         assert_eq!(
@@ -958,7 +970,14 @@ mod tests {
             rules: editor_rows(stored),
             has_rules: !stored.is_empty(),
             slot_state: slot.map(|_| "own"),
-            effective: views(stored),
+            effective: views(
+                stored,
+                if slot.is_some() {
+                    Subject::ThisSlot
+                } else {
+                    Subject::AnySlot
+                },
+            ),
             effective_from_room: false,
             room_rules: Vec::new(),
             missed: Vec::new(),
