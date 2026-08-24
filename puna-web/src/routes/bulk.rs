@@ -70,6 +70,13 @@ pub struct BulkTemplate {
     /// than derived in the browser so the suggestions are the same set the selectors match against.
     games: Vec<String>,
     claimants: Vec<String>,
+    /// The rule vocabulary, for the shared `_rule_fields.html`. Sent from the model's own `ALL`
+    /// lists so the panel offers exactly what the per-slot editor does.
+    directions: Vec<(&'static str, &'static str)>,
+    kinds: Vec<(&'static str, Option<&'static str>)>,
+    /// Whether this room filters at all — the panel says what a slot filter costs only when there
+    /// is something to lose, the same rule the per-slot editor follows.
+    room_filters: bool,
     notice: Option<Notice>,
 }
 
@@ -108,7 +115,18 @@ const ACTIONS: &[(&str, &str)] = &[
     ("release_items", "Release Items"),
     ("collect_items", "Collect Items"),
     ("set_goaled", "Set as Goaled"),
+    // **Filters, which are not commands and not the roster write either.** Each one sets the same
+    // state on every staged slot and then queues an `ApplyFilters` per slot so the running room
+    // hears about it -- so the batch page reports them exactly like any other bulk action.
+    ("filter_set", "Apply this filter"),
+    ("filter_exempt", "Exempt from all filters"),
+    ("filter_follow", "Follow the room filter"),
 ];
+
+/// Whether an action sets a slot's traffic filter rather than sending a command.
+fn is_filter_action(action: &str) -> bool {
+    action.starts_with("filter_")
+}
 
 /// The command one action produces for one slot, or `None` when it is not a room action.
 fn command_for(action: &str, slot: i32) -> Option<RoomCommand> {
@@ -188,6 +206,18 @@ async fn show(
         slots,
         games,
         claimants,
+        directions: puna_core::model::filter::Direction::ALL
+            .iter()
+            .map(|d| (d.as_str(), d.label()))
+            .collect(),
+        kinds: puna_core::model::filter::Kind::ALL
+            .iter()
+            .map(|k| (k.as_str(), k.narrows_with()))
+            .collect(),
+        room_filters: !puna_core::model::filter::room_filter(&mut conn, room.id)
+            .await?
+            .unwrap_or_default()
+            .is_empty(),
         notice: Notice::take(flash),
     })
 }
@@ -195,6 +225,14 @@ async fn show(
 #[derive(FromForm)]
 pub struct BulkForm {
     action: String,
+    /// For `filter_set`, and the same five knobs the per-slot editor takes — one rule across many
+    /// slots, which is the case filters exist for: a malformed message type crashing a set of
+    /// clients.
+    direction: Option<String>,
+    kind: Option<String>,
+    tag: Option<String>,
+    subtype: Option<String>,
+    percent: Option<String>,
     /// The staged slots. A repeated field rather than a delimited string, so the browser and Rocket
     /// agree about the shape without a parser in between.
     slots: Vec<i32>,
@@ -259,6 +297,99 @@ async fn apply(
                 )
             },
         ));
+    }
+
+    // **Filters: the same state on every staged slot, then one command per slot so the running room
+    // hears it.** Set apart from the command actions above because the durable half is Puna's own
+    // tables — the command carries only a scope and the dispatcher reads them back.
+    if is_filter_action(&form.action) {
+        use puna_core::model::filter::SlotFilter;
+
+        let state = match form.action.as_str() {
+            // One rule across many slots, which is the case the feature exists for. A multi-rule
+            // set is built on a slot's own page; here the whole point is that every staged slot
+            // ends up identical, so this REPLACES whatever each had rather than merging into it.
+            "filter_set" => match crate::routes::filters::rule_from_parts(
+                form.direction.as_deref(),
+                form.kind.as_deref(),
+                form.tag.as_deref(),
+                form.subtype.as_deref(),
+                form.percent.as_deref(),
+            ) {
+                Ok(rule) => SlotFilter::Own(vec![rule]),
+                Err(message) => return Ok(Flash::error(Redirect::to(back), message)),
+            },
+            "filter_exempt" => SlotFilter::Exempt,
+            "filter_follow" => SlotFilter::Follows,
+            other => {
+                return Err(Error::new(
+                    Status::BadRequest,
+                    anyhow::anyhow!("no such filter action: {other}"),
+                ));
+            }
+        };
+
+        for slot in &form.slots {
+            puna_core::model::filter::set_slot_filter(
+                &mut conn,
+                access.room.id,
+                *slot,
+                &state,
+                access.user_id(),
+            )
+            .await?;
+        }
+        puna_core::model::event::record(
+            &mut conn,
+            access.room.id,
+            puna_core::model::event::Actor::User(access.user_id()),
+            "slot_filter_changed",
+            serde_json::json!({ "slots": form.slots, "action": form.action }),
+        )
+        .await?;
+
+        // Nothing to tell a room that is not running: `reapply_filters` asserts everything at the
+        // next start, and queueing would only produce rows saying the room is down.
+        if access.room.state != "running" {
+            return Ok(Flash::success(
+                Redirect::to(back),
+                format!(
+                    "{} applied to {} slot(s) and stored. This room is not running, so it takes \
+                     effect the next time it starts.",
+                    label_for(&form.action),
+                    form.slots.len()
+                ),
+            ));
+        }
+
+        let pushes: Vec<RoomCommand> = form
+            .slots
+            .iter()
+            .map(|slot| RoomCommand::ApplyFilters { slot: Some(*slot) })
+            .collect();
+        let batch = command::enqueue_batch(
+            &mut conn,
+            access.room.id,
+            access.user_id(),
+            access.role(),
+            &pushes,
+        )
+        .await?;
+
+        return Ok(match batch {
+            Some(batch) => Flash::success(
+                Redirect::to(format!("/room/{room_id}/bulk/{batch}")),
+                format!(
+                    "{} applied to {} slot(s).",
+                    label_for(&form.action),
+                    pushes.len()
+                ),
+            ),
+            None => Flash::warning(
+                Redirect::to(back),
+                "Nothing was staged, so nothing was done.",
+            ),
+        });
     }
 
     let commands: Vec<RoomCommand> = form
@@ -462,10 +593,14 @@ mod tests {
     fn every_offered_action_becomes_a_command_or_is_the_roster_one() {
         for (name, label) in ACTIONS {
             assert!(!label.is_empty(), "{name} has no label");
-            if *name == "release_claims" {
+            // The two shapes that are not `command_for` commands, named rather than skipped by a
+            // rule somebody could widen: the roster write, which never reaches the room at all, and
+            // the filters, whose durable half is Puna's tables and whose command is built per slot
+            // from the stored state rather than from the button.
+            if *name == "release_claims" || is_filter_action(name) {
                 assert!(
                     command_for(name, 1).is_none(),
-                    "release_claims must not become a command: it never reaches the room"
+                    "{name} must not become a passthrough command"
                 );
                 continue;
             }
@@ -484,6 +619,8 @@ mod tests {
         use puna_core::model::member::RoomRole;
         for (name, _) in ACTIONS {
             let Some(command) = command_for(name, 1) else {
+                // A filter push is a helper's too -- `ApplyFilters { slot: Some(_) }` -- and that
+                // is asserted where the tier lives, in `model::command`.
                 continue;
             };
             assert_eq!(
@@ -548,7 +685,7 @@ mod tests {
         // nothing here noticing.
         for (action, _) in ACTIONS {
             assert!(
-                *action == "release_claims" || named.contains(action),
+                *action == "release_claims" || is_filter_action(action) || named.contains(action),
                 "`{action}` is offered and its mapping is not asserted"
             );
         }

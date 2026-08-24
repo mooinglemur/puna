@@ -116,33 +116,7 @@ opted out of the room&rsquo;s filter:</p>
 <h2>Add a rule</h2>
 <form method="post" action="{% if let Some(n) = slot %}/room/{{ room_id }}/slot/{{ n }}/filter{% else %}/room/{{ room_id }}/filter{% endif %}" class="console">
 
-{# pahoa's own words, glossed rather than translated. "in" and "out" are relative and nobody
-   remembers to what -- a rule read backwards is a filter that silently does nothing. #}
-<label>Direction
-<select name="direction" required>
-{% for d in directions %}
-<option value="{{ d.0 }}">{{ d.1 }}</option>
-{% endfor %}
-</select>
-</label>
-
-<label>What to drop
-<select name="kind" required>
-{% for k in kinds %}
-<option value="{{ k.0 }}">{{ k.0 }}{% if let Some(narrow) = k.1 +%} &mdash; narrowed by {{+ narrow }}{% endif %}</option>
-{% endfor %}
-</select>
-</label>
-
-<label>Tag <input type="text" name="tag" placeholder="for a bounce, e.g. DeathLink"></label>
-<label>Subtype <input type="text" name="subtype" placeholder="for a print_json, e.g. Chat"></label>
-
-{# **A percentage of what is DROPPED**, said in the label rather than left to the reader. `p` is
-   equally readable as "how much survives", and a control built on the wrong reading produces a
-   filter that does the opposite of what was asked at the one setting nobody re-checks. #}
-<label>Percent dropped
-<input type="number" name="percent" min="0" max="100" step="1" placeholder="blank = drop all">
-</label>
+{% include "rooms/_rule_fields.html" %}
 
 <button type="submit" name="action" value="add">Add rule</button>
 </form>

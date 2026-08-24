@@ -1024,6 +1024,50 @@ fn the_tracker_summary_fills_every_cell_it_declares() {
     );
 }
 
+/// **Block containers have to close as often as they open.**
+///
+/// Written after leaving a `<fieldset>` unclosed on the bulk panel, which nested the next one inside
+/// it and gave the page two legends for one box. **Browsers repair this silently** — the markup is
+/// never rejected, nothing logs, and the rendered result is merely subtly wrong: a nested fieldset
+/// inherits the outer one's disabled state and border, and a screen reader announces the wrong
+/// grouping. It reads as a styling problem, which is the wrong place to look.
+///
+/// Counting rather than parsing, because a real parser is not worth it here and an imbalance is the
+/// whole failure — a template where these agree can still be malformed, but every malformation of
+/// this shape shows up in the count.
+#[test]
+fn every_block_container_a_template_opens_is_closed() {
+    // Deliberately not `<div>`: askama branches legitimately open one in an `{% if %}` and close it
+    // in the matching `{% else %}` arm, so a count over the source is meaningless there. These
+    // three are always written as a matched pair in this codebase.
+    const TAGS: &[&str] = &["fieldset", "table", "form"];
+    let mut offenders = Vec::new();
+
+    for path in templates() {
+        let source = blank_comments(
+            &std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("could not read {path:?}: {e}")),
+        );
+        for tag in TAGS {
+            let opens = source.matches(&format!("<{tag}")).count();
+            let closes = source.matches(&format!("</{tag}>")).count();
+            if opens != closes {
+                offenders.push(format!(
+                    "{}: {opens} <{tag}> against {closes} </{tag}>",
+                    label(&path)
+                ));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "these templates open a block they do not close, which browsers repair into something \
+         subtly different rather than rejecting:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
 /// **The bulk panel's buttons and its action table have to name the same set.**
 ///
 /// `ACTIONS` in `routes/bulk.rs` decides what the route will do; the buttons in `rooms/bulk.html`

@@ -149,9 +149,39 @@ The room page&rsquo;s per-slot controls work without it.</p>
 <button type="submit" name="action" value="collect_items"
         data-confirm="Collect every staged slot's own items from the multiworld? This cannot be undone.">Collect Items</button>
 
+
 <button type="submit" name="action" value="set_goaled"
         title="Mark these slots Goaled, as their own clients would. Cannot be undone."
         data-confirm="Mark every staged slot as Goaled? Nobody can undo a goal — not staff, not the player — and the room may release or collect their worlds automatically.">Set as Goaled</button>
+</fieldset>
+
+{# --- filters ---------------------------------------------------------------------------------
+   **The same knobs as a slot's own page**, from one include, so a rule typed here and a rule typed
+   there mean the same thing. One rule across many slots, which is the case filters exist for: a
+   malformed message type crashing a set of clients.
+
+   It REPLACES whatever each staged slot had rather than merging, so every one of them ends up
+   identical -- which is what "identically per affected slot" means and is the only outcome a bulk
+   action can honestly promise. A multi-rule set is built on a slot's own page. #}
+<fieldset class="selector filters">
+<legend>Filter the target slots</legend>
+{% include "rooms/_rule_fields.html" %}
+<button type="submit" name="action" value="filter_set"
+        data-confirm="Replace the filter on every staged slot with this one rule? Whatever they had is discarded.">Apply this filter</button>
+<button type="submit" name="action" value="filter_exempt"
+        title="These slots are filtered by nothing at all, including the room's filter."
+        data-confirm="Exempt every staged slot from all filtering, including the room's?">Exempt from all filters</button>
+<button type="submit" name="action" value="filter_follow"
+        title="Remove these slots' own filters so the room's applies to them again."
+        data-confirm="Remove the filter from every staged slot? The room's filter applies to them again.">Follow the room filter</button>
+{% if room_filters %}
+{# Both directions of the replacement hazard, shown only when a room filter exists to be lost or
+   gained -- the same rule the per-slot editor follows, because a warning that is always there is
+   not read. #}
+<p class="warning">This room has a filter of its own. <strong>Apply</strong> and
+<strong>Exempt</strong> stop it reaching the staged slots; <strong>Follow</strong> makes it apply to
+them again, at once. See the <a href="/room/{{ room_id }}/filter">room filter</a>.</p>
+{% endif %}
 </fieldset>
 
 </form>

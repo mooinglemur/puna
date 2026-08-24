@@ -130,6 +130,30 @@ fn blank(value: &Option<String>) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Build one rule from loose parts, naming what is wrong rather than answering a bare 400.
+///
+/// **Shared with the bulk panel**, which offers the same five knobs and must build the same rule
+/// from them — a second parser would be a second set of refusals and a second place for the
+/// percentage-to-fraction conversion to be got backwards.
+pub(crate) fn rule_from_parts(
+    direction: Option<&str>,
+    kind: Option<&str>,
+    tag: Option<&str>,
+    subtype: Option<&str>,
+    percent: Option<&str>,
+) -> std::result::Result<Rule, String> {
+    let form = FilterForm {
+        action: String::new(),
+        index: None,
+        direction: direction.map(str::to_string),
+        kind: kind.map(str::to_string),
+        tag: tag.map(str::to_string),
+        subtype: subtype.map(str::to_string),
+        percent: percent.map(str::to_string),
+    };
+    build_rule(&form)
+}
+
 /// Build one rule from the form, naming what is wrong rather than answering a bare 400.
 fn build_rule(form: &FilterForm) -> std::result::Result<Rule, String> {
     let kind_name = blank(&form.kind).ok_or_else(|| "choose what to drop".to_string())?;
