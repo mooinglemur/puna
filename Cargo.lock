@@ -2103,7 +2103,7 @@ dependencies = [
 [[package]]
 name = "pahoa-multidata"
 version = "0.1.0"
-source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=03aad14bf38e39ebaf5aa6486ade55668d049597#03aad14bf38e39ebaf5aa6486ade55668d049597"
+source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=e810ae8abac5c47a51ecded86c11908da2b6fcbc#e810ae8abac5c47a51ecded86c11908da2b6fcbc"
 dependencies = [
  "flate2",
  "pahoa-pickle",
@@ -2115,7 +2115,7 @@ dependencies = [
 [[package]]
 name = "pahoa-pickle"
 version = "0.1.0"
-source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=03aad14bf38e39ebaf5aa6486ade55668d049597#03aad14bf38e39ebaf5aa6486ade55668d049597"
+source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=e810ae8abac5c47a51ecded86c11908da2b6fcbc#e810ae8abac5c47a51ecded86c11908da2b6fcbc"
 dependencies = [
  "thiserror",
 ]

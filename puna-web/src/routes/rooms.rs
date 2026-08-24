@@ -8,6 +8,7 @@
 //! unguessable id is the authorization, exactly as the reference implementation does it. What that
 //! page shows varies by who is looking -- credentials only ever through `SlotAccess`.
 
+use puna_core::artifact;
 use puna_core::model::command::{self, RoomCommand};
 use puna_core::model::event;
 use puna_core::model::generation;
@@ -24,6 +25,7 @@ use rocket::{FromForm, State, get, post, routes};
 use askama::Template;
 use askama_web::WebTemplate;
 
+use crate::DataDir;
 use crate::auth::{LoggedInSession, Session};
 use crate::error::{Error, Result, not_found};
 use crate::gate::{CanCreateRoom, Direct};
@@ -32,6 +34,74 @@ use crate::params::RoomParam;
 use crate::tpl::TplContext;
 
 type Pool = puna_core::db::Pool;
+
+/// Refuse to open a room from a seed a room would not load.
+///
+/// The same check the upload form runs, run again here, and it is not redundant: those checks live
+/// in `pahoa-multidata` at a pinned rev and **they change** -- so every generation on the volume
+/// was last checked under whatever the rules were the day it arrived. Bumping the pin is what makes
+/// this the only place the answer is current, and a room opened from a stale pass is a pod that
+/// exits at startup with the reason in a container log.
+///
+/// Costs one read and one parse per room CREATION, which is a form POST by a person: ~140 ms on the
+/// largest seed in the corpus, against a room that then takes the better part of a minute to come
+/// up. It is deliberately not on the start path, where it would be paid over and over for an answer
+/// that cannot have changed.
+async fn refuse_unloadable_seed(
+    conn: &mut diesel_async::AsyncPgConnection,
+    data_dir: &std::path::Path,
+    generation_id: puna_core::ids::GenerationId,
+) -> Result<()> {
+    let Some(generation) = generation::get(conn, generation_id).await? else {
+        return Err(not_found("no such generation"));
+    };
+    let sha256: [u8; 32] = generation.sha256.clone().try_into().map_err(|_| {
+        Error::new(
+            Status::InternalServerError,
+            anyhow::anyhow!("this generation's stored hash is not 32 bytes"),
+        )
+    })?;
+
+    let seed = std::fs::read(artifact::GenerationPaths::new(data_dir, &sha256).seed()).map_err(
+        |e| {
+            // The provisioning step copies this same file, so a room created here would park in
+            // `provisioning` instead. Saying so now beats a room that never comes up.
+            tracing::error!(generation = %generation_id, error = %e, "the promoted seed is unreadable");
+            Error::new(
+                Status::InternalServerError,
+                anyhow::anyhow!(
+                    "this generation's seed could not be read; this is a server-side fault \
+                     and has been logged"
+                ),
+            )
+        },
+    )?;
+
+    match artifact::seed_refusal(&seed) {
+        Ok(None) => Ok(()),
+        Ok(Some(reason)) => {
+            tracing::warn!(
+                generation = %generation_id,
+                %reason,
+                "refused to open a room from a seed a room would not load"
+            );
+            Err(Error::new(
+                Status::BadRequest,
+                anyhow::anyhow!(
+                    "this generation's seed will not load: {reason}. \
+                     A room opened from it would exit at startup instead of serving."
+                ),
+            ))
+        }
+        Err(e) => {
+            tracing::error!(generation = %generation_id, error = %e, "the promoted seed no longer parses");
+            Err(Error::new(
+                Status::InternalServerError,
+                anyhow::anyhow!("this generation's seed could not be read: {e}"),
+            ))
+        }
+    }
+}
 
 #[derive(Template, WebTemplate)]
 #[template(path = "rooms/list.html")]
@@ -484,6 +554,7 @@ async fn create(
     gate: CanCreateRoom<Direct>,
     form: Form<CreateRoomForm>,
     pool: &State<Pool>,
+    data_dir: &State<DataDir>,
     environment: &State<puna_core::Environment>,
 ) -> Result<Redirect> {
     let generation_id = form
@@ -498,10 +569,8 @@ async fn create(
     let mut conn = pool.get().await?;
 
     // The generation must exist before a room can reference it, and saying so here beats a
-    // foreign-key violation surfacing as a 500.
-    if generation::get(&mut conn, generation_id).await?.is_none() {
-        return Err(not_found("no such generation"));
-    }
+    // foreign-key violation surfacing as a 500 -- and it must be one a room will actually load.
+    refuse_unloadable_seed(&mut conn, &data_dir.0, generation_id).await?;
 
     let mut new = room::NewRoom::direct(**environment, name, generation_id, gate.user_id());
     new.slot_auth = slot_auth;
@@ -981,11 +1050,17 @@ async fn clone_room(
     gate: CanCreateRoom<Direct>,
     form: Form<CloneForm>,
     pool: &State<Pool>,
+    data_dir: &State<DataDir>,
 ) -> Result<Redirect> {
     let name = room::validate_name(&form.name)
         .map_err(|e| Error::new(Status::BadRequest, anyhow::anyhow!(e)))?;
 
     let mut conn = pool.get().await?;
+
+    // The source room having run is not evidence its seed still passes: the checks move with the
+    // `pahoa-multidata` pin, and a clone is a NEW room that has to come up on its own.
+    refuse_unloadable_seed(&mut conn, &data_dir.0, access.room.generation_id).await?;
+
     let clone = room::clone_room(
         &mut conn,
         access.room.id,

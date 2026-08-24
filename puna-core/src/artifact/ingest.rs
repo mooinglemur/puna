@@ -45,6 +45,18 @@
 //!
 //! Groups are the opposite case: no yaml creates one, nothing connects as one, and the server
 //! builds them from this same multidata, so a row for one would be unclaimable and unplayable.
+//!
+//! ## The load-time checks
+//!
+//! Parsing is not the whole question. pahoa runs `MultiData::validate` on the serve path, before
+//! it binds its port, so a seed that parses and is *inconsistent* -- a hole in the locations
+//! table, a connect name pointing at a slot with no world behind it, a group listing a member
+//! that does not exist, a team this server cannot serve -- is a pod that exits at startup rather
+//! than a room. That is the [`load_refusal`] check here, and it is pahoa's own function rather
+//! than a transcription of it: the two must agree, and the only way to be sure they do is for
+//! there to be one of them.
+//!
+//! Puna answers the structural half and deliberately not the version half; see [`load_refusal`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read};
@@ -65,6 +77,17 @@ pub enum IngestError {
 
     #[error("the .archipelago file could not be parsed: {0}")]
     Multidata(String),
+
+    /// It parses, and a room would refuse to serve it. See [`load_refusal`].
+    ///
+    /// Separate from [`IngestError::Multidata`] because the two say different things to whoever
+    /// uploaded it: that one means Puna could not read the file, this one means the file is
+    /// internally inconsistent and the seed wants regenerating.
+    #[error(
+        "this seed will not load: {0}. \
+         A room opened from it would exit at startup instead of serving, so it is refused here."
+    )]
+    WillNotLoad(String),
 
     #[error("archive is {size} bytes, over the {limit} byte limit")]
     TooLarge { size: u64, limit: u64 },
@@ -249,6 +272,48 @@ fn slot_from_filename(name: &str) -> Option<u32> {
     found
 }
 
+/// Why a room would refuse to load this seed, or `None` if it would serve it.
+///
+/// This is **pahoa's `MultiData::validate`, called rather than transcribed**. It is the same
+/// function the room runs before it binds its port, so the answer here and the answer there cannot
+/// disagree -- which a second implementation of the reference's `NetUtils.py:449-506` checks would
+/// eventually manage to do. Puna already links the parser for the same reason.
+///
+/// It covers: a locations table with a hole in its slot ids or a duplicated location, a
+/// `connect_names` entry pointing at a slot with no `slot_info` (a name somebody could
+/// authenticate as with no world behind it), a group listing a member that does not exist, and a
+/// slot on a team other than 0 -- which nothing can generate and neither server can serve.
+///
+/// **The version arm is deliberately made vacuous, by handing `validate` the seed's own floor.**
+/// That arm asks "is *this server* new enough", and Puna is not the server: the room's version is
+/// whatever `PUNA_PAHOA_IMAGE` resolves to, which only the orchestrator names and only the probe
+/// can read back -- and neither is available at upload. The alternative is a version constant
+/// transcribed from another repository, and its failure runs the wrong way: a constant that goes
+/// stale LOW makes Puna refuse a seed the room would happily serve, blaming the seed for a number
+/// in Puna's source. A seed genuinely demanding a newer server is left to the room, which refuses
+/// it by name on stderr. The honest fix is for `pahoa-multidata` to export `SERVER_VERSION`, which
+/// today lives a crate above it; that is asked for in the handoff.
+///
+/// The margin makes that trade cheap rather than merely defensible: every seed in the corpus
+/// demands 0.5.0 while pahoa reports 0.6.8, so this arm binds only on a seed from the future.
+pub fn load_refusal(data: &MultiData) -> Option<String> {
+    data.validate(data.minimum_server_version)
+        .err()
+        .map(|e| e.to_string())
+}
+
+/// [`load_refusal`], for a seed already promoted to the volume.
+///
+/// The upload check is not the whole answer, and the reason is not the rows that predate it -- it
+/// is that **these checks change**. They live in `pahoa-multidata` at a pinned rev, and pahoa
+/// tightening them (or fixing one, as it just did for spectators) means every generation on the
+/// volume was last checked under the previous rules. A room opened from one of them is the case
+/// the upload check cannot cover, so it is checked again where a room is opened.
+pub fn seed_refusal(seed: &[u8]) -> Result<Option<String>, IngestError> {
+    let data = MultiData::parse(seed).map_err(|e| IngestError::Multidata(e.to_string()))?;
+    Ok(load_refusal(&data))
+}
+
 /// Inspect a generation zip.
 pub fn inspect(bytes: &[u8], size_limit: u64) -> Result<GenerationMeta, IngestError> {
     let size = bytes.len() as u64;
@@ -292,6 +357,13 @@ pub fn inspect(bytes: &[u8], size_limit: u64) -> Result<GenerationMeta, IngestEr
 
     let data =
         MultiData::parse(&multidata_bytes).map_err(|e| IngestError::Multidata(e.to_string()))?;
+
+    // Before anything is attributed, because a seed no room will load has nothing worth indexing
+    // -- and because the whole point of doing this at upload is that it is a sentence on a form
+    // rather than a pod exiting at startup with the reason in a container log.
+    if let Some(reason) = load_refusal(&data) {
+        return Err(IngestError::WillNotLoad(reason));
+    }
 
     // Connectable slots: players and spectators, groups dropped. See the module docs -- a spectator
     // that is missing here is a spectator with no password in a `per_slot` room. Groups still count
@@ -567,5 +639,41 @@ mod tests {
     fn oversized_input_is_rejected_before_parsing() {
         let err = inspect(&[0u8; 128], 64).unwrap_err();
         assert!(matches!(err, IngestError::TooLarge { .. }), "got {err:?}");
+    }
+
+    /// **`inspect` must actually call `load_refusal`**, and this is a source lint because nothing
+    /// else here can reach that.
+    ///
+    /// The refusal cases are covered against a real seed in `tests/ingest.rs`, by mutating a
+    /// parsed `MultiData` -- but a test that calls `load_refusal` directly keeps passing when the
+    /// call site is deleted, and there is no other symptom: a malformed seed simply uploads,
+    /// indexes cleanly, and becomes a room whose pod exits at startup. The whole feature is the
+    /// call site, so the call site is what is pinned.
+    ///
+    /// Re-pickling a mutated multidata into a zip would test this properly and is not available:
+    /// `MultiData::parse` is a decoder with no encoder beside it.
+    #[test]
+    fn inspect_refuses_a_seed_that_would_not_load() {
+        let source = include_str!("ingest.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("the file has a non-test half");
+
+        let call = source
+            .find("if let Some(reason) = load_refusal(&data)")
+            .expect("`inspect` no longer runs the load-time checks a room runs before it starts");
+        let parse = source
+            .find("MultiData::parse(&multidata_bytes)")
+            .expect("the parse call was renamed; re-point this lint rather than deleting it");
+        // Ordering is not incidental: the checks read the parsed seed, and everything after them
+        // -- patch attribution, the slot list, the games -- is work on a seed no room will load.
+        assert!(
+            call > parse,
+            "the load-time checks must run on the parsed seed"
+        );
+        assert!(
+            source[call..].contains("IngestError::WillNotLoad"),
+            "the refusal must reach the uploader as a rejection, not a log line"
+        );
     }
 }

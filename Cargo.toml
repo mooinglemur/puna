@@ -40,7 +40,15 @@ puna-core = { path = "puna-core" }
 # is public while the GitHub origin stays private during early development, so CI needs no
 # credentials for this. Bump the rev deliberately; pahoa changing must never silently change how
 # Puna reads a seed.
-pahoa-multidata = { git = "https://git.mooinglemur.com/mooinglemur/pahoa.git", rev = "03aad14bf38e39ebaf5aa6486ade55668d049597" }
+#
+# Bumped 03aad14b -> e810ae8a for `MultiData::validate`, which pahoa now RUNS ON THE SERVE PATH
+# before the port binds -- so from that image on, a seed failing it is a room that exits at
+# startup instead of one that comes up and misbehaves. Puna runs the same function at upload so
+# that refusal is a 400 on the form. The delta to this crate's API is purely additive (`ONLY_TEAM`,
+# `teams`, `team_slots`, `ClientStatus::from_text`), and the one behavioral change is a fix Puna
+# wants: the locations check counts DECLARED slot ids, so a seed with a spectator in it is no
+# longer read as having a hole. All 14 corpus zips parse and validate identically across the bump.
+pahoa-multidata = { git = "https://git.mooinglemur.com/mooinglemur/pahoa.git", rev = "e810ae8abac5c47a51ecded86c11908da2b6fcbc" }
 
 anyhow = "1.0"
 async-trait = "0.1"
