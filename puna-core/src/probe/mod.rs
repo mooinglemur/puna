@@ -163,6 +163,13 @@ pub struct ActivityStatus {
     pub check_idle_seconds: Option<i64>,
 }
 
+/// One slot, as the room reports it.
+///
+/// **pahoa sends a `team` on every row here and this deliberately does not read it.** Team is
+/// provably 0 for every slot that can exist — nothing upstream can generate a second one, and pahoa
+/// refuses at load a seed that names one — so Puna keys slots on the room and the number alone. The
+/// decision, and what would have to change if Archipelago ever grows teams, is written up once in
+/// [`crate::model::slot`]; this is only the place the field arrives and is dropped.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SlotStatus {
     pub slot: i32,

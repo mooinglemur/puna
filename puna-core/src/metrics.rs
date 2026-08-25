@@ -783,7 +783,7 @@ pub const TICK_KINDS: &[&str] = &["reconcile", "converge"];
 /// different names. Both wrote to the same gauge, so it carried the union and asserted `0` for two
 /// capabilities that no longer name anything -- next to the very series that disproved them.
 ///
-/// Now the names come from [`ProbeCapabilities`] itself, and this is the only thing that writes
+/// Now the names come from [`crate::probe::ProbeCapabilities`] itself, and this is the only thing that writes
 /// them.
 pub fn publish_probe_capabilities(capabilities: &crate::probe::ProbeCapabilities) {
     for (name, present) in capabilities.as_pairs() {

@@ -18,6 +18,36 @@
 //! With `slot_auth = 'none'` there is no password to protect, but a claim still gates the per-slot
 //! patch download and is what puts a room on a player's landing page. So the claim link is issued
 //! in every mode.
+//!
+//! ## A SLOT IS KEYED BY `(room_id, slot_number)`, AND ARCHIPELAGO'S REAL KEY IS `(team, slot)`
+//!
+//! **Decided 2026-08-24, and the day upstream grows teams this is the note to find.**
+//!
+//! Archipelago's data model is team-aware throughout — `(team, slot)` keys everything the server
+//! owns, and `Connected` and `NetworkPlayer` both carry a team — but **nothing can generate a second
+//! one**. Generation writes `{name: (0, player)}` unconditionally (`Main.py:337`), the server seeds
+//! `self.clients = {0: {}}` and never grows it (`MultiServer.py:521`), and pahoa now **refuses at
+//! load** a seed that names any other team rather than half-serving it. So team is provably 0 for
+//! every slot that can exist today.
+//!
+//! pahoa asked Puna to key on the pair anyway, on the grounds that a caller assuming slot numbers
+//! are unique is what would have to be found and fixed everywhere later, and that carrying a
+//! constant costs nothing. **That is true on their side and not on ours**, which is why this is a
+//! note rather than a column: a label on a metric is free, while here it is four primary keys —
+//! `room_slots`, `generation_slots`, `room_slot_filters`, `generation_slot_locations` — plus every
+//! query, route parameter and template that names a slot.
+//!
+//! **What to do if it ever changes.** The trigger is upstream Archipelago allowing generation to
+//! produce a second team; pahoa refusing such a seed is what makes that visible rather than
+//! silent, and `pahoa_*{team!="0"}` appearing in a scrape is the cheapest early warning. Then:
+//! every table above takes a team column, `SlotKey` becomes a pair, and the surfaces that render a
+//! slot number — the roster, the console, the filter editors, the tracker's slot views — have to
+//! say which team they mean. Until then the assumption is **stated here rather than implied
+//! everywhere**, which is the whole point of writing it down.
+//!
+//! Nothing breaks in the meantime: pahoa's status document now carries `team` on every slot row and
+//! `crate::probe::http::parse` reads named fields and ignores the rest, so the extra field arrives
+//! and is dropped. Its admin commands take an optional `team`, which Puna does not send.
 
 use diesel::sql_types::{BigInt, Integer, Nullable, Text, Timestamptz, Uuid as SqlUuid};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
