@@ -473,6 +473,39 @@ pub static ROOM_FILTERED_TO_SLOTS: LazyLock<IntCounterVec> = LazyLock::new(|| {
     )
 });
 
+/// When the room's current Deployment was created — **how long this SPEC has been in force**.
+///
+/// A unix instant, not an age, which is deliberate: a gauge counting upward has to be re-set on
+/// every scrape to stay true, where an instant is written once and `time() - x` is the age at
+/// whatever moment somebody asks. It is also what makes a restart legible as a *step* rather than
+/// as a sawtooth nobody was watching at the right second.
+///
+/// **`_timestamp_seconds`, not `_seconds`**, because `puna_room_idle_seconds` next door is a
+/// duration and two `_seconds` families meaning different things is exactly the ambiguity this
+/// codebase keeps paying for. pahoa spells `pahoa_last_save_timestamp_seconds` the same way.
+pub static ROOM_DEPLOYMENT_CREATED: LazyLock<IntGaugeVec> = room_gauge!(
+    "puna_room_deployment_created_timestamp_seconds",
+    "Unix time the room's current Deployment was created: how long its spec has been in force"
+);
+
+/// When the room's **process** started — how long *this pahoa* has been serving.
+///
+/// **The pair is the point, and they are different questions.** The deployment age is how long the
+/// current spec has been in force; this is how long the thing answering right now has been up. They
+/// diverge when Kubernetes moved the pod — eviction, drain, preemption — or when the container
+/// restarted in place, and either way **the room reloaded its save and every client reconnected**,
+/// which an organizer notices and Puna could not otherwise explain.
+///
+/// It is also the honest explanation for a discontinuity in the re-exported room counters: pahoa's
+/// totals reset to zero with the process, so a step here is the cliff on a cumulative graph.
+///
+/// Read as `time() - x` for an age, and `changes(x[range])` for how many times a room restarted
+/// while somebody was looking.
+pub static ROOM_PROCESS_STARTED: LazyLock<IntGaugeVec> = room_gauge!(
+    "puna_room_process_started_timestamp_seconds",
+    "Unix time the room's pahoa process started: how long this process has been serving"
+);
+
 /// A room's name, as an **info metric**: always `1`, carrying the label.
 ///
 /// Every other series here is keyed by the room's uuid, which is correct — it is the identity, it
@@ -508,6 +541,27 @@ pub static ROOM_INFO: LazyLock<IntGaugeVec> = LazyLock::new(|| {
 /// deeper.
 static ROOM_NAMES: LazyLock<Mutex<HashMap<String, String>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Publish when a room's Deployment was created, from the cluster snapshot.
+///
+/// Separate entry point from [`publish_room`] because it has a **different observer**: this is what
+/// Kubernetes says, where the process start is what the room says. A pair that agrees is a room
+/// running the pod it was given; a process younger than its Deployment is a pod that moved or a
+/// container that restarted in place, and that difference is only visible because the two numbers
+/// arrive by different routes.
+///
+/// `None` removes the series, the same rule the gauges follow: a room with no Deployment is not a
+/// room whose Deployment was created at the epoch.
+pub fn publish_room_deployment(room: &str, created_at: Option<chrono::DateTime<chrono::Utc>>) {
+    match created_at {
+        Some(at) => ROOM_DEPLOYMENT_CREATED
+            .with_label_values(&[room])
+            .set(at.timestamp()),
+        None => {
+            let _ = ROOM_DEPLOYMENT_CREATED.remove_label_values(&[room]);
+        }
+    }
+}
 
 /// Publish (or re-publish) a room's name.
 pub fn publish_room_info(room: &str, name: &str) {
@@ -603,6 +657,15 @@ pub fn publish_room(room: &str, status: &crate::probe::RoomStatus) {
     set(&ROOM_RESIDENT_BYTES, room, status.net.resident_bytes);
     set(&ROOM_IDLE_SECONDS, room, status.activity.idle_seconds);
     set(&ROOM_SLOTS_FILTERED, room, status.filters.slots_filtered);
+    // The room's own answer for when its process started. Its partner,
+    // `ROOM_DEPLOYMENT_CREATED`, is written from the cluster snapshot instead — the two come from
+    // different observers on purpose, which is what makes a disagreement between them mean
+    // something. See `publish_room_deployment`.
+    set(
+        &ROOM_PROCESS_STARTED,
+        room,
+        status.started_at.map(|at| at.timestamp()),
+    );
 
     /// Advance a re-exported counter by the difference since the last poll.
     ///
@@ -681,6 +744,8 @@ pub fn retain_rooms(live: &std::collections::HashSet<String>) {
             &*ROOM_RESIDENT_BYTES,
             &*ROOM_IDLE_SECONDS,
             &*ROOM_SLOTS_FILTERED,
+            &*ROOM_DEPLOYMENT_CREATED,
+            &*ROOM_PROCESS_STARTED,
         ] {
             let _ = vec.remove_label_values(&[room]);
         }
@@ -858,6 +923,8 @@ pub const ORCHESTRATOR_FAMILIES: &[&str] = &[
     "puna_room_metrics_series",
     "puna_room_metrics_dropped_total",
     "puna_room_info",
+    "puna_room_deployment_created_timestamp_seconds",
+    "puna_room_process_started_timestamp_seconds",
 ];
 
 /// Families that are REGISTERED but do not appear until something writes a series.
@@ -893,6 +960,8 @@ pub const DEFERRED_FAMILIES: &[&str] = &[
     "puna_room_filtered_to_slots_total",
     "puna_room_metrics_series",
     "puna_room_info",
+    "puna_room_deployment_created_timestamp_seconds",
+    "puna_room_process_started_timestamp_seconds",
 ];
 
 /// The families `component` registers, shared ones included.
@@ -965,6 +1034,8 @@ fn init_orchestrator() {
     LazyLock::force(&ROOM_METRICS_SERIES);
     LazyLock::force(&ROOM_METRICS_DROPPED);
     LazyLock::force(&ROOM_INFO);
+    LazyLock::force(&ROOM_DEPLOYMENT_CREATED);
+    LazyLock::force(&ROOM_PROCESS_STARTED);
     LazyLock::force(&ROOM_START_SECONDS);
     LazyLock::force(&PORTS_CAPACITY);
     LazyLock::force(&PORTS_BOUND);
@@ -1164,7 +1235,12 @@ mod tests {
     /// child if it is missing and so can never answer "is there a series" -- the exact question
     /// both traps turn on.
     fn gauge(room: &str) -> Option<i64> {
-        prometheus::core::Collector::collect(&*ROOM_CLIENTS)
+        gauge_of(&ROOM_CLIENTS, room)
+    }
+
+    /// The same question of any room-labeled gauge. See [`gauge`].
+    fn gauge_of(vec: &IntGaugeVec, room: &str) -> Option<i64> {
+        prometheus::core::Collector::collect(vec)
             .iter()
             .flat_map(prometheus::proto::MetricFamily::get_metric)
             .find(|m| {
@@ -1403,6 +1479,47 @@ mod tests {
         for capability in ProbeCapabilities::NAMES {
             PROBE_CAPABILITY.with_label_values(&[capability]).set(0);
         }
+    }
+
+    /// **The two ages come from two observers, and both are instants rather than durations.**
+    ///
+    /// A gauge counting upward would have to be re-set on every scrape to stay true; an instant is
+    /// written once and `time() - x` is the age whenever somebody asks. The pair is what makes a pod
+    /// that moved distinguishable from a room that has simply been up a while — so the test asserts
+    /// they are independent, since a refactor that fed both from one reading would produce two
+    /// series that agree by construction and answer only one question.
+    #[test]
+    fn the_deployment_and_process_instants_are_written_independently() {
+        let _guard = exclusive();
+        let room = "two-observers";
+        let at = |secs: i64| chrono::DateTime::from_timestamp(secs, 0).expect("an instant");
+
+        publish_room_deployment(room, Some(at(1_000)));
+        let mut status = crate::probe::RoomStatus {
+            started_at: Some(at(1_500)),
+            ..Default::default()
+        };
+        publish_room(room, &status);
+
+        assert_eq!(gauge_of(&ROOM_DEPLOYMENT_CREATED, room), Some(1_000));
+        assert_eq!(gauge_of(&ROOM_PROCESS_STARTED, room), Some(1_500));
+
+        // The room restarted in place: its process moves, the Deployment does not. That gap is the
+        // whole signal, and it is what an organizer saw as everybody reconnecting.
+        status.started_at = Some(at(9_000));
+        publish_room(room, &status);
+        assert_eq!(gauge_of(&ROOM_DEPLOYMENT_CREATED, room), Some(1_000));
+        assert_eq!(gauge_of(&ROOM_PROCESS_STARTED, room), Some(9_000));
+
+        // A room that cannot say when it started publishes nothing, rather than the epoch — the
+        // same null-is-not-zero rule the rest of these follow. `time() - 0` would render as
+        // fifty-six years of uptime.
+        status.started_at = None;
+        publish_room(room, &status);
+        assert_eq!(gauge_of(&ROOM_PROCESS_STARTED, room), None);
+
+        retain_rooms(&std::collections::HashSet::new());
+        assert_eq!(gauge_of(&ROOM_DEPLOYMENT_CREATED, room), None);
     }
 
     /// **A rename must retract the old series**, and this is the whole reason `ROOM_NAMES` exists.

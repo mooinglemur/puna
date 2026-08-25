@@ -648,6 +648,14 @@ async fn record_observed(
         images.push(deployment.image.clone());
         created.push(deployment.created_at);
     }
+    // Published from the same reading that writes the column, so the admin table and the dashboard
+    // cannot disagree about how long a room's spec has been in force. A room whose Deployment is
+    // gone is not cleared here -- `clear_deployment` owns that, and `retain_rooms` sweeps the
+    // series either way.
+    for (room, created_at) in ids.iter().zip(&created) {
+        puna_core::metrics::publish_room_deployment(&room.to_string(), Some(*created_at));
+    }
+
     if ids.is_empty() {
         return Ok(());
     }
