@@ -39,7 +39,7 @@ const GLOBAL_LOCK_KEY: i32 = 0;
 /// Constructing one requires [`acquire`], which requires the lock to have actually been taken --
 /// so this is a witness rather than an assertion. It is what
 /// [`puna_core::model::Orchestrator`] should be built from once M6's wiring lands, replacing
-/// `assume_leader`'s honour system.
+/// `assume_leader`'s honor system.
 #[derive(Debug)]
 pub struct LeaderLock {
     /// Held for the lifetime of the leadership. Dropping it ends the session, and Postgres

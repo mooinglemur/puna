@@ -153,7 +153,7 @@ pub async fn insert_room(
 
 /// Shrink an environment's range to its lowest `pairs` reservations.
 ///
-/// Exhaustion and LRU behaviour are only observable near the end of a range, and deleting rows is
+/// Exhaustion and LRU behavior are only observable near the end of a range, and deleting rows is
 /// a far cheaper way to get there than allocating 2500 times.
 pub async fn shrink_range(conn: &mut AsyncPgConnection, environment: &str, pairs: i64) {
     diesel::sql_query(

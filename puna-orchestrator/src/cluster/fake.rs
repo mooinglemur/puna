@@ -194,7 +194,7 @@ impl FakeCluster {
 
     /// Make the next `get_deployment` for this room answer `None` though the object exists.
     ///
-    /// The stale read, modelled: lists and gets go to the watch cache at `resourceVersion=0`, so a
+    /// The stale read, modeled: lists and gets go to the watch cache at `resourceVersion=0`, so a
     /// Deployment created moments ago can be missing from one. It is the only way to reach the `409`
     /// branch in the applier, and the reason that branch treats a conflict as success.
     pub fn withhold_deployment(&self, room: RoomId) {

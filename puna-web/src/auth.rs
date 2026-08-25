@@ -2,7 +2,7 @@
 //!
 //! Adapted from `Archipelago-lobby/community-ap-tools/src/auth.rs`. The flow is deliberately the
 //! same -- same Discord application, same `/oauth2/@me` lookup, same immediate token revoke -- so
-//! that a user who has already authorised the app sees a redirect rather than a consent dialog.
+//! that a user who has already authorized the app sees a redirect rather than a consent dialog.
 //!
 //! Three things differ from the original, each for a reason:
 //!
@@ -13,7 +13,7 @@
 //!
 //!   * Login is NOT gated. community-ap-tools rejects anyone not already in a team, because every
 //!     one of its pages is staff-only. Puna's public surface is genuinely public -- a player
-//!     follows a room link and claims a slot -- so authentication and authorisation are separate:
+//!     follows a room link and claims a slot -- so authentication and authorization are separate:
 //!     anyone may log in, and `CanCreateRoom` (M4) plus `RoomRole` (M5) decide what they may do.
 //!
 //!   * `is_admin` is re-derived from Puna's own `admins` list on every login and never inherited.
@@ -442,7 +442,7 @@ async fn oauth_callback(
     user::upsert(&mut conn, discord_id, &discord_user.username).await?;
 
     // **Refused before a cookie is minted.** The `LoggedInSession` guard also turns a banned
-    // account away, so this is not the only defence -- it is the one that makes the refusal
+    // account away, so this is not the only defense -- it is the one that makes the refusal
     // legible. Without it a banned person logs in successfully, lands on the site, and is then
     // told no by every page they touch, which reads as the site being broken rather than as a
     // decision somebody made about them.

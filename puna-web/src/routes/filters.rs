@@ -88,7 +88,7 @@ fn views(rules: &[Rule], subject: Subject) -> Vec<RuleView> {
 /// Shared with the bulk panel through `rooms/_rule_table.html`, so both pages offer the same knobs
 /// spelled the same way.
 pub struct RuleRow {
-    /// The `rules[N]` index. Only ever has to be distinct between neighbours — Rocket starts a new
+    /// The `rules[N]` index. Only ever has to be distinct between neighbors — Rocket starts a new
     /// element when the index changes — but it is distinct throughout, so removing a row never
     /// renumbers the ones after it.
     pub index: usize,
@@ -1181,7 +1181,7 @@ mod tests {
 
     /// **The form field names are the contract with the template**, and Rocket's indexing is the
     /// part that is easy to get subtly wrong: it starts a new element when the index changes, so a
-    /// row whose fields were not grouped together would silently merge into its neighbour.
+    /// row whose fields were not grouped together would silently merge into its neighbor.
     ///
     /// Parsed from a real query string rather than hand-built structs, because that is the only
     /// assertion that fails when the template renders `rules.0.direction` or `rule[0]`.

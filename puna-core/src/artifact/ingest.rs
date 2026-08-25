@@ -16,7 +16,7 @@
 //!
 //! Puna differs from the reference in one respect, deliberately: the reference gates step 1 on
 //! `AutoPatchRegister`, a registry populated by the apworlds a WebHost happens to have installed,
-//! so an unrecognised extension falls through to filename parsing. Puna has no apworld registry,
+//! so an unrecognized extension falls through to filename parsing. Puna has no apworld registry,
 //! so it simply tries every member as a zip. That is strictly more permissive and needs no
 //! per-game knowledge.
 //!
@@ -531,7 +531,7 @@ mod tests {
         }
     }
 
-    /// Tolerance for malformed LEGACY names, kept deliberately and labelled as such.
+    /// Tolerance for malformed LEGACY names, kept deliberately and labeled as such.
     ///
     /// A since-fixed Minecraft apworld bug emitted seeds containing `_` and `P`-plus-digits. The
     /// reference implementation rejects those outright, which is correct on its part -- this is a
@@ -578,7 +578,7 @@ mod tests {
 
     /// Every extension the reference bans, plus the shapes that must NOT be caught.
     #[test]
-    fn roms_are_recognised_and_patches_are_not() {
+    fn roms_are_recognized_and_patches_are_not() {
         for rom in [
             "zelda.sfc",
             "mario.smc",

@@ -324,7 +324,7 @@
   });
 
   // Escape closes a <dialog> natively, which is right while the form is up and wrong once an answer
-  // is showing: the whole point is that the result gets read. Cancelled instead, and the dismiss
+  // is showing: the whole point is that the result gets read. Canceled instead, and the dismiss
   // button is the way out.
   dialog.addEventListener("cancel", function (event) {
     if (!result.hidden || !working.hidden) event.preventDefault();

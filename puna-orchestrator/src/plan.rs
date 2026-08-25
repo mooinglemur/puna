@@ -517,7 +517,7 @@ fn step_for(
                 }
 
                 match room.retry_after {
-                    // No backoff recorded is not a licence to retry immediately: something failed
+                    // No backoff recorded is not a license to retry immediately: something failed
                     // and did not say when to try again, so wait for an operator rather than spin.
                     // A spec change above is exactly that operator, which is why it is checked
                     // first rather than inside this match.

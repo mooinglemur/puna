@@ -514,7 +514,7 @@ mod tests {
         let with_spectator = status(&["Yacht Dice Bliss"], 1, 3);
         assert!(with_spectator.complete(), "the spectator was counted");
 
-        assert!(html.contains("none"), "the uncached state is not labelled");
+        assert!(html.contains("none"), "the uncached state is not labeled");
         assert!(
             html.contains("partial"),
             "the half-rebuilt state is not called out"

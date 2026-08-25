@@ -24,7 +24,7 @@ use puna_core::ids::RoomId;
 /// The cluster-wide values a room's manifest needs and no room chooses.
 ///
 /// One namespace, one public address, one certificate, one volume — a room differs from its
-/// neighbours only by id and port. Kept apart from [`crate::cluster::RoomSpec`] for that reason:
+/// neighbors only by id and port. Kept apart from [`crate::cluster::RoomSpec`] for that reason:
 /// these are **not** in the spec hash, because a change to any of them is an operator editing the
 /// orchestrator's own Deployment, and hashing them would recreate every room in the namespace at
 /// once as a side effect of a config edit.

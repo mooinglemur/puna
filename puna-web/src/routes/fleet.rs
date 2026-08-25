@@ -580,7 +580,7 @@ mod tests {
         assert!(html.contains(">troy<"), "the creator's username is shown");
         assert!(!html.contains("4931"), "and their Discord id is not");
 
-        // The section is present, labelled with its count, and EMPTY -- the rooms behind it were
+        // The section is present, labeled with its count, and EMPTY -- the rooms behind it were
         // never loaded. A page that quietly rendered them would defeat the whole point.
         assert!(
             html.contains("Stopped and closed rooms (2)"),

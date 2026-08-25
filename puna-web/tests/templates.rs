@@ -301,7 +301,7 @@ fn renders_text(content: &str) -> bool {
 ///
 /// Whitespace itself is excluded too, and leaving it out was the bug in this lint's first draft:
 /// the runs are trimmed of spaces and tabs only, so a tag indented on its own line leaves a `\n`
-/// as the neighbouring character. Counting that as text flagged every indented `{% if %}` in the
+/// as the neighboring character. Counting that as text flagged every indented `{% if %}` in the
 /// crate.
 fn is_rendered_text(c: char) -> bool {
     !c.is_whitespace() && !matches!(c, '>' | '<' | '{' | '}')
@@ -882,7 +882,7 @@ fn a_client_error_never_carries_a_converted_error_chain() {
 ///
 /// It shipped on `/admin/users`. `td .actions form { display: flex; align-items: center }` was added
 /// to stop form-wrapped glyphs riding their text baseline, and the restored 1.25rem then had
-/// `align-items: center` centre each form's **margin box** — floating every form-wrapped glyph about
+/// `align-items: center` center each form's **margin box** — floating every form-wrapped glyph about
 /// half that above the bare buttons beside it. Rows whose controls happened to be all forms or all
 /// buttons lined up perfectly, so it read as a row-height problem for two rounds of fixing.
 #[test]

@@ -55,7 +55,7 @@ async fn set_gate(
     })?;
 
     // The key comes from the form, so it is checked against the set Puna actually owns rather
-    // than written through: an unrecognised key would insert a row nothing ever reads, which
+    // than written through: an unrecognized key would insert a row nothing ever reads, which
     // looks like a working change and silently is not.
     let key = known_gate(&form.key).ok_or_else(|| {
         Error::new(
@@ -114,7 +114,7 @@ async fn allow(
 
     let mut conn = pool.get().await?;
     // No `users` row is created: `creator_allowlist` has no foreign key precisely so that a
-    // Discord id can be authorised before its owner has ever logged in, which is the normal case
+    // Discord id can be authorized before its owner has ever logged in, which is the normal case
     // when access is arranged in a Discord channel first.
     settings::allow(&mut conn, user_id, note, session.user_id()).await?;
 

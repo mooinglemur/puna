@@ -43,7 +43,7 @@
   // The highest `rules[N]` index in the form, so a new row gets one nothing else is using.
   //
   // Rocket starts a new element whenever the index changes, so the indices need only be distinct
-  // between neighbours — but distinct everywhere is cheaper to reason about than distinct enough,
+  // between neighbors — but distinct everywhere is cheaper to reason about than distinct enough,
   // and it means removing a row never has to renumber the ones after it.
   function highestIndex(form) {
     var highest = -1;

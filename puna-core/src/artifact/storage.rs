@@ -251,7 +251,7 @@ fn fill(dir: &Path, bytes: &[u8], meta: &GenerationMeta) -> Result<(), StorageEr
     Ok(())
 }
 
-/// The extension a patch member should keep, sanitised.
+/// The extension a patch member should keep, sanitized.
 ///
 /// Clients dispatch on the extension, so it has to survive -- but it reaches the filesystem, so
 /// anything that is not plainly alphanumeric is replaced rather than trusted. `bin` is the
@@ -339,7 +339,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn patch_extensions_are_kept_but_sanitised() {
+    fn patch_extensions_are_kept_but_sanitized() {
         assert_eq!(patch_extension("AP_1_P3_Name.apsms"), "apsms");
         assert_eq!(patch_extension("AP_1_P3_Name.APZ3"), "apz3");
         assert_eq!(patch_extension("dir/AP_1_P3_Name.chunky"), "chunky");

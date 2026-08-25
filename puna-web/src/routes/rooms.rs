@@ -1595,7 +1595,7 @@ mod tests {
 
     /// A placeholder is told apart by its shape, and a real username never wears it.
     #[test]
-    fn a_stand_in_username_is_recognisable() {
+    fn a_stand_in_username_is_recognizable() {
         use puna_core::model::user::{is_placeholder, placeholder_username};
 
         assert!(is_placeholder(&placeholder_username(4931)));
@@ -1997,7 +1997,7 @@ mod tests {
         assert!(html.contains("/tracker/"), "the tracker link was hidden");
     }
 
-    /// The same room, seen by an organizer: the one door, labelled for what it does.
+    /// The same room, seen by an organizer: the one door, labeled for what it does.
     #[test]
     fn an_organizer_can_reopen_a_closed_room() {
         let mut closed = page(true);

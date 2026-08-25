@@ -32,7 +32,7 @@ before rather than a second copy of it.</p>
 <td>
 {{ slot.game }}
 {# A spectator connects and watches the whole multiworld but plays nothing, so it has no patch
-   and no checks. Labelled rather than hidden: it is a real slot somebody logs into. #}
+   and no checks. Labeled rather than hidden: it is a real slot somebody logs into. #}
 {% if slot.kind == puna_core::artifact::SlotKind::Spectator %}<span class="tag">spectator</span>{% endif %}
 </td>
 <td>{% if slot.patch_member.is_some() %}yes{% else %}&mdash;{% endif %}</td>

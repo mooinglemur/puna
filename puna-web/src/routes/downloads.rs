@@ -88,7 +88,7 @@ async fn slot_patch(
         .try_into()
         .map_err(|_| not_found("this room's generation is not addressable"))?;
     let paths = GenerationPaths::new(&data_dir.0, &sha256);
-    // The same sanitising the writer used, from the same function: two copies of that rule would
+    // The same sanitizing the writer used, from the same function: two copies of that rule would
     // diverge on exactly the inputs it exists for.
     let path = paths.patch(entry.slot_number, &storage::patch_extension(member));
 
@@ -214,7 +214,7 @@ fn attachment(filename: &str) -> Header<'static> {
 ///
 /// **Every part of this is untrusted text** -- a player name and a member name both come out of a
 /// zip somebody uploaded -- and it is going into a response header, where a newline would be a
-/// response-splitting bug and a quote would end the filename early. So it is not sanitised so much
+/// response-splitting bug and a quote would end the filename early. So it is not sanitized so much
 /// as reconstructed: an allowlist of characters, a length cap, and the extension taken from the
 /// same function that named the file on disk.
 fn filename(seed_name: &str, entry: &generation::Slot, member: &str) -> String {
@@ -310,7 +310,7 @@ mod tests {
         assert!(!name.starts_with('.'), "{name} would be a hidden file");
     }
 
-    /// A stem that sanitises away entirely still has to be a filename.
+    /// A stem that sanitizes away entirely still has to be a filename.
     ///
     /// Tested against `sanitize` rather than `filename`, because `filename` always contributes
     /// `_P<n>_` and so can never produce one — asserting it through the caller would be a test that

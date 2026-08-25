@@ -140,7 +140,7 @@ impl<'r, S: GateSource> FromRequest<'r> for CanCreateRoom<S> {
             {
                 Ok(decision) => decision,
                 // A gate that cannot be read is not a gate that permits. `settings::evaluate` already
-                // fails closed on a missing or unrecognised row; this is the connection-level case.
+                // fails closed on a missing or unrecognized row; this is the connection-level case.
                 Err(e) => {
                     return Outcome::Error((
                         Status::ServiceUnavailable,

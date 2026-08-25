@@ -416,7 +416,7 @@ mod tests {
             "nothing should reference a data package file: {argv:?}"
         );
 
-        // The neighbours it sat between are untouched -- this was a removal, not a reshuffle.
+        // The neighbors it sat between are untouched -- this was a removal, not a reshuffle.
         assert!(argv.contains(&format!("--save-dir={SAVE_DIR}")));
         assert!(argv.contains(&"--journal".to_string()));
         assert!(argv.contains(&SEED_PATH.to_string()));

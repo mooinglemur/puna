@@ -289,7 +289,7 @@ async fn assert_environment(
     Ok(())
 }
 
-/// Refuse to start if the configured room label does not recognise the objects already running.
+/// Refuse to start if the configured room label does not recognize the objects already running.
 ///
 /// **The failure this exists for is a fleet deletion carried out by the garbage collector.** The
 /// room label is identity: every object is read back through it to answer *which room is this*, and

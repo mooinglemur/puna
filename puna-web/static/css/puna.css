@@ -159,14 +159,14 @@ td .actions {
    A `<form>` here is a block, so its height is a LINE BOX -- font line-height plus space for
    descenders -- while a bare `.act` button is a flex item sized to itself. `align-items: center`
    then centers two boxes of different heights, and the button inside the taller one rides its text
-   baseline instead of its centre. Flexing the form collapses it onto the button it contains, so
+   baseline instead of its center. Flexing the form collapses it onto the button it contains, so
    every glyph in the row is measured the same way.
 
    **`margin: 0` is not tidiness -- it is the other half of the same bug, and this rule CAUSED it.**
    `form { margin: 0 0 1.25rem }` at the foot of this file applies to these forms like any other.
    It was inert while they were `display: inline`, because vertical margins do not apply to an
    inline box -- and the `display: flex` above turns them back into block-level boxes, which
-   re-enables it. `align-items: center` then centres each form's MARGIN box, so every form-wrapped
+   re-enables it. `align-items: center` then centers each form's MARGIN box, so every form-wrapped
    glyph floated about 10px above the bare buttons beside it: half the restored margin. Rows whose
    controls happened to be all-forms or all-buttons looked perfectly fine, which is what made it
    read as a row-height problem rather than a margin one. */
@@ -271,7 +271,7 @@ td .actions form {
   font-size: 0.85rem;
 }
 
-/* Labelled, unlike the row outside it. A glyph works in a row where position teaches it; in a menu
+/* Labeled, unlike the row outside it. A glyph works in a row where position teaches it; in a menu
    opened once a week the word is what makes it choosable without hovering each one. */
 .mod-menu .act {
   display: flex;
@@ -611,7 +611,7 @@ code.stale {
    always carries the room's own words and an elapsed count, and this sits in front of them.
 
    `aria-hidden` in the markup: it says nothing a screen reader cannot get from the text beside it,
-   and an unlabelled spinning element announces itself as noise. */
+   and an unlabeled spinning element announces itself as noise. */
 .swirl {
   display: inline-block;
   width: 0.85em;
@@ -733,7 +733,7 @@ p.error {
   overflow-y: hidden;
   /* Room for a focus ring, which `:focus-visible` draws 2px OUTSIDE the control -- on a link in the
      first or last row `hidden` would clip it, and this file does not remove focus rings anywhere.
-     Cancelled by the negative margin, so nothing on the page moves. */
+     Canceled by the negative margin, so nothing on the page moves. */
   padding-block: 4px;
   margin: -4px 0 calc(1.25rem - 4px);
 }
@@ -872,7 +872,7 @@ summary { cursor: pointer; }
 
 /* The search box and any toggles beside it, on one line until the viewport says otherwise. */
 /* A button carrying a glyph beside its word, rather than instead of it.
-   `inline-flex` so the two are centred against each other -- left as inline content the svg sits on
+   `inline-flex` so the two are centered against each other -- left as inline content the svg sits on
    the text baseline and rides a little low. An explicit class rather than `button:has(svg)`, so a
    browser without `:has()` gets the same layout instead of the fallback. */
 .with-icon {
@@ -1160,10 +1160,10 @@ button:hover { border-color: var(--muted); }
 
 /* --- the bulk panel -------------------------------------------------------------------------------
    Two lists and the controls between them. `align-items: end` so the transfer buttons sit against
-   the lists rather than centred against their labels. */
+   the lists rather than centered against their labels. */
 .panes {
   /* Named areas so the transfer buttons sit on the SAME ROW as the two lists. A flex row would
-     centre them against each pane's label-plus-list, landing them half a label's height low. */
+     center them against each pane's label-plus-list, landing them half a label's height low. */
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   grid-template-areas:
@@ -1189,7 +1189,7 @@ button:hover { border-color: var(--muted); }
 
 /* Stacked, and word-shaped rather than arrow glyphs: direction is the entire meaning of these two,
    and a 15px arrow pair is exactly the confusion the roster's lock and unlock icons caused.
-   Centred on the lists, which is what the grid above exists for. */
+   Centered on the lists, which is what the grid above exists for. */
 .transfer {
   grid-area: transfer;
   align-self: center;

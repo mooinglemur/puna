@@ -18,7 +18,7 @@
 //!
 //! ## Everything here fails closed
 //!
-//! A missing `settings` row, or a `mode` this build does not recognise, resolves to
+//! A missing `settings` row, or a `mode` this build does not recognize, resolves to
 //! [`GateMode::Disabled`] with a loud warning -- never to `Open`. A gate is a thing that
 //! *permits*, so the absence of one must permit nothing. The alternative, treating an
 //! unreadable gate as absent and therefore open, turns a deleted row or a botched migration into
@@ -50,7 +50,7 @@ impl GateMode {
         }
     }
 
-    /// Parse what the database returned. `None` for anything unrecognised, which the caller
+    /// Parse what the database returned. `None` for anything unrecognized, which the caller
     /// turns into `Disabled` rather than guessing.
     pub fn parse(raw: &str) -> Option<Self> {
         match raw {
@@ -125,7 +125,7 @@ impl Decision {
 
 /// May this caller create a room from this source?
 ///
-/// **Admins short-circuit before any query runs.** That is not just an optimisation: it means an
+/// **Admins short-circuit before any query runs.** That is not just an optimization: it means an
 /// administrator can still act when the `settings` row is missing or unreadable, which is the
 /// state they would be logging in to repair.
 pub async fn evaluate(
@@ -151,7 +151,7 @@ pub async fn evaluate(
     }
 }
 
-/// Read one gate. Missing or unrecognised resolves to [`GateMode::Disabled`], loudly.
+/// Read one gate. Missing or unrecognized resolves to [`GateMode::Disabled`], loudly.
 pub async fn mode(
     conn: &mut AsyncPgConnection,
     key: &str,
@@ -185,7 +185,7 @@ pub async fn mode(
             tracing::warn!(
                 key,
                 mode = %row.mode,
-                "unrecognised gate mode; treating it as disabled. This build is older than the \
+                "unrecognized gate mode; treating it as disabled. This build is older than the \
                  database."
             );
             Ok(GateMode::Disabled)
@@ -283,7 +283,7 @@ pub async fn is_allowlisted(
 /// Add someone to the creator allowlist.
 ///
 /// Note there is deliberately no foreign key from `creator_allowlist.user_id` to `users`: an
-/// administrator must be able to authorise a Discord id before its owner has ever logged in,
+/// administrator must be able to authorize a Discord id before its owner has ever logged in,
 /// which is the normal case when access is arranged in a Discord channel first.
 pub async fn allow(
     conn: &mut AsyncPgConnection,
@@ -368,7 +368,7 @@ mod tests {
         }
     }
 
-    /// The failure this guards is silent: an unrecognised value resolving to `Open` would be a
+    /// The failure this guards is silent: an unrecognized value resolving to `Open` would be a
     /// gate that stops gating, which nothing surfaces until someone unexpected creates a room.
     #[test]
     fn an_unknown_gate_mode_does_not_parse() {

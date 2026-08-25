@@ -578,7 +578,7 @@ async fn conflicting_puna_service(
 /// **The victim gets the row, not the taker**, because the victim is the one who will be surprised:
 /// a reclaimed port invalidates the address embedded in every patch its players have already
 /// downloaded, so "why does my client connect to somebody else's room" has an answer in the room's
-/// own history. The reservation is a weak claim by design — honoured while nothing else needs the
+/// own history. The reservation is a weak claim by design — honored while nothing else needs the
 /// port — and this is what makes that claim's expiry visible rather than silent.
 async fn note_reclaim(
     conn: &mut AsyncPgConnection,

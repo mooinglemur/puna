@@ -225,7 +225,7 @@ pub struct OrchestratorConfig {
     ///
     /// **Changing `room_label_key` on a live deployment is not a config change.** It is the
     /// Deployment's `spec.selector`, which Kubernetes will not let you update, and it is what every
-    /// object is read back through — so a new value makes the whole fleet unrecognisable at once.
+    /// object is read back through — so a new value makes the whole fleet unrecognizable at once.
     /// The orchestrator refuses to start rather than let that proceed silently.
     pub room_label_key: String,
     pub lb_pool_label_key: String,

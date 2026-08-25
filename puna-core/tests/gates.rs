@@ -5,7 +5,7 @@
 //! create rooms, and nothing about the wrong answer looks like a failure at the time.
 //!
 //! The forward-compatibility case is the one worth reading. `gate_mode` is a Postgres enum, so a
-//! value this build does not recognise cannot be inserted by accident -- it can only arrive from a
+//! value this build does not recognize cannot be inserted by accident -- it can only arrive from a
 //! database migrated ahead of the binary, which is exactly what a rollout does for a few minutes.
 //! `a_gate_mode_this_build_does_not_know_is_refused` provokes that state deliberately.
 
@@ -259,7 +259,7 @@ async fn allowlist_entries_can_be_added_listed_and_revoked() {
         .await
         .expect("allowlist mode");
 
-        // Deliberately never registered as a user: an administrator must be able to authorise a
+        // Deliberately never registered as a user: an administrator must be able to authorize a
         // Discord id before its owner has ever logged in, so `creator_allowlist` has no FK.
         assert!(
             !settings::is_allowlisted(&mut conn, ALLOWLISTED)
