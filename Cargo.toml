@@ -4,6 +4,11 @@ members = [
     "puna-core",
     "puna-web",
     "puna-orchestrator",
+    # Dev tools, not a shipped tier. The release jobs build `--bin puna-web` and
+    # `--bin puna-orchestrator` by name (.gitlab-ci.yml), so nothing here reaches either image --
+    # while `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace`
+    # still cover it, which is the bar a pickle encoder should be held to.
+    "puna-tools",
 ]
 
 # There is deliberately NO [patch.crates-io] block here.
@@ -48,7 +53,27 @@ puna-core = { path = "puna-core" }
 # `teams`, `team_slots`, `ClientStatus::from_text`), and the one behavioral change is a fix Puna
 # wants: the locations check counts DECLARED slot ids, so a seed with a spectator in it is no
 # longer read as having a hole. All 14 corpus zips parse and validate identically across the bump.
-pahoa-multidata = { git = "https://git.mooinglemur.com/mooinglemur/pahoa.git", rev = "e810ae8abac5c47a51ecded86c11908da2b6fcbc" }
+#
+# Bumped e810ae8a -> f3275941 for `pahoa-net`'s client below. Nothing under `crates/pahoa-multidata`
+# or `crates/pahoa-pickle` changed in that range -- `git diff --stat` over those two paths is empty
+# -- so how Puna reads a seed is byte-for-byte what it was.
+pahoa-multidata = { git = "https://git.mooinglemur.com/mooinglemur/pahoa.git", rev = "f327594149dccee2bec2ff389c1904a493927d90" }
+# The untyped layer under `pahoa-multidata`, taken directly so `puna-tools` can BUILD a `PyObj`
+# tree and write it back out as pickle. **The rev must equal the one above** -- two revs would mean
+# two incompatible `PyObj` types in one graph, and the error would be about a trait not being
+# implemented rather than about a version skew.
+pahoa-pickle = { git = "https://git.mooinglemur.com/mooinglemur/pahoa.git", rev = "f327594149dccee2bec2ff389c1904a493927d90" }
+# pahoa's WebSocket layer, for `puna-tools` alone -- **the only client anywhere that negotiates
+# permessage-deflate against a pahoa room.** `tungstenite` rejects a frame with RSV1 set outright
+# (`protocol/mod.rs:643`), so a load run through it is a population the room can share no
+# compression with, and every outbound byte it measures is a worst case.
+#
+# Same rev as the two above, and it must stay that way: this crate depends on `pahoa-multidata`
+# itself, so a second rev would put two copies of the seed parser in one graph.
+#
+# It is a load-tool dependency and reaches no shipped tier -- `puna-core` and the two binaries do
+# not name it.
+pahoa-net = { git = "https://git.mooinglemur.com/mooinglemur/pahoa.git", rev = "f327594149dccee2bec2ff389c1904a493927d90" }
 
 anyhow = "1.0"
 async-trait = "0.1"
@@ -117,6 +142,19 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rustls-pki-types = "1.8"
 tokio-postgres = "0.7"
 tokio-postgres-rustls = "0.13"
+# `puna-tools`' load generator only, so this never reaches a shipped image -- but it is declared
+# here because of what its DEFAULT features would do. `tungstenite`'s own `rustls` feature pulls
+# rustls with defaults on, which enables aws-lc-rs; feature unification would then compile BOTH
+# providers into anything sharing the graph, and rustls cannot infer a process default with two --
+# `ClientConfig::builder()` panics at runtime. `default-features = false` plus the webpki-roots
+# feature keeps it on ring, verified the same way as everything else here:
+# `grep -c 'name = "aws-lc' Cargo.lock` must stay 0.
+tokio-tungstenite = { version = "0.30", default-features = false, features = [
+    "connect",
+    "handshake",
+    "stream",
+    "rustls-tls-webpki-roots",
+] }
 
 [profile.release]
 # Symbols kept deliberately: a backtrace out of a container is worth more than the

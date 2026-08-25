@@ -961,6 +961,7 @@ version = "1.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
+ "crc32fast",
  "miniz_oxide",
  "zlib-rs",
 ]
@@ -2110,9 +2111,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pahoa-datastore"
+version = "0.1.0"
+source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=f327594149dccee2bec2ff389c1904a493927d90#f327594149dccee2bec2ff389c1904a493927d90"
+dependencies = [
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "pahoa-multidata"
 version = "0.1.0"
-source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=e810ae8abac5c47a51ecded86c11908da2b6fcbc#e810ae8abac5c47a51ecded86c11908da2b6fcbc"
+source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=f327594149dccee2bec2ff389c1904a493927d90#f327594149dccee2bec2ff389c1904a493927d90"
 dependencies = [
  "flate2",
  "pahoa-pickle",
@@ -2122,11 +2132,68 @@ dependencies = [
 ]
 
 [[package]]
+name = "pahoa-net"
+version = "0.1.0"
+source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=f327594149dccee2bec2ff389c1904a493927d90#f327594149dccee2bec2ff389c1904a493927d90"
+dependencies = [
+ "bytes",
+ "flate2",
+ "httparse",
+ "pahoa-multidata",
+ "pahoa-proto",
+ "pahoa-room",
+ "rustls",
+ "rustls-pemfile",
+ "serde_json",
+ "sha1",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+]
+
+[[package]]
 name = "pahoa-pickle"
 version = "0.1.0"
-source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=e810ae8abac5c47a51ecded86c11908da2b6fcbc#e810ae8abac5c47a51ecded86c11908da2b6fcbc"
+source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=f327594149dccee2bec2ff389c1904a493927d90#f327594149dccee2bec2ff389c1904a493927d90"
 dependencies = [
  "thiserror",
+]
+
+[[package]]
+name = "pahoa-proto"
+version = "0.1.0"
+source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=f327594149dccee2bec2ff389c1904a493927d90#f327594149dccee2bec2ff389c1904a493927d90"
+dependencies = [
+ "pahoa-multidata",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "pahoa-pyrandom"
+version = "0.1.0"
+source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=f327594149dccee2bec2ff389c1904a493927d90#f327594149dccee2bec2ff389c1904a493927d90"
+dependencies = [
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "pahoa-room"
+version = "0.1.0"
+source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=f327594149dccee2bec2ff389c1904a493927d90#f327594149dccee2bec2ff389c1904a493927d90"
+dependencies = [
+ "flate2",
+ "pahoa-datastore",
+ "pahoa-multidata",
+ "pahoa-pickle",
+ "pahoa-proto",
+ "pahoa-pyrandom",
+ "serde_json",
+ "strsim",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]
@@ -2475,6 +2542,28 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "puna-tools"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flate2",
+ "pahoa-multidata",
+ "pahoa-net",
+ "pahoa-pickle",
+ "rand 0.8.7",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha1",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "tracing-subscriber",
+ "webpki-roots",
+ "zip",
 ]
 
 [[package]]
@@ -2886,6 +2975,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustls-pemfile"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
 name = "rustls-pki-types"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3067,6 +3165,7 @@ version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
 dependencies = [
+ "indexmap",
  "itoa",
  "memchr",
  "serde",
@@ -4047,6 +4146,15 @@ name = "webpki-root-certs"
 version = "1.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b96554aa2acc8ccdb7e1c9a58a7a68dd5d13bccc69cd124cb09406db612a1c9b"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
 dependencies = [
  "rustls-pki-types",
 ]

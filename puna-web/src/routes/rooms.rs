@@ -798,23 +798,39 @@ fn is_working(room: &Room) -> bool {
     }
 }
 
-/// When the thing the panel is currently describing began.
+/// When the thing the panel is currently describing began: **the later of the two clocks.**
 ///
-/// **Not `state_changed_at`, which is the clock the page used and the reason a stop said "35
-/// minutes" a second after it was clicked.** That column times the state the room is *leaving*, so
-/// for a room that had been up all afternoon it starts the transition counter at all afternoon.
+/// The counter times *the current state*, and the two columns are each right about half of what
+/// that means, which is why this is a `max` rather than a choice between them.
 ///
-/// A requested transition is timed from the request. That also keeps the count **monotonic across
-/// the phases**: `desired_at` does not move when the orchestrator finally acts, so the sentence
-/// changes from "stopping the room" to "shutting the room down" while the number keeps climbing —
-/// where timing each phase separately would reset it to zero mid-transition and read as a stall.
+/// `state_changed_at` alone was the original bug: it times the state the room is **leaving**, so
+/// clicking Stop on a room that had been up all afternoon started the transition counter at all
+/// afternoon. `desired_at` alone was the fix and was wrong in the other direction — **it does not
+/// move on a redeploy**, because a redeploy never changes `desired_state`, so it still points at
+/// whenever the room was first asked to run. Navigating to the page after one showed a counter
+/// carried over from hours ago, and it did not reset as the phases advanced:
 ///
-/// `degraded` is the exception, and it is the only working state that is not something anybody
-/// asked for: the room is falling over on its own while `desired_at` still points at whenever it
-/// was started. Its clock is the state change, which is when it started failing.
+/// ```text
+/// starting the room                        26s
+/// waiting for the room's server to come up  27s   <- should have been 0
+/// ```
+///
+/// Taking the later of the two gives each phase its own clock while keeping the property the
+/// earlier fix existed for: a fresh request is *itself* the start of something, so a room asked to
+/// stop reads zero even though it has been `running` for thirty-five minutes, and the count then
+/// restarts as the orchestrator moves it through `stopping`.
+///
+/// **Monotonic across phases was the wrong goal**, and the argument for it — that a reset "reads as
+/// a stall" — did not survive contact with the page: a number that keeps climbing through a
+/// sentence change cannot say how long *this* step has taken, which is the question somebody
+/// watching a cold start is actually asking.
+///
+/// `degraded` needs no special case under this rule, where it did under the last one: nobody asked
+/// for it, so `desired_at` is old, and the `max` picks the state change — which is when it started
+/// failing.
 fn transition_began(room: &Room) -> chrono::DateTime<chrono::Utc> {
-    if is_working(room) && room.state != "degraded" {
-        room.desired_at
+    if is_working(room) {
+        room.state_changed_at.max(room.desired_at)
     } else {
         room.state_changed_at
     }
@@ -2317,17 +2333,17 @@ mod tests {
         }
     }
 
-    /// **The transition is timed from the REQUEST, not from the state it is leaving.**
+    /// **The counter times the CURRENT state — each phase gets its own clock.**
     ///
-    /// Reported from the live deployment: clicking Stop on a room that had been up for 35 minutes
-    /// showed "35m" immediately, because `state_changed_at` times the state being left. The whole
-    /// point of the counter is telling "coming up" from "stuck", and a number that starts at 35
-    /// minutes cannot do that.
+    /// Both columns are half right, so `transition_began` takes the later of them. This asserts all
+    /// four cases, because each one is a bug that has actually been reported.
     #[test]
-    fn a_transition_is_timed_from_when_it_was_asked_for() {
+    fn each_phase_of_a_transition_is_timed_from_its_own_start() {
         let long_running = chrono::TimeDelta::minutes(35);
+        let ago = |secs: i64| chrono::Utc::now() - chrono::TimeDelta::seconds(secs);
 
-        // Just clicked: up for 35 minutes, asked to stop a moment ago.
+        // Just clicked: up for 35 minutes, asked to stop a moment ago. `state_changed_at` alone
+        // said "35m" a second after the click, which was the original report.
         let mut stopping = a_room();
         stopping.desired_state = "stopped".into();
         stopping.desired_at = chrono::Utc::now();
@@ -2336,26 +2352,39 @@ mod tests {
             "the counter started at the age of the state being left"
         );
 
-        // **Monotonic across the phase change.** The orchestrator acts, `state` becomes `stopping`
-        // and `state_changed_at` moves to now -- but the request did not, so the number keeps
-        // climbing while the sentence changes. Timing each phase separately would reset it to zero
-        // mid-transition, which reads as a stall.
+        // **The phase advances and the clock RESTARTS.** The orchestrator acts, `state` becomes
+        // `stopping`, and the sentence changes — so the number is how long *this* step has taken,
+        // not how long ago the button was pressed. Carrying it across was the previous behavior and
+        // is what this test now exists to prevent.
         let mut draining = stopping.clone();
         draining.state = "stopping".into();
         draining.state_changed_at = chrono::Utc::now();
-        draining.desired_at = chrono::Utc::now() - chrono::TimeDelta::seconds(20);
-        let carried = since_ms(transition_began(&draining));
+        draining.desired_at = ago(20);
         assert!(
-            (19_000..22_000).contains(&carried),
-            "the count restarted when the orchestrator picked the request up: {carried}ms"
+            since_ms(transition_began(&draining)) < 1_000,
+            "the count carried over from the request instead of timing this phase"
         );
 
-        // `degraded` is the one working state nobody asked for: the room is failing on its own
-        // while `desired_at` still points at whenever it was started. Its clock is the state
-        // change, or a room that has just started failing would claim to have been failing for as
-        // long as it had been up.
+        // **A redeploy: `desired_at` is STALE and must not be used.** A redeploy never changes
+        // `desired_state`, so the request clock still points at whenever the room was first asked
+        // to run — hours, on a room that has been up all day. Reported from the live deployment as
+        // a counter that opened at a large number and did not reset between phases.
+        let mut redeployed = a_room();
+        redeployed.state = "starting".into();
+        redeployed.desired_state = "running".into();
+        redeployed.desired_at = chrono::Utc::now() - chrono::TimeDelta::hours(6);
+        redeployed.state_changed_at = ago(5);
+        let shown = since_ms(transition_began(&redeployed));
+        assert!(
+            (4_000..7_000).contains(&shown),
+            "a redeploy carried the original start request's clock: {shown}ms"
+        );
+
+        // `degraded` needs no special case under this rule: nobody asked for it, so the request
+        // clock is old and the `max` picks the state change — which is when it started failing.
         let mut degraded = a_room();
         degraded.state = "degraded".into();
+        degraded.desired_at = ago(9_000);
         degraded.state_changed_at = chrono::Utc::now();
         assert!(since_ms(transition_began(&degraded)) < 1_000);
 
