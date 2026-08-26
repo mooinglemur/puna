@@ -70,6 +70,164 @@ const START_GRACE: Duration = Duration::from_secs(30);
 /// Connections opened per second when nothing says otherwise. See [`schedule`].
 pub const DEFAULT_CONNECT_RATE: f64 = 5.0;
 
+/// The first wait after a connection is lost. See [`reconnect_delay`].
+const RECONNECT_BASE: Duration = Duration::from_millis(500);
+
+/// The longest wait between attempts, and also the length a session has to reach before it counts
+/// as having been a stable connection. See [`Backoff::held`].
+const RECONNECT_MAX: Duration = Duration::from_secs(30);
+
+/// How long to wait before attempt `attempt + 1`, doubling and jittered.
+///
+/// **A real client reconnects, so a load tool that does not is measuring a room that is emptying.**
+/// Every drop used to end that slot for the rest of the run, which quietly changed what was being
+/// measured: 545 of 2000 gone means every later number is per-1455, and the room was serving a
+/// population that only ever shrank. A room shedding load is *supposed* to see the shed clients come
+/// back — that is the interesting half of backpressure, and none of it was being exercised.
+///
+/// **Jittered, and that is not decoration.** The event that drops connections drops many at once: a
+/// goal cascade shed 545 in twelve seconds. Undelayed, all 545 redial in the same instant — the
+/// connect storm [`schedule`] exists to avoid, aimed at a room that has just demonstrated it is
+/// already at its limit. Equal jitter (half the window fixed, half uniform) spreads them without
+/// letting the first retry land at zero.
+pub fn reconnect_delay(attempt: u32, rng: &mut impl Rng) -> Duration {
+    // Saturating rather than wrapping: at attempt 64 a shift would panic in debug and wrap to a
+    // one-nanosecond backoff in release, which is a reconnect storm produced by an integer.
+    let window = RECONNECT_BASE
+        .saturating_mul(1u32.checked_shl(attempt).unwrap_or(u32::MAX))
+        .min(RECONNECT_MAX);
+    let half = window / 2;
+    half + half.mul_f64(rng.r#gen::<f64>())
+}
+
+/// Wait, unless the run ends first. `false` means it did.
+///
+/// Polled rather than notified because `finished` is a bare flag shared with the progress watcher,
+/// and a bare `sleep` of the full backoff would hold the process open for up to
+/// [`RECONNECT_MAX`] after the last goal — a tool that appears to hang at the end of a run it has
+/// already finished.
+async fn hold(delay: Duration, finished: &AtomicBool) -> bool {
+    let deadline = Instant::now() + delay;
+    while Instant::now() < deadline {
+        if finished.load(Ordering::Relaxed) {
+            return false;
+        }
+        let slice = (deadline - Instant::now()).min(Duration::from_millis(250));
+        tokio::time::sleep(slice).await;
+    }
+    !finished.load(Ordering::Relaxed)
+}
+
+/// Why one connection's session ended.
+enum Ended {
+    /// The run is over. Nothing to reconnect to.
+    RunOver,
+    /// The connection went away and the run has not finished.
+    Lost,
+}
+
+/// What to do after one session ended.
+enum Retry {
+    /// Dial again — the wait has already been served.
+    Again,
+    /// The run is over, or it ended while waiting.
+    Stop,
+}
+
+/// Decide what happens after a session, and serve the backoff when the answer is "again".
+///
+/// **Every ending except `RunOver` is retried, deliberately, including a refusal.** Troy's rule is
+/// that a connection always comes back if the room dropped it before we were done, and the tool is
+/// in no position to decide which refusals are permanent: a room mid-restart refuses for a few
+/// seconds and then does not, and a room that refuses forever is answered by the backoff reaching
+/// its 30-second ceiling — a slot knocking politely rather than hammering.
+///
+/// The logging is loud once and quiet after, because at two thousand connections a warning per
+/// attempt is a wall of text that hides the first one. The first loss of a stable connection is the
+/// interesting line; the ninth consecutive failure to redial is not.
+///
+/// **A free function taking the state rather than a `reconnecting(|| session())` combinator**,
+/// which is what this was first. `AsyncFnMut` puts no `Send` bound on the future it returns, so a
+/// closure borrowing the slot's own state — which is the entire point of the loop — produced
+/// *"implementation of `Send` is not general enough"* at every `tokio::spawn`: an error in the
+/// caller, about lifetimes, naming nothing that is actually wrong. The loop is six lines at each of
+/// the two call sites and they cannot drift, because everything that decides anything is here.
+async fn retry(
+    what: &str,
+    outcome: Result<Ended>,
+    lasted: Duration,
+    backoff: &mut Backoff,
+    rng: &mut StdRng,
+    finished: &AtomicBool,
+) -> Retry {
+    backoff.held(lasted);
+
+    match outcome {
+        Ok(Ended::RunOver) => return Retry::Stop,
+        Ok(Ended::Lost) if finished.load(Ordering::Relaxed) => return Retry::Stop,
+        Ok(Ended::Lost) => {
+            if backoff.attempt == 0 {
+                tracing::warn!("{what} lost its connection; reconnecting");
+            } else {
+                tracing::debug!("{what} lost its connection again");
+            }
+        }
+        Err(e) => {
+            if backoff.attempt == 0 {
+                tracing::warn!("{what}: {e:#}; reconnecting");
+            } else {
+                tracing::debug!("{what}: {e:#}");
+            }
+        }
+    }
+
+    if hold(backoff.wait(rng), finished).await {
+        Retry::Again
+    } else {
+        Retry::Stop
+    }
+}
+
+/// The backoff's own rng: `Send`, and separate from a slot's seeded traffic rng.
+///
+/// Separate so a reconnect does not consume draws the traffic shape depends on — `--seed`
+/// reproducibility is already lost the moment a drop happens, and the failure path should not take
+/// more of it than the failure did. `ThreadRng` would do neither: it is not `Send`, and this is held
+/// across an await inside a spawned task.
+fn backoff_rng() -> StdRng {
+    StdRng::from_entropy()
+}
+
+/// One connection's place in the backoff.
+struct Backoff {
+    attempt: u32,
+}
+
+impl Backoff {
+    fn new() -> Self {
+        Self { attempt: 0 }
+    }
+
+    fn wait(&mut self, rng: &mut impl Rng) -> Duration {
+        let delay = reconnect_delay(self.attempt, rng);
+        self.attempt = self.attempt.saturating_add(1);
+        delay
+    }
+
+    /// A session ended after `lasted`. Reset only if it was a connection worth having.
+    ///
+    /// **Not "reset whenever the handshake succeeded"**, which is the obvious rule and is wrong for
+    /// the case this exists for. A room shedding load accepts a connection and drops it again
+    /// moments later; resetting on the accept would put that slot into a 500 ms redial loop against
+    /// a room that has just said it cannot cope — a load tool converting a shed into a storm. A
+    /// session shorter than the longest backoff was not a stable connection, so it escalates.
+    fn held(&mut self, lasted: Duration) {
+        if lasted >= RECONNECT_MAX {
+            self.attempt = 0;
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub room: String,
@@ -168,8 +326,27 @@ pub struct Totals {
     /// misreports its own population is worse than one that reports nothing: every rate below it
     /// is then read as per-200-slots when it is per-35.
     pub connected: AtomicU64,
-    /// Slots that have ended, for any reason. Almost always the room dropping a connection.
-    pub dropped: AtomicU64,
+    /// **Times a connection was lost**, not connections that are gone.
+    ///
+    /// The distinction arrived with reconnection: a drop is now an event rather than an ending, so
+    /// this accumulates and `connected` recovers. Read the two together — `drops` says how hard the
+    /// room was shedding, `connected` says how much of the population is there now, and neither
+    /// answers the other's question.
+    pub drops: AtomicU64,
+    /// Times a lost connection came back.
+    ///
+    /// **`drops - reconnects` is how many are down right now**, and that is the only way to ask the
+    /// question after the run: `connected` is zero once the tasks have been joined, because every
+    /// connection closed cleanly on the way out. Both counters move only on the unclean path, so
+    /// the subtraction cannot drift — a clean ending touches neither.
+    pub reconnects: AtomicU64,
+    /// Connections opened, counting every redial.
+    ///
+    /// Not the population, which is `connected`, and not the slot count either. It exists so the
+    /// deflate line has an honest denominator: a run that reconnected ten times opened twenty
+    /// connections, and "20 negotiated permessage-deflate" beside "connected 10/10" reads as a
+    /// contradiction without it.
+    pub opened: AtomicU64,
     /// Connections that negotiated permessage-deflate.
     ///
     /// Worth counting rather than assuming: it is the difference between a run whose outbound
@@ -190,8 +367,24 @@ struct Connection<'a> {
 }
 
 impl<'a> Connection<'a> {
-    fn opened(totals: &'a Totals) -> Self {
+    /// `been_up` is whether this connection has ever been established before, and it is set here.
+    ///
+    /// **Not "is this the first attempt", which is what it was and which counted `back` higher than
+    /// `drops`.** A slot whose opening dial fails and whose second succeeds has not *re*connected —
+    /// it has connected, late — but the attempt counter had already moved off its first value, so
+    /// the guard was created looking like a recovery from a drop that never happened. Observed as
+    /// `(drops 20436, back 20437)` on a 2000-connection run: one number that must bound the other,
+    /// exceeding it by exactly the number of slots that stumbled on their way in.
+    ///
+    /// Written this way, `reconnects <= drops` holds by construction: nothing counts a return
+    /// except a session that follows an established one, and every established session that ends
+    /// unclean counts a drop.
+    fn opened(totals: &'a Totals, been_up: &mut bool) -> Self {
         totals.connected.fetch_add(1, Ordering::Relaxed);
+        if *been_up {
+            totals.reconnects.fetch_add(1, Ordering::Relaxed);
+        }
+        *been_up = true;
         Self {
             totals,
             cleanly: false,
@@ -208,8 +401,74 @@ impl Drop for Connection<'_> {
     fn drop(&mut self) {
         self.totals.connected.fetch_sub(1, Ordering::Relaxed);
         if !self.cleanly {
-            self.totals.dropped.fetch_add(1, Ordering::Relaxed);
+            self.totals.drops.fetch_add(1, Ordering::Relaxed);
         }
+    }
+}
+
+/// What one slot knows about itself, across however many connections it takes to finish.
+///
+/// **The point of the struct is that these three outlive a socket and `remaining` does not.** A
+/// reconnect re-derives what is left to check from the room's own `Connected`, exactly as a resumed
+/// run does — the room is authoritative and the tool's idea of the list is not. What cannot be
+/// re-derived is what this slot has already *told the run*, and counting any of it twice corrupts
+/// the numbers the run exists to produce.
+#[derive(Default)]
+struct Session {
+    /// Locations still to send, from the current connection's `Connected`.
+    remaining: Vec<i64>,
+    /// Whether this slot has its Goal. Survives a reconnect: the room does too, in its save.
+    goaled: bool,
+    /// Whether the run's goal tally has been told, which must happen **once**.
+    ///
+    /// Separate from `goaled` because the two answer different questions, and conflating them ends
+    /// the run early: `totals.goaled >= players` is the run's terminating condition, so a slot that
+    /// counted itself twice after a reconnect would stop the run with somebody still playing.
+    counted_goal: bool,
+    /// How many items this slot has contributed to [`Totals::items_received`].
+    ///
+    /// **A reconnect replays the slot's entire item history from index zero**, which is how a
+    /// resumed slot learns it already won — so the replay after a drop is everything already
+    /// counted, plus whatever arrived while the connection was down. Adding it whole would inflate
+    /// the run's item total by a slot's history per drop, and that total is the one number checkable
+    /// against the room's own tracker. See [`Session::absorb_replay`].
+    items_counted: usize,
+    /// Whether this slot has already waited at the start gate. It waits at most once.
+    ///
+    /// A `Barrier` counts arrivals, so a reconnecting slot that waited again would arrive twice and
+    /// release the gate for a slot that had not.
+    gated: bool,
+}
+
+impl Session {
+    /// Count the connect-time replay, without counting any of it twice.
+    ///
+    /// Returns how many were newly counted. The replay is a prefix-superset of what has been seen —
+    /// the room replays from index zero every time — so the new items are whatever is past the
+    /// high-water mark.
+    fn absorb_replay(&mut self, replayed: usize, totals: &Totals) -> usize {
+        let fresh = replayed.saturating_sub(self.items_counted);
+        self.items_counted = self.items_counted.max(replayed);
+        totals
+            .items_received
+            .fetch_add(fresh as u64, Ordering::Relaxed);
+        fresh
+    }
+
+    /// Count items that arrived on a live connection.
+    fn absorb_live(&mut self, items: usize, totals: &Totals) {
+        self.items_counted += items;
+        totals
+            .items_received
+            .fetch_add(items as u64, Ordering::Relaxed);
+    }
+
+    /// Record the goal, and say whether this is the first time.
+    fn goal(&mut self) -> bool {
+        self.goaled = true;
+        let first = !self.counted_goal;
+        self.counted_goal = true;
+        first
     }
 }
 
@@ -551,6 +810,7 @@ pub fn to_send(missing: Vec<i64>, checked: &[i64]) -> Vec<i64> {
 async fn dial(config: &Config, plan: &SlotPlan, role: Role, totals: &Totals) -> Result<Socket> {
     let endpoint = Endpoint::parse(&config.room)?;
     let mut socket = connect(&endpoint).await?;
+    totals.opened.fetch_add(1, Ordering::Relaxed);
     if socket.deflate {
         totals.deflated.fetch_add(1, Ordering::Relaxed);
     }
@@ -605,9 +865,45 @@ pub async fn observe(
 ) -> Result<()> {
     tokio::time::sleep_until(tokio::time::Instant::from_std(schedule.connect_at)).await;
 
-    let mut socket = dial(&config, &plan, role, &totals).await?;
-    let _connected = handshake(&mut socket, &plan).await?;
-    let mut connection = Connection::opened(&totals);
+    let what = format!("slot {} ({role:?})", plan.slot);
+    let mut backoff = Backoff::new();
+    let mut rng = backoff_rng();
+    // Whether this connection has ever been up, which is what separates a return from a late
+    // arrival. See `Connection::opened`.
+    let mut been_up = false;
+
+    while !finished.load(Ordering::Relaxed) {
+        let began = Instant::now();
+        let outcome = observe_once(&plan, role, &config, &totals, &finished, &mut been_up).await;
+        match retry(
+            &what,
+            outcome,
+            began.elapsed(),
+            &mut backoff,
+            &mut rng,
+            &finished,
+        )
+        .await
+        {
+            Retry::Again => {}
+            Retry::Stop => break,
+        }
+    }
+    Ok(())
+}
+
+/// One observing connection, from dial to whatever ends it.
+async fn observe_once(
+    plan: &SlotPlan,
+    role: Role,
+    config: &Config,
+    totals: &Totals,
+    finished: &AtomicBool,
+    been_up: &mut bool,
+) -> Result<Ended> {
+    let mut socket = dial(config, plan, role, totals).await?;
+    let _connected = handshake(&mut socket, plan).await?;
+    let mut connection = Connection::opened(totals, been_up);
 
     // A wake often enough to notice the run ending, since a quiet room may send this connection
     // nothing at all for long stretches.
@@ -621,7 +917,7 @@ pub async fn observe(
         tokio::select! {
             message = socket.recv() => {
                 if message?.is_none() {
-                    bail!("slot {} ({role:?}) lost its connection", plan.slot);
+                    return Ok(Ended::Lost);
                 }
             }
             _ = &mut idle => {
@@ -631,7 +927,7 @@ pub async fn observe(
     }
 
     connection.closing();
-    Ok(())
+    Ok(Ended::RunOver)
 }
 
 /// Play one slot until it goals, then hold the connection open until the run ends.
@@ -648,24 +944,89 @@ pub async fn play(
     // the ramp is one clock rather than a spawn loop that would also delay the progress watcher.
     tokio::time::sleep_until(tokio::time::Instant::from_std(schedule.connect_at)).await;
 
-    let mut socket = dial(&config, &plan, Role::Player, &totals).await?;
+    // **Outside the session, so it survives a reconnect.** The traffic rng in particular: reseeding
+    // it per session would make every slot that got dropped replay the same burst pattern from the
+    // top, which is a shape the run would then be measuring.
+    let mut session = Session::default();
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut pace = Pace::default();
+
+    let what = format!("slot {}", plan.slot);
+    let mut backoff = Backoff::new();
+    let mut backoff_rng = backoff_rng();
+    // Whether this connection has ever been up, which is what separates a return from a late
+    // arrival. See `Connection::opened`.
+    let mut been_up = false;
+
+    while !finished.load(Ordering::Relaxed) {
+        let began = Instant::now();
+        let outcome = play_once(
+            &plan,
+            &config,
+            &totals,
+            &finished,
+            &start,
+            schedule,
+            &mut been_up,
+            &mut session,
+            &mut rng,
+            &mut pace,
+        )
+        .await;
+        match retry(
+            &what,
+            outcome,
+            began.elapsed(),
+            &mut backoff,
+            &mut backoff_rng,
+            &finished,
+        )
+        .await
+        {
+            Retry::Again => {}
+            Retry::Stop => break,
+        }
+    }
+    Ok(())
+}
+
+/// One playing connection, from dial to whatever ends it.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "every one of these is state that outlives the socket, which is the whole point of \
+              splitting a session out of `play`. A context struct would group them and would make \
+              the thing that matters -- which of them survive a reconnect and which do not -- \
+              harder to see rather than easier."
+)]
+async fn play_once(
+    plan: &SlotPlan,
+    config: &Config,
+    totals: &Totals,
+    finished: &AtomicBool,
+    start: &Barrier,
+    schedule: Schedule,
+    been_up: &mut bool,
+    session: &mut Session,
+    rng: &mut StdRng,
+    pace: &mut Pace,
+) -> Result<Ended> {
+    let mut socket = dial(config, plan, Role::Player, totals).await?;
 
     let Connected {
         mut remaining,
         replayed,
-    } = handshake(&mut socket, &plan).await?;
-    let mut connection = Connection::opened(&totals);
+    } = handshake(&mut socket, plan).await?;
+    let mut connection = Connection::opened(totals, been_up);
 
-    // Whatever was already waiting for this slot counts as received, because it was.
-    totals
-        .items_received
-        .fetch_add(replayed.len() as u64, Ordering::Relaxed);
+    // Whatever was already waiting for this slot counts as received, because it was — minus
+    // anything a previous session already counted, since the room replays from index zero every
+    // time. See `Session::absorb_replay`.
+    session.absorb_replay(replayed.len(), totals);
 
-    let mut rng = StdRng::seed_from_u64(seed);
     // Shuffled so slots do not all walk their worlds in ascending id order. Two slots sharing a
     // game have identically-shaped location tables, and unshuffled they would march through them
     // in lockstep — traffic with a regularity no room ever sees.
-    remaining.shuffle(&mut rng);
+    remaining.shuffle(rng);
 
     // **Nothing left to check means this slot is done**, which is how a resumed run behaves: point
     // the tool at a room that is already part-played and the slots that finished last time come
@@ -689,22 +1050,39 @@ pub async fn play(
     // the connect-time replay is a slot that *won* last time, which the room announces at connect
     // and which says nothing about how many locations are left. Reading only the first would leave
     // such a slot checking a world it had already finished while the run waited for its goal.
+    //
+    // **A reconnect arrives here already knowing**, through `session.goaled`, and re-declares
+    // anyway. Cheap insurance rather than duplication: a slot that goaled and lost the connection
+    // in the same breath may never have got the `StatusUpdate` out, and telling a room a goal it
+    // already has is idempotent. What must not repeat is the *run's* tally, which is why the
+    // counter moves only on the transition — `totals.goaled >= players` ends the run, so a slot
+    // counting itself twice would stop the run with somebody still playing.
     let goal_replayed = plan.goal_item.is_some_and(|goal| replayed.contains(&goal));
-    let mut goaled = remaining.is_empty() || goal_replayed;
-    if goaled && plan.goal_item.is_some() {
+    let finished_here = session.goaled || remaining.is_empty() || goal_replayed;
+    if finished_here && plan.goal_item.is_some() {
         remaining.clear();
-        tracing::info!(
-            slot = plan.slot,
-            replayed_goal = goal_replayed,
-            "connected already finished; declaring goal"
-        );
+        let first_time = session.goal();
+        if first_time {
+            tracing::info!(
+                slot = plan.slot,
+                replayed_goal = goal_replayed,
+                "connected already finished; declaring goal"
+            );
+        }
         socket
             .send(&frame(&[Outbound::StatusUpdate {
                 status: STATUS_GOAL,
             }])?)
             .await?;
-        totals.goaled.fetch_add(1, Ordering::Relaxed);
+        if first_time {
+            totals.goaled.fetch_add(1, Ordering::Relaxed);
+        }
+    } else if finished_here {
+        // A spectator: nothing to check, nothing to declare.
+        remaining.clear();
+        session.goaled = true;
     }
+    session.remaining = remaining;
 
     // **Only when there is no ramp**: with one, this slot starts checking the moment it is
     // connected, so load builds with the population instead of arriving all at once after a dead
@@ -724,7 +1102,14 @@ pub async fn play(
     //
     // The barrier future is pinned and polled across iterations rather than recreated: dropping a
     // half-polled `Barrier::wait` and calling it again would count this slot's arrival twice.
-    if let Some(until) = schedule.gate_until {
+    //
+    // **A reconnecting slot skips the gate entirely** (`session.gated`), for the same reason: a
+    // `Barrier` counts arrivals, so a slot that came back and waited again would arrive twice and
+    // release the gate on behalf of one that never showed up.
+    if let Some(until) = schedule.gate_until
+        && !session.gated
+    {
+        session.gated = true;
         let gate = start.wait();
         tokio::pin!(gate);
         let gate_deadline = tokio::time::sleep_until(tokio::time::Instant::from_std(until));
@@ -735,11 +1120,11 @@ pub async fn play(
                 _ = &mut gate_deadline => break,
                 message = socket.recv() => {
                     let Some(text) = message? else {
-                        bail!("slot {} lost its connection while waiting at the gate", plan.slot);
+                        return Ok(Ended::Lost);
                     };
                     // Items can already be arriving here — a resumed room replays a slot's history
                     // on connect — so this goes through the same handler rather than being dropped.
-                    if pump(&mut socket, text, &plan, &totals, &mut goaled, &mut remaining).await? {
+                    if pump(&mut socket, text, plan, totals, session).await? {
                         totals.goaled.fetch_add(1, Ordering::Relaxed);
                     }
                 }
@@ -748,7 +1133,6 @@ pub async fn play(
     }
 
     let mut window: Vec<u32> = Vec::new();
-    let mut pace = Pace::default();
     let mut tick = TICKS_PER_WINDOW as usize;
     let tick_len = WINDOW / TICKS_PER_WINDOW;
 
@@ -766,7 +1150,11 @@ pub async fn play(
     // the same clock it decorrelates the windows too. The README has claimed since the first draft
     // that slots "burst independently rather than in one synchronized waveform"; until now that was
     // true of which tick and false of the tick itself.
-    let mut next_tick = Instant::now() + tick_phase(&mut rng, tick_len);
+    //
+    // **Re-phased on every session**, which a reconnect makes worth saying: the connections a room
+    // sheds are shed together, so they reconnect together, and a grid resumed from where it left
+    // off would hand the room back a phase-aligned block of the very slots it just dropped.
+    let mut next_tick = Instant::now() + tick_phase(rng, tick_len);
 
     // **A read is armed at all times, and the tick is a peer branch rather than a deadline the
     // reading stops at.** This is the shape the 2000-slot cascade asked for.
@@ -800,9 +1188,9 @@ pub async fn play(
         tokio::select! {
             message = socket.recv() => {
                 let Some(text) = message? else {
-                    bail!("slot {} lost its connection", plan.slot);
+                    return Ok(Ended::Lost);
                 };
-                if pump(&mut socket, text, &plan, &totals, &mut goaled, &mut remaining).await? {
+                if pump(&mut socket, text, plan, totals, session).await? {
                     totals.goaled.fetch_add(1, Ordering::Relaxed);
                 }
             }
@@ -816,11 +1204,18 @@ pub async fn play(
                 tick_at.as_mut().reset(tokio::time::Instant::from_std(next_tick));
 
                 // Refill the window when its ticks run out.
+                //
+                // **`pace` outlives the session on purpose, and it does the right thing without
+                // being told to.** It counts windows as they are refilled, so a slot that spent
+                // ninety seconds backing off simply did not refill during them — where a rate
+                // derived from wall-clock elapsed time would hand that slot every check it "owed"
+                // the moment it reconnected, aiming a catch-up burst at a room that has just
+                // finished shedding load.
                 if tick >= window.len() {
                     window = plan_window(
-                        window_budget(config.rate, &mut pace),
+                        window_budget(config.rate, pace),
                         config.jitter,
-                        &mut rng,
+                        rng,
                     );
                     tick = 0;
                 }
@@ -829,20 +1224,29 @@ pub async fn play(
 
                 // Released on goal, so there is nothing left worth checking -- but the connection
                 // stays up and the loop keeps draining and answering pings.
-                if !goaled && want > 0 && !remaining.is_empty() {
+                if !session.goaled && want > 0 && !session.remaining.is_empty() {
                     let mut packets = Vec::new();
                     let mut sent = 0;
-                    while sent < want && !remaining.is_empty() {
-                        let take = config.batch.min(want - sent).min(remaining.len()).max(1);
-                        let locations: Vec<i64> = remaining.drain(..take).collect();
+                    while sent < want && !session.remaining.is_empty() {
+                        let take = config
+                            .batch
+                            .min(want - sent)
+                            .min(session.remaining.len())
+                            .max(1);
+                        let locations: Vec<i64> = session.remaining.drain(..take).collect();
                         sent += locations.len();
                         packets.push(Outbound::LocationChecks { locations });
                     }
+                    // **Counted after the send, so a drop mid-write can undercount by at most one
+                    // batch.** The other order overcounts, and of the two a load tool must never
+                    // claim traffic it did not make. The locations themselves are not lost either
+                    // way: a reconnect takes the to-send list from the room's own
+                    // `missing_locations`, so anything that did not land comes back.
                     socket.send(&frame(&packets)?).await?;
                     totals.checks_sent.fetch_add(sent as u64, Ordering::Relaxed);
                 }
 
-                if !goaled
+                if !session.goaled
                     && config.say_rate > 0.0
                     && rng.gen_bool((config.say_rate * tick_len.as_secs_f64()).min(1.0))
                 {
@@ -859,7 +1263,7 @@ pub async fn play(
     connection.closing();
     // No close handshake: pahoa's client does not model one, and a room reads a dropped socket the
     // same way a real client's crash reads. The run is over by the time this happens.
-    Ok(())
+    Ok(Ended::RunOver)
 }
 
 /// Handle one message. Returns whether this call is the one that goaled the slot.
@@ -873,8 +1277,7 @@ async fn pump(
     text: String,
     plan: &SlotPlan,
     totals: &Totals,
-    goaled: &mut bool,
-    remaining: &mut Vec<i64>,
+    session: &mut Session,
 ) -> Result<bool> {
     let _ = plan.slot;
 
@@ -894,16 +1297,13 @@ async fn pump(
     let mut newly_goaled = false;
     for packet in serde_json::from_str::<Vec<Inbound>>(&text)? {
         if let Inbound::ReceivedItems { items } = packet {
-            totals
-                .items_received
-                .fetch_add(items.len() as u64, Ordering::Relaxed);
+            session.absorb_live(items.len(), totals);
             let found_goal = plan
                 .goal_item
                 .is_some_and(|goal| items.iter().any(|i| i.item == goal));
-            if !*goaled && found_goal {
-                *goaled = true;
-                newly_goaled = true;
-                remaining.clear();
+            if !session.goaled && found_goal {
+                newly_goaled = session.goal();
+                session.remaining.clear();
                 socket
                     .send(&frame(&[Outbound::StatusUpdate {
                         status: STATUS_GOAL,
@@ -1008,6 +1408,169 @@ mod tests {
 
     fn rng(seed: u64) -> StdRng {
         StdRng::seed_from_u64(seed)
+    }
+
+    /// The backoff doubles, stops doubling, and never lands twice in the same place.
+    ///
+    /// **The ceiling is the load-bearing half.** A room that refuses forever is answered by every
+    /// slot knocking at 30-second intervals; without the cap, `RECONNECT_BASE << attempt` overflows
+    /// a `u32` shift at 32 — a panic in debug and, in release, a wrap to a one-nanosecond backoff,
+    /// which is a two-thousand-connection redial storm produced by an integer.
+    #[test]
+    fn the_backoff_doubles_up_to_a_ceiling() {
+        let mut rng = rng(7);
+
+        // Doubling, allowing for the jitter band: attempt n's floor is attempt n-1's floor doubled.
+        for attempt in 0..6 {
+            let window = RECONNECT_BASE * (1 << attempt);
+            for _ in 0..64 {
+                let delay = reconnect_delay(attempt, &mut rng);
+                assert!(
+                    delay >= window / 2 && delay <= window,
+                    "attempt {attempt} drew {delay:?} outside [{:?}, {window:?}]",
+                    window / 2
+                );
+            }
+        }
+
+        // Capped, and still capped at the shift widths that would overflow.
+        for attempt in [7, 31, 32, 64, u32::MAX] {
+            let delay = reconnect_delay(attempt, &mut rng);
+            assert!(
+                delay >= RECONNECT_MAX / 2 && delay <= RECONNECT_MAX,
+                "attempt {attempt} drew {delay:?}, which is not the ceiling"
+            );
+        }
+    }
+
+    /// **Jittered, because the connections a room sheds are shed together.**
+    ///
+    /// A goal cascade dropped 545 of 2000 in twelve seconds. Undelayed or fixed-delay, all 545
+    /// redial in the same instant — the connect storm `schedule` exists to prevent, aimed at a room
+    /// that has just demonstrated it is at its limit.
+    #[test]
+    fn the_backoff_does_not_land_every_slot_on_one_instant() {
+        let mut rng = rng(11);
+        let draws: Vec<Duration> = (0..500).map(|_| reconnect_delay(4, &mut rng)).collect();
+        let distinct: std::collections::HashSet<_> = draws.iter().collect();
+        assert!(
+            distinct.len() > 400,
+            "500 slots drew only {} distinct delays",
+            distinct.len()
+        );
+    }
+
+    /// **A session that did not last is not a connection that worked.**
+    ///
+    /// The obvious rule — reset once the handshake succeeds — is wrong for the case the backoff
+    /// exists for: a room shedding load accepts and drops again moments later, and resetting on the
+    /// accept puts that slot into a 500 ms redial loop against a room that has just said it cannot
+    /// cope. That is a load tool turning a shed into a storm.
+    #[test]
+    fn a_flapping_connection_keeps_escalating() {
+        let mut backoff = Backoff::new();
+        let mut rng = rng(3);
+
+        for _ in 0..5 {
+            backoff.wait(&mut rng);
+            backoff.held(Duration::from_secs(1));
+        }
+        assert_eq!(
+            backoff.attempt, 5,
+            "a flapping room must not reset the wait"
+        );
+
+        backoff.held(RECONNECT_MAX);
+        assert_eq!(
+            backoff.attempt, 0,
+            "a session that lasted must start the next drop from the bottom"
+        );
+    }
+
+    /// **A slot that stumbles on the way in has not reconnected**, and `back` must never exceed
+    /// `drops`.
+    ///
+    /// The first version keyed the recovery on "is this the first attempt", which is a different
+    /// question and agrees with the right one everywhere except here: a slot whose opening dial
+    /// fails and whose second succeeds arrives *late*, having never been up, and was counted as a
+    /// return from a drop that never happened. Seen on a 2000-connection run as
+    /// `(drops 20436, back 20437)` — a bound violated by exactly the number of slots that stumbled.
+    ///
+    /// It matters past the display: `drops - reconnects` is what the summary reports as never having
+    /// come back, and a negative difference saturates to zero — so a run that really did end a
+    /// connection short would have said every connection was up.
+    #[test]
+    fn a_late_arrival_is_not_a_reconnection() {
+        let totals = Totals::default();
+        let mut been_up = false;
+
+        let drops = || totals.drops.load(Ordering::Relaxed);
+        let back = || totals.reconnects.load(Ordering::Relaxed);
+
+        // Two dials that failed before establishing anything. There is no guard to construct, so
+        // neither counter moves -- and, the point, the slot has still never been up.
+
+        // Now it lands for the first time: an arrival, not a return.
+        let late = Connection::opened(&totals, &mut been_up);
+        assert_eq!(
+            back(),
+            0,
+            "a slot that stumbled on the way in has not returned from anything"
+        );
+        assert_eq!(drops(), 0);
+
+        // The room drops it and it comes back. *That* is a return.
+        drop(late);
+        let mut again = Connection::opened(&totals, &mut been_up);
+        again.closing();
+
+        assert_eq!(drops(), 1);
+        assert_eq!(back(), 1);
+        assert!(
+            back() <= drops(),
+            "back {} exceeded drops {}",
+            back(),
+            drops()
+        );
+    }
+
+    /// **A reconnect replays the slot's whole item history, and it must not be counted twice.**
+    ///
+    /// `totals.items_received` is the one number checkable against the room's own tracker, so
+    /// adding a slot's history per drop would inflate exactly the figure a run is verified by --
+    /// and it would inflate it *more* the worse the run went, which is the direction that hides a
+    /// problem rather than showing one.
+    #[test]
+    fn a_replayed_history_is_counted_once_however_often_a_slot_reconnects() {
+        let totals = Totals::default();
+        let mut session = Session::default();
+
+        // First connection: three waiting, then two arrive live.
+        assert_eq!(session.absorb_replay(3, &totals), 3);
+        session.absorb_live(2, &totals);
+        assert_eq!(totals.items_received.load(Ordering::Relaxed), 5);
+
+        // Dropped and back: the room replays all five, of which none is new.
+        assert_eq!(session.absorb_replay(5, &totals), 0);
+        assert_eq!(totals.items_received.load(Ordering::Relaxed), 5);
+
+        // Dropped again, and this time two arrived while it was away.
+        assert_eq!(session.absorb_replay(7, &totals), 2);
+        assert_eq!(totals.items_received.load(Ordering::Relaxed), 7);
+    }
+
+    /// **The run's goal tally moves once per slot, and the run's end depends on it.**
+    ///
+    /// `totals.goaled >= players` is what ends a run, so a slot that counted itself again after a
+    /// reconnect would stop the run with somebody still playing — a truncated measurement that
+    /// reports as a complete one.
+    #[test]
+    fn a_slot_counts_its_goal_once_across_reconnects() {
+        let mut session = Session::default();
+        assert!(session.goal(), "the first goal is the one that counts");
+        assert!(!session.goal(), "a reconnect must not count the goal again");
+        assert!(!session.goal());
+        assert!(session.goaled);
     }
 
     /// **The budget is spent exactly, at every jitter setting.** The whole promise of the window is

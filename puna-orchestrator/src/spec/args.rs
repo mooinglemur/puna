@@ -239,6 +239,23 @@ pub fn serve(spec: &RoomSpec) -> Vec<String> {
         args.value("--filtered-port", filtered);
     }
 
+    // **Set, not left to pahoa's own heuristic, and that is the point.**
+    //
+    // pahoa derives this from `slot_info.len()` with the identical expression `spec::room` used to
+    // transcribe -- two independent computations of one number from one input, with nothing
+    // checking they agree. The number decides how much the room may queue, and Puna's memory limit
+    // is sized around it, so a drift between the two is not a disagreement about a constant: it is
+    // a container limit provisioned for a queue the room no longer has. That failure is an OOM
+    // kill, which is the least diagnosable thing a room can do.
+    //
+    // Passing it makes Puna's value authoritative and the relationship checkable in one place --
+    // see `room::memory_limit_bytes`, whose test asserts the room can always reach this cap before
+    // the kernel reaches the room.
+    args.value(
+        "--outbound-budget",
+        crate::spec::room::outbound_budget_bytes(spec.slot_count),
+    );
+
     args.value("--save-dir", SAVE_DIR)
         .value("--save-interval", spec.save_interval_secs)
         .value("--tls-cert", TLS_CERT_PATH)
@@ -299,6 +316,9 @@ mod tests {
                 "--bind=::",
                 "--port=40000",
                 "--filtered-port=40001",
+                // 96 slots sits on pahoa's own 64 MiB floor. Passed rather than left to the room
+                // to derive, so the memory limit is sized against the number in use.
+                "--outbound-budget=67108864",
                 "--save-dir=/var/lib/pahoa",
                 "--save-interval=30",
                 "--tls-cert=/etc/pahoa/tls/tls.crt",

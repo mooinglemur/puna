@@ -116,6 +116,13 @@ items (234 of 240 on a six-slot run, the shortfall rising with connect order) an
 a slot checking a world it had already won while the run waited for a goal that had already
 happened.
 
+**A mid-run reconnect is the same code path**, which is why it is safe: a slot that comes back takes
+its to-send list from the room and re-reads its own history rather than trusting anything it
+remembered. What it does carry across is only what the room cannot tell it — that it has already
+counted those items, and that it has already told the run it goaled. Both are counted once however
+many times a slot reconnects, because the item total is the one number checkable against the room's
+own tracker and the goal tally is what ends the run.
+
 ### Connecting
 
 `wss://` with the certificate verified against the host you name, so use the room's advertised
@@ -143,14 +150,38 @@ about the square of its size. A ramp is also what a room actually looks like: pl
 minutes. `--connect-rate 0` opens them all at once, kept because reproducing that storm on purpose
 is a measurement rather than a mistake.
 
+**A lost connection comes back.** Every socket reconnects on an exponential backoff of its own —
+half a second doubling to a thirty-second ceiling, jittered — and keeps trying for as long as the run
+is unfinished. Nothing else about the slot restarts: the to-send list comes from the room's own
+`missing_locations` on the way back in, exactly as [resuming](#resuming) does, so nothing is
+re-checked and nothing is lost.
+
+Two reasons it matters beyond convenience. **A room that sheds load is supposed to see the shed
+clients return** — that is the half of backpressure a tool that gave up was never exercising — and a
+run whose population only ever falls is quietly measuring something else, because every number after
+the drop is per-survivor.
+
+The backoff resets only after a connection has **held for thirty seconds**, not when the handshake
+succeeds. A room under pressure accepts a connection and drops it again moments later, and resetting
+on the accept would put that slot into a half-second redial loop against a room that has just said it
+cannot cope. The jitter is there for the same reason: the connections a room sheds are shed together,
+so undelayed they would all redial in the same instant — the connect storm the ramp exists to
+prevent, aimed at a room already at its limit.
+
+The progress line carries `connected 1455/2000 (drops 545, back 540)`: a population against what was
+asked for, then how often the room dropped somebody and how many came back. **The first two are
+different questions** — a run with 545 drops that ends full is a room that shed and recovered, which
+used to look identical here to one that lost 545 slots for good.
+
 **A big run will lose connections, and the tool now says so.** Every check broadcasts a `PrintJSON`
 and a `RoomUpdate` to *every* connection, so the full feed costs about 47 KB delivered per check
 received on a 200-slot room — 1.2 GB across a few runs, uncompressed. The room drops the connections
 that cannot keep up, which is its backpressure working. Two things to do about it: point `--room` at
 the room's **filtered port** (`base_port + 1`, shown on the room page), which exists precisely to
 drop that firehose for clients that cannot take it, and read `pahoa_lag_disconnects_total` for the
-room to confirm what dropped them. The progress line carries `(dropped N)` and the summary repeats
-it, because a run that lost half its slots measured half a run.
+room to confirm what dropped them. Every one of them reconnects, per above, so what a big run
+produces now is a population that dips and recovers rather than one that only falls — and the drop
+count is what says it happened at all.
 
 **Every connection negotiates permessage-deflate**, which is why the WebSocket layer is pahoa's
 (`pahoa-net`) rather than a crate from elsewhere. `tungstenite` rejects a frame with RSV1 set

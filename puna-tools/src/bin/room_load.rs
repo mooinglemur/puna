@@ -124,6 +124,9 @@ async fn main() -> Result<()> {
     // Spectators never goal, so the run's end is decided by the players alone. Counting a
     // spectator would leave a run waiting forever for somebody who cannot finish.
     let players = plans.iter().filter(|p| p.goal_item.is_some()).count();
+    // What a full house looks like, so the progress line can say `connected 1455/2000` rather than
+    // a bare number that only means something if you remember what was asked for.
+    let sockets = plans.len() * config.clients_per_slot;
     println!(
         "playing {} slots ({players} can goal) against {} at {}/s each, jitter {}",
         plans.len(),
@@ -248,6 +251,7 @@ async fn main() -> Result<()> {
         Arc::clone(&finished),
         Arc::clone(&config),
         players as u64,
+        sockets as u64,
         first_check,
     ));
 
@@ -263,13 +267,19 @@ async fn main() -> Result<()> {
     finished.store(true, Ordering::Relaxed);
     let _ = watcher.await;
 
-    let dropped = totals.dropped.load(Ordering::Relaxed);
+    let drops = totals.drops.load(Ordering::Relaxed);
+    let reconnects = totals.reconnects.load(Ordering::Relaxed);
     let deflated = totals.deflated.load(Ordering::Relaxed);
+    let opened = totals.opened.load(Ordering::Relaxed);
     // **Stated rather than assumed.** Whether the room could share compression with these clients
     // decides what every outbound number means, and it is settled by a handshake header nobody
     // sees. A room on an image without the extension answers 0 here and nothing else changes.
+    //
+    // **Against connections opened, not against the population.** Reconnection made the bare count
+    // misleading: a run that lost ten connections and got them back opened twenty, and printing
+    // "20 negotiated" under a line reading `connected 10/10` reads as a contradiction.
     println!(
-        "  {deflated} connections negotiated permessage-deflate{}",
+        "  {deflated} of {opened} connections opened negotiated permessage-deflate{}",
         if deflated == 0 {
             " -- the room compressed nothing for us, so outbound bytes are a worst case"
         } else {
@@ -282,14 +292,28 @@ async fn main() -> Result<()> {
         totals.items_received.load(Ordering::Relaxed),
         totals.goaled.load(Ordering::Relaxed)
     );
-    if dropped > 0 {
-        // Said plainly at the end, because a run that lost half its slots measured half a run and
-        // every number above is per-survivor. The room's own `pahoa_lag_disconnects_total` is
-        // where to confirm it was backpressure rather than something else.
+    if drops > 0 {
+        // Said plainly at the end, because a room that sheds is the interesting result and the
+        // numbers above are what the population that was up at the time managed. The room's own
+        // `pahoa_lag_disconnects_total` is where to confirm it was backpressure rather than
+        // something else.
+        //
+        // **Two numbers, because reconnection made one insufficient.** How often the room dropped
+        // somebody is a measure of the room; how many never came back is a measure of the run. A
+        // run with 545 drops that ended full is a room that shed and recovered — which used to be
+        // indistinguishable here from one that lost 545 slots for good.
+        //
+        // **From the two counters, never from `connected`**, which is zero by the time this runs:
+        // every task has been joined and every connection closed cleanly on the way out. Reading it
+        // here reported a full recovery as "10 of 10 were still down at the end".
+        let down = drops.saturating_sub(reconnects);
         println!(
-            "  {dropped} of {total} connections did not survive the run -- the numbers above are \
-             what the rest did",
-            total = dropped + totals.connected.load(Ordering::Relaxed)
+            "  {drops} connection drops, {reconnects} recovered; {}",
+            if down == 0 {
+                "every connection was up when the run ended".to_string()
+            } else {
+                format!("{down} of {sockets} never came back")
+            }
         );
     }
     Ok(())
@@ -305,6 +329,8 @@ async fn watch(
     finished: Arc<AtomicBool>,
     config: Arc<Config>,
     players: u64,
+    // Connections the run means to hold -- slots times `--clients-per-slot`, not players.
+    sockets: u64,
     first_check: Duration,
 ) {
     let began = std::time::Instant::now();
@@ -317,10 +343,16 @@ async fn watch(
             return;
         }
         let goaled = totals.goaled.load(Ordering::Relaxed);
-        // **`dropped` is on every line, not only in the warnings above it.** A room that drops
+        // **The drop count is on every line, not only in the warnings above it.** A room that drops
         // most of the run still leaves the totals climbing, so without this the display reads as a
         // full house doing less work rather than as a smaller run doing its share.
-        let dropped = totals.dropped.load(Ordering::Relaxed);
+        //
+        // Since connections reconnect, the number is a count of *events* and the population is
+        // `connected` beside it — which is why that is now shown against the total rather than
+        // alone. `connected 1455/2000` with `drops 545` is a room shedding and a harness coming
+        // back; `connected 2000/2000` with the same drops is a room that shed and recovered, and
+        // those are different runs that used to print the same line.
+        let drops = totals.drops.load(Ordering::Relaxed);
         let sent = totals.checks_sent.load(Ordering::Relaxed);
         // **While nothing has been sent yet, say when something will be.** This is the whole of the
         // "it just sits there" report: a long ramp and a slow rate mean minutes of `checks 0` on a
@@ -335,11 +367,15 @@ async fn watch(
             String::new()
         };
         println!(
-            "  {:>5}s  connected {}{}  checks {sent}  items {}  goaled {goaled}/{players}{waiting}",
+            "  {:>5}s  connected {}/{sockets}{}  checks {sent}  items {}  goaled \
+             {goaled}/{players}{waiting}",
             began.elapsed().as_secs(),
             totals.connected.load(Ordering::Relaxed),
-            if dropped > 0 {
-                format!(" (dropped {dropped})")
+            if drops > 0 {
+                format!(
+                    " (drops {drops}, back {})",
+                    totals.reconnects.load(Ordering::Relaxed)
+                )
             } else {
                 String::new()
             },

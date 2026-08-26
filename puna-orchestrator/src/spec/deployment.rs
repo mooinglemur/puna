@@ -566,8 +566,9 @@ mod tests {
             limits["memory"],
             quantity_bytes(crate::spec::room::memory_limit_bytes(spec.slot_count))
         );
-        // A 96-slot room sits on the floor: 64 MiB of budget plus 192 MiB of overhead.
-        assert_eq!(requests["memory"], Quantity("262144Ki".to_string()));
+        // A 96-slot room sits on pahoa's 64 MiB budget floor, so its request is the base --
+        // 192 MiB plus 96 slots at 288 KiB -- and a quarter of that budget.
+        assert_eq!(requests["memory"], Quantity("240640Ki".to_string()));
     }
 
     #[test]

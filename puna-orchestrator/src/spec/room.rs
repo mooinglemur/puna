@@ -155,11 +155,16 @@ fn slot_numbers(json: &str) -> Vec<String> {
     }
 }
 
-/// Pahoa's own sizing heuristic, transcribed from `config::outbound_budget_for`.
+/// The room's outbound queue cap, **which Puna sets** via `--outbound-budget`.
 ///
 /// `max(64 MiB, slots × 3 × 96 KiB)`: three connections per slot, because one player commonly holds
 /// a game client, a text client and a tracker, at 96 KiB of headroom each. A 2000-slot room lands at
 /// 562.5 MiB, which is the number pahoa's own help text quotes.
+///
+/// The expression is pahoa's `config::outbound_budget_for`, and it used to be a *transcription* of
+/// it — the same number computed twice from one input with nothing checking the two agreed. It is
+/// passed on the argv now, so this one is the number the room actually uses and
+/// [`memory_limit_bytes`] is sized against a fact rather than a guess about another repository.
 pub fn outbound_budget_bytes(slot_count: i32) -> i64 {
     const PER_CONNECTION: i64 = 96 * 1024;
     const CONNECTIONS_PER_SLOT: i64 = 3;
@@ -172,21 +177,88 @@ pub fn outbound_budget_bytes(slot_count: i32) -> i64 {
         .max(FLOOR)
 }
 
-/// Headroom over the outbound budget for everything else in the process: the save in memory, the
-/// data package, the allocator's slack.
-const MEMORY_REQUEST_OVERHEAD: i64 = 192 * 1024 * 1024;
-/// The limit's own overhead, on top of half again the budget. A room that reaches its outbound cap
-/// is a room under load, and being OOM-killed at exactly that moment loses play.
-const MEMORY_LIMIT_OVERHEAD: i64 = 256 * 1024 * 1024;
+/// Everything in the process that is **not** the outbound queue: the restored save, the location
+/// and item tables, per-connection state, and the allocator's retained slack.
+///
+/// ## Measured, which the note this replaces asked for
+///
+/// That note said to *"replace with measurement once `/admin/v1/status` reports `resident_bytes`"*.
+/// It does, the orchestrator has been re-exporting it since M11, and two 2000-slot rooms were
+/// OOM-killed before anybody read it. Taken from Prometheus across every room size dev has run,
+/// as `process_resident_memory_bytes - pahoa_outbound_queued_bytes`:
+///
+/// | slots | at rest | under load |
+/// |---|---|---|
+/// | 1 | 46 MiB | 50 MiB (1 connection) |
+/// | 4 | 49 MiB | 70 MiB (2 connections) |
+/// | 200 | 66 MiB | 74 MiB (201 connections) |
+/// | 2000 | 125 MiB | **494 MiB** (1993 connections) |
+///
+/// **The load column is not a function of connections alone**, which is the finding that shaped
+/// these constants. Two 2000-slot rooms at ~2000 connections measured 208 MiB and 494 MiB; the
+/// difference is churn — the second had taken 20,000 reconnects, and freed connection state is
+/// retained by the allocator rather than returned. At rest a 2000-slot room is flat to within
+/// 3 MiB for hours, so this is fragmentation and not a leak, but a limit has to cover the churny
+/// case because a room under load is exactly the room that is being dropped and re-joined.
+///
+/// So the per-slot term is fitted to the **worst** observation rather than the median.
+///
+/// ## The floor is deliberately far above what a small room measured
+///
+/// 192 MiB against 46-70 MiB observed, which is chosen so that **no room's limit gets smaller than
+/// the one it runs under today**: below 228 slots the outbound budget is its own 64 MiB floor, and
+/// `64 + 192 × 3/2` is exactly the 352 MiB the previous formula produced. Large rooms grow, nothing
+/// shrinks.
+///
+/// Troy's call, and the reasoning is that the three small-room samples come from rooms with one or
+/// two connections — nothing about them says what a 200-slot room does mid-cascade. A limit is not
+/// a reservation, so generosity costs nothing here beyond a fleet-wide bug having more rope, and
+/// tightening it later is a decision that can be made against data rather than instead of it.
+fn non_queue_bytes(slot_count: i32) -> i64 {
+    /// See above: sized to hold the small end at its current limit, not to the 46-70 MiB measured.
+    const FLOOR: i64 = 192 * 1024 * 1024;
+    /// Fitted to the 2000-slot room under churn: 2000 × 288 KiB = 562 MiB over the floor, so 754
+    /// against 494 measured.
+    ///
+    /// **Its equality with pahoa's own per-slot budget contribution (3 × 96 KiB) is a coincidence**
+    /// — both scale with the connections a slot implies, but one is queue depth and this is
+    /// resident state. Do not "simplify" this function to `budget + FLOOR`: pahoa owns the 96 KiB
+    /// and can change it, and the two would then move together for no reason.
+    const PER_SLOT: i64 = 288 * 1024;
 
-/// What to request, in bytes. Replace with measurement once `/admin/v1/status` reports
-/// `resident_bytes` — the endpoint exists for questions like this one.
-pub fn memory_request_bytes(slot_count: i32) -> i64 {
-    outbound_budget_bytes(slot_count) + MEMORY_REQUEST_OVERHEAD
+    let slots = i64::from(slot_count.max(0));
+    FLOOR.saturating_add(slots.saturating_mul(PER_SLOT))
 }
 
+/// What to request, in bytes: the room's ordinary footprint plus room to queue.
+///
+/// A quarter of the budget rather than all of it, because the request is the **scheduling
+/// reservation** — what the node sets aside and what protects the room from eviction — and
+/// reserving a queue depth the room reaches only under a cascade would price every room at its
+/// worst minute. The limit is where the worst minute is covered.
+pub fn memory_request_bytes(slot_count: i32) -> i64 {
+    non_queue_bytes(slot_count) + outbound_budget_bytes(slot_count) / 4
+}
+
+/// What to limit at, in bytes: the **whole** outbound budget, plus half again the base.
+///
+/// ## The invariant, and it was violated
+///
+/// A room must be able to reach its own outbound cap before the kernel reaches the room. That is
+/// the entire point of the cap: pahoa sheds one slow client rather than dying, so if the cgroup
+/// binds first then everybody's connection dies instead of one, and the backpressure that was
+/// supposed to protect the room never gets to run.
+///
+/// The previous formula — `budget × 3/2 + 256 MiB` — did not hold it at scale. For a 2000-slot
+/// room that is 1099 MiB against a 562 MiB budget, leaving 537 MiB above the queue for everything
+/// else; the room measured 494 MiB of base at 2000 connections and was OOM-killed three times.
+/// The 256 MiB was flat, and the thing it was covering is not: it scales with slots and with the
+/// connections they imply.
+///
+/// Asserted by `the_limit_lets_a_room_reach_its_own_outbound_cap`, which is the test that would
+/// have caught this before a room did.
 pub fn memory_limit_bytes(slot_count: i32) -> i64 {
-    outbound_budget_bytes(slot_count) * 3 / 2 + MEMORY_LIMIT_OVERHEAD
+    outbound_budget_bytes(slot_count) + non_queue_bytes(slot_count) * 3 / 2
 }
 
 #[cfg(test)]
@@ -497,9 +569,60 @@ mod tests {
                 "{slots} slots: {limit} must exceed {request}"
             );
             assert!(
-                request > outbound_budget_bytes(slots),
-                "the request has to cover more than the outbound budget alone"
+                request > non_queue_bytes(slots),
+                "the request has to reserve the room's ordinary footprint"
             );
         }
+    }
+
+    /// **A room must be able to reach its own outbound cap before the kernel reaches the room.**
+    ///
+    /// This is the property two dev rooms broke. pahoa's budget exists so that a room sheds one
+    /// slow client instead of dying; if the container limit binds first then everybody's connection
+    /// dies rather than one, and the backpressure never runs at all. It is one subtraction, and
+    /// nothing asserted it — the old formula failed it at 2000 slots by 43 MiB against a base that
+    /// measured 494.
+    #[test]
+    fn the_limit_lets_a_room_reach_its_own_outbound_cap() {
+        for slots in [0, 1, 4, 96, 200, 227, 228, 1000, 2000, 5000] {
+            let budget = outbound_budget_bytes(slots);
+            let limit = memory_limit_bytes(slots);
+            let base = non_queue_bytes(slots);
+            assert!(
+                limit - budget >= base,
+                "{slots} slots: a limit of {limit} over a budget of {budget} leaves \
+                 {} for a base of {base} -- the room is killed before its own cap binds",
+                limit - budget
+            );
+        }
+    }
+
+    /// The sizing is held to what the cluster actually measured, so tightening it later means
+    /// arguing with the numbers rather than editing a constant.
+    ///
+    /// Worst base observed per room size, from Prometheus as
+    /// `process_resident_memory_bytes - pahoa_outbound_queued_bytes`. The 2000-slot figure is the
+    /// churned one, not the calm one: the same size measured 208 MiB after a quiet run and 494 MiB
+    /// after twenty thousand reconnects, and a limit that only covers the calm case is a limit that
+    /// holds until somebody is actually playing.
+    #[test]
+    fn the_limit_covers_every_base_measured_on_the_cluster() {
+        const MIB: i64 = 1024 * 1024;
+        for (slots, measured_mib) in [(1, 50), (4, 70), (200, 74), (2000, 494)] {
+            let measured = measured_mib * MIB;
+            let headroom = memory_limit_bytes(slots) - outbound_budget_bytes(slots);
+            assert!(
+                headroom >= measured * 5 / 4,
+                "{slots} slots: {} MiB of non-queue headroom against {measured_mib} MiB measured \
+                 leaves under a quarter to spare",
+                headroom / MIB
+            );
+        }
+
+        // The exact limit three rooms were killed at, which must now be unreachable.
+        assert!(
+            memory_limit_bytes(2000) > 1099 * MIB,
+            "the 2000-slot limit is back at the value that OOM-killed three times"
+        );
     }
 }
