@@ -63,7 +63,12 @@ const PROGRESSION_SHARE: f64 = 0.25;
 /// Must be at or past Archipelago's `LEGACY_GENERATOR_CUTOFF` (0.6.2), below which pahoa applies a
 /// much older client floor — a synthetic seed claiming to be ancient would quietly accept clients
 /// this tool would never send.
-const GENERATOR_VERSION: (i64, i64, i64) = (0, 6, 8);
+///
+/// **0.6.7, because that is the newest version upstream has actually released.** A synthetic seed
+/// is meant to be indistinguishable from a real one everywhere it can cheaply be, and a generator
+/// stamp naming an unreleased version is the sort of detail that makes somebody doubt a whole
+/// fixture. It moves to 0.6.8 when upstream ships it.
+const GENERATOR_VERSION: (i64, i64, i64) = (0, 6, 7);
 
 /// The oldest server that may host this seed. `validate` refuses a room older than it.
 const MINIMUM_SERVER_VERSION: (i64, i64, i64) = (0, 5, 0);
@@ -473,9 +478,18 @@ fn data_package_checksum(items: &[(&str, i64)], locations: &[(&str, i64)]) -> St
 
 /// The options the room adopts, because Puna passes `--use-embedded-options`.
 ///
-/// Deliberately three keys and no more. `release_mode: "auto"` is the one that matters — see the
-/// module docs — and pahoa only accepts the value because it round-trips, `from_text` being a
-/// substring test that would land a typo on `disabled` in silence.
+/// `release_mode: "auto"` is the one that matters — see the module docs — and pahoa only accepts
+/// either value because it round-trips: `from_text` is a substring test that lands anything
+/// unrecognized on `disabled`, so `serve.rs`'s `permission` trusts a word only when
+/// `as_text(from_text(w)) == w`. `"auto"` and `"disabled"` both do.
+///
+/// **`collect_mode: "disabled"`**, where pahoa's own default is `auto`. Under auto, a slot that
+/// goals is immediately handed every outstanding item addressed to it, wherever those items still
+/// sit — so the goal cascade delivers twice over, once by the release that empties the goaled
+/// slot's world and again by the collect that fills it. Off, an item reaches a slot only when
+/// somebody actually checks or releases the location holding it, which is the traffic a load run
+/// is meant to be measuring. **It does not affect termination**: a slot goals on receiving its Goal
+/// item, and auto-release is what keeps every Goal reachable.
 ///
 /// Both passwords are written as explicit `None`, which is how a seed spells "no password"
 /// (`serve.rs`'s `text`). The environment outranks a seed's password anyway, so this is belt and
@@ -483,6 +497,7 @@ fn data_package_checksum(items: &[(&str, i64)], locations: &[(&str, i64)]) -> St
 fn server_options() -> PyObj {
     PyObj::Dict(vec![
         (str_("release_mode"), str_("auto")),
+        (str_("collect_mode"), str_("disabled")),
         (str_("password"), PyObj::None),
         (str_("server_password"), PyObj::None),
     ])
@@ -715,7 +730,7 @@ mod tests {
         ] {
             let (zip, _) = build(&s).expect("build");
             let data = parse(&zip);
-            data.validate(pahoa_multidata::Version::new(0, 6, 8))
+            data.validate(pahoa_multidata::Version::new(0, 6, 7))
                 .unwrap_or_else(|e| panic!("{s:?} would not load: {e}"));
 
             assert_eq!(data.slot_info.len(), s.players + s.spectators, "{s:?}");
@@ -748,7 +763,7 @@ mod tests {
             assert_eq!(info.game, "Archipelago");
         }
         // The contiguity rule is over declared ids, and `validate` is what enforces it.
-        data.validate(pahoa_multidata::Version::new(0, 6, 8))
+        data.validate(pahoa_multidata::Version::new(0, 6, 7))
             .expect("a seed with spectators must load");
     }
 
@@ -838,11 +853,57 @@ mod tests {
                 .map(|(_, v)| v)
         };
         assert_eq!(get("release_mode").and_then(|v| v.as_str()), Some("auto"));
+        // Off, against pahoa's own default of `auto`: a goaled slot should not be handed its
+        // outstanding items on top of the release cascade that is the point of the run.
+        assert_eq!(
+            get("collect_mode").and_then(|v| v.as_str()),
+            Some("disabled")
+        );
         for key in ["password", "server_password"] {
             assert!(
                 matches!(get(key), Some(PyObj::None)),
                 "{key} must be explicitly None"
             );
+        }
+    }
+
+    /// **Every mode word this writes must survive pahoa's round-trip check**, which is what stops
+    /// `from_text`'s substring matching turning a near-miss into silence — anything it does not
+    /// recognize lands on `disabled`, so a seed with `"of"` for `"off"` would quietly turn releases
+    /// off and the run would never end.
+    #[test]
+    fn the_mode_words_are_ones_pahoa_will_accept() {
+        // pahoa's `serve.rs::permission`: trust the word only when it round-trips.
+        let round_trips = |word: &str| {
+            let mut bits = 0u8;
+            let lower = word.to_ascii_lowercase();
+            if lower.contains("auto") {
+                bits |= 0b110;
+            }
+            if lower.contains("enabled") {
+                bits |= 0b001;
+            }
+            if lower.contains("goal") {
+                bits |= 0b010;
+            }
+            let text = match bits {
+                0b000 => "disabled",
+                0b001 => "enabled",
+                0b010 => "goal",
+                0b110 => "auto",
+                0b111 => "auto-enabled",
+                _ => "?",
+            };
+            text == word.replace('_', "-")
+        };
+
+        let options = server_options();
+        let dict = options.as_dict().expect("a dict");
+        for (key, value) in dict {
+            let Some(word) = value.as_str() else { continue };
+            if key.as_str().is_some_and(|k| k.ends_with("_mode")) {
+                assert!(round_trips(word), "{word:?} would not be trusted by pahoa");
+            }
         }
     }
 

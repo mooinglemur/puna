@@ -61,6 +61,18 @@ impl Document {
             Self::Static => "static_tracker",
         }
     }
+
+    /// The same distinction, as the shared cache spells it.
+    ///
+    /// Two enums rather than one because they carry different things: this one knows the upstream
+    /// path and the cache window, which are the web tier's business, and `puna-core` has no
+    /// business holding either.
+    pub fn kind(self) -> puna_core::model::tracker::Kind {
+        match self {
+            Self::Live => puna_core::model::tracker::Kind::Live,
+            Self::Static => puna_core::model::tracker::Kind::Static,
+        }
+    }
 }
 
 /// Re-exported so the tier's configuration keeps naming one type.
@@ -96,7 +108,7 @@ pub enum UpstreamError {
 }
 
 impl Upstream {
-    /// Fetch one document from one room.
+    /// Fetch one document from one room, **as bytes**.
     ///
     /// The client is built per fetch rather than shared, which is deliberate and cheap here: the
     /// `resolve` override is per-client and per-room, and a fetch only happens on a cache miss —
@@ -107,7 +119,7 @@ impl Upstream {
         base_port: u16,
         admin_token: &str,
         document: Document,
-    ) -> Result<serde_json::Value, UpstreamError> {
+    ) -> Result<String, UpstreamError> {
         let endpoint = RoomEndpoint {
             room,
             base_port,
@@ -133,7 +145,14 @@ impl Upstream {
             return Err(e.into());
         }
 
-        Ok(response.json().await.map_err(RoomError::from)?)
+        // **Deliberately not `.json()`, and this is the whole of M36's fix.** A room-scoped tracker
+        // request is bytes in and bytes out: the caller needs the body to serve it and to hash it
+        // for an `ETag`, and needs its *structure* only when a slot id asks for a projection.
+        // Parsing here paid for structure on every request whether or not anybody wanted it — and a
+        // `serde_json::Value` tree is millions of small allocations running an order of magnitude
+        // past the wire size, which on a 2000-slot room's 17.6 MiB document is what was killing
+        // this tier. See `routes::tracker::project`, which parses only when a scope is present.
+        Ok(response.text().await.map_err(RoomError::from)?)
     }
 }
 
@@ -157,6 +176,47 @@ mod tests {
                 "{path} is the surface this proxy exists not to expose"
             );
         }
+    }
+
+    /// **The proxy must not parse what it is only going to hand back**, and this is a source lint
+    /// because nothing observable distinguishes the two.
+    ///
+    /// `response.json()` and `response.text()` return the same document to every caller and differ
+    /// only in peak memory — by roughly an order of magnitude, since a `serde_json::Value` tree is
+    /// millions of small allocations over what was 17.6 MiB of wire. That gap is invisible on the
+    /// two-slot rooms every test and every hand-check uses, and is what OOM-killed the tracker tier
+    /// on a 2000-slot room. So a later `.json()` here would look like a tidy-up, pass everything,
+    /// and reinstate M36.
+    /// Comment lines are stripped first, because the thing this lint forbids is also the thing the
+    /// code around it has to *name* in order to explain itself — and a lint that matches its own
+    /// prose fails on a correct file, which teaches the next person to delete it.
+    #[test]
+    fn a_fetched_document_is_never_parsed_here() {
+        let code: String = include_str!("upstream.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("the file has a non-test half")
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            code.contains("Ok(response.text().await.map_err(RoomError::from)?)"),
+            "the fetch no longer returns the room's bytes; re-point this lint rather than \
+             deleting it"
+        );
+        // `.json`, not `.json()`: the first mutation of this lint reinstated the parse as
+        // `.json::<serde_json::Value>()`, which the narrower spelling walked straight past.
+        assert!(
+            !code.contains(".json"),
+            "this proxy parses a tracker document it only serves back; see M36"
+        );
+        assert!(
+            !code.contains("serde_json"),
+            "nothing on this path needs a document's structure -- only a slot scope does, and that \
+             lives in routes::tracker::project"
+        );
     }
 
     /// Pahoa's windows, not Puna's. Matching them is what keeps the staleness identical to what

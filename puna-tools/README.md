@@ -29,7 +29,12 @@ replacement from a space of a quarter of a million, so a small seed looks differ
 
 Every slot gets exactly one `Goal` item, pooled and shuffled with everything else, so it may land in
 its own world or anybody's. The seed embeds **`release_mode: "auto"`**, and that is what lets a room
-played by `room-load` reach an end — see below.
+played by `room-load` reach an end — see below. It also embeds **`collect_mode: "disabled"`**,
+against pahoa's own default of `auto`: with collect on, a slot that goals is handed every
+outstanding item addressed to it at once, so the cascade delivers twice over and the traffic stops
+resembling play. Termination is unaffected — that rests on auto-release.
+
+The generator stamp is **0.6.7**, the newest version upstream has actually released.
 
 Each game's package carries a **checksum**, computed the way Archipelago computes it — sha1 over the
 package's canonical JSON. It is not decoration: a client skips any game the server did not give it a
@@ -55,6 +60,27 @@ drift from what the room believes.
 **`--rate` is per slot.** The room's offered load is `rate × active slots`, which models a room:
 a player checks at a human pace and the load is a consequence of how many are playing. It also means
 slots burst independently rather than in one synchronized waveform.
+
+**`--clients-per-slot 1-3` models what a player actually holds**: the game client, then a text
+client, then a tracker. The extra two consume the firehose and answer heartbeats and nothing else —
+which is all they can do, since Archipelago's `TextOnly` and `Tracker` tags make a connection
+`no_locations` at the server, refused by name if it tries to check or claim a goal. They carry an
+**empty `game`**, which is what lets the tag skip the game and per-slot version checks; that they
+connect at all is the proof the tags registered, because an empty game without a non-game tag is
+refused as `InvalidGame`.
+
+It matters because **a room's outbound cost is per connection**. One socket per slot understates the
+fan-out of a real room by about two thirds, and every rate that looks per-player is really
+per-socket. Items received by the extra connections are deliberately not counted — each item arrives
+once per socket, and counting them would multiply the run's item total by the clients per slot and
+destroy the one number that can be checked against the room's own tracker.
+
+**Any rate works, including a very slow one.** A window's budget is a whole number of checks, so
+`--rate 0.01` — one check per slot every hundred seconds, a reasonable soak — used to round to a
+budget of zero and send nothing at all, forever, while the connections sat there looking healthy.
+The budget now comes from the rate's running total rather than one window's share, so a sub-window
+rate simply lands in one window out of ten. The startup line says how long a fresh run would take
+and when to expect the first check, because a slow run and a stuck one look identical until then.
 
 **The rate is bursty.** It holds on average over a ten-second window and swings hard inside it,
 because a flat check every `1/rate` seconds is the one shape a real room never produces — and the
@@ -83,12 +109,31 @@ comes from `Connected`'s `missing_locations`, not from the seed. A slot that com
 left to check declares its goal immediately, which is what stops a resumed run deadlocking on two
 finished-but-silent slots each holding the other's `Goal`.
 
+**A slot can also come back already *won*.** The room replays a slot's item history at connect, in
+the same batch as `Connected`, and if this slot's `Goal` is in it then it finished last time however
+many locations it has left. That replay is read rather than discarded — dropping it under-counted
+items (234 of 240 on a six-slot run, the shortfall rising with connect order) and, worse, left such
+a slot checking a world it had already won while the run waited for a goal that had already
+happened.
+
 ### Connecting
 
 `wss://` with the certificate verified against the host you name, so use the room's advertised
 hostname rather than an address. There is deliberately no flag to turn that off.
 
 Room-wide passwords work with `--password`. Per-slot password rooms are not supported.
+
+**Each slot starts checking as soon as it is connected**, so load builds with the population the way
+a room filling up does. There is no start gate when a ramp is in effect: the ramp already gives the
+run its shape, where the two together bought a dead period the length of the ramp — 6.7 minutes at
+2000 slots, looking for all the world like a stuck tool — followed by every slot starting in the
+same instant. `--connect-rate 0` still gates, because with everybody dialing at once there is
+nothing else to give the run a defined start.
+
+A slot that *is* waiting keeps reading while it waits. pahoa pings every 20 seconds and closes a
+peer that has not answered 20 seconds later — it is the only side that pings, since Archipelago's
+own clients turn theirs off — so a silent connection is a dead one within 40 seconds, and from this
+side it looks like a TLS EOF that names nothing.
 
 **Connections open on a ramp**, `--connect-rate` a second, default 5. The first live run against a
 200-slot room opened all 200 at once and lost 165 of them — and it was not the room, which peaked at

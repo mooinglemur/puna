@@ -69,9 +69,14 @@ impl Memo {
 
     fn put(&self, key: (RoomId, Document), body: String) {
         if let Ok(mut entries) = self.entries.lock() {
-            // Unbounded in principle, bounded in practice by the room count and swept by age on
-            // read. A room that stops being asked about holds one entry until the process restarts;
-            // at a few hundred rooms that is not worth an eviction policy.
+            // **Expired entries are dropped here, not merely ignored on read.** The comment this
+            // replaces argued that a room nobody asks about any more could keep its entry until the
+            // process restarts, because "at a few hundred rooms that is not worth an eviction
+            // policy" -- which quietly assumed a small document. A 2000-slot room's is 17.6 MiB, so
+            // ten rooms that were browsed once is 350 MiB of a 768 Mi limit held for nothing. The
+            // sweep is O(rooms) over a map with one entry per room per kind, on a path that only
+            // runs on a cache miss.
+            entries.retain(|_, (at, _)| at.elapsed() < MEMO_TTL);
             entries.insert(key, (Instant::now(), body));
         }
     }
@@ -331,7 +336,12 @@ async fn obtain(
     }
 
     // Layer 2: the shared cache, honoring pahoa's own window.
-    let cached = tracker::cached(conn, room.id).await?;
+    //
+    // `mut` because the document is **taken** rather than cloned: the two `take` call sites below
+    // are mutually exclusive -- the fresh one returns -- and at 17.6 MiB a defensive clone is not
+    // free. Were that ever reordered, the second take would answer `None` and the request would
+    // degrade to "this room cannot be reached", which is a visible failure rather than a silent one.
+    let mut cached = tracker::cached(conn, room.id).await?;
     let fresh = cached.as_ref().is_some_and(|c| {
         chrono::Utc::now()
             .signed_duration_since(c.at)
@@ -340,11 +350,10 @@ async fn obtain(
             .is_some_and(|age| age < which.ttl())
     });
 
-    if let Some(cache) = &cached
-        && fresh
-        && let Some(value) = pick(cache, which)
+    if fresh
+        && let Some(cache) = cached.as_mut()
+        && let Some(body) = cache.take(which.kind())
     {
-        let body = value.to_string();
         memo.put((room.id, which), body.clone());
         return Ok(Fetched {
             body,
@@ -354,8 +363,7 @@ async fn obtain(
 
     // Nothing fresh: ask the room.
     match fetch(conn, upstream, room, which, cache_max).await {
-        Ok(value) => {
-            let body = value.to_string();
+        Ok(body) => {
             memo.put((room.id, which), body.clone());
             Ok(Fetched {
                 body,
@@ -367,8 +375,8 @@ async fn obtain(
             // column exists; the page says how old it is, and deliberately offers **no start
             // button** -- a tracker's audience is not necessarily authorized to provision a pod,
             // and a widely-shared link that spins up compute is the hazard D8 exists to prevent.
-            if let Some(cache) = &cached
-                && let Some(stale) = pick(cache, which)
+            if let Some(cache) = cached.as_mut()
+                && let Some(stale) = cache.take(which.kind())
             {
                 tracing::debug!(
                     room = %room.id,
@@ -377,7 +385,7 @@ async fn obtain(
                     "serving a stale tracker document"
                 );
                 return Ok(Fetched {
-                    body: stale.to_string(),
+                    body: stale,
                     stale_since: Some(cache.at),
                 });
             }
@@ -697,13 +705,16 @@ async fn render(
 }
 
 /// Ask the room, and write what comes back into the shared cache.
+///
+/// Returns the document's **text**, unparsed. Nothing on this path needs its structure — see
+/// `upstream::Upstream::fetch`, where that decision lives.
 async fn fetch(
     conn: &mut diesel_async::AsyncPgConnection,
     upstream: &Upstream,
     room: &Room,
     which: Document,
     cache_max: usize,
-) -> std::result::Result<serde_json::Value, UpstreamError> {
+) -> std::result::Result<String, UpstreamError> {
     let base_port = puna_core::model::port::reserved_pair(conn, room.id)
         .await
         .ok()
@@ -716,36 +727,35 @@ async fn fetch(
         .flatten()
         .ok_or(UpstreamError::NoAddress)?;
 
-    let value = upstream
+    let body = upstream
         .fetch(room.id, base_port, &secrets.admin_token, which)
         .await?;
 
-    let (live, statics) = match which {
-        Document::Live => (Some(&value), None),
-        Document::Static => (None, Some(&value)),
-    };
-    // Merged with whatever the other key already held, so fetching one document does not evict the
-    // other -- a room with a cached live document and no static one renders a table with no games.
-    let existing = tracker::cached(conn, room.id).await.ok().flatten();
-    let live = live.or(existing.as_ref().and_then(|c| c.live.as_ref()));
-    let statics = statics.or(existing.as_ref().and_then(|c| c.statics.as_ref()));
-
-    if let Ok(false) = tracker::store(conn, room.id, live, statics, cache_max).await {
-        tracing::warn!(
+    // One key, merged in SQL, so fetching one document cannot evict the other -- a room with a
+    // cached live document and no static one would render a table with no games. This used to be a
+    // read-modify-write, which meant parsing the whole column back into this process to write one
+    // half of it.
+    match tracker::store(conn, room.id, which.kind(), &body, cache_max).await {
+        Ok(true) => {}
+        Ok(false) => tracing::warn!(
             room = %room.id,
+            document = which.as_str(),
+            bytes = body.len(),
             "this room's tracker document is too large for the shared cache; it will be fetched \
              from the room every time and will not survive a teardown"
-        );
+        ),
+        // The cast to `jsonb` is where Postgres parses it, so this is a room that answered with
+        // something that is not JSON. Served anyway -- the room is what said it -- but worth a line,
+        // because from a viewer's side the only symptom is a tracker that never caches.
+        Err(e) => tracing::warn!(
+            room = %room.id,
+            document = which.as_str(),
+            error = %e,
+            "could not cache this room's tracker document"
+        ),
     }
 
-    Ok(value)
-}
-
-fn pick(cache: &tracker::CachedDocuments, which: Document) -> Option<serde_json::Value> {
-    match which {
-        Document::Live => cache.live.clone(),
-        Document::Static => cache.statics.clone(),
-    }
+    Ok(body)
 }
 
 /// Every per-player array in either document, keyed by `player`.
@@ -921,6 +931,32 @@ mod tests {
         entry.0 = Instant::now() - MEMO_TTL - Duration::from_secs(1);
         drop(entries);
         assert_eq!(memo.get(key), None);
+    }
+
+    /// **A document the memo will no longer serve is dropped, not just ignored.**
+    ///
+    /// Expiring on read alone leaves the bytes resident until something overwrites that exact key,
+    /// which for a room nobody opens again is until the process restarts. That was a fair trade
+    /// when the entries were small; at 17.6 MiB each it is the tier's memory limit.
+    #[test]
+    fn the_memo_drops_what_it_will_not_serve() {
+        let memo = Memo::default();
+        let stale = (RoomId::new(), Document::Live);
+        memo.put(stale, "{}".to_string());
+        {
+            let mut entries = memo.entries.lock().expect("lock");
+            entries.get_mut(&stale).expect("the entry").0 =
+                Instant::now() - MEMO_TTL - Duration::from_secs(1);
+        }
+
+        memo.put((RoomId::new(), Document::Live), "{}".to_string());
+
+        let entries = memo.entries.lock().expect("lock");
+        assert!(
+            !entries.contains_key(&stale),
+            "an expired entry outlived the write that swept it"
+        );
+        assert_eq!(entries.len(), 1, "the live entry must survive the sweep");
     }
 
     /// The two documents are memoized separately: fetching one must not serve it as the other.

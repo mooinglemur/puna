@@ -37,8 +37,21 @@ const STATUS_GOAL: u8 = 30;
 /// outbound counters measure. A load tool that only sent would exercise half the server.
 pub const ITEMS_HANDLING_ALL: u8 = 0b111;
 
-/// The version a client claims. Must be at least pahoa's floor for the seed.
-const CLIENT_VERSION: (u32, u32, u32) = (0, 6, 8);
+/// The version a client claims.
+///
+/// **0.6.7 because that is what upstream has actually released.** pahoa is moving its own
+/// `SERVER_VERSION` to the same value until 0.6.8 ships, and the two are not independent: a room
+/// running `compatibility = 0` — tournament mode — refuses any client whose version is not
+/// **exactly** the server's (`pahoa-room/src/room.rs:505`, `IncompatibleVersion`). Under the
+/// default `compatibility = 2` only the seed's floor applies, which is `MIN_CLIENT_VERSION` = 0.5.0
+/// for any generator at or past 0.6.2.
+///
+/// So: matching pahoa exactly is what keeps this usable against a tournament-mode room, and the
+/// floor is what keeps it usable everywhere else. The floor half is asserted against the pinned
+/// crate rather than trusted; see `the_client_version_clears_pahoas_floor`. Once pahoa's move
+/// lands and the pin catches up, this is a candidate for reading `pahoa_room::SERVER_VERSION`
+/// directly — a fact from the same rev beats a number transcribed from another repository.
+const CLIENT_VERSION: (u32, u32, u32) = (0, 6, 7);
 
 /// How long a rate holds on average. Bursts happen inside it; the average comes out over it.
 const WINDOW: Duration = Duration::from_secs(10);
@@ -46,17 +59,12 @@ const WINDOW: Duration = Duration::from_secs(10);
 /// Sub-intervals a window is dealt across.
 const TICKS_PER_WINDOW: u32 = 10;
 
-/// The smallest slice of every loop that belongs to reading.
+/// How long a connected slot waits for the others **when there is no ramp** — see [`schedule`],
+/// which is where the gate does or does not exist.
 ///
-/// A client that never drains gets dropped for lagging, so sending must never be able to crowd
-/// reading out entirely — however far behind the tick schedule a slot falls.
-const MIN_READ_SLICE: Duration = Duration::from_millis(5);
-
-/// How long a connected slot waits at the starting gate for the others, measured from the moment
-/// the **last** slot was due to dial.
-///
-/// The gate exists so the run's shape is the load being applied rather than a staircase of clients
-/// still arriving; the grace exists because one slot that cannot connect must not hold the rest.
+/// The grace is there because one slot that cannot connect must not hold the rest: a bare barrier
+/// turns a single refused connection into a hang, which reads as a broken tool rather than as the
+/// one error it is.
 const START_GRACE: Duration = Duration::from_secs(30);
 
 /// Connections opened per second when nothing says otherwise. See [`schedule`].
@@ -68,6 +76,8 @@ pub struct Config {
     pub password: Option<String>,
     /// Connections opened per second across the whole run. 0 opens them all at once.
     pub connect_rate: f64,
+    /// Sockets per slot, 1 to 3: the game client, then a text client, then a tracker.
+    pub clients_per_slot: usize,
     /// Checks per second **per slot**, not for the room. See [`plan_window`].
     pub rate: f64,
     /// 0 is a flat metronome; 1 is as bursty as this gets.
@@ -81,6 +91,51 @@ pub struct Config {
     pub linger: Duration,
     /// Backstop, so a room that misbehaves cannot hang the run.
     pub timeout: Duration,
+}
+
+/// What a connection is pretending to be.
+///
+/// **One player commonly holds three sockets** — the game client, a text client and a tracker —
+/// which is why `clients_connected` counts sockets rather than players, and why a load run with one
+/// connection per slot understates a real room's fan-out by roughly a third of what it should be.
+///
+/// The difference is entirely **tags**. `TextOnly` and `Tracker` are Archipelago's non-game tags
+/// (`MultiServer.py:956`): carried together with an empty `game`, they skip the game and per-slot
+/// version checks (`Client::ignores_game`), and they make the connection `no_locations` — pahoa
+/// refuses a check or a goal from one by name. So these two connect, consume the firehose and
+/// answer heartbeats, which is exactly the job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// The game client: checks locations, receives items, goals.
+    Player,
+    /// `!hint` and chat, and the reference client's own choice of `items_handling`.
+    Text,
+    /// A tracker watching the same slot.
+    Tracker,
+}
+
+impl Role {
+    /// In connect order, so a second connection is the text client and a third is the tracker.
+    pub const EVERY: [Role; 3] = [Role::Player, Role::Text, Role::Tracker];
+
+    fn tags(self) -> Vec<&'static str> {
+        match self {
+            // `CommonContext.tags` is `{"AP"}`, and each client adds its own.
+            Role::Player => vec!["AP"],
+            Role::Text => vec!["AP", "TextOnly"],
+            Role::Tracker => vec!["AP", "Tracker"],
+        }
+    }
+
+    /// **Empty for the non-game roles, and that is what makes the tag work.** `ignores_game` needs
+    /// *both* an absent game and a non-game tag; naming the game here would put a text client back
+    /// under the slot's own version floor for no benefit.
+    fn game(self, plan: &SlotPlan) -> &str {
+        match self {
+            Role::Player => &plan.game,
+            Role::Text | Role::Tracker => "",
+        }
+    }
 }
 
 /// What one slot needs to play.
@@ -158,11 +213,12 @@ impl Drop for Connection<'_> {
     }
 }
 
-/// When one slot dials, and when it stops waiting at the gate for the others.
+/// When one slot dials, and — only when everybody dials at once — how long it waits for the rest.
 #[derive(Debug, Clone, Copy)]
 pub struct Schedule {
     pub connect_at: Instant,
-    pub gate_until: Instant,
+    /// `None` means start checking as soon as this slot is connected. See [`schedule`].
+    pub gate_until: Option<Instant>,
 }
 
 /// Deal the connects out over a ramp, one [`Schedule`] per slot.
@@ -178,21 +234,32 @@ pub struct Schedule {
 /// the default is a ramp and the storm is the thing that has to be asked for — `0`, which is kept
 /// because reproducing the storm deliberately is a legitimate measurement rather than a mistake.
 ///
-/// **The gate moves with the ramp**, which is the part that is easy to get wrong. `START_GRACE` is
-/// measured from the last slot's dial rather than from the run's start, so a ramp longer than the
-/// grace cannot open the gate under slots that have not connected yet — which would hand back the
-/// staircase of late arrivals the gate exists to remove, while looking like the ramp working.
+/// **A ramp replaces the start gate rather than sitting in front of it**, which is Troy's call and
+/// the right one. The gate — everybody connects, nobody checks until the last one is in — was
+/// written before the ramp existed, to stop a run being measured through a staircase of arrivals.
+/// A ramp *is* a staircase, deliberately, so keeping both bought two bad things and nothing else:
+/// a dead period the length of the ramp (**6.7 minutes at 2000 slots**, during which the tool looks
+/// stuck), and then a synchronized start with every slot beginning its first window in the same
+/// instant — the herd shape [`tick_phase`] exists to break up.
+///
+/// Without the gate, load builds with the population, which is what a room filling up actually
+/// looks like.
+///
+/// **The gate survives for `connect_rate = 0`**, where there is no ramp to replace it: every slot
+/// dials at once, so waiting for the rest is the only way the run has a defined start. It is a
+/// timed wait rather than a barrier alone, because one slot that cannot connect must not hold the
+/// others forever.
 pub fn schedule(origin: Instant, slots: usize, connect_rate: f64) -> Vec<Schedule> {
-    let spacing = if connect_rate > 0.0 {
+    let ramped = connect_rate > 0.0;
+    let spacing = if ramped {
         Duration::from_secs_f64(1.0 / connect_rate)
     } else {
         Duration::ZERO
     };
-    let gate_until = origin + spacing.mul_f64(slots.saturating_sub(1) as f64) + START_GRACE;
     (0..slots)
         .map(|i| Schedule {
             connect_at: origin + spacing.mul_f64(i as f64),
-            gate_until,
+            gate_until: (!ramped).then(|| origin + START_GRACE),
         })
         .collect()
 }
@@ -314,6 +381,36 @@ pub fn plan_window(budget: u32, jitter: f64, rng: &mut impl Rng) -> Vec<u32> {
         remainder -= 1;
     }
     counts
+}
+
+/// One slot's place in its own schedule: how many windows have passed, and how many checks it has
+/// been given across all of them.
+#[derive(Default)]
+struct Pace {
+    windows: u32,
+    granted: u32,
+}
+
+/// How many checks this window gets, from the rate's own running total.
+///
+/// **A window's budget is a whole number of checks, and rounding it away silently stopped the tool
+/// dead.** `--rate 0.01` is one check per slot every hundred seconds — a perfectly reasonable soak
+/// — and against a ten-second window that is a budget of `0.1`, which rounded to **zero**. Every
+/// tick then wanted nothing, forever: the slots connected, the connections stayed up, the progress
+/// line counted `checks 0`, and nothing anywhere explained why. Every rate below 0.05 did this.
+///
+/// Computed as *how many are owed by now, minus how many have been handed out* rather than by
+/// accumulating a remainder — which is the same idea with a bug in it: adding `0.1` ten times gives
+/// `0.9999999999999999`, so the first check of a 0.01 run would arrive a window late and every
+/// hundredth one after that would slip again. One multiplication against the window count cannot
+/// drift.
+fn window_budget(rate: f64, pace: &mut Pace) -> u32 {
+    pace.windows += 1;
+    let due = (rate.max(0.0) * WINDOW.as_secs_f64() * f64::from(pace.windows)).floor();
+    // Saturating because a rate cannot go backwards, but a caller could hand this one that did.
+    let budget = (due as u32).saturating_sub(pace.granted);
+    pace.granted += budget;
+    budget
 }
 
 /// Where in the tick grid one slot sits, uniform over a tick.
@@ -450,6 +547,93 @@ pub fn to_send(missing: Vec<i64>, checked: &[i64]) -> Vec<i64> {
     missing.into_iter().filter(|l| !seen.contains(l)).collect()
 }
 
+/// Open one connection in a given role and get as far as having sent `Connect`.
+async fn dial(config: &Config, plan: &SlotPlan, role: Role, totals: &Totals) -> Result<Socket> {
+    let endpoint = Endpoint::parse(&config.room)?;
+    let mut socket = connect(&endpoint).await?;
+    if socket.deflate {
+        totals.deflated.fetch_add(1, Ordering::Relaxed);
+    }
+
+    // RoomInfo arrives unprompted; the handshake is Connect in reply to it.
+    wait_for_room_info(&mut socket).await?;
+
+    socket
+        .send(&frame(&[Outbound::Connect {
+            password: config.password.as_deref(),
+            game: role.game(plan),
+            name: &plan.name,
+            // Distinct per connection: a uuid is how a client identifies itself across a
+            // reconnect, and three sockets on one slot are three clients.
+            uuid: &format!("puna-tools-{}-{role:?}", plan.slot),
+            version: Version {
+                major: CLIENT_VERSION.0,
+                minor: CLIENT_VERSION.1,
+                build: CLIENT_VERSION.2,
+                class: "Version",
+            },
+            items_handling: config.items_handling,
+            tags: role.tags(),
+            // Nothing here reads slot data, and a large seed's can be megabytes per connection.
+            slot_data: false,
+        }])?)
+        .await?;
+    Ok(socket)
+}
+
+/// Hold one non-playing connection open, consuming everything the room sends it.
+///
+/// **This is what makes a load run's fan-out honest.** A room's outbound cost is per *connection*,
+/// and a real player holds up to three — so a run with one socket per slot measures a third of the
+/// delivery a full room would do, while every rate that looks per-player is really per-socket.
+///
+/// It sends nothing after `Connect` and that is not laziness: a `TextOnly` or `Tracker` connection
+/// is `no_locations` at the server, which refuses a check or a goal from it by name. Its whole job
+/// is to drain and to answer heartbeats, and `Client::recv` answers those on the socket it owns.
+///
+/// **Items it receives are deliberately not counted.** With `items_handling` on, every one of a
+/// slot's items arrives once per connection; counting them would multiply the run's item total by
+/// the number of clients per slot and destroy the one number that can be checked against the
+/// room's own tracker.
+pub async fn observe(
+    plan: SlotPlan,
+    role: Role,
+    config: Arc<Config>,
+    totals: Arc<Totals>,
+    finished: Arc<AtomicBool>,
+    schedule: Schedule,
+) -> Result<()> {
+    tokio::time::sleep_until(tokio::time::Instant::from_std(schedule.connect_at)).await;
+
+    let mut socket = dial(&config, &plan, role, &totals).await?;
+    let _connected = handshake(&mut socket, &plan).await?;
+    let mut connection = Connection::opened(&totals);
+
+    // A wake often enough to notice the run ending, since a quiet room may send this connection
+    // nothing at all for long stretches.
+    let idle = tokio::time::sleep(Duration::from_secs(1));
+    tokio::pin!(idle);
+
+    loop {
+        if finished.load(Ordering::Relaxed) {
+            break;
+        }
+        tokio::select! {
+            message = socket.recv() => {
+                if message?.is_none() {
+                    bail!("slot {} ({role:?}) lost its connection", plan.slot);
+                }
+            }
+            _ = &mut idle => {
+                idle.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(1));
+            }
+        }
+    }
+
+    connection.closing();
+    Ok(())
+}
+
 /// Play one slot until it goals, then hold the connection open until the run ends.
 pub async fn play(
     plan: SlotPlan,
@@ -464,53 +648,18 @@ pub async fn play(
     // the ramp is one clock rather than a spawn loop that would also delay the progress watcher.
     tokio::time::sleep_until(tokio::time::Instant::from_std(schedule.connect_at)).await;
 
-    let endpoint = Endpoint::parse(&config.room)?;
-    let mut socket = connect(&endpoint).await?;
-    if socket.deflate {
-        totals.deflated.fetch_add(1, Ordering::Relaxed);
-    }
+    let mut socket = dial(&config, &plan, Role::Player, &totals).await?;
 
-    // RoomInfo arrives unprompted; the handshake is Connect in reply to it.
-    wait_for_room_info(&mut socket).await?;
-
-    socket
-        .send(&frame(&[Outbound::Connect {
-            password: config.password.as_deref(),
-            game: &plan.game,
-            name: &plan.name,
-            uuid: &format!("puna-tools-{}", plan.slot),
-            version: Version {
-                major: CLIENT_VERSION.0,
-                minor: CLIENT_VERSION.1,
-                build: CLIENT_VERSION.2,
-                class: "Version",
-            },
-            items_handling: config.items_handling,
-            tags: vec![],
-            // Nothing here reads slot data, and a large seed's can be megabytes per connection.
-            slot_data: false,
-        }])?)
-        .await?;
-
-    let mut remaining = handshake(&mut socket, &plan).await?;
+    let Connected {
+        mut remaining,
+        replayed,
+    } = handshake(&mut socket, &plan).await?;
     let mut connection = Connection::opened(&totals);
 
-    // Everybody connects before anybody checks, so the run's shape is the load being applied rather
-    // than a staircase of clients still arriving.
-    //
-    // **Timed out, because a barrier is a deadlock waiting for a bad slot.** One connection refused
-    // — a wrong password, a slot name the room does not have, a room that went down mid-start —
-    // and every other slot would wait at this gate forever, which reads as a hang rather than as
-    // the one error it is.
-    //
-    // An absolute deadline rather than a per-slot duration: every slot is waiting for the same
-    // event, so they should give up together rather than each starting its own clock from whenever
-    // it happened to arrive on the ramp.
-    let _ = tokio::time::timeout_at(
-        tokio::time::Instant::from_std(schedule.gate_until),
-        start.wait(),
-    )
-    .await;
+    // Whatever was already waiting for this slot counts as received, because it was.
+    totals
+        .items_received
+        .fetch_add(replayed.len() as u64, Ordering::Relaxed);
 
     let mut rng = StdRng::seed_from_u64(seed);
     // Shuffled so slots do not all walk their worlds in ascending id order. Two slots sharing a
@@ -530,11 +679,24 @@ pub async fn play(
     // **A spectator is not "already finished"** — it has nothing to check because it never had
     // anything, which is a different fact from a player who has checked everything. It stops
     // sending either way; only a player declares a goal or counts toward the run's end.
-    let mut goaled = remaining.is_empty();
+    //
+    // Settled **before** the gate rather than after it, because the gate now reads: a slot can
+    // receive its Goal from somebody else's resumed history while it waits, and `pump` needs the
+    // flag to exist to avoid announcing the same goal twice.
+    //
+    // **Two ways to arrive already finished, and the second is the one that used to be missed.**
+    // An empty `missing_locations` is a slot that checked everything last time; a Goal sitting in
+    // the connect-time replay is a slot that *won* last time, which the room announces at connect
+    // and which says nothing about how many locations are left. Reading only the first would leave
+    // such a slot checking a world it had already finished while the run waited for its goal.
+    let goal_replayed = plan.goal_item.is_some_and(|goal| replayed.contains(&goal));
+    let mut goaled = remaining.is_empty() || goal_replayed;
     if goaled && plan.goal_item.is_some() {
+        remaining.clear();
         tracing::info!(
             slot = plan.slot,
-            "connected with nothing left to check; declaring goal"
+            replayed_goal = goal_replayed,
+            "connected already finished; declaring goal"
         );
         socket
             .send(&frame(&[Outbound::StatusUpdate {
@@ -543,7 +705,50 @@ pub async fn play(
             .await?;
         totals.goaled.fetch_add(1, Ordering::Relaxed);
     }
+
+    // **Only when there is no ramp**: with one, this slot starts checking the moment it is
+    // connected, so load builds with the population instead of arriving all at once after a dead
+    // period the length of the ramp. See `schedule`.
+    //
+    // **Timed out, because a barrier is a deadlock waiting for a bad slot.** One connection refused
+    // — a wrong password, a slot name the room does not have, a room that went down mid-start —
+    // and every other slot would wait at this gate forever, which reads as a hang rather than as
+    // the one error it is.
+    //
+    // **AND IT KEEPS READING WHILE IT WAITS**, which the first version did not. A slot at the gate
+    // holds a live connection, and **pahoa pings, and is the only side that does** (`config.rs`:
+    // Archipelago's own clients connect with `ping_interval=None`) — 20 s, with 20 s more to
+    // answer, so 40 s of silence is a connection the room closes with `no pong within the keepalive
+    // timeout`, appearing here as a TLS EOF that names nothing. A storm of two thousand slots takes
+    // long enough to connect that this is reachable even with no ramp at all.
+    //
+    // The barrier future is pinned and polled across iterations rather than recreated: dropping a
+    // half-polled `Barrier::wait` and calling it again would count this slot's arrival twice.
+    if let Some(until) = schedule.gate_until {
+        let gate = start.wait();
+        tokio::pin!(gate);
+        let gate_deadline = tokio::time::sleep_until(tokio::time::Instant::from_std(until));
+        tokio::pin!(gate_deadline);
+        loop {
+            tokio::select! {
+                _ = &mut gate => break,
+                _ = &mut gate_deadline => break,
+                message = socket.recv() => {
+                    let Some(text) = message? else {
+                        bail!("slot {} lost its connection while waiting at the gate", plan.slot);
+                    };
+                    // Items can already be arriving here — a resumed room replays a slot's history
+                    // on connect — so this goes through the same handler rather than being dropped.
+                    if pump(&mut socket, text, &plan, &totals, &mut goaled, &mut remaining).await? {
+                        totals.goaled.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+    }
+
     let mut window: Vec<u32> = Vec::new();
+    let mut pace = Pace::default();
     let mut tick = TICKS_PER_WINDOW as usize;
     let tick_len = WINDOW / TICKS_PER_WINDOW;
 
@@ -563,6 +768,28 @@ pub async fn play(
     // true of which tick and false of the tick itself.
     let mut next_tick = Instant::now() + tick_phase(&mut rng, tick_len);
 
+    // **A read is armed at all times, and the tick is a peer branch rather than a deadline the
+    // reading stops at.** This is the shape the 2000-slot cascade asked for.
+    //
+    // The previous loop read *until* the tick was due and then left the socket alone while it
+    // planned a window, drained locations and awaited a send. At ordinary rates that gap is
+    // nothing. Under a goal cascade — 247,000 frames a second delivered across two thousand
+    // connections — it is the difference between draining and falling behind, and falling behind
+    // has a hard floor: pahoa's `budget::reserve` checks the **per-connection** share first, so a
+    // client 256 KiB behind on its own socket is dropped by design. 545 of 2000 went that way.
+    //
+    // Everything the room said pointed away from the room: 0.6 of 2 cores, the room-wide queue at
+    // 208 of 562 MiB, mailbox depth zero, shard overflow zero, and the drops stopping the moment
+    // the surviving population matched what the harness could drain.
+    //
+    // **Not `Client::split()`, which is what pahoa built for this**, because `Reader::recv`
+    // discards ping frames — the writer half owns writing — and pahoa is the only side that pings,
+    // with 40 seconds of silence being a closed connection. A true split would need the reader to
+    // hand pings to the writer; one task that always has a read armed gets the same drain behavior
+    // and keeps `Client::recv` answering them.
+    let tick_at = tokio::time::sleep_until(tokio::time::Instant::from_std(next_tick));
+    tokio::pin!(tick_at);
+
     loop {
         // **Not "this slot goaled"** -- a spectator never does, and gating on it would leave every
         // watching connection hanging after the players had finished and the run was over.
@@ -570,80 +797,62 @@ pub async fn play(
             break;
         }
 
-        // Refill the window when its ticks run out.
-        if tick >= window.len() {
-            let budget = (config.rate * WINDOW.as_secs_f64()).round() as u32;
-            window = plan_window(budget, config.jitter, &mut rng);
-            tick = 0;
-        }
-
-        // **Drop missed ticks rather than chasing them, and always read for a moment.**
-        //
-        // Found by running this against a real room: without the clamp, a slot that fell behind
-        // had every subsequent deadline already in the past, so the read loop below returned
-        // instantly forever and the client stopped draining. The room then did exactly what it
-        // should — `dropping a connection that cannot keep up` — and 9 of 14 slots were
-        // disconnected while the run stalled at 2 of 12 goaled.
-        //
-        // The failure is worth naming because of how it reads from the other side: it looks like
-        // the *room* lagging, and `pahoa_lag_disconnects_total` is a counter whose help text says
-        // it should sit at zero. A load tool that manufactures its own lag disconnects would have
-        // sent somebody hunting a server bug.
-        let now = Instant::now();
-        if next_tick < now {
-            next_tick = now;
-        }
-        let due = next_tick.max(now + MIN_READ_SLICE);
-        next_tick += tick_len;
-
-        // Read whatever arrives until this tick is due. **The read loop runs whether or not this
-        // slot still has checks to send** -- see `pump`.
-        let deadline = tokio::time::sleep_until(tokio::time::Instant::from_std(due));
-        tokio::pin!(deadline);
-        loop {
-            tokio::select! {
-                _ = &mut deadline => break,
-                message = socket.recv() => {
-                    let Some(text) = message? else {
-                        bail!("slot {} lost its connection", plan.slot);
-                    };
-                    if pump(&mut socket, text, &plan, &totals, &mut goaled, &mut remaining).await? {
-                        totals.goaled.fetch_add(1, Ordering::Relaxed);
-                    }
+        tokio::select! {
+            message = socket.recv() => {
+                let Some(text) = message? else {
+                    bail!("slot {} lost its connection", plan.slot);
+                };
+                if pump(&mut socket, text, &plan, &totals, &mut goaled, &mut remaining).await? {
+                    totals.goaled.fetch_add(1, Ordering::Relaxed);
                 }
             }
-        }
+            _ = &mut tick_at => {
+                // **Missed ticks are dropped rather than chased.** Without the clamp, a slot that
+                // fell behind had every later deadline already in the past, so this branch would
+                // fire continuously and crowd out the read — which is how an earlier version
+                // manufactured its own lag disconnects and made them look like the room's.
+                let now = Instant::now();
+                next_tick = next_tick.max(now) + tick_len;
+                tick_at.as_mut().reset(tokio::time::Instant::from_std(next_tick));
 
-        if goaled {
-            // Released on goal, so there is nothing left worth checking -- but the connection
-            // stays up and the loop above keeps draining and answering pings.
-            tick += 1;
-            continue;
-        }
+                // Refill the window when its ticks run out.
+                if tick >= window.len() {
+                    window = plan_window(
+                        window_budget(config.rate, &mut pace),
+                        config.jitter,
+                        &mut rng,
+                    );
+                    tick = 0;
+                }
+                let want = window[tick] as usize;
+                tick += 1;
 
-        let want = window[tick] as usize;
-        tick += 1;
-        if want > 0 && !remaining.is_empty() {
-            let mut packets = Vec::new();
-            let mut sent = 0;
-            while sent < want && !remaining.is_empty() {
-                let take = config.batch.min(want - sent).min(remaining.len()).max(1);
-                let locations: Vec<i64> = remaining.drain(..take).collect();
-                sent += locations.len();
-                packets.push(Outbound::LocationChecks { locations });
+                // Released on goal, so there is nothing left worth checking -- but the connection
+                // stays up and the loop keeps draining and answering pings.
+                if !goaled && want > 0 && !remaining.is_empty() {
+                    let mut packets = Vec::new();
+                    let mut sent = 0;
+                    while sent < want && !remaining.is_empty() {
+                        let take = config.batch.min(want - sent).min(remaining.len()).max(1);
+                        let locations: Vec<i64> = remaining.drain(..take).collect();
+                        sent += locations.len();
+                        packets.push(Outbound::LocationChecks { locations });
+                    }
+                    socket.send(&frame(&packets)?).await?;
+                    totals.checks_sent.fetch_add(sent as u64, Ordering::Relaxed);
+                }
+
+                if !goaled
+                    && config.say_rate > 0.0
+                    && rng.gen_bool((config.say_rate * tick_len.as_secs_f64()).min(1.0))
+                {
+                    socket
+                        .send(&frame(&[Outbound::Say {
+                            text: format!("{} is still going", plan.name),
+                        }])?)
+                        .await?;
+                }
             }
-            socket.send(&frame(&packets)?).await?;
-            totals.checks_sent.fetch_add(sent as u64, Ordering::Relaxed);
-        }
-
-        if config.say_rate > 0.0
-            && rng.gen_bool((config.say_rate * tick_len.as_secs_f64()).min(1.0))
-        {
-            socket
-                .send(&frame(&[Outbound::Say {
-                    text: format!("{} is still going", plan.name),
-                }])?)
-                .await?;
         }
     }
 
@@ -713,15 +922,43 @@ async fn wait_for_room_info(socket: &mut Socket) -> Result<()> {
     }
 }
 
+/// What connecting told us: what is left to check, and whatever was already waiting.
+struct Connected {
+    remaining: Vec<i64>,
+    /// Item ids delivered as part of connecting — the room's replay of this slot's history.
+    replayed: Vec<i64>,
+}
+
 /// Read until `Connected`, and take the to-send list **from the room**.
 ///
 /// This is what makes the tool restartable: a run stopped and started again against a part-played
 /// room picks up where the room is rather than replaying thousands of checks it has already seen,
 /// which the room answers by ignoring — load that measures nothing while hiding the real rate.
-async fn handshake(socket: &mut Socket, plan: &SlotPlan) -> Result<Vec<i64>> {
+///
+/// **The whole batch is read, not just up to `Connected`**, and that is a fix rather than a
+/// nicety. The room answers a connect with `Connected` *and* the slot's item history, commonly in
+/// one array, and returning at the first match threw the rest of it away. Two consequences, one
+/// merely cosmetic and one not:
+///
+/// - The tool under-reported items. Measured against a room's own tracker: slots 4, 5 and 6 of a
+///   six-player run were short by exactly 1, 2 and 3 — the count rising with connect order,
+///   because a ramped slot that dials later has more already waiting for it. 234 of 240.
+/// - **A resumed slot could miss its own Goal.** Point the tool at a part-played room where this
+///   slot's Goal has already been found, and the Goal arrives in precisely this replay: dropped,
+///   the slot never notices it has finished, keeps checking a world it has already won, and the
+///   run waits for a goal that has already happened.
+///
+/// It was invisible until the start gate went away — with everybody waiting for the last connect,
+/// nothing had been checked yet and every replay was empty.
+async fn handshake(socket: &mut Socket, plan: &SlotPlan) -> Result<Connected> {
+    let mut replayed = Vec::new();
     while let Some(text) = socket.recv().await? {
+        let mut remaining = None;
         for packet in serde_json::from_str::<Vec<Inbound>>(&text)? {
             match packet {
+                Inbound::ReceivedItems { items } => {
+                    replayed.extend(items.iter().map(|i| i.item));
+                }
                 Inbound::Connected {
                     slot,
                     missing_locations,
@@ -739,7 +976,7 @@ async fn handshake(socket: &mut Socket, plan: &SlotPlan) -> Result<Vec<i64>> {
                         checked = checked_locations.len(),
                         "connected"
                     );
-                    return Ok(to_send(missing_locations, &checked_locations));
+                    remaining = Some(to_send(missing_locations, &checked_locations));
                 }
                 Inbound::ConnectionRefused { errors } => {
                     return Err(anyhow!(
@@ -754,6 +991,12 @@ async fn handshake(socket: &mut Socket, plan: &SlotPlan) -> Result<Vec<i64>> {
                 }
                 _ => {}
             }
+        }
+        if let Some(remaining) = remaining {
+            return Ok(Connected {
+                remaining,
+                replayed,
+            });
         }
     }
     bail!("slot {} never reached Connected", plan.slot)
@@ -785,12 +1028,11 @@ mod tests {
         }
     }
 
-    /// **The dials are spaced and the gate is measured from the LAST one.** The second half is the
-    /// one worth pinning: a gate timed from the run's start would expire ~10 s into a 40 s ramp, so
-    /// the early slots would begin checking while the later ones were still arriving — the
-    /// staircase the gate exists to remove, restored by the fix for the storm.
+    /// **The dials are spaced, and a ramp replaces the gate rather than preceding it.** The second
+    /// half is the one worth pinning: with both, a 2000-slot run spent 6.7 minutes connected and
+    /// silent before anything was sent, and then started every slot in the same instant.
     #[test]
-    fn the_connect_ramp_spaces_the_dials_and_moves_the_gate_with_them() {
+    fn a_ramp_spaces_the_dials_and_leaves_no_gate() {
         let origin = Instant::now();
         let plan = schedule(origin, 200, 5.0);
 
@@ -802,22 +1044,76 @@ mod tests {
             "the ramp must not go backwards"
         );
 
-        assert_eq!(plan[0].gate_until, plan[199].connect_at + START_GRACE);
         assert!(
-            plan.iter().all(|s| s.gate_until == plan[0].gate_until),
-            "every slot waits for the same instant"
+            plan.iter().all(|s| s.gate_until.is_none()),
+            "a ramped slot checks as soon as it is connected"
+        );
+    }
+
+    /// **A slot waiting at the gate must still be reading.** Source lint, because the failure has
+    /// no unit test that could reach it and no symptom that names it.
+    ///
+    /// pahoa is the only side that pings (Archipelago's own clients set `ping_interval=None`), at
+    /// 20 s with 20 s more to answer — so 40 s of silence is a connection the room closes. The
+    /// default ramp for 200 slots is 39.8 s, which puts the first slot to arrive **exactly on that
+    /// boundary**, and from this side the death appears as a TLS EOF that names nothing.
+    ///
+    /// Proved against a real room rather than argued: with a room pinging every 4 s and a ramp that
+    /// holds the first slot for 40 s, draining at the gate loses nothing, and awaiting the barrier
+    /// bare loses 4 of 5 slots with four `no pong within the keepalive timeout` lines in the room's
+    /// log. This lint is what stops that being rediscovered.
+    #[test]
+    fn a_slot_keeps_reading_while_it_waits_at_the_gate() {
+        let source = include_str!("load.rs");
+        let gate = source
+            .find("start.wait()")
+            .expect("the gate must exist at all");
+        let window = &source[gate..source.len().min(gate + 1400)];
+
+        assert!(
+            window.contains("socket.recv()"),
+            "the barrier is awaited without reading the socket; a slot that goes quiet for 40s at \
+             the gate is one pahoa closes for a missing pong"
+        );
+        assert!(
+            !source.contains("timeout_at(\n"),
+            "an awaited timeout around the barrier is the shape that stopped draining"
+        );
+    }
+
+    /// **The floor comes from the pinned crate, not from a comment.** pahoa refuses a client below
+    /// `MIN_CLIENT_VERSION` for any seed from a generator at or past 0.6.2, and the failure is a
+    /// refusal on every slot at once — worth catching when the pin moves rather than in a run.
+    ///
+    /// The *other* constraint cannot be asserted here and is stated instead: a room with
+    /// `compatibility = 0` demands an exact match with pahoa's own `SERVER_VERSION`, which lives in
+    /// `pahoa-room`. This crate reaches that only transitively, so the two are kept equal by hand
+    /// until it is worth depending on directly.
+    #[test]
+    fn the_client_version_clears_pahoas_floor() {
+        let claimed =
+            pahoa_multidata::Version::new(CLIENT_VERSION.0, CLIENT_VERSION.1, CLIENT_VERSION.2);
+
+        assert!(
+            claimed >= pahoa_multidata::MIN_CLIENT_VERSION,
+            "a client claiming {claimed} is refused by any modern seed"
         );
     }
 
     /// Zero is the storm, kept on purpose: opening every connection at once is a measurement worth
-    /// being able to take, and it is what the first live run did by accident.
+    /// being able to take, and it is what the first live run did by accident. **It is also the one
+    /// case that still gates**, since there is no ramp to give the run a shape instead.
     #[test]
-    fn a_connect_rate_of_zero_opens_everything_at_once() {
+    fn a_connect_rate_of_zero_opens_everything_at_once_and_keeps_the_gate() {
         let origin = Instant::now();
         let plan = schedule(origin, 200, 0.0);
 
         assert!(plan.iter().all(|s| s.connect_at == origin));
-        assert_eq!(plan[0].gate_until, origin + START_GRACE);
+        assert!(
+            plan.iter()
+                .all(|s| s.gate_until == Some(origin + START_GRACE)),
+            "with no ramp, waiting for the others is the only defined start"
+        );
     }
 
     /// A one-slot run has no ramp to speak of, and must not underflow working that out.
@@ -828,7 +1124,7 @@ mod tests {
 
         assert_eq!(plan.len(), 1);
         assert_eq!(plan[0].connect_at, origin);
-        assert_eq!(plan[0].gate_until, origin + START_GRACE);
+        assert!(plan[0].gate_until.is_none(), "nobody to wait for");
         assert!(schedule(origin, 0, 5.0).is_empty());
     }
 
@@ -887,6 +1183,41 @@ mod tests {
             "the tick clock must start on this slot's own phase, not on a shared instant: {}",
             starts[0]
         );
+    }
+
+    /// **A rate below one check per window still checks.** The reported failure: `--rate 0.01`
+    /// connected every slot and then sent nothing at all, because 0.01 × 10 s rounded to a budget
+    /// of zero and every tick honestly wanted nothing.
+    #[test]
+    fn a_rate_smaller_than_one_check_per_window_is_carried_rather_than_rounded_away() {
+        let mut pace = Pace::default();
+        let budgets: Vec<u32> = (0..10).map(|_| window_budget(0.01, &mut pace)).collect();
+
+        assert_eq!(
+            budgets.iter().sum::<u32>(),
+            1,
+            "one check per 100s means exactly one in ten windows: {budgets:?}"
+        );
+        assert_eq!(*budgets.last().unwrap(), 1, "and it lands on the tenth");
+
+        // The old behavior, for the record: this is what the tool did for any rate under 0.05.
+        assert_eq!((0.01f64 * WINDOW.as_secs_f64()).round() as u32, 0);
+    }
+
+    /// The average has to come out true over a long run, at rates that do not divide evenly.
+    #[test]
+    fn the_carried_budget_holds_the_rate_over_time() {
+        for rate in [0.01, 0.037, 0.1, 0.37, 1.0, 2.5] {
+            let mut pace = Pace::default();
+            let windows = 100;
+            let total: u32 = (0..windows).map(|_| window_budget(rate, &mut pace)).sum();
+            let want = rate * WINDOW.as_secs_f64() * f64::from(windows);
+
+            assert!(
+                (f64::from(total) - want).abs() <= 1.0,
+                "rate {rate}: sent {total} where {want} was asked for"
+            );
+        }
     }
 
     /// Zero jitter is the flat metronome, kept so a run can be made boring on purpose.

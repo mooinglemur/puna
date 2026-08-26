@@ -20,9 +20,19 @@
 //! keep open. Serving the last known state with an "as of" stamp is better than an error page, and
 //! it is also what makes the shared cache shared — a per-process one would multiply upstream
 //! fetches by the replica count instead of amortizing them.
+//!
+//! ## The documents cross this boundary as TEXT, never as a `serde_json::Value`
+//!
+//! The column is `jsonb` and the tracker tier is a proxy: it serves these documents back verbatim
+//! and hashes them for an `ETag`, so on the room-scoped path nothing here ever needs their
+//! structure. Handing a `Value` over meant parsing on the read, cloning the tree, and rendering it
+//! again — three times the peak of a document that is 17.6 MiB on the wire for a 2000-slot room,
+//! which is what OOM-killed the tier. So the read casts to text in Postgres and the write casts
+//! back, and the merge of the two documents happens **in SQL** rather than by reading the column
+//! into this process first.
 
 use chrono::{DateTime, Utc};
-use diesel::sql_types::{Integer, Jsonb, Nullable, Text, Timestamptz, Uuid as SqlUuid};
+use diesel::sql_types::{Integer, Nullable, Text, Timestamptz, Uuid as SqlUuid};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 
 use crate::ids::{RoomId, TrackerId};
@@ -99,11 +109,47 @@ pub async fn resolve(
 }
 
 /// The last documents a proxy fetch saw, and when.
+///
+/// Each is the document's own JSON **text**, exactly as it will be served — see the note at the top
+/// of this module for why it is not a `serde_json::Value`.
 #[derive(Debug, Clone)]
 pub struct CachedDocuments {
-    pub live: Option<serde_json::Value>,
-    pub statics: Option<serde_json::Value>,
+    pub live: Option<String>,
+    pub statics: Option<String>,
     pub at: DateTime<Utc>,
+}
+
+impl CachedDocuments {
+    /// Take one document out, rather than cloning it.
+    ///
+    /// A caller wants exactly one of the two and then owns it; at 17.6 MiB a clone is not a detail.
+    pub fn take(&mut self, kind: Kind) -> Option<String> {
+        match kind {
+            Kind::Live => self.live.take(),
+            Kind::Static => self.statics.take(),
+        }
+    }
+}
+
+/// Which of a room's two tracker documents a cache entry is for.
+///
+/// The web tier has its own `Document` for the same distinction, because it also carries the
+/// upstream path and the cache window — neither of which belongs in a model. This exists so
+/// [`store`] can be told which key to write without being handed a string, where the only two
+/// valid values would live in another crate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Live,
+    Static,
+}
+
+impl Kind {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Live => LIVE_KEY,
+            Self::Static => STATIC_KEY,
+        }
+    }
 }
 
 /// The two documents share one column, under these keys.
@@ -120,67 +166,89 @@ pub async fn cached(
 ) -> Result<Option<CachedDocuments>, diesel::result::Error> {
     #[derive(diesel::QueryableByName)]
     struct Row {
-        #[diesel(sql_type = Nullable<Jsonb>)]
-        last_tracker_doc: Option<serde_json::Value>,
+        #[diesel(sql_type = Nullable<Text>)]
+        live: Option<String>,
+        #[diesel(sql_type = Nullable<Text>)]
+        statics: Option<String>,
         #[diesel(sql_type = Nullable<Timestamptz>)]
         last_tracker_at: Option<DateTime<Utc>>,
     }
 
-    let rows: Vec<Row> =
-        diesel::sql_query("SELECT last_tracker_doc, last_tracker_at FROM rooms WHERE id = $1")
-            .bind::<SqlUuid, _>(room)
-            .load(conn)
-            .await?;
+    // **Postgres renders each document to text and this process never parses it.** The keys are
+    // bound rather than interpolated -- they are compile-time constants, not input, but binding
+    // them is what keeps `store`'s idea of the keys and this one from being two things that could
+    // drift. `->` then `::text` rather than `->>`, because the two agree for an object and only the
+    // first stays valid JSON for anything else.
+    let rows: Vec<Row> = diesel::sql_query(
+        "SELECT (last_tracker_doc -> $2)::text AS live,
+                (last_tracker_doc -> $3)::text AS statics,
+                last_tracker_at
+           FROM rooms WHERE id = $1",
+    )
+    .bind::<SqlUuid, _>(room)
+    .bind::<Text, _>(LIVE_KEY)
+    .bind::<Text, _>(STATIC_KEY)
+    .load(conn)
+    .await?;
 
     let Some(row) = rows.into_iter().next() else {
         return Ok(None);
     };
-    let (Some(doc), Some(at)) = (row.last_tracker_doc, row.last_tracker_at) else {
+    let Some(at) = row.last_tracker_at else {
         return Ok(None);
     };
+    if row.live.is_none() && row.statics.is_none() {
+        return Ok(None);
+    }
 
     Ok(Some(CachedDocuments {
-        live: doc.get(LIVE_KEY).cloned(),
-        statics: doc.get(STATIC_KEY).cloned(),
+        live: row.live,
+        statics: row.statics,
         at,
     }))
 }
 
-/// Store what a fetch returned, if it is small enough to be worth storing.
+/// Store one document, if it is small enough to be worth storing.
 ///
 /// **Over the cap the column is left alone rather than truncated**, and the caller says so on the
 /// page. A truncated tracker document is not a smaller tracker document; it is invalid JSON that
 /// would fail to parse on every later read, turning a size problem into a permanent one.
+///
+/// **`max_bytes` bounds one document rather than the pair**, which is a change from the form that
+/// merged in Rust: the merge is now a SQL `||`, so this side never holds both at once and has
+/// nothing to measure the pair with. The column's worst case is therefore twice the cap. That is
+/// the better bargain anyway — under the old rule a live document that fit was refused because the
+/// static one beside it did not.
+///
+/// The merge is server-side for the same reason the read casts to text: doing it here meant reading
+/// the column back, parsing it, and re-rendering it on every write, which is exactly the cost this
+/// module exists to stop paying. It also cannot evict the other key, which is what the read-modify-
+/// write was for.
+///
+/// `body` is parsed **by Postgres** on the cast to `jsonb`, so a room that answers with something
+/// that is not JSON fails here rather than being cached. That is an `Err`, and the caller warns:
+/// the document is still served, because the room is what said it.
 pub async fn store(
     conn: &mut AsyncPgConnection,
     room: RoomId,
-    live: Option<&serde_json::Value>,
-    statics: Option<&serde_json::Value>,
+    kind: Kind,
+    body: &str,
     max_bytes: usize,
 ) -> Result<bool, diesel::result::Error> {
-    let mut doc = serde_json::Map::new();
-    if let Some(live) = live {
-        doc.insert(LIVE_KEY.to_string(), live.clone());
-    }
-    if let Some(statics) = statics {
-        doc.insert(STATIC_KEY.to_string(), statics.clone());
-    }
-    if doc.is_empty() {
-        return Ok(false);
-    }
-
-    let value = serde_json::Value::Object(doc);
-    // Measured on the rendered form, because that is what Postgres stores and what a later read
-    // has to parse.
-    if serde_json::to_vec(&value).map_or(true, |bytes| bytes.len() > max_bytes) {
+    if body.len() > max_bytes {
         return Ok(false);
     }
 
     diesel::sql_query(
-        "UPDATE rooms SET last_tracker_doc = $2, last_tracker_at = now() WHERE id = $1",
+        "UPDATE rooms
+            SET last_tracker_doc = COALESCE(last_tracker_doc, '{}'::jsonb)
+                                   || jsonb_build_object($2::text, $3::jsonb),
+                last_tracker_at = now()
+          WHERE id = $1",
     )
     .bind::<SqlUuid, _>(room)
-    .bind::<Jsonb, _>(value)
+    .bind::<Text, _>(kind.key())
+    .bind::<Text, _>(body)
     .execute(conn)
     .await?;
     Ok(true)

@@ -27,8 +27,16 @@ room-load — synthetic check traffic against a running Puna room
   --slots LIST       which slots to play: 1-8, 1,3,5, or all       (default all)
   --connect-rate N   connections opened per second. 0 opens them
                      all at once, which is a connect storm          (default 5)
+  --clients-per-slot N  sockets per slot, 1-3: the game client, then
+                     a text client, then a tracker. The extra two
+                     only consume the firehose and answer
+                     heartbeats -- which is what a real player's
+                     three clients do, and what makes the room's
+                     fan-out realistic                              (default 1)
   --rate N           checks per second PER SLOT. The room's offered
                      load is this times the number of active slots (default 0.5)
+                     Rates below one check per ten seconds are fine:
+                     0.01 is one check per slot every 100 seconds
   --jitter 0..1      how bursty. The rate holds on average over ten
                      seconds and swings hard inside it              (default 0.8)
   --batch N          locations per LocationChecks packet             (default 1)
@@ -73,6 +81,7 @@ async fn main() -> Result<()> {
             "password",
             "slots",
             "connect-rate",
+            "clients-per-slot",
             "rate",
             "jitter",
             "batch",
@@ -92,6 +101,7 @@ async fn main() -> Result<()> {
         room: args.require("room")?.to_string(),
         password: args.text("password").map(String::from),
         connect_rate: args.get("connect-rate", load::DEFAULT_CONNECT_RATE)?,
+        clients_per_slot: args.get("clients-per-slot", 1usize)?.clamp(1, 3),
         rate: args.get("rate", 0.5)?,
         jitter: args.get("jitter", 0.8)?,
         batch: args.get("batch", 1usize)?.max(1),
@@ -101,7 +111,7 @@ async fn main() -> Result<()> {
         timeout: args::duration(args.text("timeout").unwrap_or("30m"))?,
     });
 
-    let plans = read_generation(args.require("generation")?)?;
+    let (plans, locations) = read_generation(args.require("generation")?)?;
     let wanted = select(args.text("slots").unwrap_or("all"), &plans)?;
     let plans: Vec<SlotPlan> = plans
         .into_iter()
@@ -121,47 +131,116 @@ async fn main() -> Result<()> {
         config.rate,
         config.jitter
     );
+    // Computed once, here, so every slot's ramp position and the gate they share come off one
+    // clock. See `load::schedule` for why the connects are dealt out at all. **Sized to
+    // CONNECTIONS, not slots** — three clients per slot is three dials, and ramping only the game
+    // clients would let the other two thirds arrive as a storm.
+    let schedules = load::schedule(
+        Instant::now(),
+        plans.len() * config.clients_per_slot,
+        config.connect_rate,
+    );
+    let ramp = match (schedules.first(), schedules.last()) {
+        (Some(first), Some(last)) => last.connect_at - first.connect_at,
+        _ => Duration::ZERO,
+    };
+    if ramp > Duration::ZERO {
+        println!(
+            "  connecting over {} at {}/s; each slot starts checking as soon as it is up, so load \
+             builds with the population",
+            humanize(ramp),
+            config.connect_rate
+        );
+    } else {
+        println!("  connecting all at once; nobody checks until every slot is up");
+    }
+
+    // **When the first check will land, and how long the whole thing would take.** A slow rate is a
+    // legitimate soak and is indistinguishable from a stuck tool until something arrives: at 0.01/s
+    // that is a hundred seconds of `checks 0` on a run doing exactly what it was told.
+    //
+    // The first check comes one window after the FIRST slot connects, since a ramped run no longer
+    // waits for the rest — where the last slot's world is not finished until a ramp later, which is
+    // why only the full-run figure carries it.
+    let first_check = Duration::from_secs_f64(1.0 / config.rate.max(f64::MIN_POSITIVE));
+    if config.rate > 0.0 && locations > 0 {
+        let full = ramp + Duration::from_secs_f64(locations as f64 / config.rate);
+        println!(
+            "  {locations} locations per slot at {}/s: first check ~{} in, ~{} for a fresh run",
+            config.rate,
+            humanize(first_check),
+            humanize(full)
+        );
+        if full > config.timeout {
+            println!(
+                "  NOTE: --timeout is {}, so this run would be cut short unless the room is \
+                 already part-played",
+                humanize(config.timeout)
+            );
+        }
+    }
     // **The per-slot rate is not the room's load, and the difference is two multiplications.**
     // Every check the room accepts is announced to every connection, so the work it does is the
     // product, and a rate that reads as gentle per player is not gentle at two hundred of them.
+    let connections = plans.len() * config.clients_per_slot;
     println!(
-        "  ~{:.1} checks/s offered in total; each is announced to every connection, so ~{:.0} \
-         messages/s to deliver",
+        "  ~{:.1} checks/s offered in total; each is announced to every one of {connections} \
+         connections, so ~{:.0} messages/s to deliver",
         config.rate * plans.len() as f64,
-        config.rate * plans.len() as f64 * plans.len() as f64
+        config.rate * plans.len() as f64 * connections as f64
     );
-
-    // Computed once, here, so every slot's ramp position and the gate they share come off one
-    // clock. See `load::schedule` for why the connects are dealt out at all.
-    let schedules = load::schedule(Instant::now(), plans.len(), config.connect_rate);
-    if let (Some(first), Some(last)) = (schedules.first(), schedules.last()) {
-        let span = last.connect_at - first.connect_at;
-        if span > Duration::ZERO {
-            println!(
-                "  connecting over {:?} at {}/s",
-                span.max(Duration::from_secs(1)),
-                config.connect_rate
-            );
-        }
+    if config.clients_per_slot > 1 {
+        println!(
+            "  {} sockets per slot: {}",
+            config.clients_per_slot,
+            load::Role::EVERY
+                .iter()
+                .take(config.clients_per_slot)
+                .map(|r| format!("{r:?}"))
+                .collect::<Vec<_>>()
+                .join(" + ")
+        );
     }
 
     let totals = Arc::new(Totals::default());
     let finished = Arc::new(AtomicBool::new(false));
+    // Sized to the playing slots alone: an observer never waits at the gate, having nothing to
+    // start doing. A barrier expecting arrivals that never come would hold the run open.
     let start = Arc::new(Barrier::new(plans.len()));
 
+    // **Interleaved per slot, not role by role.** A player opens their game client, their text
+    // client and their tracker together, so this is both the realistic arrival order and the one
+    // that grows the population evenly — three separate waves would put every tracker at the end.
     let mut tasks = Vec::new();
     for (i, plan) in plans.into_iter().enumerate() {
         let slot = plan.slot;
-        tasks.push(tokio::spawn(load::play(
-            plan,
-            Arc::clone(&config),
-            Arc::clone(&totals),
-            Arc::clone(&finished),
-            Arc::clone(&start),
-            // A per-slot seed, so slots burst independently rather than in lockstep.
-            0xC0FFEE ^ u64::from(slot) ^ (i as u64) << 32,
-            schedules[i],
-        )));
+        for (r, role) in load::Role::EVERY
+            .iter()
+            .take(config.clients_per_slot)
+            .enumerate()
+        {
+            let schedule = schedules[i * config.clients_per_slot + r];
+            tasks.push(match role {
+                load::Role::Player => tokio::spawn(load::play(
+                    plan.clone(),
+                    Arc::clone(&config),
+                    Arc::clone(&totals),
+                    Arc::clone(&finished),
+                    Arc::clone(&start),
+                    // A per-slot seed, so slots burst independently rather than in lockstep.
+                    0xC0FFEE ^ u64::from(slot) ^ (i as u64) << 32,
+                    schedule,
+                )),
+                other => tokio::spawn(load::observe(
+                    plan.clone(),
+                    *other,
+                    Arc::clone(&config),
+                    Arc::clone(&totals),
+                    Arc::clone(&finished),
+                    schedule,
+                )),
+            });
+        }
     }
 
     let watcher = tokio::spawn(watch(
@@ -169,6 +248,7 @@ async fn main() -> Result<()> {
         Arc::clone(&finished),
         Arc::clone(&config),
         players as u64,
+        first_check,
     ));
 
     for task in tasks {
@@ -220,7 +300,13 @@ async fn main() -> Result<()> {
 /// **The linger is the interesting part of the run, not politeness.** When the last player goals,
 /// auto-release empties every unfinished world at once — the biggest `to_slot` burst a room ever
 /// produces. Closing at the moment of the last goal would measure everything except it.
-async fn watch(totals: Arc<Totals>, finished: Arc<AtomicBool>, config: Arc<Config>, players: u64) {
+async fn watch(
+    totals: Arc<Totals>,
+    finished: Arc<AtomicBool>,
+    config: Arc<Config>,
+    players: u64,
+    first_check: Duration,
+) {
     let began = std::time::Instant::now();
     let mut all_goaled_at: Option<std::time::Instant> = None;
     let mut ticker = tokio::time::interval(Duration::from_secs(2));
@@ -235,8 +321,21 @@ async fn watch(totals: Arc<Totals>, finished: Arc<AtomicBool>, config: Arc<Confi
         // most of the run still leaves the totals climbing, so without this the display reads as a
         // full house doing less work rather than as a smaller run doing its share.
         let dropped = totals.dropped.load(Ordering::Relaxed);
+        let sent = totals.checks_sent.load(Ordering::Relaxed);
+        // **While nothing has been sent yet, say when something will be.** This is the whole of the
+        // "it just sits there" report: a long ramp and a slow rate mean minutes of `checks 0` on a
+        // run doing exactly what it was told, and a number counting down is the difference between
+        // waiting and wondering.
+        let waiting = if sent == 0 && began.elapsed() < first_check {
+            format!(
+                "  (first check in ~{})",
+                humanize(first_check - began.elapsed())
+            )
+        } else {
+            String::new()
+        };
         println!(
-            "  {:>5}s  connected {}{}  checks {}  items {}  goaled {goaled}/{players}",
+            "  {:>5}s  connected {}{}  checks {sent}  items {}  goaled {goaled}/{players}{waiting}",
             began.elapsed().as_secs(),
             totals.connected.load(Ordering::Relaxed),
             if dropped > 0 {
@@ -244,7 +343,6 @@ async fn watch(totals: Arc<Totals>, finished: Arc<AtomicBool>, config: Arc<Confi
             } else {
                 String::new()
             },
-            totals.checks_sent.load(Ordering::Relaxed),
             totals.items_received.load(Ordering::Relaxed),
         );
         // **Flushed, because stdout to a file is block-buffered.** A run of any length is one you
@@ -282,7 +380,7 @@ async fn watch(totals: Arc<Totals>, finished: Arc<AtomicBool>, config: Arc<Confi
 /// **With `pahoa-multidata`**, the same parser Puna and pahoa use, so what this believes about a
 /// room cannot drift from what the room believes. A second reader here would be a second thing to
 /// keep in step with a format neither repository owns.
-fn read_generation(path: &str) -> Result<Vec<SlotPlan>> {
+fn read_generation(path: &str) -> Result<(Vec<SlotPlan>, usize)> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {path}"))?;
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes))
         .with_context(|| format!("{path} is not a zip"))?;
@@ -332,7 +430,28 @@ fn read_generation(path: &str) -> Result<Vec<SlotPlan>> {
             orphan.game
         );
     }
-    Ok(plans)
+    // The largest world in the seed, which is what a fresh run's length is bounded by. Read from
+    // the multidata rather than counted after connecting, because the estimate is wanted at
+    // startup — and a resumed run against a part-played room will finish sooner than it says.
+    let locations = plans
+        .iter()
+        .map(|p| data.locations.count_for(p.slot))
+        .max()
+        .unwrap_or(0);
+
+    Ok((plans, locations))
+}
+
+/// A duration a person reads at a glance rather than `Duration`'s own debug shape.
+fn humanize(d: Duration) -> String {
+    let secs = d.as_secs_f64();
+    if secs < 90.0 {
+        format!("{secs:.0}s")
+    } else if secs < 5400.0 {
+        format!("{:.0}m", secs / 60.0)
+    } else {
+        format!("{:.1}h", secs / 3600.0)
+    }
 }
 
 /// `all`, `1,3,5`, `1-8`, or any combination of the last two.
