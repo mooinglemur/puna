@@ -63,6 +63,8 @@ pub const PAHOA_SERVE_OPTS: &[Opt] = &[
     value("--save-dir"),
     value("--save-interval"),
     value("--outbound-budget"),
+    value("--shards"),
+    value("--shard-queue-depth"),
     value("--log-level"),
     value("--log-format"),
     flag("--journal"),
@@ -261,6 +263,30 @@ pub fn serve(spec: &RoomSpec) -> Vec<String> {
         crate::spec::room::outbound_budget_mib(spec.slot_count),
     );
 
+    // The fan-out, for the same reason and one more.
+    //
+    // pahoa derives both from the seed when they are absent, and its derivation is the one
+    // `spec::room` transcribes -- so passing them changes nothing about how the room runs. What it
+    // changes is who owns the number the CONTAINER is sized against: the shard inboxes reserve
+    // `shards × depth × 72` bytes at startup, and that memory sits **outside**
+    // `--outbound-budget`'s accounting entirely, because the budget is charged only once a shard
+    // has expanded a broadcast into per-connection frames. Confirmed by pahoa when asked, and
+    // visible in the run that prompted the flags: the room queued zero budgeted bytes while its
+    // shards overflowed.
+    //
+    // So `memory_limit_bytes` adds a term for it, and this is what makes that term a fact rather
+    // than a guess about another repository's defaults.
+    //
+    // Both are BOUNDED on pahoa's side rather than merely floored -- 1..=32 and 4096..=65536 -- on
+    // the grounds that these are numbers an orchestrator renders from a template, so a slipped
+    // decimal should refuse to start rather than spawn a thousand shards. `spec::room` clamps to
+    // the same ranges, so a value that would be refused is unrepresentable here.
+    args.value("--shards", crate::spec::room::shards(spec.slot_count))
+        .value(
+            "--shard-queue-depth",
+            crate::spec::room::shard_queue_depth(spec.slot_count),
+        );
+
     args.value("--save-dir", SAVE_DIR)
         .value("--save-interval", spec.save_interval_secs)
         .value("--tls-cert", TLS_CERT_PATH)
@@ -326,6 +352,11 @@ mod tests {
                 // actually in use. A number here in the millions is this option's unit being got
                 // wrong again; see `room::outbound_budget_mib`.
                 "--outbound-budget=64",
+                // 96 slots is 288 expected connections, so one shard per 512 lands on the floor of
+                // 2 and the depth on its own floor of 4096 -- the sizing every room ran at before
+                // either knob existed. These grow only for rooms big enough to need them.
+                "--shards=2",
+                "--shard-queue-depth=4096",
                 "--save-dir=/var/lib/pahoa",
                 "--save-interval=30",
                 "--tls-cert=/etc/pahoa/tls/tls.crt",
