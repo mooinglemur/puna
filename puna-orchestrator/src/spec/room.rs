@@ -253,30 +253,74 @@ pub fn shards(slot_count: i32) -> i64 {
 
 /// How far behind one shard may fall before it starts closing connections — `--shard-queue-depth`.
 ///
-/// **The two knobs multiply, which is why this takes the width into account.** What a shard has to
-/// absorb is a burst from the connections *it* owns, so halving the fan-out doubles what each shard
-/// needs to hold. Deriving it from [`shards`] rather than from the slot count alone is what keeps
-/// the pair coherent.
+/// **This is the one number Puna does NOT take from pahoa**, and the divergence is deliberate. Their
+/// default is per-connection; the burst that actually overflows a Puna room is per-*release*, and
+/// the two are unrelated quantities.
 ///
-/// That product is the arithmetic the dev-cluster run failed: at two shards a 2000-slot room's
-/// shards owned ~3000 connections each against a flat 4096, which is **1.4 messages per
-/// connection** — less than one broadcast apiece.
+/// ## Why the width does not size this, and why widening it did not help
 ///
-/// Transcribed from `config::shard_queue_depth_for`. The floor is the constant every room ran at
-/// before either knob existed, and it has never been the thing that failed on its own.
+/// `Shards::broadcast` enqueues one copy of the message into **every** shard's inbox. So the number
+/// of broadcasts a room can buffer is exactly the depth, *however many shards there are* — widening
+/// the fan-out multiplies the total memory and leaves broadcast headroom exactly where it was. That
+/// is why the second dev-cluster run collapsed at the same point as the first, on 12 shards instead
+/// of 2, with CPU at **0.3 of 2 cores**: nothing was compute-bound and nothing had more room.
+///
+/// ## What the burst actually is
+///
+/// A release fans out twice. The full feed chunks 140 items into one broadcast and is cheap. The
+/// scoped feed does not amortize at all — `room.rs` ends a release with
+///
+/// ```text
+/// for (target, messages) in scoped {
+///     for chunk in messages.chunks(PRINT_JSON_CHUNK) {
+///         out.broadcast(Recipients::SlotScopedText(target), chunk);
+///     }
+/// }
+/// ```
+///
+/// **one broadcast per distinct receiver slot.** Every Puna room publishes the filtered port and
+/// `wants_filtered` defaults on, so those recipients are real. One release is therefore about
+/// `min(locations-per-slot, slots)` broadcasts, and pahoa's own note agrees: *"a 2000-slot release
+/// produces ~2,860 broadcast frames"*.
+///
+/// ## Their default is a constant, which is the whole problem
+///
+/// `shards_for` divides by 512 and `shard_queue_depth_for` multiplies the per-shard connection count
+/// by 8, so the two cancel: **4,096 for every room from 1 slot to ~5,461**, rising only once the
+/// shard count clamps at 32. The burst grows linearly with slots and their default does not grow at
+/// all, so headroom measured in concurrent releases is `4096 / slots` — about 20 at 200 slots, 8 at
+/// 500, and **2 at 2000**. The room that failed was taking 14 goals a second.
+///
+/// So this sizes against the burst instead: enough depth for
+/// [`CONCURRENT_RELEASES`](shard_queue_depth) worth of it, floored at pahoa's own constant so no
+/// small room is ever given less than it ran at before either knob existed.
+///
+/// **It is bounded by slots rather than by locations on purpose.** The receiver count caps the
+/// burst, so slots alone is an upper bound — which over-provisions a shallow seed by a few MiB of
+/// envelopes and needs nothing plumbed through [`crate::cluster::RoomSpec`] that is not already
+/// there. The safe direction, cheaply.
+///
+/// ## What this does not fix
+///
+/// Depth absorbs a *burst*. It does nothing about sustained overproduction: at 14 goals a second the
+/// room was producing broadcasts faster than it could deliver them, and a deeper queue defers that
+/// rather than preventing it. What it buys is the ability to tell the two apart — a room that
+/// collapses again with a deep queue *and* CPU pinned at its limit is a compute problem, which is a
+/// different lever and one this project has deliberately not pulled yet.
 pub fn shard_queue_depth(slot_count: i32) -> i64 {
-    /// Headroom per connection the shard owns.
-    const MESSAGES_PER_CONNECTION: i64 = 8;
+    /// How many simultaneous releases a room should absorb without closing anybody.
+    ///
+    /// One release is at most one broadcast per receiver slot, so `slots × this` is the depth that
+    /// holds that many at once. Troy's number.
+    const CONCURRENT_RELEASES: i64 = 16;
+    /// pahoa's own default, and the floor here for the same reason it is theirs: it is what every
+    /// room ran at before either knob existed, and it has never been the thing that failed alone.
     const FLOOR: i64 = 4096;
+    /// pahoa refuses more, on the grounds that a room this far behind will not catch up by queuing.
     const CEILING: i64 = 65536;
 
-    let per_shard = {
-        let connections = expected_connections(slot_count);
-        let shards = shards(slot_count);
-        (connections + shards - 1) / shards
-    };
-    per_shard
-        .saturating_mul(MESSAGES_PER_CONNECTION)
+    i64::from(slot_count.max(0))
+        .saturating_mul(CONCURRENT_RELEASES)
         .clamp(FLOOR, CEILING)
 }
 
@@ -772,33 +816,50 @@ mod tests {
         }
     }
 
-    /// pahoa's own worked table, reproduced by Puna's transcription.
+    /// The width matches pahoa exactly. The depth deliberately does not, and this states both.
     ///
-    /// Every row is theirs: the two-shard row is what the dev-cluster run actually failed at, the
-    /// twelve-shard row is what a 2000-slot room gets now, and the blast radius column is the number
-    /// this sizing exists to choose. If any of these move, Puna and pahoa have parted company about
-    /// how wide a room fans out — and since Puna passes both flags, Puna would win and the container
-    /// would be sized for a fan-out nobody asked for.
+    /// Puna passes both flags, so Puna wins wherever they disagree — which makes an *accidental*
+    /// disagreement a container sized for a fan-out nobody chose, and a deliberate one something
+    /// that has to be written down rather than discovered.
     #[test]
-    fn the_fan_out_reproduces_pahoas_own_table() {
-        // slots, shards, depth, envelope bytes
-        for (slots, want_shards, want_depth) in [
-            (1, 2, 4096),
-            (4, 2, 4096),
-            (200, 2, 4096),
-            (2000, 12, 4096),
-            (6000, 32, 4504),
-        ] {
+    fn the_width_is_pahoas_and_the_depth_is_deliberately_not() {
+        // pahoa's own worked table for the width. The two-shard row is what the first dev-cluster
+        // run failed at; the twelve-shard row is what a 2000-slot room gets now.
+        for (slots, want_shards) in [(1, 2), (4, 2), (200, 2), (2000, 12), (6000, 32)] {
             assert_eq!(shards(slots), want_shards, "{slots} slots: fan-out width");
+        }
+
+        // The depth: 16 concurrent releases' worth, floored at pahoa's constant.
+        for (slots, want_depth) in [
+            (1, 4096),
+            (200, 4096),
+            (256, 4096),
+            (500, 8000),
+            (2000, 32_000),
+            (6000, 65_536),
+        ] {
             assert_eq!(
                 shard_queue_depth(slots),
                 want_depth,
                 "{slots} slots: inbox depth"
             );
-            assert_eq!(
-                shard_queue_bytes(slots),
-                want_shards * want_depth * 72,
-                "{slots} slots: envelope reservation"
+        }
+
+        // **Never quieter than the default it overrides.** pahoa's derivation cancels to a flat
+        // 4,096 for every room up to ~5,461 slots, so this is the property that says Puna's rule is
+        // an increase everywhere rather than a trade -- if it ever went below, a room would be worse
+        // off for Puna having an opinion at all.
+        for slots in [0, 1, 4, 200, 500, 1000, 2000, 5000, 6000, i32::MAX] {
+            let pahoa_default = {
+                let per_shard = expected_connections(slots)
+                    .div_euclid(shards(slots).max(1))
+                    .max(1);
+                per_shard.saturating_mul(8).clamp(4096, 65_536)
+            };
+            assert!(
+                shard_queue_depth(slots) >= pahoa_default,
+                "{slots} slots: {} is shallower than the {pahoa_default} pahoa would have chosen",
+                shard_queue_depth(slots)
             );
         }
 
@@ -820,13 +881,35 @@ mod tests {
             );
         }
 
-        // The envelopes stay a rounding error against the limit at every size, which is what makes
-        // adding them at face value rather than with headroom the right call.
+        // The envelopes stay a small term against the limit at every size, which is what makes
+        // adding them at face value rather than with headroom the right call. 6000 slots is the
+        // worst case the bounds allow: 32 x 65,536 x 72 = 144 MiB.
         for slots in [1, 200, 2000, 6000] {
             assert!(
                 shard_queue_bytes(slots) * 20 < memory_limit_bytes(slots),
                 "{slots} slots: {} MiB of envelopes is no longer a small term",
                 shard_queue_bytes(slots) / MIB
+            );
+        }
+    }
+
+    /// The headroom this sizing exists to buy, stated in the units the failure was measured in.
+    ///
+    /// A release broadcasts once per distinct receiver slot, so a room absorbs `depth / slots`
+    /// simultaneous releases. Under pahoa's flat 4,096 a 2000-slot room absorbed **two**, and the
+    /// run that collapsed was taking fourteen goals a second.
+    #[test]
+    fn a_room_absorbs_sixteen_simultaneous_releases() {
+        for slots in [500, 1000, 2000, 4000] {
+            let concurrent = shard_queue_depth(slots) / i64::from(slots);
+            assert!(
+                concurrent >= 16,
+                "{slots} slots: only {concurrent} simultaneous releases of headroom"
+            );
+            let under_pahoas_default = 4096 / i64::from(slots);
+            assert!(
+                concurrent > under_pahoas_default,
+                "{slots} slots: no better than the {under_pahoas_default} the default gave"
             );
         }
     }
@@ -940,12 +1023,14 @@ mod tests {
         assert_eq!(memory_request_bytes(96), 240_640 * 1024 + 589_824);
         assert_eq!(memory_limit_bytes(96), 412_155_904);
 
-        // 2000 slots: 563 MiB budget + 12×4096×72 envelopes + (192 MiB + 2000×288 KiB) base.
+        // 2000 slots: 563 MiB budget + 12×32000×72 envelopes + (192 MiB + 2000×288 KiB) base.
+        // The envelope term is 26.4 MiB here rather than 3.4 -- the depth is Puna's own, sized for
+        // sixteen simultaneous releases rather than pahoa's flat 4,096.
         assert_eq!(
             memory_request_bytes(2000),
-            791_150_592 + 3_538_944 + 590_348_288 / 4
+            791_150_592 + 27_648_000 + 590_348_288 / 4
         );
-        assert_eq!(memory_limit_bytes(2000), 1_780_613_120);
+        assert_eq!(memory_limit_bytes(2000), 1_804_722_176);
     }
 
     /// The sizing is held to what the cluster actually measured, so tightening it later means
