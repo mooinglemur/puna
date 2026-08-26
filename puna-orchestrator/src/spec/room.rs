@@ -155,26 +155,55 @@ fn slot_numbers(json: &str) -> Vec<String> {
     }
 }
 
-/// The room's outbound queue cap, **which Puna sets** via `--outbound-budget`.
+/// The room's outbound queue cap **in MiB**, which is the unit `--outbound-budget` is spelled in.
 ///
-/// `max(64 MiB, slots × 3 × 96 KiB)`: three connections per slot, because one player commonly holds
-/// a game client, a text client and a tracker, at 96 KiB of headroom each. A 2000-slot room lands at
-/// 562.5 MiB, which is the number pahoa's own help text quotes.
+/// `max(64 MiB, slots × 3 × 96 KiB)` rounded **up** to a whole MiB: three connections per slot,
+/// because one player commonly holds a game client, a text client and a tracker, at 96 KiB of
+/// headroom each. A 2000-slot room lands at 562.5 MiB and is passed as 563.
 ///
 /// The expression is pahoa's `config::outbound_budget_for`, and it used to be a *transcription* of
 /// it — the same number computed twice from one input with nothing checking the two agreed. It is
-/// passed on the argv now, so this one is the number the room actually uses and
-/// [`memory_limit_bytes`] is sized against a fact rather than a guess about another repository.
-pub fn outbound_budget_bytes(slot_count: i32) -> i64 {
+/// passed on the argv now, so this is the number the room actually uses and [`memory_limit_bytes`]
+/// is sized against a fact rather than a guess about another repository.
+///
+/// ## MiB is the whole point of this function existing
+///
+/// **The first version passed bytes**, because the option's presence was checked and its *unit* was
+/// not: `main.rs` reads `--outbound-budget` as `Some(mib) => mib * 1024 * 1024`, and its help text
+/// says `<MiB>`. So `589824000` — meant as 562.5 MiB — configured **562 TiB**, and every room
+/// deployed with it had no room-wide backstop at all.
+///
+/// That failure is invisible from every direction anybody would look. pahoa accepts the value, the
+/// startup banner reports it without comment, per-connection caps still shed slow clients so lag
+/// disconnects look normal, and the only symptom is the room-wide budget never binding — which is
+/// indistinguishable from a healthy room until many clients stall at once, at which point the room
+/// queues until the kernel kills it. **It re-armed the exact OOM this milestone existed to remove.**
+///
+/// Rounded **up** rather than down so the cap is never quieter than pahoa's own default would have
+/// been, and returned in MiB so the unit is in the name and the byte value is derived from it —
+/// rather than the two being converted at a call site, which is where this went wrong.
+pub fn outbound_budget_mib(slot_count: i32) -> i64 {
     const PER_CONNECTION: i64 = 96 * 1024;
     const CONNECTIONS_PER_SLOT: i64 = 3;
     const FLOOR: i64 = 64 * 1024 * 1024;
 
     let slots = i64::from(slot_count.max(0));
-    slots
+    let bytes = slots
         .saturating_mul(CONNECTIONS_PER_SLOT)
         .saturating_mul(PER_CONNECTION)
-        .max(FLOOR)
+        .max(FLOOR);
+    // Written out rather than `div_ceil`, which is still unstable for signed integers.
+    (bytes + MIB - 1) / MIB
+}
+
+const MIB: i64 = 1024 * 1024;
+
+/// The same cap in bytes, for sizing the container against it.
+///
+/// Derived from [`outbound_budget_mib`] rather than computed beside it, so the number Puna sizes
+/// the memory limit against is exactly the number the room was told to use — including the rounding.
+pub fn outbound_budget_bytes(slot_count: i32) -> i64 {
+    outbound_budget_mib(slot_count).saturating_mul(MIB)
 }
 
 /// Everything in the process that is **not** the outbound queue: the restored save, the location
@@ -545,18 +574,70 @@ mod tests {
     #[test]
     fn the_memory_budget_matches_pahoas_heuristic() {
         // The floor: a small room does not get a cap so low it binds during ordinary play.
-        assert_eq!(outbound_budget_bytes(1), 64 * 1024 * 1024);
-        assert_eq!(outbound_budget_bytes(0), 64 * 1024 * 1024);
+        assert_eq!(outbound_budget_mib(1), 64);
+        assert_eq!(outbound_budget_mib(0), 64);
         // 228 slots is where three connections at 96 KiB each first passes the floor; at 227 the
         // formula is still below it and the floor is what binds.
-        assert_eq!(outbound_budget_bytes(227), 64 * 1024 * 1024);
-        assert_eq!(outbound_budget_bytes(228), 228 * 3 * 96 * 1024);
-        // The number pahoa's own help text quotes for a 2000-slot room.
-        assert_eq!(outbound_budget_bytes(2000), 562 * 1024 * 1024 + 512 * 1024);
+        assert_eq!(outbound_budget_mib(227), 64);
+        assert_eq!(
+            outbound_budget_mib(228),
+            (228 * 3 * 96 * 1024i64 + MIB - 1) / MIB
+        );
+        // pahoa's own heuristic puts a 2000-slot room at 562.5 MiB; rounded up so the cap is never
+        // quieter than the default it replaces.
+        assert_eq!(outbound_budget_mib(2000), 563);
+        assert!(outbound_budget_bytes(2000) >= 562 * MIB + 512 * 1024);
 
         // A negative slot count cannot come from the database, but it must not become a huge
         // request if it ever does.
-        assert_eq!(outbound_budget_bytes(-5), 64 * 1024 * 1024);
+        assert_eq!(outbound_budget_mib(-5), 64);
+    }
+
+    /// **The argv value is in MiB, and the sizing is in bytes, and they must mean the same cap.**
+    ///
+    /// This is the assertion that was missing when Puna passed `--outbound-budget=589824000`
+    /// intending 562.5 MiB and configured 562 TiB. Nothing else could have caught it: pahoa accepts
+    /// the number, the banner prints it without comment, and per-connection caps keep shedding slow
+    /// clients so a room with no room-wide backstop looks entirely normal — right up until many
+    /// clients stall at once and it queues until the kernel kills it.
+    #[test]
+    fn the_argv_budget_is_the_same_cap_the_container_is_sized_against() {
+        use crate::cluster::RoomSpec;
+        use crate::spec::args::serve;
+
+        for slots in [1, 4, 96, 200, 228, 2000] {
+            let spec = RoomSpec {
+                room_id: RoomId::new(),
+                spec_hash: "hash".into(),
+                image: "registry.example/pahoa:sha-abc123".into(),
+                base_port: 40000,
+                wants_filtered: true,
+                slot_count: slots,
+                save_interval_secs: 30,
+                use_embedded_options: true,
+            };
+
+            let arg = serve(&spec)
+                .into_iter()
+                .find_map(|a| a.strip_prefix("--outbound-budget=").map(str::to_string))
+                .expect("every room is told its own budget");
+            let mib: i64 = arg.parse().expect("a bare number of MiB");
+
+            // The unit, stated as the multiplication pahoa itself performs.
+            assert_eq!(
+                mib * MIB,
+                outbound_budget_bytes(slots),
+                "{slots} slots: the room is told {mib} MiB but sized for \
+                 {} MiB of queue",
+                outbound_budget_bytes(slots) / MIB
+            );
+            // And a sanity bound, because the failure this exists for was six orders of magnitude:
+            // no room's cap belongs anywhere near a terabyte.
+            assert!(
+                mib < 1024 * 1024,
+                "{slots} slots: a cap of {mib} MiB is not a room's outbound queue"
+            );
+        }
     }
 
     #[test]

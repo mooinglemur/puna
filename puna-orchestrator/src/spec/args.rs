@@ -251,9 +251,14 @@ pub fn serve(spec: &RoomSpec) -> Vec<String> {
     // Passing it makes Puna's value authoritative and the relationship checkable in one place --
     // see `room::memory_limit_bytes`, whose test asserts the room can always reach this cap before
     // the kernel reaches the room.
+    //
+    // **In MiB, which is the unit pahoa spells this option in** — `main.rs` multiplies what it is
+    // given by 1024×1024 and its help text says `<MiB>`. Passing bytes here is accepted, reported
+    // without comment in the startup banner, and configures a cap a million times too large; see
+    // `room::outbound_budget_mib`, which is named for its unit because of it.
     args.value(
         "--outbound-budget",
-        crate::spec::room::outbound_budget_bytes(spec.slot_count),
+        crate::spec::room::outbound_budget_mib(spec.slot_count),
     );
 
     args.value("--save-dir", SAVE_DIR)
@@ -316,9 +321,11 @@ mod tests {
                 "--bind=::",
                 "--port=40000",
                 "--filtered-port=40001",
-                // 96 slots sits on pahoa's own 64 MiB floor. Passed rather than left to the room
-                // to derive, so the memory limit is sized against the number in use.
-                "--outbound-budget=67108864",
+                // **MiB, not bytes** -- 96 slots sits on pahoa's own 64 MiB floor. Passed rather
+                // than left to the room to derive, so the memory limit is sized against the number
+                // actually in use. A number here in the millions is this option's unit being got
+                // wrong again; see `room::outbound_budget_mib`.
+                "--outbound-budget=64",
                 "--save-dir=/var/lib/pahoa",
                 "--save-interval=30",
                 "--tls-cert=/etc/pahoa/tls/tls.crt",
