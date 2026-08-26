@@ -253,9 +253,18 @@ pub fn shards(slot_count: i32) -> i64 {
 
 /// How far behind one shard may fall before it starts closing connections — `--shard-queue-depth`.
 ///
-/// **This is the one number Puna does NOT take from pahoa**, and the divergence is deliberate. Their
-/// default is per-connection; the burst that actually overflows a Puna room is per-*release*, and
-/// the two are unrelated quantities.
+/// **The larger of two bursts that scale in opposite directions**, which is pahoa's rule and was
+/// briefly Puna's alone. Their first default was per-connection only; the burst that actually
+/// overflowed a Puna room is per-*release*, and the two are unrelated quantities. Puna overrode the
+/// depth for one release, reported why, and pahoa adopted the release term verbatim in `9c382ab` —
+/// so this is a transcription again rather than a divergence, and the two agree at every size.
+///
+/// It is still **passed** rather than left to their default, and their own note on the field says
+/// why: *"it sizes the container against these, so the value it sized for and the value the room
+/// runs at must not be able to disagree."* Dropping the flag would not remove the second
+/// computation — [`shard_queue_bytes`] still needs this number to size the memory limit — it would
+/// only stop anything checking that the two agree, which is exactly how the `--outbound-budget`
+/// unit bug reached the cluster.
 ///
 /// ## Why the width does not size this, and why widening it did not help
 ///
@@ -283,17 +292,19 @@ pub fn shards(slot_count: i32) -> i64 {
 /// `min(locations-per-slot, slots)` broadcasts, and pahoa's own note agrees: *"a 2000-slot release
 /// produces ~2,860 broadcast frames"*.
 ///
-/// ## Their default is a constant, which is the whole problem
+/// ## The connection term alone was a constant, which is what made this necessary
 ///
-/// `shards_for` divides by 512 and `shard_queue_depth_for` multiplies the per-shard connection count
-/// by 8, so the two cancel: **4,096 for every room from 1 slot to ~5,461**, rising only once the
-/// shard count clamps at 32. The burst grows linearly with slots and their default does not grow at
-/// all, so headroom measured in concurrent releases is `4096 / slots` — about 20 at 200 slots, 8 at
-/// 500, and **2 at 2000**. The room that failed was taking 14 goals a second.
+/// pahoa's first derivation had only the reconnect-storm half, and `shards_for` divides by 512 while
+/// it multiplied the per-shard connection count by 8 — so the two cancelled: **4,096 for every room
+/// from 1 slot to ~5,461**, rising only once the shard count clamped at 32. The release burst grows
+/// linearly with slots and that term did not grow at all, so headroom measured in concurrent
+/// releases was `4096 / slots` — about 20 at 200 slots, 8 at 500, and **2 at 2000**. The room that
+/// failed was taking 14 goals a second.
 ///
-/// So this sizes against the burst instead: enough depth for
-/// [`CONCURRENT_RELEASES`](shard_queue_depth) worth of it, floored at pahoa's own constant so no
-/// small room is ever given less than it ran at before either knob existed.
+/// The storm term is kept rather than replaced, because it is the right model for the burst it
+/// names and dominates where the release term does not: a room past pahoa's 32-shard ceiling has
+/// each shard owning far more than 512 connections. Taking the larger costs nothing and needs no
+/// argument about which case a given room is in.
 ///
 /// **It is bounded by slots rather than by locations on purpose.** The receiver count caps the
 /// burst, so slots alone is an upper bound — which over-provisions a shallow seed by a few MiB of
@@ -308,20 +319,32 @@ pub fn shards(slot_count: i32) -> i64 {
 /// collapses again with a deep queue *and* CPU pinned at its limit is a compute problem, which is a
 /// different lever and one this project has deliberately not pulled yet.
 pub fn shard_queue_depth(slot_count: i32) -> i64 {
-    /// How many simultaneous releases a room should absorb without closing anybody.
-    ///
-    /// One release is at most one broadcast per receiver slot, so `slots × this` is the depth that
-    /// holds that many at once. Troy's number.
+    /// Headroom per connection one shard owns, for the reconnect storm. Divides by the width,
+    /// because that burst really is bounded by the connections a single shard holds.
+    const MESSAGES_PER_CONNECTION: i64 = 8;
+    /// Simultaneous releases to keep room for, for the release tail. Divides by nothing: each costs
+    /// up to one broadcast per receiver slot, and a broadcast occupies a slot in *every* shard's
+    /// inbox. Troy's number, adopted by pahoa verbatim.
     const CONCURRENT_RELEASES: i64 = 16;
     /// pahoa's own default, and the floor here for the same reason it is theirs: it is what every
     /// room ran at before either knob existed, and it has never been the thing that failed alone.
     const FLOOR: i64 = 4096;
     /// pahoa refuses more, on the grounds that a room this far behind will not catch up by queuing.
+    /// Left where it is deliberately -- broadcast headroom costs `shards × depth` and buys `depth`,
+    /// so raising the ceiling is the most expensive way to buy it. The cheap way is pahoa's next
+    /// change: stop broadcasting slot-scoped traffic to shards that own nobody.
     const CEILING: i64 = 65536;
 
-    i64::from(slot_count.max(0))
-        .saturating_mul(CONCURRENT_RELEASES)
-        .clamp(FLOOR, CEILING)
+    let slots = i64::from(slot_count.max(0));
+    let reconnect_storm = {
+        let shards = shards(slot_count);
+        // Written out rather than `div_ceil`, which is still unstable for signed integers.
+        ((expected_connections(slot_count) + shards - 1) / shards)
+            .saturating_mul(MESSAGES_PER_CONNECTION)
+    };
+    let release_tail = slots.saturating_mul(CONCURRENT_RELEASES);
+
+    reconnect_storm.max(release_tail).clamp(FLOOR, CEILING)
 }
 
 /// Memory the shard inboxes reserve up front, which **the outbound budget does not cover**.
@@ -816,13 +839,14 @@ mod tests {
         }
     }
 
-    /// The width matches pahoa exactly. The depth deliberately does not, and this states both.
+    /// Both numbers are pahoa's own derivation, and this pins the values rather than the formula.
     ///
-    /// Puna passes both flags, so Puna wins wherever they disagree — which makes an *accidental*
-    /// disagreement a container sized for a fan-out nobody chose, and a deliberate one something
-    /// that has to be written down rather than discovered.
+    /// Puna passes both flags, so Puna wins wherever the two disagree — which makes a disagreement
+    /// a container sized for a fan-out nobody chose, in silence. The depth was briefly Puna's alone;
+    /// pahoa adopted the release term in `9c382ab`, so the rows below are equally theirs and ours
+    /// and a drift in either direction fails here.
     #[test]
-    fn the_width_is_pahoas_and_the_depth_is_deliberately_not() {
+    fn the_fan_out_is_pahoas_own_derivation() {
         // pahoa's own worked table for the width. The two-shard row is what the first dev-cluster
         // run failed at; the twelve-shard row is what a 2000-slot room gets now.
         for (slots, want_shards) in [(1, 2), (4, 2), (200, 2), (2000, 12), (6000, 32)] {
@@ -845,21 +869,41 @@ mod tests {
             );
         }
 
-        // **Never quieter than the default it overrides.** pahoa's derivation cancels to a flat
-        // 4,096 for every room up to ~5,461 slots, so this is the property that says Puna's rule is
-        // an increase everywhere rather than a trade -- if it ever went below, a room would be worse
-        // off for Puna having an opinion at all.
-        for slots in [0, 1, 4, 200, 500, 1000, 2000, 5000, 6000, i32::MAX] {
-            let pahoa_default = {
-                let per_shard = expected_connections(slots)
-                    .div_euclid(shards(slots).max(1))
-                    .max(1);
-                per_shard.saturating_mul(8).clamp(4096, 65_536)
-            };
+        // **The release term is what binds on every room worth worrying about**, and that is the
+        // finding rather than an implementation detail. If it stopped dominating, the sizing would
+        // quietly go back to being connection-shaped -- the shape that gave a 2000-slot room two
+        // concurrent releases of headroom and collapsed twice.
+        let storm = |slots: i32| {
+            let shards = shards(slots);
+            ((expected_connections(slots) + shards - 1) / shards) * 8
+        };
+        for slots in [500, 1000, 2000, 4000, 6000] {
+            let release = i64::from(slots) * 16;
             assert!(
-                shard_queue_depth(slots) >= pahoa_default,
-                "{slots} slots: {} is shallower than the {pahoa_default} pahoa would have chosen",
-                shard_queue_depth(slots)
+                release > storm(slots),
+                "{slots} slots: the reconnect term ({}) now exceeds the release term ({release}), \
+                 so the depth is no longer sized against the burst that failed",
+                storm(slots)
+            );
+        }
+
+        // **The reconnect term never wins, at any size**, and that is asserted rather than assumed
+        // because the first draft of this test assumed the opposite and was wrong.
+        //
+        // It falls out of `shards_for`: below the 32-shard clamp the width is at least
+        // `connections / 512`, so the storm term is at most `512 × 8 = 4096` -- the floor -- and
+        // above the clamp it is `3 × slots / 32 × 8`, which is `0.75 × slots` against a release term
+        // of `16 × slots`. So `max()` is the release term or the floor, everywhere.
+        //
+        // Kept anyway, and transcribed rather than simplified away, because it is pahoa's
+        // expression: the redundancy is a property of their two constants rather than of the shape,
+        // and simplifying here would mean Puna silently not tracking a change to either.
+        for slots in [1, 4, 200, 256, 500, 2000, 6000, 200_000] {
+            assert!(
+                storm(slots) <= (i64::from(slots) * 16).max(4096),
+                "{slots} slots: the reconnect term ({}) now binds -- the comment above this \
+                 assertion is stale and the sizing has changed shape",
+                storm(slots)
             );
         }
 
