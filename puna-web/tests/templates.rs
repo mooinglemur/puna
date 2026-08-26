@@ -585,6 +585,62 @@ fn code_only(source: &str) -> String {
         .join("\n")
 }
 
+/// **`localtime.js` is the only file that decides how an instant is spelled.**
+///
+/// A bare `toLocaleString` renders `24/08/2026, 06.07.58` for one reader, `8/24/2026, 6:07:58 AM`
+/// for another, and **no timezone for either** — so a date that is meant to say *how stale this is*
+/// says something different to every reader and cannot be pasted, sorted or compared. `localtime.js`
+/// settled that at M26: fixed field order, and only the ZONE localized, because the zone is the one
+/// part a reader cannot infer.
+///
+/// The tracker's stale-document banner used `toLocaleString` anyway — reported from a live room —
+/// and nothing could have caught it. It renders, it is plausible, it is *correct* in the reader's own
+/// locale, and the ambiguity is invisible to whoever wrote it because their browser resolves it the
+/// way they expect. That is the whole argument for a lint rather than a code review: the failure is
+/// only visible to a reader in a different locale from the author, which on the tracker — the page
+/// built to be shared with an audience the organizers do not choose — is most of the audience.
+///
+/// **Forbids the shape, not one spelling.** `toLocaleDateString` and `toLocaleTimeString` have the
+/// same defect, so the anchor is `.toLocale`; matching only the exact call this bug used would walk
+/// straight past the next one. That lesson is [[puna-silent-breakage]] #27's, from the `.json` lint.
+///
+/// **Comments are stripped first**, and that guard is precautionary rather than currently
+/// load-bearing — stated precisely, because claiming otherwise would be the same class of error this
+/// file exists to catch. Today's explanations write `toLocaleString` without a leading dot, so they
+/// do not collide with the anchor. A comment that names the *call* — `d.as_of.toLocaleString()`, the
+/// natural way to explain what this rule refuses — does collide, and fails the lint on a correct
+/// file without it. Verified by adding exactly that comment and watching the unguarded form reject
+/// `tracker.js`. Four lints in this project have shipped with that bug.
+#[test]
+fn only_localtime_js_decides_how_an_instant_is_spelled() {
+    let dir = source("static");
+    let mut checked = 0;
+    for entry in std::fs::read_dir(&dir).expect("static/") {
+        let path = entry.expect("entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("js") {
+            continue;
+        }
+        // The one file allowed an opinion, being the one that holds it.
+        if path.file_name().and_then(|n| n.to_str()) == Some("localtime.js") {
+            continue;
+        }
+        let script = std::fs::read_to_string(&path).expect("a script");
+        checked += 1;
+        assert!(
+            !code_only(&script).contains(".toLocale"),
+            "{}: formats an instant with `.toLocale*` rather than `PunaTime.absolute`. A \
+             locale-ordered date with no zone cannot say how stale something is -- see \
+             static/localtime.js, which is the one place that decides this.",
+            path.file_name().and_then(|n| n.to_str()).unwrap_or("?")
+        );
+    }
+    // A lint that inspects nothing passes, so say how much it looked at.
+    assert!(
+        checked >= 6,
+        "expected to scan every script in static/, saw only {checked}"
+    );
+}
+
 /// **Every `popovertarget` names an `id` that exists in the same template.**
 ///
 /// A mismatched pair is the quietest possible failure: the button renders, it is focusable, it has

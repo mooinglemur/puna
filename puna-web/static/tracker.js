@@ -570,9 +570,19 @@
     }
     // The torn-down room, which for an async is most of its life. Deliberately NO start button: a
     // tracker's audience is not necessarily authorized to provision a pod.
+    //
+    // **Through `PunaTime.absolute`, not `toLocaleString`.** This banner exists to say how stale the
+    // document is, and a bare `toLocaleString` renders `24/08/2026, 06.07.58` for one reader and
+    // `8/24/2026, 6:07:58 AM` for another with no zone on either -- so the one fact it is here to
+    // convey is the one an ambiguous date cannot carry. That matters more on the tracker than
+    // anywhere else in Puna, because this is the page built to be shared with an audience the
+    // organizers do not choose. Same reasoning `localtime.js` already carries, and the same fixed
+    // field order with only the ZONE localized, which is the part a reader cannot infer.
     const when = new Date(d.as_of);
+    const stamp =
+      isNaN(when) || !window.PunaTime ? d.as_of : window.PunaTime.absolute(when.getTime());
     freshness.textContent =
-      `As of ${isNaN(when) ? d.as_of : when.toLocaleString()} — this room is not currently ` +
+      `As of ${stamp} — this room is not currently ` +
       `running, so this is the last state it reported.`;
     freshness.hidden = false;
   }
