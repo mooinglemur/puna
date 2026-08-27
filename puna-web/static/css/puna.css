@@ -1509,3 +1509,69 @@ h1 .scope {
   flex-wrap: wrap;
   margin: 0 0 0.5rem;
 }
+
+/* ---- the room-creation panel ------------------------------------------------
+ *
+ * Visually its own thing on a page that is otherwise a description of a seed, because it is the
+ * one part of that page that DOES something -- and what it does is set five policies a room then
+ * lives with, three of which cost a restart to change afterwards. So it is laid out as labelled
+ * rows rather than a line of controls: each choice gets its own row, its own set of options and
+ * room for a sentence saying what the option means.
+ *
+ * Not a `<table>`: these are form controls in labelled groups rather than tabular data, and a
+ * table would announce rows and columns to a screen reader that has no rows and columns to
+ * navigate. A two-column grid gives the same alignment with the right semantics. */
+.panel.create-room {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  margin: 1.5rem 0;
+  background: var(--surface);
+}
+
+.create-room .field {
+  display: grid;
+  grid-template-columns: 12rem 1fr;
+  gap: 0.5rem 1rem;
+  padding: 0.9rem 0;
+  border-top: 1px solid var(--border);
+}
+.create-room .field:first-of-type { border-top: 0; }
+
+/* The label column. `.label` rather than a `<label>` for the radio groups: a label points at ONE
+ * control, and pointing a group's heading at whichever radio happened to be first would make
+ * clicking it select that option. Each radio carries its own label instead. */
+.create-room .field > label,
+.create-room .field > .label {
+  font-weight: 600;
+  padding-top: 0.15rem;
+}
+
+.create-room .choices { display: flex; flex-direction: column; gap: 0.4rem; }
+.create-room .choices > label { font-weight: normal; display: flex; gap: 0.45rem; align-items: baseline; }
+.create-room .choices input[type="text"],
+.create-room .choices input[type="url"] { max-width: 28rem; }
+
+/* Every hint is rendered and all of them show until the script says otherwise, so a page with no
+ * scripting explains all the options rather than none. */
+.create-room .hint { margin: 0.15rem 0 0; }
+.js-create-room .create-room .hint[data-for][hidden] { display: none; }
+
+.create-room .actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+/* The destructive-ish one reads as secondary: a reset throws away everything typed, and it sits
+ * beside the button somebody actually came here to press. */
+.create-room .actions .secondary {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+@media (max-width: 40rem) {
+  .create-room .field { grid-template-columns: 1fr; }
+}

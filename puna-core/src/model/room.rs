@@ -159,6 +159,41 @@ impl TrackerPolicy {
     }
 }
 
+/// Whether a served patch carries the credential to connect, or only the address.
+///
+/// **The mechanism is Archipelago's, verified in its source rather than inferred.**
+/// `CommonClient.py`'s `server_loop` parses userinfo out of the address it is handed and
+/// `unquote`s both halves, and a patch's `server` field reaches that parser through `args.connect`
+/// — so `wss://<slot>:<password>@<host>:<port>` connects a client with no typing. The `unquote` is
+/// why [`crate::artifact::patch`] percent-encodes both: a slot name is arbitrary text out of a
+/// seed and may hold an `@`, a `:` or a space, any of which silently changes what the netloc is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PatchPolicy {
+    /// `host:port`, as the reference writes it. A player with a password types it.
+    Open,
+    /// The credential too, where the room or the slot has one. A patch is already served only to
+    /// its slot's owner and the room's staff, so this hands them something they are entitled to —
+    /// but it does travel with the file, which is what `Open` is for.
+    Claimed,
+}
+
+impl PatchPolicy {
+    pub fn as_sql(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Claimed => "claimed",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "open" => Some(Self::Open),
+            "claimed" => Some(Self::Claimed),
+            _ => None,
+        }
+    }
+}
+
 /// How much of a room's journal somebody who is **not an organizer** may read.
 ///
 /// This is a second question on top of [`may_see_tracker`], not a replacement for it. That one
@@ -365,6 +400,11 @@ pub struct NewRoom {
     pub spoiler_policy: Option<SpoilerPolicy>,
     /// `None` defaults from `race_mode` too: `members` for a race, `link` otherwise.
     pub tracker_policy: Option<TrackerPolicy>,
+    /// `None` keeps the column default, `open`. The creation form sends `claimed`.
+    pub patch_policy: Option<PatchPolicy>,
+    /// A remote-admin password for pahoa's `!admin login`. `None` sets none, which is the
+    /// ordinary case: Puna's console drives a room over the bearer-token admin API instead.
+    pub server_password: Option<String>,
     /// `None` defaults from `race_mode` as well: `feed` for a race, `full` otherwise.
     ///
     /// **Open by default, unlike the two above**, and deliberately so. Those guard information the
@@ -401,6 +441,8 @@ impl NewRoom {
             spoiler_policy: None,
             tracker_policy: None,
             journal_policy: None,
+            patch_policy: None,
+            server_password: None,
             wants_filtered: true,
             use_embedded_options: true,
             save_interval_secs: 30,
@@ -435,6 +477,8 @@ pub struct Room {
     pub tracker_policy: TrackerPolicy,
     /// How much of the journal a non-organizer gets, once `tracker_policy` has let them reach it.
     pub journal_policy: JournalPolicy,
+    /// Whether a served patch carries the credential to connect, or only the address.
+    pub patch_policy: PatchPolicy,
     pub wants_filtered: bool,
 
     pub state: String,
@@ -492,6 +536,8 @@ struct RoomRow {
     tracker_policy: String,
     #[diesel(sql_type = Text)]
     journal_policy: String,
+    #[diesel(sql_type = Text)]
+    patch_policy: String,
     #[diesel(sql_type = Bool)]
     wants_filtered: bool,
     #[diesel(sql_type = Text)]
@@ -542,6 +588,9 @@ impl From<RoomRow> for Room {
             // reads as the most restrictive answer, never the default one.
             journal_policy: JournalPolicy::parse(&row.journal_policy)
                 .unwrap_or(JournalPolicy::Disabled),
+            // Unknown reads as `Open`, which embeds no credential -- the restrictive direction
+            // here is the one that discloses less, same rule as the policies above.
+            patch_policy: PatchPolicy::parse(&row.patch_policy).unwrap_or(PatchPolicy::Open),
             wants_filtered: row.wants_filtered,
             state: row.state,
             state_changed_at: row.state_changed_at,
@@ -559,7 +608,8 @@ const ROOM_COLUMNS: &str = "id, name, environment::text AS environment, generati
                             desired_state::text AS desired_state, slot_auth::text AS slot_auth, \
                             password, spoiler_policy::text AS spoiler_policy, tracker_id, journal_id, \
                             tracker_policy::text AS tracker_policy, \
-                            journal_policy::text AS journal_policy, wants_filtered, \
+                            journal_policy::text AS journal_policy, \
+                            patch_policy::text AS patch_policy, wants_filtered, \
                             state::text AS state, state_changed_at, desired_at, advertised_host, \
                             advertised_port, advertised_filtered_port, last_error";
 
@@ -613,6 +663,7 @@ pub async fn create(
             } else {
                 JournalPolicy::Full
             });
+            let patch_policy = new.patch_policy.unwrap_or(PatchPolicy::Open);
 
             let id = RoomId::new();
             // Only `room` mode has a room-wide password, and the `room_password_matches_mode`
@@ -627,11 +678,12 @@ pub async fn create(
                 "INSERT INTO rooms
                     (id, environment, name, generation_id, source, lobby_room_id, lobby_job_id,
                      idempotency_key, cloned_from, created_by, spoiler_policy, tracker_id,
-                     tracker_policy, journal_policy, slot_auth, password, wants_filtered,
-                     use_embedded_options, save_interval_secs, admin_token)
+                     tracker_policy, journal_policy, patch_policy, slot_auth, password,
+                     server_password, wants_filtered, use_embedded_options, save_interval_secs,
+                     admin_token)
                  VALUES ($1, $2::puna_environment, $3, $4, $5::room_source, $6, $7, $8, $9, $10,
                          $11::spoiler_policy, $12, $13::tracker_policy, $14::journal_policy,
-                         $15::slot_auth_mode, $16, $17, $18, $19, $20)",
+                         $15::patch_policy, $16::slot_auth_mode, $17, $18, $19, $20, $21, $22)",
             )
             .bind::<SqlUuid, _>(id)
             .bind::<Text, _>(new.environment.as_str())
@@ -647,8 +699,10 @@ pub async fn create(
             .bind::<SqlUuid, _>(TrackerId::new())
             .bind::<Text, _>(tracker_policy.as_sql())
             .bind::<Text, _>(journal_policy.as_sql())
+            .bind::<Text, _>(patch_policy.as_sql())
             .bind::<Text, _>(new.slot_auth.as_sql())
             .bind::<Nullable<Text>, _>(password.as_deref())
+            .bind::<Nullable<Text>, _>(new.server_password.as_deref())
             .bind::<Bool, _>(new.wants_filtered)
             .bind::<Bool, _>(new.use_embedded_options)
             .bind::<Integer, _>(new.save_interval_secs)
@@ -1113,6 +1167,8 @@ pub async fn clone_room(
         spoiler_policy: Some(existing.spoiler_policy),
         tracker_policy: Some(existing.tracker_policy),
         journal_policy: Some(existing.journal_policy),
+        patch_policy: Some(existing.patch_policy),
+        server_password: None,
         wants_filtered: existing.wants_filtered,
         use_embedded_options: true,
         save_interval_secs: 30,

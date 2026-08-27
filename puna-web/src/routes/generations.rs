@@ -44,6 +44,13 @@ pub struct ShowTemplate {
     /// True when these bytes were already on file, so the page can say "already uploaded"
     /// rather than implying this upload created it.
     deduplicated: bool,
+    /// A room name to start from: `<organizer>'s multiworld <YYYY-MM-DD>`.
+    ///
+    /// **Server-rendered rather than filled in by script**, so it is there before anything loads
+    /// and there for somebody with scripting off. The date is the server's, in UTC -- a name is a
+    /// label rather than an instant, and one that disagreed with the creator's calendar by a few
+    /// hours would be a worse kind of wrong than one that is simply the server's day.
+    default_room_name: String,
 }
 
 #[derive(Template, WebTemplate)]
@@ -108,6 +115,11 @@ async fn show(
         generation,
         slots,
         deduplicated: dedup.unwrap_or(false),
+        default_room_name: format!(
+            "{}'s multiworld {}",
+            session.session().username.as_deref().unwrap_or("a"),
+            chrono::Utc::now().format("%Y-%m-%d")
+        ),
     })
 }
 
@@ -647,5 +659,122 @@ mod tests {
             "the generation's creation date reached the page: it dates this entry to somebody \
              else's upload"
         );
+    }
+
+    /// **The creation form presents five decisions, each preselected and each explained.**
+    ///
+    /// Every setting here is one the room then lives with, and three of them cost a restart to
+    /// change afterwards — so the panel's job is to make somebody choose rather than to be quick to
+    /// get past. What this pins is the part that fails silently: a default that moves, a radio
+    /// group whose value no longer matches what the route parses, or a hint that stops being
+    /// rendered for one of the options.
+    ///
+    /// **The route parses every one of these strictly**, so a value renamed on one side and not
+    /// the other is a `400` on a form that looks completely ordinary. Asserting the rendered
+    /// `value=` against the same words `parse()` accepts is what keeps the two in step.
+    #[test]
+    fn the_creation_form_preselects_a_deliberate_default_for_every_choice() {
+        use askama::Template;
+
+        let html = ShowTemplate {
+            base: crate::tpl::TplContext::new(&crate::auth::Session::default()),
+            generation: a_generation(),
+            slots: Vec::new(),
+            deduplicated: false,
+            default_room_name: "troy's multiworld 2026-08-29".into(),
+        }
+        .render()
+        .expect("renders");
+
+        // The name arrives filled in, so the common case is one button rather than a naming
+        // decision nobody wanted to make.
+        let name_field = html
+            .split_once(r#"id="name""#)
+            .expect("a room name field")
+            .1
+            .split_once('>')
+            .expect("a closed tag")
+            .0;
+        assert!(
+            name_field.contains("multiworld 2026-08-29"),
+            "the room name is not prefilled, so the common case is a naming decision nobody \
+             wanted to make: {name_field}"
+        );
+
+        // Troy's defaults, one per group. Each is the answer somebody would otherwise have to
+        // think about on a page they see once.
+        for (name, value) in [
+            ("slot_auth", "none"),
+            ("patch_policy", "claimed"),
+            ("journal_policy", "feed"),
+            ("tracker_policy", "link"),
+        ] {
+            let expected = format!(r#"name="{name}" value="{value}" checked"#);
+            assert!(
+                html.contains(&expected),
+                "`{name}` does not default to `{value}` — the form opens on a different choice \
+                 from the one that was decided on"
+            );
+        }
+
+        // Every option the route accepts is offered, and vice versa: the route parses these
+        // strictly, so a word that differs on either side is a 400 from an ordinary-looking form.
+        for value in ["none", "room", "per_slot"] {
+            assert!(
+                html.contains(&format!(r#"value="{value}""#)),
+                "no `{value}` option"
+            );
+            assert!(puna_core::model::room::SlotAuth::parse(value).is_some());
+        }
+        for value in ["full", "feed", "disabled"] {
+            assert!(puna_core::model::room::JournalPolicy::parse(value).is_some());
+        }
+        for value in ["link", "members", "disabled"] {
+            assert!(puna_core::model::room::TrackerPolicy::parse(value).is_some());
+        }
+        for value in ["open", "claimed"] {
+            assert!(puna_core::model::room::PatchPolicy::parse(value).is_some());
+        }
+
+        // **A hint per option, not per group.** They are server-rendered and revealed one at a
+        // time, so a page with no scripting shows all of them — verbose and correct — where
+        // building the text in script would leave an unscripted reader with unlabelled radios.
+        let hints = html.matches("data-for=").count();
+        assert_eq!(
+            hints, 11,
+            "expected one hint for each of the 11 explained options, found {hints}"
+        );
+
+        // Unchecked, and it says what it is for: this is pahoa's in-game `!admin login` and not
+        // anything Puna's own console needs.
+        assert!(html.contains(r#"type="checkbox" name="server_password""#));
+        assert!(!html.contains(r#"name="server_password" value="1" checked"#));
+
+        // Rendered but inert. A disabled input submits nothing, so the route cannot receive it by
+        // accident before the pipeline behind it exists.
+        assert!(
+            html.contains(r#"id="lobby_url""#) && html.contains("disabled"),
+            "the lobby field is either missing or live before anything can honor it"
+        );
+
+        assert!(
+            html.contains(r#"type="reset""#),
+            "no way back to the defaults"
+        );
+    }
+
+    fn a_generation() -> generation::Generation {
+        generation::Generation {
+            id: GenerationId::new(),
+            sha256: vec![0; 32],
+            size_bytes: 1,
+            seed_name: "seed".into(),
+            slots: 2,
+            locations: 20,
+            games: vec!["Balatro".into()],
+            race_mode: false,
+            has_spoiler: false,
+            created_at: chrono::Utc::now(),
+        }
     }
 }

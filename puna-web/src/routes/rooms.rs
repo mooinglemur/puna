@@ -555,6 +555,22 @@ struct CreateRoomForm {
     generation_id: String,
     name: String,
     slot_auth: String,
+    patch_policy: String,
+    /// `full` / `feed` / `disabled`, spelled on the form as open / feed-only / closed.
+    journal_policy: String,
+    /// `link` / `members` / `disabled`, spelled on the form as open / participant / closed.
+    tracker_policy: String,
+    /// **A checkbox, so absent means unchecked.** `Option` rather than `bool` because an HTML form
+    /// sends nothing at all for an unticked box, and a `bool` field would make the whole submission
+    /// fail to parse rather than reading as `false`.
+    server_password: Option<String>,
+    /// The lobby room this was handed over from. **Accepted and deliberately unread**: the field
+    /// is rendered `disabled`, so a browser submits nothing for it and anything arriving here today
+    /// came from somebody editing the markup rather than from the form. It is declared so that the
+    /// route does not start rejecting submissions the day the control is enabled, and named here so
+    /// that whoever enables it finds the place to read it.
+    #[allow(dead_code)]
+    lobby_url: Option<String>,
 }
 
 /// Open a room from a generation you have already uploaded.
@@ -578,6 +594,20 @@ async fn create(
         .map_err(|e| Error::new(Status::BadRequest, anyhow::anyhow!(e)))?;
     let slot_auth = SlotAuth::parse(&form.slot_auth)
         .ok_or_else(|| Error::new(Status::BadRequest, anyhow::anyhow!("unknown password mode")))?;
+    // **Each parsed rather than defaulted on a miss.** A radio group that arrives unrecognized is a
+    // form and a route that have drifted, and silently substituting a default would open a room
+    // configured differently from what somebody just chose — visibly wrong only later, on the one
+    // page nobody re-reads after creating it.
+    let patch_policy = room::PatchPolicy::parse(&form.patch_policy)
+        .ok_or_else(|| Error::new(Status::BadRequest, anyhow::anyhow!("unknown patch policy")))?;
+    let journal_policy = room::JournalPolicy::parse(&form.journal_policy)
+        .ok_or_else(|| Error::new(Status::BadRequest, anyhow::anyhow!("unknown feed policy")))?;
+    let tracker_policy = room::TrackerPolicy::parse(&form.tracker_policy).ok_or_else(|| {
+        Error::new(
+            Status::BadRequest,
+            anyhow::anyhow!("unknown tracker policy"),
+        )
+    })?;
 
     let mut conn = pool.get().await?;
 
@@ -587,6 +617,16 @@ async fn create(
 
     let mut new = room::NewRoom::direct(**environment, name, generation_id, gate.user_id());
     new.slot_auth = slot_auth;
+    new.patch_policy = Some(patch_policy);
+    new.journal_policy = Some(journal_policy);
+    new.tracker_policy = Some(tracker_policy);
+    // **Generated here, never typed.** The checkbox says whether the room has one at all; a field
+    // asking somebody to invent a remote-admin password would collect a weak one, and the value is
+    // rendered back to the organizer on the room page either way.
+    new.server_password = form
+        .server_password
+        .is_some()
+        .then(puna_core::secret::room_password);
     let id = room::create(&mut conn, &new).await?;
 
     tracing::info!(
@@ -2262,6 +2302,7 @@ pub(crate) mod tests {
             journal_id: puna_core::ids::JournalId::new(),
             tracker_policy: puna_core::model::room::TrackerPolicy::Link,
             journal_policy: puna_core::model::room::JournalPolicy::Full,
+            patch_policy: puna_core::model::room::PatchPolicy::Claimed,
             wants_filtered: true,
             state: "running".into(),
             // A room that has been up for a while, which is the situation the elapsed-time bug

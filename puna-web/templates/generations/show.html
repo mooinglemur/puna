@@ -42,21 +42,124 @@ before rather than a second copy of it.</p>
 </table>
 </div>
 
+{# **Its own panel, laid out as rows of choices rather than a line of controls.**
+
+   Every setting here is one a room is stuck with until somebody changes it deliberately, and three
+   of them cost a restart to change afterwards -- so the form's job is to make somebody *choose*
+   rather than to be quick to get past. The table-ish shape is what gives each choice its own row,
+   its own explanation, and enough room to say what the option means in words.
+
+   The hints under each group are rendered for EVERY option and revealed one at a time by
+   `create-room.js`. Server-rendered rather than built in script so the page explains itself with
+   nothing loaded -- unscripted, all of them show, which is verbose and never wrong. #}
+<section class="panel create-room">
 <h2>Open a room from this seed</h2>
 <p class="hint">One generation can back any number of rooms &mdash; they are independent
 multiworlds sharing the same seed, and a second one costs no storage.</p>
-<form method="post" action="/rooms">
+
+<form method="post" action="/rooms" id="create-room">
 <input type="hidden" name="generation_id" value="{{ generation.id }}">
-<p>
+
+<div class="field">
 <label for="name">Room name</label>
-<input type="text" id="name" name="name" required>
-<label for="slot_auth">Passwords</label>
-<select id="slot_auth" name="slot_auth">
-<option value="none">none &mdash; anyone with the address</option>
-<option value="room">one shared room password</option>
-<option value="per_slot">a password per slot</option>
-</select>
+<div class="choices">
+<input type="text" id="name" name="name" value="{{ default_room_name }}" required>
+<p class="hint">Shown on the room page and in every link to it. Changing it later is the one
+setting here that does not restart the room.</p>
+</div>
+</div>
+
+<div class="field" data-hints="slot_auth">
+<span class="label">Passwords</span>
+<div class="choices">
+<label><input type="radio" name="slot_auth" value="none" checked> None</label>
+<label><input type="radio" name="slot_auth" value="room"> Room-wide</label>
+<label><input type="radio" name="slot_auth" value="per_slot"> Per-slot</label>
+<p class="hint" data-for="none">Anyone holding the address can connect as any slot. The
+ordinary choice for a game among people who know each other.</p>
+<p class="hint" data-for="room">One password for the whole room, which every player types.
+Shown to participants and staff on the room page.</p>
+<p class="hint" data-for="per_slot">Each slot gets its own password, so a player can only
+connect as their own. Also what lets a slot be locked without disturbing anybody else.</p>
+</div>
+</div>
+
+<div class="field" data-hints="patch_policy">
+<span class="label">Patch downloads</span>
+<div class="choices">
+<label><input type="radio" name="patch_policy" value="open"> Open</label>
+<label><input type="radio" name="patch_policy" value="claimed" checked> Claimed</label>
+<p class="hint" data-for="open">The patch carries only the room's address, so a player with a
+password types it into their client themselves.</p>
+<p class="hint" data-for="claimed">The patch carries the address <em>and</em> the slot's
+credential, where the room has one, so the client it launches connects without being told
+anything. The credential travels inside the file &mdash; which is already a per-slot file served
+only to that slot's owner and the room's staff.</p>
+</div>
+</div>
+
+<div class="field" data-hints="journal_policy">
+<span class="label">Feed</span>
+<div class="choices">
+<label><input type="radio" name="journal_policy" value="full"> Open</label>
+<label><input type="radio" name="journal_policy" value="feed" checked> Items only</label>
+<label><input type="radio" name="journal_policy" value="disabled"> Closed</label>
+<p class="hint" data-for="full">Anyone who can open the feed reads the whole history, chat and
+hints included, and can download the file.</p>
+<p class="hint" data-for="feed">Item movements and DeathLinks only. Chat, hints and admin
+actions are withheld and counted. Organizers always read everything.</p>
+<p class="hint" data-for="disabled">The feed is staff-only; anybody else gets nothing.</p>
+</div>
+</div>
+
+<div class="field" data-hints="tracker_policy">
+<span class="label">Tracker</span>
+<div class="choices">
+<label><input type="radio" name="tracker_policy" value="link" checked> Open</label>
+<label><input type="radio" name="tracker_policy" value="members"> Participant</label>
+<label><input type="radio" name="tracker_policy" value="disabled"> Closed</label>
+<p class="hint" data-for="link">The unguessable link is the authorization, as Archipelago's own
+tracker works. Shareable with an audience who will never sign in.</p>
+<p class="hint" data-for="members">A Discord sign-in and a slot or a staff role in this room are
+required as well. The race default.</p>
+<p class="hint" data-for="disabled">Nobody but staff, and an unknown link is answered the same
+way as a refused one.</p>
+</div>
+</div>
+
+<div class="field">
+<span class="label">Remote admin</span>
+<div class="choices">
+<label><input type="checkbox" name="server_password" value="1"> Create a remote admin
+password</label>
+<p class="hint">Only for pahoa's in-game <code>!admin login</code>. Puna's own console drives the
+room over an authenticated API and needs none of this, so leave it off unless somebody intends to
+administer the room from inside a game client.</p>
+</div>
+</div>
+
+{# Disabled rather than absent: the field is part of the shape this form is growing into, and an
+   organizer who expects it should see that it is coming rather than wonder where it went. A
+   disabled input submits nothing at all, so the route cannot receive it by accident. #}
+<div class="field">
+<label for="lobby_url">Lobby room</label>
+<div class="choices">
+<input type="url" id="lobby_url" name="lobby_url" disabled
+       placeholder="not available yet">
+<p class="hint">Optional, and not built on either side yet. It will claim each slot for the
+Discord account that owns the matching YAML in the lobby, so nobody has to be sent a claim
+link.</p>
+</div>
+</div>
+
+<div class="actions">
 <button type="submit">Create the room</button>
-</p>
+<button type="reset" class="secondary">Reset to defaults</button>
+</div>
 </form>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/create-room.js?v={{ base.static_version }}" defer></script>
 {% endblock %}
