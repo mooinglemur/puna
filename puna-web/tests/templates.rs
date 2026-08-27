@@ -615,14 +615,23 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
         );
     }
 
-    // The room id travels through a data attribute, and the script returns without it.
+    // The FEED's id travels through a data attribute, and the script returns without it.
+    //
+    // **`data-feed`, never `data-room`.** The page is addressed by an id that is not the room's, so
+    // the room's id must not appear in its markup at all — putting it in a data attribute would leak
+    // it just as surely as an `href` would, to every viewer holding a link meant to be shareable.
     assert!(
-        code.contains("status.dataset.room"),
-        "journal.js no longer reads the room id"
+        !markup.contains("data-room="),
+        "the feed page carries the room's id in a data attribute, which is what /journal/<id> exists \
+         to avoid"
     );
     assert!(
-        markup.contains("data-room="),
-        "the journal template does not carry the room id"
+        code.contains("status.dataset.feed"),
+        "journal.js no longer reads the feed id"
+    );
+    assert!(
+        markup.contains("data-feed="),
+        "the journal template does not carry the feed id, so the socket has no address"
     );
 
     // Every class the script paints has a rule. The item classes carry `flags`, so a missing one is
@@ -637,13 +646,15 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
         "useful",
         "trap",
         "gap-note",
+        "daybreak",
+        "day",
     ] {
         assert!(
             code.contains(class),
             "journal.js no longer paints `{class}`; this lint is checking a class nobody uses"
         );
         assert!(
-            css.contains(&format!(".journal .{class}")) || css.contains(&format!(".item.{class}")),
+            styles(&css, class),
             "puna.css has no rule for `.{class}`, so the feed renders it as plain text"
         );
     }
@@ -654,6 +665,25 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
         code.contains("location.protocol") && code.contains("wss:") && code.contains("ws:"),
         "journal.js no longer derives its scheme from the page's"
     );
+}
+
+/// Whether the stylesheet has a rule for this class *as a whole word*.
+///
+/// A plain `contains` is not enough and the difference is not pedantic: renaming `.journal .daybreak`
+/// to `.journal .daybreak-unused` leaves the substring intact, so the lint kept passing over a class
+/// with no rule. Found by mutation — the check has to end at a character that cannot continue an
+/// identifier.
+fn styles(css: &str, class: &str) -> bool {
+    [format!(".journal .{class}"), format!(".item.{class}")]
+        .iter()
+        .any(|selector| {
+            css.match_indices(selector.as_str()).any(|(at, _)| {
+                css[at + selector.len()..]
+                    .chars()
+                    .next()
+                    .is_none_or(|c| !(c.is_alphanumeric() || c == '-' || c == '_'))
+            })
+        })
 }
 
 /// **The whole-journal download refuses anything but an organizer, in the route.**

@@ -41,7 +41,7 @@ use puna_core::model::{room, slot};
 use crate::auth::Session;
 use crate::error::{Result, not_found};
 use crate::journal;
-use crate::params::RoomParam;
+use crate::params::JournalParam;
 use crate::routes::rooms::resolve_role;
 use crate::tpl::TplContext;
 use crate::{DataDir, Pool};
@@ -96,11 +96,14 @@ pub enum Visibility {
 async fn readable(
     conn: &mut diesel_async::AsyncPgConnection,
     session: &Session,
-    id: RoomParam,
+    id: JournalParam,
 ) -> Result<(room::Room, Visibility)> {
-    let room = room::get(conn, id.0)
+    // **Resolved by the feed's own id, never the room's.** That is the whole reason the column
+    // exists: `/journal/<id>` is the link handed to a stream chat, and the room it belongs to must
+    // not be recoverable from it.
+    let room = room::by_journal_id(conn, id.0)
         .await?
-        .ok_or_else(|| not_found("no such room"))?;
+        .ok_or_else(|| not_found("no such feed"))?;
     let role = resolve_role(conn, session, room.id).await?;
     let owns_a_slot = match session.user_id {
         Some(user_id) => slot::owns_a_slot(conn, room.id, user_id).await?,
@@ -137,9 +140,9 @@ pub struct JournalTemplate {
     may_download: bool,
 }
 
-#[get("/room/<id>/journal")]
+#[get("/journal/<id>")]
 async fn page(
-    id: RoomParam,
+    id: JournalParam,
     session: Session,
     pool: &State<Pool>,
     data_dir: &State<DataDir>,
@@ -201,9 +204,9 @@ impl<'r> Responder<'r, 'r> for Journal {
 /// this is ordinary HTTP, where compression is available — unlike the feed below, which cannot have
 /// it. The encoder runs on a blocking thread and hands finished blocks to the response, so a slow
 /// client backs the work up rather than occupying a runtime worker with it.
-#[get("/room/<id>/journal.jsonl")]
+#[get("/journal/<id>/download")]
 async fn download(
-    id: RoomParam,
+    id: JournalParam,
     session: Session,
     pool: &State<Pool>,
     data_dir: &State<DataDir>,
@@ -257,8 +260,40 @@ async fn download(
 
     Ok(Journal {
         blocks: rx,
-        filename: format!("puna-journal-{}.jsonl", room.id),
+        filename: download_name(&room),
     })
+}
+
+/// What the saved file is called.
+///
+/// **Never the room's id.** The whole point of the feed having an id of its own is that holding the
+/// link does not hand over the room — and a `Content-Disposition` naming `room.id` would have put it
+/// back, in a file that outlives the page and gets forwarded. That is the same class of leak as a
+/// tracker page rendering the room's address: the capability escapes through the artifact rather
+/// than through the URL.
+///
+/// The room's **name** is fine and is what a person wants when three of these are in one downloads
+/// folder: it is already rendered on this page and on the public room page, and it names nothing
+/// that can be navigated to. Sanitized the way patch downloads are — an allowlist, with no `.` at
+/// all, so `..` and a leading dot are unspellable rather than merely filtered.
+fn download_name(room: &room::Room) -> String {
+    let stem: String = room
+        .name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let stem = stem.trim_matches('-');
+    if stem.is_empty() {
+        "feed.jsonl".to_string()
+    } else {
+        format!("{stem}-feed.jsonl")
+    }
 }
 
 /// Where a viewer wants the replay to start.
@@ -282,9 +317,9 @@ struct FeedRequest {
 ///
 /// The client speaks first, naming where to start; a client that says nothing within a moment gets
 /// the default tail, so a viewer whose script failed to send still sees a page with history on it.
-#[get("/room/<id>/journal/feed")]
+#[get("/journal/<id>/feed")]
 async fn feed(
-    id: RoomParam,
+    id: JournalParam,
     ws: ws::WebSocket,
     session: Session,
     pool: &State<Pool>,
@@ -605,7 +640,7 @@ mod tests {
 
         let staff = render(true);
         assert!(
-            staff.contains("/journal.jsonl"),
+            staff.contains("/download"),
             "an organizer is not offered the file"
         );
         assert!(
@@ -615,11 +650,88 @@ mod tests {
 
         let viewer = render(false);
         assert!(
-            !viewer.contains("journal.jsonl"),
+            !viewer.contains("/download"),
             "a public viewer is offered a download the route would refuse"
         );
         // The feed itself is still there: that is the whole point of the tier split.
         assert!(viewer.contains("journal-status"));
+    }
+
+    /// **A feed link hands over the feed and not the room.**
+    ///
+    /// The page is addressed by `journal_id`, which is derivable from neither the room's id nor its
+    /// tracker's — so this asserts what the markup must not carry. It is the same property M8b
+    /// asserts for the tracker, and it is asserted by rendering rather than by reading, because the
+    /// leak that matters is whatever reaches the browser: an `href` back to the room, a `data-`
+    /// attribute the script reads, a download URL with the id in its path.
+    ///
+    /// The room's **name** is deliberately present. It tells a viewer which feed they are watching,
+    /// it is already on the public room page, and it names nothing that can be navigated to.
+    #[test]
+    fn the_feed_page_never_names_the_room_it_belongs_to() {
+        use askama::Template;
+
+        let room = crate::routes::rooms::tests::a_room();
+        let (id, tracker) = (room.id.to_string(), room.tracker_id.to_string());
+        let journal = room.journal_id.to_string();
+
+        for may_download in [true, false] {
+            let html = JournalTemplate {
+                base: crate::tpl::TplContext::new(&Session::default()),
+                room: room.clone(),
+                size: Some(4096),
+                may_download,
+            }
+            .render()
+            .expect("renders");
+
+            assert!(
+                !html.contains(&id),
+                "the feed page carries the room's id, so sharing the feed shares the room"
+            );
+            assert!(
+                !html.contains("/room/"),
+                "the feed page links back to the room it belongs to"
+            );
+            assert!(
+                !html.contains(&tracker),
+                "the feed page carries the tracker id, collapsing two separate capabilities"
+            );
+            // What it must carry: its own id, or nothing on the page can reach the feed.
+            assert!(
+                html.contains(&journal),
+                "the feed page does not carry its own id"
+            );
+        }
+    }
+
+    /// **The saved file does not name the room either.**
+    ///
+    /// A `Content-Disposition` is the one part of a download that outlives the page and gets
+    /// forwarded, so putting `room.id` in it would have handed the room over through the artifact
+    /// after the URL had been carefully arranged not to. The room's *name* is deliberately kept: it
+    /// is what tells three files apart in a downloads folder, and it names nothing navigable.
+    #[test]
+    fn the_saved_file_is_named_for_the_room_and_never_addresses_it() {
+        let mut room = crate::routes::rooms::tests::a_room();
+        room.name = "Friday Async".into();
+        let name = download_name(&room);
+        assert_eq!(name, "Friday-Async-feed.jsonl");
+        assert!(!name.contains(&room.id.to_string()));
+        assert!(!name.contains(&room.journal_id.to_string()));
+
+        // The stem is an allowlist with no `.` at all, so `..` and a leading dot are unspellable
+        // rather than filtered — the same rule the patch download follows, and for the same reason:
+        // this is untrusted text out of a room name heading for a response header.
+        room.name = "../../etc/passwd".into();
+        let escaped = download_name(&room);
+        assert!(!escaped.contains(".."), "{escaped}");
+        assert!(!escaped.contains('/'), "{escaped}");
+        assert!(escaped.ends_with("-feed.jsonl"), "{escaped}");
+
+        // A room named entirely in punctuation still produces a filename.
+        room.name = "!!!".into();
+        assert_eq!(download_name(&room), "feed.jsonl");
     }
 
     #[test]

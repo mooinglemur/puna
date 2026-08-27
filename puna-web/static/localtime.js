@@ -108,6 +108,29 @@
     });
   }
 
-  window.PunaTime = { absolute: absolute, stamp: stamp };
+  // `Saturday, 2026-08-22` in the reader's own zone.
+  //
+  // Split the way `absolute` is split, and for the same reason: the DATE keeps a fixed field order,
+  // because a day heading that reads `08/22` to one person and `22/08` to another is the ambiguity
+  // this file exists to remove — while the WEEKDAY is localized, because it is a word rather than an
+  // ordering and it is the part a reader cannot infer from the digits.
+  //
+  // Here rather than in `journal.js` because this file is the one place that decides how an instant
+  // is spelled, which a lint enforces. A caller wanting a date gets one from here or not at all.
+  function day(ms) {
+    var d = new Date(ms);
+    if (isNaN(d.getTime())) return "";
+    var date =
+      d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+    try {
+      var weekday = new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(d);
+      if (weekday) return weekday + ", " + date;
+    } catch (e) {
+      // No `Intl`, or a locale with no weekday name. The date alone says the same thing.
+    }
+    return date;
+  }
+
+  window.PunaTime = { absolute: absolute, day: day, stamp: stamp };
   stamp(document);
 })();

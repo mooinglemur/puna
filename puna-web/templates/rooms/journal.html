@@ -1,12 +1,19 @@
 {% extends "base.html" %}
-{% block title %}{{ room.name +}} &mdash; history{% endblock %}
+{% block title %}{{ room.name +}} &mdash; feed{% endblock %}
 {# A feed of fixed-width lines, not prose. The same opt-out the tracker and the admin tables take. #}
 {% block layout %}wide{% endblock %}
 {% block content %}
 
+{# **NOTHING here links to the room**, exactly as the tracker page does not. This URL carries the
+   feed's own id precisely so it can be handed to an audience the organizers did not choose, and a
+   "back to the room" link would hand over the room with it -- the capability escaping through the
+   markup rather than through the address bar. The room's NAME is fine and is what tells a reader
+   which feed they are watching; it is already on the public room page and names nothing navigable.
+
+   A viewer who holds the room link does not need a link back, and one who does not must not get
+   one. #}
 <h1>{{ room.name }}</h1>
-<p class="hint">Everything found in this room, as it happens. <a href="/room/{{ room.id }}">Back to
-the room</a>.</p>
+<p class="hint">Everything found in this room, as it happens.</p>
 
 {# **The download is an organizer's and the feed is not**, and the difference is not cosmetic: the
    file carries every line anybody typed in the room, where the feed below is item movements. The
@@ -15,11 +22,12 @@ the room</a>.</p>
 {% if may_download %}
 <p>
 {% if let Some(size) = size %}
-<a href="/room/{{ room.id }}/journal.jsonl" download>Download the whole history</a>
+<a href="/journal/{{ room.journal_id }}/download" download>Download the feed history</a>
 <span class="hint">&mdash; {{+ size|filesizeformat +}} on disk, sent compressed. One JSON object per
 line, including chat and hints, which is why this is staff-only.</span>
 {% else %}
-<span class="hint">There is no history to download yet. It is written while the room runs.</span>
+<span class="hint">There is no feed history to download yet. It is written while the room
+runs.</span>
 {% endif %}
 </p>
 {% endif %}
@@ -27,19 +35,22 @@ line, including chat and hints, which is why this is staff-only.</span>
 {# The status line is server-rendered so the page says something before the socket opens, and
    `journal.js` replaces its text as the connection changes. Without script it stays exactly as it
    is, which is the honest description of what a scriptless browser is going to get. #}
-<p id="journal-status" class="notice" data-room="{{ room.id }}">Connecting to the room&rsquo;s
-history&hellip;</p>
+{# The FEED's id, not the room's. `journal.js` builds its socket URL from this, so putting the room
+   id here would leak it into the page's markup for every viewer -- the exact thing the separate id
+   exists to prevent, arriving through a data attribute instead of an href. #}
+<p id="journal-status" class="notice" data-feed="{{ room.journal_id }}">Connecting to the room&rsquo;s
+feed&hellip;</p>
 
 <noscript>
 <p class="warning">This feed needs JavaScript: it is a live connection to the room rather than a
-page that is regenerated.{% if may_download +%} The download above is the whole history and needs
+page that is regenerated.{% if may_download +%} The feed history above is the whole file and needs
 nothing.{% endif %}</p>
 </noscript>
 
 {# `aria-live="polite"` rather than `assertive`: a busy room appends several lines a second, and a
    screen reader interrupting itself for each one would make the page unusable for the reader it is
    meant to help. Polite lets it finish a sentence first. #}
-<div id="journal" class="journal" role="log" aria-live="polite" aria-label="Room history"></div>
+<div id="journal" class="journal" role="log" aria-live="polite" aria-label="Room feed"></div>
 
 {% endblock %}
 {% block scripts %}

@@ -91,8 +91,8 @@
    in this project something correct and gated turned out to have no door. #}
 {% if can_see_tracker %}
 <p class="tracker"><a href="/tracker/{{ room.tracker_id }}">Multiworld Tracker</a></p>
-<p class="tracker"><a href="/room/{{ room.id }}/journal">Room History</a>
-<span class="hint">&mdash; every item found here, live.</span></p>
+<p class="tracker"><a href="/journal/{{ room.journal_id }}">Room Feed</a>
+<span class="hint">&mdash; every item found here, live. Shareable without sharing this page.</span></p>
 {% endif %}
 
 <h2>Slots</h2>

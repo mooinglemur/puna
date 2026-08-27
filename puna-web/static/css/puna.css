@@ -1368,18 +1368,37 @@ h1 .scope {
 
 .form-actions .cancel { color: var(--muted); }
 
-/* --- the room's history feed ---------------------------------------------------------------------
+/* --- the room's feed ------------------------------------------------------------------------------
    A terminal, deliberately: this is Archipelago's own item feed and players read it in a client that
-   looks like this. Fixed width, dark ground in both themes, and the item colors are the protocol's
-   `flags` rather than decoration -- progression, useful and trap are what a reader is scanning for.
+   looks like this. Fixed width, and the item colors are the protocol's `flags` rather than
+   decoration -- progression, useful and trap are what a reader is scanning for.
 
-   The ground stays dark in LIGHT mode too, which is the one place this stylesheet does not follow
-   the theme. A feed of colored tokens on white is unreadable at the saturations the flags need, and
-   the alternative -- a second palette tuned for light -- would be two sets of meanings for one set
-   of bits. It is a console; consoles are dark. */
+   **It follows the theme, in both directions.** An earlier version of this block pinned the ground
+   dark in light mode and argued that a console is a console -- which is a real argument and is not
+   the one that decides it: a reader who has asked the site for light mode has asked for it, and one
+   page answering "no, not here" is the site overriding a preference it offered. Nor is the dark
+   palette usable on a bright display in daylight, which is the case light mode exists for.
+
+   So there are two palettes and the same seven meanings, mapped through `light-dark()` like every
+   other color here. The item hues are not the dark ones lightened: on white they are DARKENED and
+   desaturated, because the same hue that reads clearly at 60% lightness on #16181c is a pale smear
+   on #fbfbfa. Progression and trap keep a lightness gap as well as a hue gap in both themes, so the
+   two a reader most needs to tell apart survive being seen as one color. */
 .journal {
-  --feed-bg: #16181c;
-  --feed-dim: #6d7480;
+  --feed-bg: light-dark(#ffffff, #16181c);
+  --feed-stripe: light-dark(#f4f5f7, #1b1e24);
+  --feed-rule: light-dark(#e2e4e8, #333842);
+  --feed-fg: light-dark(#24272d, #d7dae0);
+  --feed-dim: light-dark(#6b7280, #6d7480);
+  --feed-verb: light-dark(#7a828f, #9aa2af);
+  --feed-who: light-dark(#111318, #e6e7ea);
+  --feed-where: light-dark(#15803d, #6ac48a);
+  --feed-item: light-dark(#0e7490, #56c8d8);
+  --feed-progression: light-dark(#7e22ce, #c58af9);
+  --feed-useful: light-dark(#1d4ed8, #7cb0f0);
+  --feed-trap: light-dark(#b91c1c, #f08a7c);
+  --feed-kind: light-dark(#a16207, #d7a65a);
+  --feed-gap: light-dark(#a16207, #f0c86a);
   background: var(--feed-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1393,7 +1412,7 @@ h1 .scope {
   overflow-y: auto;
   overflow-x: auto;
   padding: 0.6rem 0.8rem;
-  color: #d7dae0;
+  color: var(--feed-fg);
 }
 
 .journal .entry {
@@ -1404,28 +1423,56 @@ h1 .scope {
 
 /* Alternating ground, as the reference client does it: at this density it is what lets the eye keep
    its place across a long location name. */
-.journal .entry:nth-child(even) { background: #1b1e24; }
+.journal .entry:nth-child(even) { background: var(--feed-stripe); }
 
 .journal .when { color: var(--feed-dim); }
-.journal .verb { color: #9aa2af; }
-.journal .who { color: #e6e7ea; }
-.journal .where { color: #6ac48a; }
+.journal .verb { color: var(--feed-verb); }
+.journal .who { color: var(--feed-who); }
+.journal .where { color: var(--feed-where); }
 
 /* The item classes, from `flags`. Chosen to stay apart from each other for the common forms of
    color blindness -- the two most likely to be confused, progression and trap, differ in lightness
    as well as hue, so the distinction survives being seen as one color. */
-.journal .item { color: #56c8d8; }
-.journal .item.progression { color: #c58af9; }
-.journal .item.useful { color: #7cb0f0; }
-.journal .item.trap { color: #f08a7c; }
+.journal .item { color: var(--feed-item); }
+.journal .item.progression { color: var(--feed-progression); }
+.journal .item.useful { color: var(--feed-useful); }
+.journal .item.trap { color: var(--feed-trap); }
 
-.journal .chat-text { color: #e6e7ea; }
-.journal .kind { color: #d7a65a; }
+.journal .chat-text { color: var(--feed-who); }
+.journal .kind { color: var(--feed-kind); }
 .journal .hint { color: var(--feed-dim); }
 
 /* pahoa's own marker that records are missing. It is the one line here that must not be skimmable:
    everything else says what happened, and this says the record is incomplete. */
 .journal .gap-note {
-  color: #f0c86a;
+  color: var(--feed-gap);
   font-weight: 600;
+}
+
+/* The day heading. A feed shows times of day, so without this a journal spanning a week reads as
+   one where the clock runs backwards -- which is exactly how it looked before it existed. Centered
+   rules rather than a left-aligned line, because it separates rather than belonging to either side.
+   The date is the reader's own, from `PunaTime.day`. */
+.journal .daybreak {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.5rem 0 0.25rem;
+  color: var(--feed-dim);
+  /* It is a heading, not a record: nothing about it should look like something that happened. */
+  background: none !important;
+}
+
+.journal .daybreak::before,
+.journal .daybreak::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--feed-rule);
+}
+
+.journal .day {
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
 }

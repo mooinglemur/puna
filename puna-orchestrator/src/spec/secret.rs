@@ -161,6 +161,7 @@ mod tests {
             password: password.map(str::to_string),
             spoiler_policy: SpoilerPolicy::AdminOnly,
             tracker_id: TrackerId::new(),
+            journal_id: puna_core::ids::JournalId::new(),
             tracker_policy: TrackerPolicy::Link,
             wants_filtered: true,
             state: "idle".into(),

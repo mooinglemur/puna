@@ -26,7 +26,7 @@ use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 
 use crate::Environment;
-use crate::ids::{GenerationId, RoomId, TrackerId};
+use crate::ids::{GenerationId, JournalId, RoomId, TrackerId};
 use crate::model::member::{self, RoomRole};
 use crate::model::{RoomSource, slot};
 
@@ -374,6 +374,9 @@ pub struct Room {
     pub password: Option<String>,
     pub spoiler_policy: SpoilerPolicy,
     pub tracker_id: TrackerId,
+    /// The feed's URL segment. Independent of both [`RoomId`] and [`TrackerId`], so a feed link
+    /// hands over neither the room nor its tracker — see the migration that added it.
+    pub journal_id: JournalId,
     pub tracker_policy: TrackerPolicy,
     pub wants_filtered: bool,
 
@@ -426,6 +429,8 @@ struct RoomRow {
     spoiler_policy: String,
     #[diesel(sql_type = SqlUuid)]
     tracker_id: TrackerId,
+    #[diesel(sql_type = SqlUuid)]
+    journal_id: JournalId,
     #[diesel(sql_type = Text)]
     tracker_policy: String,
     #[diesel(sql_type = Bool)]
@@ -471,6 +476,7 @@ impl From<RoomRow> for Room {
                 // the most restrictive value rather than the default one.
                 .unwrap_or(SpoilerPolicy::Never),
             tracker_id: row.tracker_id,
+            journal_id: row.journal_id,
             tracker_policy: TrackerPolicy::parse(&row.tracker_policy)
                 .unwrap_or(TrackerPolicy::Disabled),
             wants_filtered: row.wants_filtered,
@@ -488,7 +494,7 @@ impl From<RoomRow> for Room {
 const ROOM_COLUMNS: &str = "id, name, environment::text AS environment, generation_id, \
                             source::text AS source, created_by, created_at, cloned_from, \
                             desired_state::text AS desired_state, slot_auth::text AS slot_auth, \
-                            password, spoiler_policy::text AS spoiler_policy, tracker_id, \
+                            password, spoiler_policy::text AS spoiler_policy, tracker_id, journal_id, \
                             tracker_policy::text AS tracker_policy, wants_filtered, \
                             state::text AS state, state_changed_at, desired_at, advertised_host, \
                             advertised_port, advertised_filtered_port, last_error";
@@ -676,6 +682,25 @@ pub async fn secrets(
         admin_token: row.admin_token,
         server_password: row.server_password,
     }))
+}
+
+/// The room a feed link names.
+///
+/// The feed's whole entry point, and the reason it has an id of its own: nothing about
+/// `/journal/<id>` is derivable from the room, so a link handed to a stream chat gives that chat the
+/// feed and nothing else. Same shape as resolving a tracker id, and deliberately a *separate* space
+/// from it — holding one must not produce the other.
+pub async fn by_journal_id(
+    conn: &mut AsyncPgConnection,
+    journal: JournalId,
+) -> Result<Option<Room>, diesel::result::Error> {
+    let rows: Vec<RoomRow> = diesel::sql_query(format!(
+        "SELECT {ROOM_COLUMNS} FROM rooms WHERE journal_id = $1"
+    ))
+    .bind::<SqlUuid, _>(journal)
+    .load(conn)
+    .await?;
+    Ok(rows.into_iter().next().map(Room::from))
 }
 
 pub async fn get(

@@ -316,6 +316,7 @@ diesel::table! {
         pinned_at -> Nullable<Timestamptz>,
         pinned_by -> Nullable<Int8>,
         last_check_at -> Nullable<Timestamptz>,
+        journal_id -> Uuid,
     }
 }
 

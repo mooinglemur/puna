@@ -117,6 +117,12 @@ new_id_type!(
 );
 
 new_id_type!(
+    /// A feed's URL segment. **Derivable from neither [`RoomId`] nor [`TrackerId`]**, which is what
+    /// lets a room's feed be handed to a stream chat without handing over the room or its tracker.
+    JournalId
+);
+
+new_id_type!(
     /// One console command in flight.
     CommandId
 );

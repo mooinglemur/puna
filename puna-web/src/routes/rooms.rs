@@ -1974,6 +1974,7 @@ pub(crate) mod tests {
             password: None,
             spoiler_policy: puna_core::model::room::SpoilerPolicy::AdminOnly,
             tracker_id: puna_core::ids::TrackerId::new(),
+            journal_id: puna_core::ids::JournalId::new(),
             tracker_policy: puna_core::model::room::TrackerPolicy::Link,
             wants_filtered: true,
             state: "running".into(),
@@ -2012,10 +2013,17 @@ pub(crate) mod tests {
         visible.can_see_tracker = true;
         let html = visible.render().expect("renders");
         assert!(
-            html.contains(&format!("/room/{}/journal", visible.room.id)),
-            "the room page does not link its history, so nothing reaches it"
+            html.contains(&format!("/journal/{}", visible.room.journal_id)),
+            "the room page does not link its feed, so nothing reaches it"
         );
         assert!(html.contains("/tracker/"), "the tracker link went missing");
+        // **The link goes the safe way round.** The room page may name the feed's id — it already
+        // holds the room — but a URL shaped `/room/<id>/journal` would have put the room's id inside
+        // the feed's address, which is what the separate id exists to prevent.
+        assert!(
+            !html.contains(&format!("/room/{}/journal", visible.room.id)),
+            "the feed is addressed through the room, which leaks the room to anyone given the link"
+        );
 
         // `disabled` policy 404s the journal routes too, so the link must go with it.
         let mut hidden = page(false);
