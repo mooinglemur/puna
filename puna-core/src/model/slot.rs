@@ -305,6 +305,60 @@ pub fn may_access(
 /// One conditional `UPDATE`, so two people following the same link race on one row and exactly one
 /// matches -- the same shape as invite redemption, and for the same reason. Nulling the token in
 /// the `SET` is what makes it single-use: a second attempt finds no row with that token.
+/// What a claim link is offering, without spending it.
+///
+/// **The read and the claim are separate operations, and that is not a convenience.** A claim
+/// token is single-use and [`claim`] consumes it, so anything that wants to *describe* a link —
+/// a landing page, and the chat client that unfurls it before a person has even clicked — must be
+/// able to ask without redeeming. A page that redeemed on `GET` would be spent by the first
+/// prefetch, and the recipient would arrive at a link that had already worked for somebody else.
+#[derive(Debug, Clone)]
+pub struct ClaimOffer {
+    pub room_id: RoomId,
+    pub room_name: String,
+    pub slot_number: i32,
+    pub player_name: String,
+    pub game: String,
+}
+
+/// Look up a claim link without redeeming it. `None` for a token that never existed or is spent.
+pub async fn offered_by_claim_token(
+    conn: &mut AsyncPgConnection,
+    token: &str,
+) -> Result<Option<ClaimOffer>, diesel::result::Error> {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = SqlUuid)]
+        room_id: RoomId,
+        #[diesel(sql_type = Text)]
+        room_name: String,
+        #[diesel(sql_type = Integer)]
+        slot_number: i32,
+        #[diesel(sql_type = Text)]
+        player_name: String,
+        #[diesel(sql_type = Text)]
+        game: String,
+    }
+
+    let rows: Vec<Row> = diesel::sql_query(
+        "SELECT s.room_id, r.name AS room_name, s.slot_number, s.player_name, s.game
+           FROM room_slots s
+           JOIN rooms r ON r.id = s.room_id
+          WHERE s.claim_token = $1",
+    )
+    .bind::<Text, _>(token)
+    .load(conn)
+    .await?;
+
+    Ok(rows.into_iter().next().map(|row| ClaimOffer {
+        room_id: row.room_id,
+        room_name: row.room_name,
+        slot_number: row.slot_number,
+        player_name: row.player_name,
+        game: row.game,
+    }))
+}
+
 pub async fn claim(
     conn: &mut AsyncPgConnection,
     token: &str,

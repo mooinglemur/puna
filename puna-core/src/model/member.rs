@@ -347,6 +347,53 @@ pub async fn revoke_invite(
 /// **A redemption never lowers an existing role.** Someone who is already an organizer following a
 /// helper link stays an organizer, because a link is an offer of access and not an instruction to
 /// take some away.
+/// What an invite is offering, without spending a use of it.
+///
+/// Same separation as [`crate::model::slot::ClaimOffer`] and for the same reason: `redeem_invite`
+/// decrements `uses_remaining`, so describing a link must not go through it. An invite with a use
+/// count would otherwise be one prefetch shorter than its organizer intended.
+#[derive(Debug, Clone)]
+pub struct InviteOffer {
+    pub room_id: RoomId,
+    pub room_name: String,
+    pub role: RoomRole,
+}
+
+/// Look up an invite without spending it. `None` when it never existed, has expired, or is spent —
+/// the three cases a landing page has nothing useful to say about and no reason to distinguish.
+pub async fn offered_by_invite_token(
+    conn: &mut AsyncPgConnection,
+    token: &str,
+) -> Result<Option<InviteOffer>, diesel::result::Error> {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = SqlUuid)]
+        room_id: RoomId,
+        #[diesel(sql_type = Text)]
+        room_name: String,
+        #[diesel(sql_type = Text)]
+        role: String,
+    }
+
+    let rows: Vec<Row> = diesel::sql_query(
+        "SELECT i.room_id, r.name AS room_name, i.role::text AS role
+           FROM room_invites i
+           JOIN rooms r ON r.id = i.room_id
+          WHERE i.token = $1
+            AND (i.expires_at IS NULL OR i.expires_at > now())
+            AND (i.uses_remaining IS NULL OR i.uses_remaining > 0)",
+    )
+    .bind::<Text, _>(token)
+    .load(conn)
+    .await?;
+
+    Ok(rows.into_iter().next().map(|row| InviteOffer {
+        room_id: row.room_id,
+        room_name: row.room_name,
+        role: RoomRole::parse(&row.role).unwrap_or(RoomRole::Helper),
+    }))
+}
+
 pub async fn redeem_invite(
     conn: &mut AsyncPgConnection,
     token: &str,

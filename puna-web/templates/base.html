@@ -14,6 +14,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}{{ base.site_name }}{% endblock %}</title>
+{# **OpenGraph, for the chat clients a link gets pasted into.**
+
+   Empty on almost every page, and deliberately so: an unfurl is a summary rendered to everyone who
+   can see the message, including people who never click, so a page opts IN to being summarized
+   rather than describing itself by default. `/room/<id>` and `/tracker/<id>` say nothing here on
+   purpose — a room link pasted in a channel should not announce the room's name and state to it.
+
+   The pages that do fill this in are the ones whose whole job is to be sent to somebody: a claim
+   link and an invite. Without it, those unfurl as Discord's own login page, because that is where
+   the redirect ended up — see routes/rooms.rs.
+
+   No `og:image`: Discord renders a compact card without one, which is the right shape for a line
+   of text, and a decorative image on a link that grants something would be dressing. #}
+{% block unfurl %}{% endblock %}
 <link rel="stylesheet" href="/static/css/puna.css?v={{ base.static_version }}">
 {# **No `defer`, and that is the whole point of it being here rather than at the foot with the
    others.** It sets `color-scheme` on <html> from the reader's stored choice, and it has to do that

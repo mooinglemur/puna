@@ -1338,8 +1338,39 @@ async fn revoke_invite(
     Ok(Redirect::to(format!("/room/{id}/members")))
 }
 
-/// Follow an invite link. Requires login, then grants the membership and lands on the room.
+/// The landing page for an invite link.
+///
+/// **Describes; never grants.** See [`RedeemTemplate`] for why these links stopped redirecting.
+///
+/// The summary names the room and says that the invitation is to help run it, and **deliberately
+/// does not name the tier**. The recipient learns it on the room page a moment later, where it is
+/// useful; in an unfurl it would be an advertisement, rendered to everyone who can see the message
+/// without any of them clicking. An invite mis-pasted into a busy channel is a link somebody might
+/// scroll past — the same link previewed as "become an organizer here" is one they will not.
 #[get("/invite/<token>")]
+async fn invite_page(token: &str, session: Session, pool: &State<Pool>) -> Result<RedeemTemplate> {
+    let mut conn = pool.get().await?;
+    let offer = member::offered_by_invite_token(&mut conn, token).await?;
+
+    Ok(match offer {
+        Some(offer) => RedeemTemplate {
+            base: TplContext::new(&session),
+            headline: format!("Help run {}", offer.room_name),
+            summary: format!(
+                "You have been invited to join the staff of {} on {}.",
+                offer.room_name,
+                TplContext::new(&session).site_name
+            ),
+            action: format!("/invite/{token}"),
+            confirm: "Accept the invitation".into(),
+            offered: true,
+        },
+        None => RedeemTemplate::spent(&session, "This invitation is no longer usable"),
+    })
+}
+
+/// Accept an invite. Requires login, grants the membership and lands on the room.
+#[post("/invite/<token>")]
 async fn redeem_invite(
     token: &str,
     session: LoggedInSession,
@@ -1355,10 +1386,53 @@ async fn redeem_invite(
 
 // ---- slots -----------------------------------------------------------------
 
-/// Follow a claim link. Single-use, and the room it belongs to is derived from the token rather
-/// than supplied, so a claim cannot be aimed at a room the token does not name.
+/// The landing page for a claim link.
+///
+/// **Describes; never claims.** The slot, its game and its room, so the person who was sent this
+/// can see they were sent the right one before signing in — and so a chat client has something to
+/// unfurl other than Discord's login page.
+///
+/// Naming the slot and room here is a genuine widening: an unfurl renders to everyone who can see
+/// the message, not only to whoever clicks. It is a small one and worth it — both are already on
+/// the public room page under the default policy, the card carries no link to that page, and the
+/// person the link was sent to has no other way to tell one claim link from another.
 #[get("/claim/<token>")]
-async fn claim_slot(token: &str, session: LoggedInSession, pool: &State<Pool>) -> Result<Redirect> {
+async fn claim_page(token: &str, session: Session, pool: &State<Pool>) -> Result<RedeemTemplate> {
+    let mut conn = pool.get().await?;
+    let offer = slot::offered_by_claim_token(&mut conn, token).await?;
+
+    Ok(match offer {
+        Some(offer) => RedeemTemplate {
+            base: TplContext::new(&session),
+            headline: format!("Claim {} in {}", offer.player_name, offer.room_name),
+            summary: format!(
+                "Slot {} — {}, playing {}. Claiming it links the slot to your Discord account, so \
+                 you can download its patch and read its password.",
+                offer.slot_number, offer.player_name, offer.game
+            ),
+            action: format!("/claim/{token}"),
+            confirm: format!("Claim {}", offer.player_name),
+            offered: true,
+        },
+        None => RedeemTemplate::spent(&session, "This claim link is no longer usable"),
+    })
+}
+
+/// Claim the slot. Single-use, and the room it belongs to is derived from the token rather
+/// than supplied, so a claim cannot be aimed at a room the token does not name.
+///
+/// **Answers JSON to a scripted caller and a redirect to a form**, keyed on `Accept`, which is the
+/// convention `POST /room/<id>/command` already established. The roster's claim control is a
+/// one-click action for a person who is already looking at the slot — `room.js` posts it and
+/// rewrites the row in place — while the landing page's form and every unscripted caller get the
+/// redirect. One route, because they are the same operation seen by two clients.
+#[post("/claim/<token>")]
+async fn claim_slot(
+    token: &str,
+    session: LoggedInSession,
+    pool: &State<Pool>,
+    wants_json: crate::guards::WantsJson,
+) -> Result<ClaimAnswer> {
     let mut conn = pool.get().await?;
     let claimed = slot::claim(&mut conn, token, session.user_id())
         .await
@@ -1373,7 +1447,25 @@ async fn claim_slot(token: &str, session: LoggedInSession, pool: &State<Pool>) -
         user_id = session.user_id(),
         "slot claimed"
     );
-    Ok(Redirect::to(format!("/room/{}", claimed.room_id)))
+    Ok(if wants_json.0 {
+        // The name the roster will now show, so the script rewrites the cell with the same value a
+        // reload would render rather than guessing at one. `username` off the session is the same
+        // string `owner_name` resolves to.
+        ClaimAnswer::Json(rocket::serde::json::Json(serde_json::json!({
+            "ok": true,
+            "slot": claimed.slot_number,
+            "owner_name": session.username(),
+        })))
+    } else {
+        ClaimAnswer::Redirect(Box::new(Redirect::to(format!("/room/{}", claimed.room_id))))
+    })
+}
+
+/// One operation, two clients. See [`claim_slot`].
+#[derive(rocket::Responder)]
+pub enum ClaimAnswer {
+    Json(rocket::serde::json::Json<serde_json::Value>),
+    Redirect(Box<Redirect>),
 }
 
 /// A slot's password, for whoever `SlotAccess` admitted.
@@ -1401,6 +1493,61 @@ async fn slot_password(
         "password": password,
         "is_owner": access.is_owner(),
     })))
+}
+
+// ---- links that were sent to somebody ---------------------------------------
+
+/// The landing page for a claim or an invite.
+///
+/// **Both used to answer an unauthenticated `GET` with a redirect into Discord's OAuth, and both
+/// used to redeem on that `GET`.** Two defects in one shape:
+///
+///   * **A single-use token was spent by whatever fetched it first.** Anything holding the
+///     reader's session — a browser prefetch, a corporate link scanner — consumed the link, and the
+///     recipient arrived at one that had already worked.
+///   * **Every chat client summarized Discord's login page**, because that is where the redirect
+///     ended up. A claim link pasted into a channel unfurled as *"Discord — Group Chat that's all
+///     fun & games"*, which is the least informative thing it could possibly have said.
+///
+/// **Not fixed by keying on the user agent**, which was the obvious move and is worse. Serving a
+/// crawler different bytes from a person is cloaking, and it fails silently in the direction nobody
+/// notices: Discord's agent string can change, and Slack, Signal, Telegram and Matrix each have
+/// their own, so an unlisted one falls straight back to the broken preview with nothing to say so.
+/// The redirect was also wrong for *people* — being thrown into a login without being told what you
+/// are accepting is worst on an invite, where what you accept is a role.
+///
+/// So there is one page, the same for everybody, and the mutation moved to a `POST` behind it.
+#[derive(askama::Template, askama_web::WebTemplate)]
+#[template(path = "rooms/redeem.html")]
+pub struct RedeemTemplate {
+    base: TplContext,
+    /// The unfurl's title, and the page's heading. One string for both, so a card cannot say
+    /// something the page does not.
+    headline: String,
+    summary: String,
+    /// Where the confirming `POST` goes, and the address to come back to after a login.
+    action: String,
+    confirm: String,
+    /// Whether there is anything to accept. `false` renders the refusal and no control.
+    offered: bool,
+}
+
+impl RedeemTemplate {
+    /// A link that never existed, has expired, or is spent.
+    ///
+    /// **One answer for all three.** They want different words for whoever *minted* the link and
+    /// none at all for somebody holding a bad one — distinguishing them would answer "is this a
+    /// real token" for anyone who cared to ask, which is the only question a stranger has.
+    fn spent(session: &Session, headline: &str) -> Self {
+        Self {
+            base: TplContext::new(session),
+            headline: headline.into(),
+            summary: "It may have been used already, or it may have expired.".into(),
+            action: String::new(),
+            confirm: String::new(),
+            offered: false,
+        }
+    }
 }
 
 // ---- settings --------------------------------------------------------------
@@ -1634,7 +1781,9 @@ pub fn routes() -> Vec<rocket::Route> {
         remove_member,
         create_invite,
         revoke_invite,
+        invite_page,
         redeem_invite,
+        claim_page,
         claim_slot,
         release_slot,
         rotate_slot_password,
@@ -2020,6 +2169,79 @@ pub(crate) mod tests {
                 "{kind}"
             );
         }
+    }
+
+    /// **A link that was sent to somebody summarizes itself, without being followed.**
+    ///
+    /// This is the whole reason the landing page exists. Both routes used to redirect an
+    /// unauthenticated `GET` into Discord's OAuth, so every chat client that unfurled a claim link
+    /// rendered *Discord's login page* — the least informative summary available — and a person
+    /// clicking it was thrown into a login having never been told what they were accepting.
+    ///
+    /// Asserted by rendering rather than by reading the route, because a crawler runs no
+    /// JavaScript and follows no logic: what it summarizes is exactly the `<meta>` in the markup.
+    #[test]
+    fn a_sent_link_carries_a_summary_for_the_chat_client_that_unfurls_it() {
+        use askama::Template;
+
+        let page = RedeemTemplate {
+            base: crate::tpl::TplContext::new(&Session::default()),
+            headline: "Claim MooingYacht1 in Friday async".into(),
+            summary: "Slot 3 — MooingYacht1, playing Balatro.".into(),
+            action: "/claim/tok".into(),
+            confirm: "Claim MooingYacht1".into(),
+            offered: true,
+        };
+        let html = page.render().expect("renders");
+
+        for tag in [
+            r#"property="og:title" content="Claim MooingYacht1 in Friday async""#,
+            r#"property="og:description" content="Slot 3 — MooingYacht1, playing Balatro.""#,
+            r#"property="og:site_name""#,
+        ] {
+            assert!(html.contains(tag), "the unfurl is missing `{tag}`");
+        }
+
+        // **No `og:url`.** It is the canonical address a card links to, and this page's canonical
+        // address is the bearer token in its own URL — writing it into the markup would put the
+        // capability somewhere a crawler stores it, for no gain.
+        assert!(
+            !html.contains("og:url"),
+            "the unfurl publishes a canonical URL, which for this page is the token itself"
+        );
+
+        // An unauthenticated reader is offered the login, carrying this page as the return address
+        // rather than the room — so they come back and confirm instead of arriving with it done.
+        assert!(html.contains("/auth/login?redirect=/claim/tok"));
+    }
+
+    /// A spent link says so, and says nothing else.
+    ///
+    /// **The three ways a link can be unusable are one answer here.** Never existed, expired and
+    /// already used need different words for whoever *minted* it and none at all for a stranger
+    /// holding a bad one — telling them apart would answer "is this a real token" for anybody who
+    /// asked, which is the only question somebody guessing has.
+    #[test]
+    fn a_spent_link_offers_nothing_and_distinguishes_nothing() {
+        use askama::Template;
+
+        let html =
+            RedeemTemplate::spent(&Session::default(), "This claim link is no longer usable")
+                .render()
+                .expect("renders");
+
+        assert!(html.contains("no longer usable"));
+        assert!(
+            !html.contains("<form"),
+            "a spent link still renders a control that cannot work"
+        );
+        // `?redirect=` rather than the bare path: the topbar offers an ordinary sign-in link to
+        // every logged-out reader, and matching that would have made this assertion about the
+        // page shell rather than about the page.
+        assert!(
+            !html.contains("/auth/login?redirect="),
+            "a spent link sends somebody through a login to reach nothing"
+        );
     }
 
     pub(crate) fn a_room() -> Room {

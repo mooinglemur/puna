@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{# The landing page for a link that was SENT to somebody: a slot claim, or a staff invitation.
+   One template for both, because everything that differs between them is a sentence and the shape
+   is identical — say what is on offer, then offer it.
+
+   **This page exists because the alternative redirected.** Both routes used to answer an
+   unauthenticated GET with a bounce to Discord's OAuth, which cost two things at once: a person
+   was thrown into a login having never been told what they were about to accept, and every chat
+   client that unfurled the link summarized *Discord's login page*, because that is where the
+   redirect ended. A page that answers for itself fixes both, and needs no user-agent sniffing to
+   do it — the crawler and the person are served the same bytes. #}
+
+{% block title %}{{ headline +}} &mdash; {{+ base.site_name }}{% endblock %}
+
+{# **The unfurl, which is the reason the page is server-rendered at all.**
+
+   No crawler runs JavaScript, so anything a preview should say has to be in the markup. `og:title`
+   and `og:description` are what Discord renders; `og:site_name` is the deployment's own name, so a
+   card in a channel says whose site it came from rather than only what it offers.
+
+   `og:url` is deliberately ABSENT. It is the canonical address a card links to, and the canonical
+   address of this page is the bearer token in its own URL — writing it here would put the
+   capability into a second place, and into whatever the crawler stores. The card links to the URL
+   that was pasted regardless, which is the one the sender chose to share. #}
+{% block unfurl %}
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="{{ base.site_name }}">
+<meta property="og:title" content="{{ headline }}">
+<meta property="og:description" content="{{ summary }}">
+<meta name="theme-color" content="#3f7fd0">
+{% endblock %}
+
+{% block content %}
+<h1>{{ headline }}</h1>
+<p>{{ summary }}</p>
+
+{% if offered %}
+{% if base.is_logged_in %}
+{# **A POST, and the whole redesign turns on it.** Redeeming used to happen on the GET, so a
+   single-use link was spent by whatever fetched it first — a browser prefetch, a link scanner,
+   anything with the reader's session. It also meant the acceptance happened before the page could
+   say what was being accepted. Now the GET describes and the POST decides, which is the ordinary
+   rule for a request that changes something and was the one thing missing here. #}
+<form method="post" action="{{ action }}">
+<button type="submit">{{ confirm }}</button>
+</form>
+{% else %}
+{# Straight to the login, carrying this page as the return address, so the reader comes back here
+   and confirms rather than being redirected somewhere with the deed already done. #}
+<p><a class="button" href="/auth/login?redirect={{ action }}">Sign in with Discord to continue</a></p>
+<p class="hint">You will come back to this page afterwards to confirm.</p>
+{% endif %}
+{% else %}
+{# One message for never-existed, expired and already-used alike. They need different words to the
+   person who MINTED the link and none at all to somebody holding a bad one: distinguishing them
+   here would answer "is this a real token" for anybody who tried. #}
+<p class="warning">This link is no longer usable. It may have been used already, or it may have
+expired. Ask whoever sent it for a new one.</p>
+{% endif %}
+{% endblock %}

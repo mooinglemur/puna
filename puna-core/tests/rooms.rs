@@ -318,6 +318,102 @@ async fn assert_mode(conn: &mut diesel_async::AsyncPgConnection, id: RoomId, mod
     }
 }
 
+/// **Describing a link must never spend it**, which is the property the whole landing page rests
+/// on.
+///
+/// A claim token is single-use and a chat client fetches a link the moment it is pasted, before
+/// anybody has clicked — so a read path that went through `claim` would leave the recipient with a
+/// link that had already worked for a crawler. The same is true of any prefetch holding a session,
+/// which is how the old `GET`-that-redeemed could be spent by a browser being helpful.
+///
+/// Asserted by reading twice and then claiming, because the failure is invisible from the read
+/// itself: a consuming lookup returns exactly the same offer the first time.
+#[tokio::test]
+async fn describing_a_claim_link_does_not_spend_it() {
+    with_db(|pool| async move {
+        let mut conn = pool.get().await.expect("connection");
+        users(&mut conn).await;
+        let generation = seed_generation(&mut conn, false).await;
+        let id = room::create(
+            &mut conn,
+            &NewRoom::direct(Environment::Dev, "Friday async", generation, OWNER),
+        )
+        .await
+        .expect("create");
+
+        let slots = slot::list(&mut conn, id).await.expect("slots");
+        let token = slots[0].claim_token.clone().expect("token");
+
+        for _ in 0..2 {
+            let offer = slot::offered_by_claim_token(&mut conn, &token)
+                .await
+                .expect("read")
+                .expect("an unspent link describes itself");
+            assert_eq!(offer.room_id, id);
+            assert_eq!(offer.room_name, "Friday async");
+            assert_eq!(offer.slot_number, slots[0].slot_number);
+            assert_eq!(offer.player_name, slots[0].player_name);
+        }
+
+        // Still claimable afterwards, by somebody who is not the crawler.
+        slot::claim(&mut conn, &token, PLAYER).await.expect("claim");
+
+        // And a spent link describes nothing, so the page cannot offer what it cannot deliver.
+        assert!(
+            slot::offered_by_claim_token(&mut conn, &token)
+                .await
+                .expect("read")
+                .is_none(),
+            "a spent claim link still describes itself, so the page would offer a dead control"
+        );
+    })
+    .await;
+}
+
+/// The same property for an invite, where the cost of getting it wrong is one use rather than the
+/// only one — an organizer who minted a three-use link would find it two.
+#[tokio::test]
+async fn describing_an_invite_does_not_spend_a_use() {
+    with_db(|pool| async move {
+        let mut conn = pool.get().await.expect("connection");
+        users(&mut conn).await;
+        let generation = seed_generation(&mut conn, false).await;
+        let id = room::create(
+            &mut conn,
+            &NewRoom::direct(Environment::Dev, "Friday async", generation, OWNER),
+        )
+        .await
+        .expect("create");
+
+        let token = member::create_invite(&mut conn, id, RoomRole::Helper, OWNER, None, Some(1))
+            .await
+            .expect("invite");
+
+        for _ in 0..3 {
+            let offer = member::offered_by_invite_token(&mut conn, &token)
+                .await
+                .expect("read")
+                .expect("an unspent invite describes itself");
+            assert_eq!(offer.room_id, id);
+            assert_eq!(offer.room_name, "Friday async");
+            assert_eq!(offer.role, RoomRole::Helper);
+        }
+
+        // The single use it was minted with is still there.
+        member::redeem_invite(&mut conn, &token, PLAYER)
+            .await
+            .expect("redeem");
+        assert!(
+            member::offered_by_invite_token(&mut conn, &token)
+                .await
+                .expect("read")
+                .is_none(),
+            "a spent invite still describes itself"
+        );
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn a_claim_link_is_single_use_and_grants_only_that_slot() {
     with_db(|pool| async move {

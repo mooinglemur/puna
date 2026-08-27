@@ -171,9 +171,20 @@
    this page is public. #}
 claimed
 {% else if let Some(token) = slot.claim_token %}
-{# Staff only: this link IS the claim, so it is not shown to ordinary visitors. The copy control
-   takes the whole URL -- a claim link is a thing you send somebody, not a thing you read out. #}
-<a href="/claim/{{ token }}">claim</a>
+{# Staff only: this link is the CAPABILITY, so it is not shown to ordinary visitors. The copy
+   control takes the whole URL -- a claim link is a thing you send somebody, not a thing you read
+   out.
+
+   **`data-claim` makes this a one-click claim rather than a navigation.** `room.js` posts it and
+   rewrites the cell in place, because somebody claiming a slot from the roster is already looking
+   at the slot and has nothing to be told about it.
+
+   The `href` is the fallback and is a real page rather than a dead end: without scripting the click
+   lands on `/claim/<token>`, which describes the slot and asks. That page is not only a fallback --
+   it is what a chat client unfurls when this link is sent to somebody, which is the case the link
+   mostly exists for. #}
+<a href="/claim/{{ token }}" data-claim="/claim/{{ token }}"
+   title="Claim this slot for yourself">claim</a>
 <button type="button" class="copy" data-copy="/claim/{{ token }}"
         title="Copy this claim link" aria-label="Copy the claim link for slot {{+ slot.slot_number }}">
 <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">

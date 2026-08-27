@@ -22,6 +22,64 @@
 //
 // Without this file every control is still a form POST and a redirect, and the transient states
 // still advance on the `<noscript>` meta refresh. Slower, never wrong.
+// Claiming a slot from the roster, in one click.
+//
+// **Its own IIFE, ahead of the panel's, deliberately.** The lifecycle panel below returns early on
+// a page without one, and hanging an unrelated roster feature off that guard is exactly how the
+// clipboard controls ended up dead on `/admin/users` at M21 — a feature working everywhere except
+// the one page whose markup the guard was written for.
+//
+// The anchor's `href` is a real page: unscripted, the click lands on `/claim/<token>`, which
+// describes the slot and asks for a confirmation. That page exists for its own reasons — it is what
+// a chat client unfurls when the link is sent to somebody — so this is a shortcut over it rather
+// than a substitute for it.
+//
+// **The POST is what claims, and the GET never does.** It used to: `GET /claim/<token>` redeemed a
+// single-use token, so a staff member who clicked this instead of copying it took the slot for
+// themselves, and any prefetch holding their session spent the link before its recipient saw it.
+(function () {
+  "use strict";
+
+  document.addEventListener("click", function (event) {
+    var link = event.target.closest("a[data-claim]");
+    if (!link) return;
+    // Anything but a plain left click means the reader asked for something else — a new tab, a
+    // download, a context menu — and every one of those wants the page rather than a mutation
+    // fired from under them.
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+
+    event.preventDefault();
+    if (link.dataset.claiming) return;
+    link.dataset.claiming = "1";
+    link.textContent = "claiming…";
+
+    fetch(link.dataset.claim, {
+      method: "POST",
+      headers: { Accept: "application/json" },
+      // The session is a cookie, and a fetch does not send one unless told to.
+      credentials: "same-origin",
+    })
+      .then(function (response) {
+        if (!response.ok) throw new Error(response.status);
+        return response.json();
+      })
+      .then(function (result) {
+        // The cell holds the link and the copy control; both are spent now, so the whole cell
+        // becomes what a reload would have rendered for a claimed slot.
+        var cell = link.closest("td") || link.parentNode;
+        cell.textContent = result.owner_name || "claimed";
+      })
+      .catch(function () {
+        // **Falls back to the page rather than reporting failure in place.** A claim that did not
+        // land is nearly always a link somebody else spent first, and `/claim/<token>` is the thing
+        // that says so in words — where an error in a table cell would say only that something
+        // went wrong.
+        window.location.href = link.href;
+      });
+  });
+})();
+
 (function () {
   "use strict";
 
