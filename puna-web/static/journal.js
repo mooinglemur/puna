@@ -130,6 +130,30 @@
     return "[" + list.join(", ") + "]";
   }
 
+  // **What a connection is DOING, in the reference's own words.**
+  //
+  // `_non_game_messages` in `MultiServer.py`, transcribed rather than paraphrased: a tag decides
+  // the verb, and every Archipelago client has always announced a join as "X playing Balatro has
+  // joined" or "X tracking has joined". Order is the reference's, because a connection can carry
+  // more than one of these and the first match wins there.
+  //
+  // Worth inheriting rather than rendering the raw tags, because it is the difference between a
+  // reader knowing a tracker just attached and a reader parsing `["AP","Tracker"]` to work it out.
+  var CLIENT_VERBS = [
+    ["HintGame", "hinting"],
+    ["Tracker", "tracking"],
+    ["TextOnly", "viewing"],
+  ];
+
+  function clientVerb(list) {
+    if (Array.isArray(list)) {
+      for (var i = 0; i < CLIENT_VERBS.length; i++) {
+        if (list.indexOf(CLIENT_VERBS[i][0]) !== -1) return CLIENT_VERBS[i][1];
+      }
+    }
+    return "playing";
+  }
+
   // The build behind a `started`/`stopped` pair. `build_rev` ending in `+` means the tree was
   // dirty, which on a room off a CI image means something was built outside the pipeline.
   function build(event) {
@@ -183,12 +207,27 @@
     }
 
     switch (event.type) {
+      // **Two sentences, and the reference implementation writes both.**
+      //
+      // `json_format_send_event` in `MultiServer.py` branches on whether the finder is also the
+      // receiver: "X found their Y (location)" when it is, "X sent Y to Z (location)" when it is
+      // not. Every Archipelago client has always rendered it that way, so a feed that said "Troy
+      // sent Sword to Troy" would be describing the most ordinary event in a multiworld — a player
+      // finding something of their own — in words no player has ever seen it in.
+      //
+      // Compared on the slot NUMBERS rather than the names: the numbers are what the room means by
+      // identity, and they are present on records whose names are not.
       case "check":
         cell(row, event.finder_name || "slot " + event.finder, "who");
-        cell(row, " sent ", "verb");
-        cell(row, event.item_name || "item " + event.item, itemClass(event.flags));
-        cell(row, " to ", "verb");
-        cell(row, event.receiver_name || "slot " + event.receiver, "who");
+        if (event.finder === event.receiver) {
+          cell(row, " found their ", "verb");
+          cell(row, event.item_name || "item " + event.item, itemClass(event.flags));
+        } else {
+          cell(row, " sent ", "verb");
+          cell(row, event.item_name || "item " + event.item, itemClass(event.flags));
+          cell(row, " to ", "verb");
+          cell(row, event.receiver_name || "slot " + event.receiver, "who");
+        }
         cell(row, " (", "verb");
         cell(row, event.location_name || "location " + event.location, "where");
         cell(row, ")", "verb");
@@ -268,21 +307,36 @@
         break;
 
       // One record per CONNECTION, not per player: a slot running a game client, a text client and
-      // a tracker produces three. So the tags are worth showing — they are what tells those three
-      // apart, and they decide whether a connection may claim the goal or receives chat at all.
+      // a tracker produces three. **The reference's sentence, minus the team**: `on_client_joined`
+      // announces "X (Team #1) playing Balatro has joined. Client(0.6.8), {'AP'}." — the verb comes
+      // from the tags, so a tracker attaching reads as tracking rather than as an array to parse.
+      //
+      // `(Team #1)` is dropped deliberately: one team exists and nothing can generate a second, so
+      // it is a constant on every line. See `model::slot`'s note on why Puna keys on slot alone.
       case "connected":
         who(row, event);
-        cell(row, " connected", "verb");
-        cell(row, event.game ? " — " + event.game : "", "where");
+        cell(row, " " + clientVerb(event.tags), "verb");
+        cell(row, event.game ? " " + event.game : "", "where");
+        cell(row, " has joined", "verb");
+        cell(row, event.version ? " — client " + event.version : "", "hint");
         cell(row, " " + tags(event.tags), "hint");
         break;
 
       // `slot_empty` is the field worth building on: closing one of three clients is ordinary, the
       // slot going dark is the thing somebody asks about later. Deriving it would mean replaying
       // every join and part from the top of the file.
+      // The reference's counterpart, `on_client_left`: "has left the game" for a game client, and
+      // "has stopped tracking the game" for one of the others. `slot_empty` is Puna's own addition
+      // — the reference has no equivalent, and it is the half somebody actually asks about later,
+      // since closing one of three clients is ordinary and the slot going dark is not.
       case "disconnected":
         who(row, event);
-        cell(row, " disconnected", "verb");
+        var verb = clientVerb(event.tags);
+        cell(
+          row,
+          verb === "playing" ? " has left the game" : " has stopped " + verb + " the game",
+          "verb"
+        );
         cell(row, event.slot_empty ? " — slot is now empty" : "", "hint");
         break;
 
@@ -294,10 +348,12 @@
 
       // Written BEFORE the checks it causes, so it sits above the release burst rather than buried
       // under three thousand lines of it. Worth rendering as an arrival rather than a status.
+      // `on_goal_achieved`'s wording, again without the team. Not "finished": the reference has
+      // said "has completed their goal" since forever, and it is the line a player screenshots.
       case "goal":
         who(row, event);
-        cell(row, " finished", "verb");
-        cell(row, event.game ? " " + event.game : "", "where");
+        cell(row, " has completed their goal", "verb");
+        cell(row, event.game ? " — " + event.game : "", "where");
         break;
 
       // Every mutating admin verb, recorded at the dispatch point as it was ASKED FOR -- so a
