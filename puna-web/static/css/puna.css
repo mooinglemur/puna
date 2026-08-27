@@ -1367,3 +1367,65 @@ h1 .scope {
 .form-actions { display: flex; gap: 0.8rem; align-items: center; }
 
 .form-actions .cancel { color: var(--muted); }
+
+/* --- the room's history feed ---------------------------------------------------------------------
+   A terminal, deliberately: this is Archipelago's own item feed and players read it in a client that
+   looks like this. Fixed width, dark ground in both themes, and the item colors are the protocol's
+   `flags` rather than decoration -- progression, useful and trap are what a reader is scanning for.
+
+   The ground stays dark in LIGHT mode too, which is the one place this stylesheet does not follow
+   the theme. A feed of colored tokens on white is unreadable at the saturations the flags need, and
+   the alternative -- a second palette tuned for light -- would be two sets of meanings for one set
+   of bits. It is a console; consoles are dark. */
+.journal {
+  --feed-bg: #16181c;
+  --feed-dim: #6d7480;
+  background: var(--feed-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  /* Tall enough to be the page's subject and bounded so the reader keeps the controls above it.
+     `overflow-y` is named explicitly beside `overflow-x` for the reason the lint enforces: setting
+     one axis silently forces the other away from `visible`. */
+  height: min(70vh, 42rem);
+  overflow-y: auto;
+  overflow-x: auto;
+  padding: 0.6rem 0.8rem;
+  color: #d7dae0;
+}
+
+.journal .entry {
+  /* One record is one line. It scrolls sideways rather than wrapping, because a wrapped entry reads
+     as two events when the eye is running down a column of timestamps. */
+  white-space: pre;
+}
+
+/* Alternating ground, as the reference client does it: at this density it is what lets the eye keep
+   its place across a long location name. */
+.journal .entry:nth-child(even) { background: #1b1e24; }
+
+.journal .when { color: var(--feed-dim); }
+.journal .verb { color: #9aa2af; }
+.journal .who { color: #e6e7ea; }
+.journal .where { color: #6ac48a; }
+
+/* The item classes, from `flags`. Chosen to stay apart from each other for the common forms of
+   color blindness -- the two most likely to be confused, progression and trap, differ in lightness
+   as well as hue, so the distinction survives being seen as one color. */
+.journal .item { color: #56c8d8; }
+.journal .item.progression { color: #c58af9; }
+.journal .item.useful { color: #7cb0f0; }
+.journal .item.trap { color: #f08a7c; }
+
+.journal .chat-text { color: #e6e7ea; }
+.journal .kind { color: #d7a65a; }
+.journal .hint { color: var(--feed-dim); }
+
+/* pahoa's own marker that records are missing. It is the one line here that must not be skimmable:
+   everything else says what happened, and this says the record is incomplete. */
+.journal .gap-note {
+  color: #f0c86a;
+  font-weight: 600;
+}

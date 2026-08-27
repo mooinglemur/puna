@@ -1,2 +1,48 @@
 {% extends "base.html" %}
-{% block content %}<p>placeholder</p>{% endblock %}
+{% block title %}{{ room.name +}} &mdash; history{% endblock %}
+{# A feed of fixed-width lines, not prose. The same opt-out the tracker and the admin tables take. #}
+{% block layout %}wide{% endblock %}
+{% block content %}
+
+<h1>{{ room.name }}</h1>
+<p class="hint">Everything found in this room, as it happens. <a href="/room/{{ room.id }}">Back to
+the room</a>.</p>
+
+{# **The download is an organizer's and the feed is not**, and the difference is not cosmetic: the
+   file carries every line anybody typed in the room, where the feed below is item movements. The
+   route refuses a non-organizer regardless -- this only decides whether to offer a link that would
+   be refused, which is the rule the room page follows for every other control. #}
+{% if may_download %}
+<p>
+{% if let Some(size) = size %}
+<a href="/room/{{ room.id }}/journal.jsonl" download>Download the whole history</a>
+<span class="hint">&mdash; {{+ size|filesizeformat +}} on disk, sent compressed. One JSON object per
+line, including chat and hints, which is why this is staff-only.</span>
+{% else %}
+<span class="hint">There is no history to download yet. It is written while the room runs.</span>
+{% endif %}
+</p>
+{% endif %}
+
+{# The status line is server-rendered so the page says something before the socket opens, and
+   `journal.js` replaces its text as the connection changes. Without script it stays exactly as it
+   is, which is the honest description of what a scriptless browser is going to get. #}
+<p id="journal-status" class="notice" data-room="{{ room.id }}">Connecting to the room&rsquo;s
+history&hellip;</p>
+
+<noscript>
+<p class="warning">This feed needs JavaScript: it is a live connection to the room rather than a
+page that is regenerated.{% if may_download +%} The download above is the whole history and needs
+nothing.{% endif %}</p>
+</noscript>
+
+{# `aria-live="polite"` rather than `assertive`: a busy room appends several lines a second, and a
+   screen reader interrupting itself for each one would make the page unusable for the reader it is
+   meant to help. Polite lets it finish a sentence first. #}
+<div id="journal" class="journal" role="log" aria-live="polite" aria-label="Room history"></div>
+
+{% endblock %}
+{% block scripts %}
+<script src="/static/localtime.js?v={{ base.static_version }}" defer></script>
+<script src="/static/journal.js?v={{ base.static_version }}" defer></script>
+{% endblock %}

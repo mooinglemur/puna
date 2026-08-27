@@ -583,6 +583,45 @@ mod tests {
         assert_eq!(visibility_for(None), Visibility::Feed);
     }
 
+    /// **The page offers the download to an organizer and to nobody else.**
+    ///
+    /// The route refuses a non-organizer regardless, so this is about not offering a link that would
+    /// 404 — but it is also the page saying, in words, why the file is staff-only where the feed is
+    /// not. A viewer who cannot have it should not be left wondering whether it is missing.
+    #[test]
+    fn only_an_organizer_is_offered_the_file() {
+        use askama::Template;
+
+        let render = |may_download| {
+            JournalTemplate {
+                base: crate::tpl::TplContext::new(&Session::default()),
+                room: crate::routes::rooms::tests::a_room(),
+                size: Some(1024 * 1024),
+                may_download,
+            }
+            .render()
+            .expect("renders")
+        };
+
+        let staff = render(true);
+        assert!(
+            staff.contains("/journal.jsonl"),
+            "an organizer is not offered the file"
+        );
+        assert!(
+            staff.contains("chat"),
+            "the page does not say why the file is staff-only"
+        );
+
+        let viewer = render(false);
+        assert!(
+            !viewer.contains("journal.jsonl"),
+            "a public viewer is offered a download the route would refuse"
+        );
+        // The feed itself is still there: that is the whole point of the tier split.
+        assert!(viewer.contains("journal-status"));
+    }
+
     #[test]
     fn a_request_degrades_to_the_default_rather_than_failing() {
         let parsed: FeedRequest = serde_json::from_str("{}").expect("empty object");

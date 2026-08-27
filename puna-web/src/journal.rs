@@ -47,7 +47,14 @@ pub const FILE_NAME: &str = "history.jsonl";
 pub const MAX_REPLAY_LINES: usize = 5_000;
 
 /// What a viewer gets on connect when it does not ask for anything in particular.
-pub const DEFAULT_REPLAY_LINES: usize = 500;
+///
+/// Enough to arrive at a page with context on it and not enough to be a download: a hundred lines
+/// is roughly 25 KiB, which is a page load rather than an event. `tail` returns whatever is there
+/// when the journal is shorter, so a room that has barely started shows its whole history.
+///
+/// Troy's number, and deliberately not the cap: [`since`] exists for a viewer who wants more, and
+/// the request shape already carries `at` for the day the page offers a time to scroll back to.
+pub const DEFAULT_REPLAY_LINES: usize = 100;
 
 /// The journal of one room, if the orchestrator has provisioned it.
 pub fn path(data_dir: &Path, room: RoomId) -> PathBuf {
@@ -93,7 +100,7 @@ pub fn tail(path: &Path, wanted: usize) -> std::io::Result<Replay> {
 
     // Everything after the last newline is a record still being written; it is not ours to show and
     // the cursor must stop before it so the next read sees it whole.
-    let mut end = size;
+    let end;
     let mut buffer: Vec<u8> = Vec::new();
     let mut start = size;
 

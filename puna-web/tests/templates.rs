@@ -585,6 +585,77 @@ fn code_only(source: &str) -> String {
         .join("\n")
 }
 
+/// **The feed's markup, script and stylesheet agree about their hooks.**
+///
+/// Three files, three spellings of the same contract — `journal.html` names the elements,
+/// `journal.js` looks them up by id and paints classes onto what it builds, and `puna.css` gives
+/// those classes meaning. Every half of it fails silently: a renamed id makes the script return at
+/// its first `if`, so the page renders and simply never connects, with nothing in a console anybody
+/// has open; a class the stylesheet does not know leaves the feed as undifferentiated grey text,
+/// which reads as a design choice rather than a bug.
+///
+/// The item classes are the sharpest case: they encode the protocol's `flags`, so losing one means
+/// a trap and a progression item look identical to somebody scanning for what just hit them.
+#[test]
+fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
+    let markup = std::fs::read_to_string(source("templates/rooms/journal.html")).expect("template");
+    let script = std::fs::read_to_string(source("static/journal.js")).expect("journal.js");
+    let css = std::fs::read_to_string(source("static/css/puna.css")).expect("puna.css");
+    let code = code_only(&script);
+
+    // Ids the script gives up on, silently, if the template renames them.
+    for id in ["journal", "journal-status"] {
+        assert!(
+            code.contains(&format!("getElementById(\"{id}\")")),
+            "journal.js no longer looks up `{id}`"
+        );
+        assert!(
+            markup.contains(&format!("id=\"{id}\"")),
+            "the journal template does not render `#{id}`, so the feed never starts"
+        );
+    }
+
+    // The room id travels through a data attribute, and the script returns without it.
+    assert!(
+        code.contains("status.dataset.room"),
+        "journal.js no longer reads the room id"
+    );
+    assert!(
+        markup.contains("data-room="),
+        "the journal template does not carry the room id"
+    );
+
+    // Every class the script paints has a rule. The item classes carry `flags`, so a missing one is
+    // a trap that looks like an ordinary item.
+    for class in [
+        "when",
+        "verb",
+        "who",
+        "where",
+        "item",
+        "progression",
+        "useful",
+        "trap",
+        "gap-note",
+    ] {
+        assert!(
+            code.contains(class),
+            "journal.js no longer paints `{class}`; this lint is checking a class nobody uses"
+        );
+        assert!(
+            css.contains(&format!(".journal .{class}")) || css.contains(&format!(".item.{class}")),
+            "puna.css has no rule for `.{class}`, so the feed renders it as plain text"
+        );
+    }
+
+    // The scheme is derived, never written: hardcoding either breaks in exactly one environment,
+    // and it is the one nobody develops in.
+    assert!(
+        code.contains("location.protocol") && code.contains("wss:") && code.contains("ws:"),
+        "journal.js no longer derives its scheme from the page's"
+    );
+}
+
 /// **The whole-journal download refuses anything but an organizer, in the route.**
 ///
 /// The file carries `chat` — every line anybody typed in the room — where the feed beside it carries

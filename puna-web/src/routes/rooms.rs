@@ -1584,7 +1584,7 @@ pub fn routes() -> Vec<rocket::Route> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn slot(number: i32, owner: Option<i64>) -> Slot {
@@ -1959,7 +1959,7 @@ mod tests {
         }
     }
 
-    fn a_room() -> Room {
+    pub(crate) fn a_room() -> Room {
         Room {
             id: puna_core::ids::RoomId::new(),
             name: "Friday async".into(),
