@@ -33,12 +33,57 @@ pub enum PatchError {
 /// The member every Archipelago patch carries, and the only one this touches.
 const MANIFEST: &str = "archipelago.json";
 
-/// Rewrite `archipelago.json`'s `server` to `host:port`, leaving every other member's contents
-/// exactly as they were.
+/// The credential a `claimed` patch carries, if the room has one for this slot.
 ///
-/// `server` is written as `<host>:<port>` with no scheme, which is what the reference implementation
-/// writes and what clients parse.
-pub fn embed_server(patch: Vec<u8>, host: &str, port: u16) -> Result<Vec<u8>, PatchError> {
+/// The slot name is always needed — it is the *username* half of the URL — so this is `None` only
+/// when the room has no password at all, in which case the patch keeps the bare address.
+#[derive(Debug, Clone)]
+pub struct Credential<'a> {
+    pub slot_name: &'a str,
+    pub password: &'a str,
+}
+
+/// Percent-encode one userinfo component.
+///
+/// **Archipelago `unquote`s both halves** (`CommonClient.py`'s `server_loop`), so this is the other
+/// side of a round trip rather than decoration. It matters because a slot name is arbitrary text
+/// out of an uploaded seed: an `@` in one would end the userinfo early and point the client at a
+/// different host, a `:` would split the password in the wrong place, and a space would produce a
+/// netloc `urlparse` cannot read. Encoded, every one of them survives to be decoded back.
+///
+/// The set kept unescaped is RFC 3986's `unreserved`. Anything else is escaped, including the
+/// sub-delims a URL would technically allow in userinfo — there is nothing to gain from leaving
+/// them raw, and each one is a character somebody's parser might treat specially.
+fn encode_userinfo(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for byte in raw.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(*byte as char);
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
+
+/// Rewrite `archipelago.json`'s `server`, leaving every other member's contents exactly as they
+/// were.
+///
+/// Without a credential the value is `<host>:<port>`, no scheme — what the reference implementation
+/// writes and what every client parses.
+///
+/// With one it is `wss://<slot>:<password>@<host>:<port>`, which Archipelago's own client reads:
+/// `server_loop` hands the address to `urlparse` and takes `username` and `password` off it, and a
+/// patch's `server` reaches that same parser through `args.connect`. The `wss://` is load-bearing
+/// and survives — only `archipelago://` is rewritten to `ws://`, and the TLS context is chosen by
+/// the `wss` prefix, which is what a Puna room needs since it terminates its own TLS.
+pub fn embed_server(
+    patch: Vec<u8>,
+    host: &str,
+    port: u16,
+    credential: Option<Credential<'_>>,
+) -> Result<Vec<u8>, PatchError> {
     let Ok(mut archive) = zip::ZipArchive::new(Cursor::new(&patch)) else {
         return Ok(patch);
     };
@@ -56,7 +101,14 @@ pub fn embed_server(patch: Vec<u8>, host: &str, port: u16) -> Result<Vec<u8>, Pa
         // for it would produce a patch that opens and then fails somewhere less obvious.
         return Ok(patch);
     }
-    manifest["server"] = serde_json::Value::String(format!("{host}:{port}"));
+    manifest["server"] = serde_json::Value::String(match credential {
+        Some(c) => format!(
+            "wss://{}:{}@{host}:{port}",
+            encode_userinfo(c.slot_name),
+            encode_userinfo(c.password)
+        ),
+        None => format!("{host}:{port}"),
+    });
     let rewritten = serde_json::to_vec(&manifest)?;
 
     let mut out = Cursor::new(Vec::with_capacity(patch.len()));
@@ -156,7 +208,8 @@ mod tests {
             &payload,
         );
 
-        let embedded = embed_server(original.clone(), "rooms.example.com", 41234).expect("embed");
+        let embedded =
+            embed_server(original.clone(), "rooms.example.com", 41234, None).expect("embed");
 
         let manifest: serde_json::Value =
             serde_json::from_slice(&member(&embedded, MANIFEST)).expect("json");
@@ -179,6 +232,7 @@ mod tests {
             patch(serde_json::json!({ "game": "Timespinner" }), b"x"),
             "rooms.example.com",
             40000,
+            None,
         )
         .expect("embed");
 
@@ -194,7 +248,7 @@ mod tests {
         // Not a zip at all -- some games ship a bare binary patch.
         let raw = b"BSDIFF40\x00\x01\x02".to_vec();
         assert_eq!(
-            embed_server(raw.clone(), "host", 1).expect("passthrough"),
+            embed_server(raw.clone(), "host", 1, None).expect("passthrough"),
             raw
         );
 
@@ -210,7 +264,7 @@ mod tests {
         }
         let no_manifest = out.into_inner();
         assert_eq!(
-            embed_server(no_manifest.clone(), "host", 1).expect("passthrough"),
+            embed_server(no_manifest.clone(), "host", 1, None).expect("passthrough"),
             no_manifest
         );
 
@@ -226,7 +280,7 @@ mod tests {
         }
         let odd = out.into_inner();
         assert_eq!(
-            embed_server(odd.clone(), "host", 1).expect("passthrough"),
+            embed_server(odd.clone(), "host", 1, None).expect("passthrough"),
             odd
         );
     }
@@ -246,7 +300,7 @@ mod tests {
             writer.finish().unwrap();
         }
         assert!(matches!(
-            embed_server(out.into_inner(), "host", 1),
+            embed_server(out.into_inner(), "host", 1, None),
             Err(PatchError::Json(_))
         ));
     }
@@ -257,9 +311,9 @@ mod tests {
     fn embedding_is_idempotent_and_overwrites_a_previous_address() {
         let original = patch(serde_json::json!({ "server": "old.example:1234" }), b"data");
 
-        let once = embed_server(original, "rooms.example.com", 41234).expect("first");
-        let twice = embed_server(once.clone(), "rooms.example.com", 41234).expect("second");
-        let moved = embed_server(twice, "rooms.example.com", 40002).expect("third");
+        let once = embed_server(original, "rooms.example.com", 41234, None).expect("first");
+        let twice = embed_server(once.clone(), "rooms.example.com", 41234, None).expect("second");
+        let moved = embed_server(twice, "rooms.example.com", 40002, None).expect("third");
 
         let manifest: serde_json::Value =
             serde_json::from_slice(&member(&moved, MANIFEST)).expect("json");
@@ -286,11 +340,96 @@ mod tests {
             writer.finish().unwrap();
         }
 
-        let embedded = embed_server(out.into_inner(), "host", 40000).expect("embed");
+        let embedded = embed_server(out.into_inner(), "host", 40000, None).expect("embed");
         let archive = zip::ZipArchive::new(Cursor::new(&embedded)).expect("a zip");
         let names: Vec<String> = archive.file_names().map(str::to_string).collect();
 
         assert!(names.iter().any(|n| n == "assets/"), "{names:?}");
         assert_eq!(member(&embedded, "assets/thing.bin"), b"payload");
+    }
+
+    /// **A claimed patch carries a URL Archipelago's own client can read.**
+    ///
+    /// The shape is `wss://<slot>:<password>@<host>:<port>`, and it is not a guess: `server_loop`
+    /// in `CommonClient.py` hands the address to `urlparse` and takes `username` and `password` off
+    /// it, and a patch's `server` reaches that parser through `args.connect`. `wss://` survives —
+    /// only `archipelago://` is rewritten — and the TLS context is chosen by that prefix, which a
+    /// Puna room needs because it terminates its own TLS.
+    #[test]
+    fn a_claimed_patch_embeds_a_url_the_client_can_connect_with() {
+        let embedded = embed_server(
+            patch(serde_json::json!({ "server": "" }), b"x"),
+            "mw.example",
+            41234,
+            Some(Credential {
+                slot_name: "MooingYacht1",
+                password: "abcde-fghij",
+            }),
+        )
+        .expect("embed");
+
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&member(&embedded, MANIFEST)).expect("json");
+        assert_eq!(
+            manifest["server"],
+            "wss://MooingYacht1:abcde-fghij@mw.example:41234"
+        );
+    }
+
+    /// **Every character that would silently change the address is escaped.**
+    ///
+    /// Archipelago `unquote`s both halves, so this is one side of a round trip rather than
+    /// decoration — and it is load-bearing because a slot name is arbitrary text out of an uploaded
+    /// seed. Raw, an `@` ends the userinfo early and points the client at a different host
+    /// entirely; a `:` splits the password in the wrong place; a space produces a netloc `urlparse`
+    /// cannot read. None of those fail loudly: they connect somewhere else, or refuse with a
+    /// message about the address rather than about the name.
+    #[test]
+    fn a_slot_name_cannot_rewrite_the_address_it_is_embedded_in() {
+        let embedded = embed_server(
+            patch(serde_json::json!({ "server": "" }), b"x"),
+            "mw.example",
+            41234,
+            Some(Credential {
+                // An `@` and a host, which is the hostile case: unescaped this reads as
+                // `evil.test:1/` being the server.
+                slot_name: "a@evil.test:1/ b",
+                password: "p:s@w/d",
+            }),
+        )
+        .expect("embed");
+
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&member(&embedded, MANIFEST)).expect("json");
+        let server = manifest["server"].as_str().expect("a string");
+
+        assert_eq!(
+            server, "wss://a%40evil.test%3A1%2F%20b:p%3As%40w%2Fd@mw.example:41234",
+            "a name or password reached the URL unescaped"
+        );
+        // The property behind the literal above, stated so a future change to the escaping set
+        // still has to keep it: exactly one `@`, and the host follows it.
+        assert_eq!(server.matches('@').count(), 1);
+        assert!(server.ends_with("@mw.example:41234"));
+    }
+
+    /// No credential is no change: the bare address, exactly as before.
+    #[test]
+    fn an_open_patch_carries_the_address_and_nothing_else() {
+        let embedded = embed_server(
+            patch(serde_json::json!({ "server": "" }), b"x"),
+            "mw.example",
+            41234,
+            None,
+        )
+        .expect("embed");
+
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&member(&embedded, MANIFEST)).expect("json");
+        assert_eq!(manifest["server"], "mw.example:41234");
+        assert!(
+            !manifest["server"].as_str().expect("string").contains('@'),
+            "a patch with no credential carries userinfo"
+        );
     }
 }

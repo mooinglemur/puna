@@ -759,6 +759,66 @@ async fn a_spectator_is_a_first_class_slot() {
     .await;
 }
 
+/// **`open` widens the patch and nothing else.**
+///
+/// This is the reference implementation's behavior — archipelago.gg serves every slot's patch to
+/// anyone holding the room's URL — and it is the whole trade the two policies express: `claimed`
+/// costs a player a sign-in and a claim, and pays them back by embedding the credential so the
+/// client connects on its own.
+///
+/// **The half that must not move is the password route.** Both take a slot guard, they sit two
+/// lines apart in the roster, and widening them together would turn "patches are public, as
+/// upstream" into "every slot's password is public" — with nothing failing, on a page that is
+/// already public. So the two rules are separate functions and this asserts they disagree.
+#[tokio::test]
+async fn an_open_patch_policy_widens_the_patch_and_never_the_password() {
+    use puna_core::model::room::PatchPolicy;
+
+    with_db(|pool| async move {
+        let mut conn = pool.get().await.expect("connection");
+        users(&mut conn).await;
+        let generation = seed_generation(&mut conn, false).await;
+        let id = room::create(
+            &mut conn,
+            &NewRoom::direct(Environment::Dev, "async", generation, OWNER),
+        )
+        .await
+        .expect("create");
+
+        let slots = slot::list(&mut conn, id).await.expect("slots");
+        let token = slots[0].claim_token.clone().expect("token");
+        let held = slot::claim(&mut conn, &token, PLAYER).await.expect("claim");
+
+        // A stranger: no slot here, no role, not an admin.
+        assert!(
+            !slot::may_download_patch(PatchPolicy::Claimed, &held, Some(STRANGER), None, false),
+            "a claimed room served a patch to somebody with no claim on it"
+        );
+        assert!(
+            slot::may_download_patch(PatchPolicy::Open, &held, Some(STRANGER), None, false),
+            "an open room refused a patch, which is the whole behavior the policy exists for"
+        );
+        // Not even signed in, which is the case that makes it upstream's behavior rather than a
+        // slightly looser version of Puna's.
+        assert!(slot::may_download_patch(
+            PatchPolicy::Open,
+            &held,
+            None,
+            None,
+            false
+        ));
+
+        // The password is untouched by either policy: it goes through `may_access`, which knows
+        // nothing about patches.
+        assert!(
+            !slot::may_access(&held, Some(STRANGER), None, false),
+            "the patch policy reached the password rule"
+        );
+        assert!(slot::may_access(&held, Some(PLAYER), None, false));
+    })
+    .await;
+}
+
 /// A rename changes the label and nothing else.
 ///
 /// **The point of the test is the second half.** Every other control on the room page that looks

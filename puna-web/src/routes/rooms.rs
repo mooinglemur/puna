@@ -200,7 +200,13 @@ pub struct SlotView {
     /// client rather than a patched ROM -- so offering the link unconditionally would promise a
     /// download that answers 404 with an explanation nobody asked for.
     pub has_patch: bool,
-    /// Whether this viewer would get past `SlotAccess`: its owner, the room's staff, or an admin.
+    /// Whether this viewer would get past `PatchAccess`.
+    ///
+    /// **Two rules, because the room chooses between them.** Under `claimed` it is the slot's
+    /// owner, the room's staff or an admin; under `open` it is everybody, which is what
+    /// archipelago.gg does. Computed from the same function the guard calls, so the page cannot
+    /// hide a link the route would serve — which is the failure this project has now met from both
+    /// directions: a control with no door, and a door onto nothing.
     pub can_download: bool,
     /// This slot's own tracker id, and **only when the viewer owns the slot**.
     ///
@@ -298,6 +304,7 @@ fn slot_views(
     owner_names: &std::collections::HashMap<i64, String>,
     may_see_roster: bool,
     filters: &Filters,
+    patch_policy: room::PatchPolicy,
 ) -> Vec<SlotView> {
     slots
         .into_iter()
@@ -386,10 +393,11 @@ fn slot_views(
                 (Some(v), Some(o)) if v == o => Some(s.tracker_id),
                 _ => None,
             },
-            // The same three-way rule `SlotAccess` applies, and it deliberately does NOT include
-            // "holds some other slot in this room".
-            can_download: role.is_some()
-                || matches!((viewer, s.owner_id), (Some(v), Some(o)) if v == o),
+            // **The guard's own function, not a copy of its rule.** It deliberately does not
+            // include "holds some other slot in this room", and under `open` it includes everybody.
+            // `role` already carries the admin short-circuit -- `resolve_role` answers Organizer
+            // for an admin -- so passing `false` here is not dropping the admin case.
+            can_download: slot::may_download_patch(patch_policy, &s, viewer, role, false),
             // A claim link is offered to staff, who hand them out. A player who already holds the
             // link does not need the page to show it, and showing it to everyone would let any
             // visitor claim every unclaimed slot in a room whose URL they were given.
@@ -776,6 +784,7 @@ async fn show(
         &owner_names,
         may_see_roster,
         &slot_filters,
+        room.patch_policy,
     );
     let siblings = room::siblings(&mut conn, room.id, room.generation_id).await?;
     let message = event::latest(&mut conn, room.id)
@@ -1921,6 +1930,7 @@ pub(crate) mod tests {
             &Default::default(),
             false,
             &Default::default(),
+            puna_core::model::room::PatchPolicy::Claimed,
         );
         assert!(views[0].password.is_some(), "own slot: password expected");
         assert!(
@@ -1942,6 +1952,7 @@ pub(crate) mod tests {
             &Default::default(),
             false,
             &Default::default(),
+            puna_core::model::room::PatchPolicy::Claimed,
         );
         assert!(
             views.iter().all(|v| v.password.is_none()),
@@ -1958,6 +1969,7 @@ pub(crate) mod tests {
             &Default::default(),
             false,
             &Default::default(),
+            puna_core::model::room::PatchPolicy::Claimed,
         );
         assert!(views.iter().all(|v| v.password.is_some()));
 
@@ -1972,6 +1984,7 @@ pub(crate) mod tests {
             &Default::default(),
             false,
             &Default::default(),
+            puna_core::model::room::PatchPolicy::Claimed,
         );
         assert!(
             views.iter().all(|v| v.password.is_none()),
@@ -2006,6 +2019,7 @@ pub(crate) mod tests {
             &names,
             true,
             &Default::default(),
+            puna_core::model::room::PatchPolicy::Claimed,
         );
         assert_eq!(views[0].owner_name.as_deref(), Some("alice"));
         assert!(
@@ -2027,6 +2041,7 @@ pub(crate) mod tests {
             &names,
             false,
             &Default::default(),
+            puna_core::model::room::PatchPolicy::Claimed,
         );
         assert!(
             views
@@ -2069,6 +2084,7 @@ pub(crate) mod tests {
                 &Default::default(),
                 false,
                 &Default::default(),
+                puna_core::model::room::PatchPolicy::Claimed,
             );
             assert!(
                 views.iter().all(|v| !v.can_release),
@@ -2086,6 +2102,7 @@ pub(crate) mod tests {
                 &Default::default(),
                 false,
                 &Default::default(),
+                puna_core::model::room::PatchPolicy::Claimed,
             );
             assert!(views[0].can_release, "{role:?} may release a claimed slot");
             assert!(!views[1].can_release, "nobody holds slot 2");
@@ -2100,6 +2117,7 @@ pub(crate) mod tests {
             &Default::default(),
             false,
             &Default::default(),
+            puna_core::model::room::PatchPolicy::Claimed,
         );
         assert!(views[0].can_release, "a claimed slot can be released");
         assert!(
@@ -2130,6 +2148,7 @@ pub(crate) mod tests {
             &Default::default(),
             false,
             &Default::default(),
+            puna_core::model::room::PatchPolicy::Claimed,
         );
         assert!(views[0].tracker_id.is_some(), "own slot: link expected");
         assert!(
@@ -2149,6 +2168,7 @@ pub(crate) mod tests {
             &Default::default(),
             false,
             &Default::default(),
+            puna_core::model::room::PatchPolicy::Claimed,
         );
         assert!(
             views.iter().all(|v| v.tracker_id.is_none()),
@@ -2165,6 +2185,7 @@ pub(crate) mod tests {
             &Default::default(),
             false,
             &Default::default(),
+            puna_core::model::room::PatchPolicy::Claimed,
         );
         assert!(views.iter().all(|v| v.tracker_id.is_none()));
     }
@@ -3305,6 +3326,7 @@ pub(crate) mod tests {
             &Default::default(),
             false,
             &Default::default(),
+            puna_core::model::room::PatchPolicy::Claimed,
         );
         assert!(staff_view[0].is_locked, "staff cannot see who is barred");
 
@@ -3317,6 +3339,7 @@ pub(crate) mod tests {
             &Default::default(),
             false,
             &Default::default(),
+            puna_core::model::room::PatchPolicy::Claimed,
         );
         assert!(
             !public_view[0].is_locked,
@@ -3363,6 +3386,7 @@ pub(crate) mod tests {
                     room_filters,
                     slots,
                 },
+                puna_core::model::room::PatchPolicy::Claimed,
             )
             .remove(0)
         };

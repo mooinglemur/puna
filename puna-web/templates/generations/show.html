@@ -20,7 +20,16 @@ before rather than a second copy of it.</p>
 <dt>Spoiler</dt><dd>{% if generation.has_spoiler %}included{% else %}none{% endif %}</dd>
 </dl>
 
-<h2>Slots</h2>
+{# Collapsed so the creation form is the first thing below the facts rather than the thing under a
+   200-row table. The roster is reference material -- it is what the seed contains, which somebody
+   has usually just generated and already knows -- while the form is what this page is FOR.
+
+   `<details class="manage">` is this codebase's fold, the same one the room page's staff section
+   and `/admin/rooms` use, so it needs no script and gets the existing summary styling. The count
+   is in the summary because a collapsed section that does not say how much it is hiding is one
+   people open to find out. #}
+<details class="manage">
+<summary><h2>Slots ({{ slots.len() }})</h2></summary>
 <div class="scroll-x">
 <table class="slots">
 <thead><tr><th>#</th><th>Player</th><th>Game</th><th>Patch</th></tr></thead>
@@ -41,6 +50,7 @@ before rather than a second copy of it.</p>
 </tbody>
 </table>
 </div>
+</details>
 
 {# **Its own panel, laid out as rows of choices rather than a line of controls.**
 
@@ -64,8 +74,7 @@ multiworlds sharing the same seed, and a second one costs no storage.</p>
 <label for="name">Room name</label>
 <div class="choices">
 <input type="text" id="name" name="name" value="{{ default_room_name }}" required>
-<p class="hint">Shown on the room page and in every link to it. Changing it later is the one
-setting here that does not restart the room.</p>
+<p class="hint">Shown on the room, tracker, and feed pages, as well as any other page related to the room. The name can be changed later without restarting the room.</p>
 </div>
 </div>
 
@@ -77,10 +86,10 @@ setting here that does not restart the room.</p>
 <label><input type="radio" name="slot_auth" value="per_slot"> Per-slot</label>
 <p class="hint" data-for="none">Anyone holding the address can connect as any slot. The
 ordinary choice for a game among people who know each other.</p>
-<p class="hint" data-for="room">One password for the whole room, which every player types.
+<p class="hint" data-for="room">One password for the whole room for every player.
 Shown to participants and staff on the room page.</p>
 <p class="hint" data-for="per_slot">Each slot gets its own password, so a player can only
-connect as their own. Also what lets a slot be locked without disturbing anybody else.</p>
+connect with their own.</p>
 </div>
 </div>
 
@@ -89,12 +98,12 @@ connect as their own. Also what lets a slot be locked without disturbing anybody
 <div class="choices">
 <label><input type="radio" name="patch_policy" value="open"> Open</label>
 <label><input type="radio" name="patch_policy" value="claimed" checked> Claimed</label>
-<p class="hint" data-for="open">The patch carries only the room's address, so a player with a
-password types it into their client themselves.</p>
-<p class="hint" data-for="claimed">The patch carries the address <em>and</em> the slot's
-credential, where the room has one, so the client it launches connects without being told
-anything. The credential travels inside the file &mdash; which is already a per-slot file served
-only to that slot's owner and the room's staff.</p>
+<p class="hint" data-for="open"><em>Anyone with the room URL can download any patch.</em>
+The patch carries only the room's address, so a player with a password types it into their client themselves.</p>
+<p class="hint" data-for="claimed"><em>Only the slot owner can see their patch.</em>
+The patch carries the address <em>and</em> the slot's credential, where the room has one,
+so the client it launches connects without being told anything. The credential travels inside
+the file &mdash; which is already a per-slot file served only to that slot's owner and the room's staff.</p>
 </div>
 </div>
 
@@ -104,10 +113,9 @@ only to that slot's owner and the room's staff.</p>
 <label><input type="radio" name="journal_policy" value="full"> Open</label>
 <label><input type="radio" name="journal_policy" value="feed" checked> Items only</label>
 <label><input type="radio" name="journal_policy" value="disabled"> Closed</label>
-<p class="hint" data-for="full">Anyone who can open the feed reads the whole history, chat and
-hints included, and can download the file.</p>
-<p class="hint" data-for="feed">Item movements and DeathLinks only. Chat, hints and admin
-actions are withheld and counted. Organizers always read everything.</p>
+<p class="hint" data-for="full">Anyone who can open the feed can read the entire history, including chat,
+connects, disconnects, admin actions, room starts and stops, and hints, and can also download the raw file.</p>
+<p class="hint" data-for="feed">Item movements and Link events only. Organizers always read everything.</p>
 <p class="hint" data-for="disabled">The feed is staff-only; anybody else gets nothing.</p>
 </div>
 </div>
@@ -118,12 +126,11 @@ actions are withheld and counted. Organizers always read everything.</p>
 <label><input type="radio" name="tracker_policy" value="link" checked> Open</label>
 <label><input type="radio" name="tracker_policy" value="members"> Participant</label>
 <label><input type="radio" name="tracker_policy" value="disabled"> Closed</label>
-<p class="hint" data-for="link">The unguessable link is the authorization, as Archipelago's own
+<p class="hint" data-for="link">The link is the authorization, just as Archipelago's own
 tracker works. Shareable with an audience who will never sign in.</p>
 <p class="hint" data-for="members">A Discord sign-in and a slot or a staff role in this room are
-required as well. The race default.</p>
-<p class="hint" data-for="disabled">Nobody but staff, and an unknown link is answered the same
-way as a refused one.</p>
+required to view the tracker. The race default.</p>
+<p class="hint" data-for="disabled">Nobody but staff can see the tracker.</p>
 </div>
 </div>
 
@@ -132,9 +139,9 @@ way as a refused one.</p>
 <div class="choices">
 <label><input type="checkbox" name="server_password" value="1"> Create a remote admin
 password</label>
-<p class="hint">Only for pahoa's in-game <code>!admin login</code>. Puna's own console drives the
+<p class="hint">Only for the room server's <code>!admin login</code>. This website's own console drives the
 room over an authenticated API and needs none of this, so leave it off unless somebody intends to
-administer the room from inside a game client.</p>
+administer the room from inside an AP client.</p>
 </div>
 </div>
 
@@ -146,9 +153,9 @@ administer the room from inside a game client.</p>
 <div class="choices">
 <input type="url" id="lobby_url" name="lobby_url" disabled
        placeholder="not available yet">
-<p class="hint">Optional, and not built on either side yet. It will claim each slot for the
+<p class="hint">Optional. It will claim each slot for the
 Discord account that owns the matching YAML in the lobby, so nobody has to be sent a claim
-link.</p>
+link. (Not built yet)</p>
 </div>
 </div>
 

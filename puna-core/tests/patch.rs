@@ -81,7 +81,7 @@ fn a_real_patch_keeps_everything_but_its_server_field() {
     // A patch is itself a zip; if this one is not, the passthrough path is what is under test and
     // the assertion below still holds.
     let embedded =
-        artifact::embed_server(original.clone(), "rooms.example.com", 41234).expect("embed");
+        artifact::embed_server(original.clone(), "rooms.example.com", 41234, None).expect("embed");
 
     let Ok(before) = zip::ZipArchive::new(Cursor::new(&original)) else {
         assert_eq!(

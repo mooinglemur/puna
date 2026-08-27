@@ -285,11 +285,65 @@ impl SlotAccess {
     }
 }
 
+/// Proof that the caller may download one slot's **patch**.
+///
+/// **A separate type from [`SlotAccess`] rather than a branch inside it**, because the two answer
+/// different questions and only one of them is a room's to widen. A patch is a game file and a room
+/// may publish it to everybody, as archipelago.gg does; a slot's password never is.
+///
+/// The first version keyed on the request path ending in `/patch`, which is the same decision made
+/// implicitly — and it would have gone on compiling, passing and silently applying the wrong rule
+/// the day somebody renamed the route or added a second one. A route asks for the capability it
+/// needs by naming its type.
+pub struct PatchAccess(pub SlotAccess);
+
+impl std::ops::Deref for PatchAccess {
+    type Target = SlotAccess;
+    fn deref(&self) -> &SlotAccess {
+        &self.0
+    }
+}
+
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for PatchAccess {
+    type Error = Error;
+
+    async fn from_request(request: &'r Request<'_>) -> Outcome<Self, Self::Error> {
+        resolve_slot(request, |room, slot, session, role| {
+            slot::may_download_patch(
+                room.patch_policy,
+                slot,
+                session.user_id,
+                role,
+                session.is_admin,
+            )
+        })
+        .await
+        .map(PatchAccess)
+    }
+}
+
 #[rocket::async_trait]
 impl<'r> FromRequest<'r> for SlotAccess {
     type Error = Error;
 
     async fn from_request(request: &'r Request<'_>) -> Outcome<Self, Self::Error> {
+        resolve_slot(request, |_room, slot, session, role| {
+            slot::may_access(slot, session.user_id, role, session.is_admin)
+        })
+        .await
+    }
+}
+
+/// Resolve the room, the slot and the caller's role, then apply one predicate.
+///
+/// Shared by both slot guards so the resolution — and every refusal shape below it — exists once.
+/// The predicate is the whole difference between them.
+async fn resolve_slot(
+    request: &Request<'_>,
+    permits: impl Fn(&Room, &Slot, &Session, Option<RoomRole>) -> bool,
+) -> Outcome<SlotAccess, Error> {
+    {
         let session = Session::from_request_sync(request);
 
         let (room, pool) = match room_from_request(request).await {
@@ -341,7 +395,7 @@ impl<'r> FromRequest<'r> for SlotAccess {
             None
         };
 
-        if slot::may_access(&slot, session.user_id, role, session.is_admin) {
+        if permits(&room, &slot, &session, role) {
             return Outcome::Success(SlotAccess {
                 room,
                 slot,

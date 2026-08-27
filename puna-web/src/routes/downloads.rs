@@ -15,21 +15,23 @@
 //!
 //! ## Two different authorization models, on purpose
 //!
-//! A patch is **per slot**: `SlotAccess` admits its owner, the room's staff, and global admins, and
-//! nobody else -- holding one slot in a room grants nothing about another. A spoiler is **per
+//! A patch is **per slot**, and how narrowly depends on the room: `PatchAccess` applies
+//! `patch_policy`, so a `claimed` room admits its owner, the room's staff and global admins while
+//! an `open` one serves anybody holding the room's URL, as archipelago.gg does. Under `claimed`,
+//! holding one slot in a room grants nothing about another. A spoiler is **per
 //! room**, and its audience is a policy the organizer chose, defaulted from the seed's `race_mode`
 //! because a leaked spoiler in a race cannot be taken back.
 
-use puna_core::artifact::{GenerationPaths, embed_server, storage};
+use puna_core::artifact::{Credential, GenerationPaths, embed_server, storage};
 use puna_core::model::member;
-use puna_core::model::room::SpoilerPolicy;
+use puna_core::model::room::{self, SpoilerPolicy};
 use puna_core::model::{generation, port, slot};
 use rocket::http::Header;
 use rocket::{Responder, State, get, routes};
 
 use crate::auth::Session;
 use crate::error::{Result, forbidden, not_found};
-use crate::guards::SlotAccess;
+use crate::guards::PatchAccess;
 use crate::params::RoomParam;
 use crate::{AdvertiseHost, DataDir};
 
@@ -53,7 +55,7 @@ struct SpoilerText(String);
 async fn slot_patch(
     _id: RoomParam,
     n: i32,
-    access: SlotAccess,
+    access: PatchAccess,
     pool: &State<Pool>,
     data_dir: &State<DataDir>,
     advertise_host: &State<AdvertiseHost>,
@@ -110,7 +112,28 @@ async fn slot_patch(
         // A failure here is a 500 by way of `From`, and it should be: the file is in Puna's own
         // storage, so a patch that cannot be rewritten is a broken artifact rather than a bad
         // request, and the log gets the chain while the caller gets a status.
-        Some(base_port) => embed_server(stored, &advertise_host.0, base_port)?,
+        Some(base_port) => {
+            // **The credential is read from the ROOM's slot, not the generation's.** The entry
+            // above found the file, which belongs to the shared generation; the password belongs to
+            // this room's copy of the slot, and two rooms on one seed have different ones.
+            //
+            // `room` mode uses the room-wide password with the slot's own name as the username --
+            // pahoa authenticates the password and the name identifies the slot, so the pair is
+            // what a client needs either way.
+            let credential = match access.room.patch_policy {
+                room::PatchPolicy::Open => None,
+                room::PatchPolicy::Claimed => match access.room.slot_auth {
+                    room::SlotAuth::None => None,
+                    room::SlotAuth::Room => access.room.password.as_deref(),
+                    room::SlotAuth::PerSlot => access.slot.password.as_deref(),
+                },
+            };
+            let credential = credential.map(|password| Credential {
+                slot_name: &access.slot.player_name,
+                password,
+            });
+            embed_server(stored, &advertise_host.0, base_port, credential)?
+        }
         None => {
             tracing::info!(
                 room = %access.room.id,

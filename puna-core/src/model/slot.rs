@@ -280,6 +280,34 @@ pub async fn owns_a_slot(
 /// it by calling this rather than by remembering the policy. Note what is deliberately absent:
 /// **holding another slot in the same room grants nothing.** A multiworld is a group of people who
 /// can see each other's item traffic, not a group who share credentials.
+/// Who may download a slot's **patch**, which is a wider question than [`may_access`].
+///
+/// **`PatchPolicy::Open` is the reference implementation's behavior**: archipelago.gg lists every
+/// slot's patch on the room page and serves it to anyone holding the room's URL. Puna's own default
+/// is narrower, and the narrowing is real friction — a player has to sign in and claim before they
+/// can download the file they came for.
+///
+/// The two policies are one decision because they are the same argument in both directions. A
+/// public patch must not carry a credential, and a patch that carries one must not be public — so
+/// `Claimed` buys back the friction it costs by embedding the address *and* the password, and
+/// `Open` trades that away for the reference's convenience.
+///
+/// **Deliberately not applied to a slot's password**, which stays on [`may_access`] under every
+/// policy. `Open` is a statement about a game file, not about credentials, and the two routes that
+/// take a slot guard must not be widened together.
+pub fn may_download_patch(
+    patch_policy: crate::model::room::PatchPolicy,
+    slot: &Slot,
+    user_id: Option<i64>,
+    role: Option<RoomRole>,
+    is_admin: bool,
+) -> bool {
+    match patch_policy {
+        crate::model::room::PatchPolicy::Open => true,
+        crate::model::room::PatchPolicy::Claimed => may_access(slot, user_id, role, is_admin),
+    }
+}
+
 pub fn may_access(
     slot: &Slot,
     user_id: Option<i64>,
