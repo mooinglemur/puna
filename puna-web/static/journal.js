@@ -51,6 +51,11 @@
   // the walk has reached the beginning of the file and there is nothing earlier to ask for.
   var oldest = null;
   var backfilling = false;
+  // How many earlier records the walk has pulled in, for the progress note. A whole-feed load on a
+  // busy room is dozens of round trips over tens of seconds, and a note that says only "loading"
+  // for all of them is indistinguishable from one that has stopped — which is precisely the
+  // confusion the silent-stop bug above produced, and the reason a bare spinner would not do.
+  var backfilled = 0;
   // Set once the reader asks for the whole feed. It turns the DOM trim off: the trim exists so a
   // page left open overnight does not accumulate a node per check, and it would otherwise eat the
   // top of exactly what the reader just asked to see.
@@ -138,15 +143,6 @@
         cell(row, options(event), "hint");
         break;
 
-      case "withheld":
-        cell(
-          row,
-          event.count + (event.count === 1 ? " record is" : " records are") +
-            " not shown on this feed",
-          "hint"
-        );
-        break;
-
       case "unreadable":
         cell(row, "unreadable record", "gap-note");
         break;
@@ -219,8 +215,8 @@
     return log.scrollHeight - log.scrollTop - log.clientHeight < 40;
   }
 
-  function append(events, withheld) {
-    if (!events.length && !withheld) return;
+  function append(events) {
+    if (!events.length) return;
     stuckToBottom = nearBottom();
 
     var batch = document.createDocumentFragment();
@@ -238,7 +234,6 @@
       }
       batch.appendChild(line(event));
     });
-    if (withheld) batch.appendChild(line({ type: "withheld", count: withheld }));
     log.appendChild(batch);
 
     // Off once the reader has asked for the whole feed: the trim exists to stop an overnight page
@@ -258,8 +253,8 @@
   // and the reader loses the line they were on — which is the whole reason to backfill in place
   // rather than clear and reload. Measuring the scroll height on both sides and adding the
   // difference back keeps the same record under the same pixel.
-  function prepend(events, withheld) {
-    if (!events.length && !withheld) return;
+  function prepend(events) {
+    if (!events.length) return;
 
     var batch = document.createDocumentFragment();
     var previousDay = null;
@@ -274,7 +269,6 @@
       }
       batch.appendChild(line(event));
     });
-    if (withheld) batch.appendChild(line({ type: "withheld", count: withheld }));
 
     var before = log.scrollHeight;
     log.insertBefore(batch, log.firstChild);
@@ -295,6 +289,37 @@
     status.className = className || "notice";
   }
 
+  // **The fact that a feed is filtered belongs in the status line, once, not in the feed.**
+  //
+  // The server reports a `withheld` count per frame, and rendering it as a row put a timestamp-less
+  // line into a stream where every other line is an event at an instant — so it read as something
+  // having happened, scattered through the history once per batch, saying "1 record" each time.
+  // That is metadata about a delivery, and a delivery is a network artifact the reader should never
+  // see the seams of.
+  //
+  // It is still said, because a reader is owed the knowledge that they are looking at part of a
+  // history rather than all of it — and it is said as **what this feed is** rather than as what is
+  // missing from it. "(items only)" is the same phrase the room's own setting offers, so a reader
+  // who goes looking for why sees the words they were shown; a count would describe whatever
+  // happened to be fetched rather than anything about the room.
+  var live = false;
+  var filtered = false;
+
+  function sayLive() {
+    say(
+      filtered
+        ? "Live — following this room's feed (items only)."
+        : "Live — following this room's feed.",
+      "notice"
+    );
+  }
+
+  function noteFiltering(count) {
+    if (!count || filtered) return;
+    filtered = true;
+    if (live) sayLive();
+  }
+
   // Ask for the page of records immediately before what is on screen.
   //
   // One request in flight at a time. The alternative — firing every page at once — would put a
@@ -305,7 +330,12 @@
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     backfilling = true;
     keepEverything = true;
-    setEarlier(false, "Loading earlier records…");
+    setEarlier(
+      false,
+      backfilled
+        ? "Loading earlier records… " + backfilled + " so far."
+        : "Loading earlier records…"
+    );
     socket.send(JSON.stringify({ before: oldest }));
   }
 
@@ -347,26 +377,36 @@
 
       // A backfill page goes on the front and never touches the follow cursor.
       if (frame.kind === "earlier") {
-        prepend(frame.events || [], frame.withheld || 0);
+        prepend(frame.events || []);
+        noteFiltering(frame.withheld);
         oldest = typeof frame.start === "number" ? frame.start : 0;
+        backfilled += (frame.events || []).length;
+        // **Cleared before the next ask, not in the arm that ends the walk.** This request is
+        // finished — its page is on the screen — so `askForEarlier`'s in-flight guard is about the
+        // *next* one. Leaving the flag set until the walk ended made that guard reject every
+        // continuation, so the whole-feed button loaded one page and stopped: button disabled,
+        // note frozen mid-sentence, nothing thrown, 5,000 records of 160,000 on the page. A silent
+        // stop is the worst shape this could fail in, because it looks exactly like a short file.
+        backfilling = false;
         if (oldest > 0) {
           // Keep walking. One page in flight at a time, so a slow disk backs the walk up rather
           // than queueing a thousand requests at a server reading a 250 MB file.
           askForEarlier();
         } else {
-          backfilling = false;
-          setEarlier(false, "Showing the whole feed.");
+          setEarlier(false, "Showing the whole feed — " + backfilled + " earlier records.");
         }
         return;
       }
 
-      append(frame.events || [], frame.withheld || 0);
+      append(frame.events || []);
+      noteFiltering(frame.withheld);
       if (frame.kind === "replay") {
         // The backoff resets on a connection that got as far as a replay, not on one that merely
         // opened: a server that accepts and drops immediately should not be redialled twice a
         // second.
         retry = RETRY_MIN;
-        say("Live — following this room's feed.", "notice");
+        live = true;
+        sayLive();
         log.scrollTop = log.scrollHeight;
 
         // **Re-anchored on every replay, including after a reconnect.** A socket that dropped and

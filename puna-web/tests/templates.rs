@@ -585,6 +585,45 @@ fn code_only(source: &str) -> String {
         .join("\n")
 }
 
+/// **The whole-feed walk clears its in-flight flag before asking for the next page.**
+///
+/// `askForEarlier` refuses to send while `backfilling` is set — one request in flight at a time,
+/// so a slow disk backs the walk up instead of queueing a thousand backwards seeks. The walk then
+/// continues itself from the frame handler, which means the handler must clear the flag *before*
+/// calling it. It did not: the flag was cleared only in the arm taken when the walk had already
+/// reached the start of the file, so every continuation was rejected by the guard.
+///
+/// **The result was a silent stop after one page.** On a room with 160,000 records the button
+/// loaded 5,000, disabled itself, and left the note reading "Loading earlier records…" forever.
+/// Nothing threw, so there was nothing in a console — and the failure is indistinguishable from a
+/// short file, which is why it was reported as "it seems to load a chunk, but then it stops".
+///
+/// Pinned here because nothing in the Rust build parses this file, and the bug is one line of
+/// ordering rather than anything a renderer or a route could notice. Verified against the real
+/// script under a stubbed DOM: 32 pages and 160,000 records with the clear in place, 1 page and
+/// 5,000 without it.
+#[test]
+fn the_whole_feed_walk_can_take_more_than_one_page() {
+    let source = std::fs::read_to_string(source("static/journal.js")).expect("journal.js");
+    let branch = source
+        .split_once(r#"if (frame.kind === "earlier")"#)
+        .expect("the backfill branch")
+        .1;
+    let branch = branch.split_once("\n      }").map_or(branch, |(b, _)| b);
+
+    let cleared = branch.find("backfilling = false").expect(
+        "the backfill branch never clears `backfilling`, so the walk stops after its first page",
+    );
+    let continues = branch
+        .find("askForEarlier()")
+        .expect("the backfill branch never continues the walk");
+    assert!(
+        cleared < continues,
+        "`backfilling` is cleared after the walk asks for its next page, so `askForEarlier` \
+         refuses it and the whole-feed button loads exactly one page, silently"
+    );
+}
+
 /// **The feed's markup, script and stylesheet agree about their hooks.**
 ///
 /// Three files, three spellings of the same contract — `journal.html` names the elements,
