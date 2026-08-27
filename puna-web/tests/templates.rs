@@ -604,7 +604,16 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
     let code = code_only(&script);
 
     // Ids the script gives up on, silently, if the template renames them.
-    for id in ["journal", "journal-status"] {
+    //
+    // `journal-earlier` and `journal-progress` are the backfill control: `journal.js` guards on
+    // their absence, so a rename does not throw — the button simply never appears and the whole
+    // feed can never be loaded, with nothing anywhere saying why.
+    for id in [
+        "journal",
+        "journal-status",
+        "journal-earlier",
+        "journal-progress",
+    ] {
         assert!(
             code.contains(&format!("getElementById(\"{id}\")")),
             "journal.js no longer looks up `{id}`"

@@ -1379,26 +1379,34 @@ h1 .scope {
    page answering "no, not here" is the site overriding a preference it offered. Nor is the dark
    palette usable on a bright display in daylight, which is the case light mode exists for.
 
-   So there are two palettes and the same seven meanings, mapped through `light-dark()` like every
-   other color here. The item hues are not the dark ones lightened: on white they are DARKENED and
-   desaturated, because the same hue that reads clearly at 60% lightness on #16181c is a pale smear
-   on #fbfbfa. Progression and trap keep a lightness gap as well as a hue gap in both themes, so the
-   two a reader most needs to tell apart survive being seen as one color. */
+   So there are two palettes and the same meanings, mapped through `light-dark()` like every other
+   color here. The light values are not the dark ones darkened: they are **purer**, at higher chroma
+   (0.48-0.88 against 0.44-0.51 in dark), because a hue that reads vividly at 60% lightness on
+   #16181c goes muddy rather than pale when it is simply dulled for white. Every one is held to at
+   least 4.5:1 on the ground it sits on, measured rather than judged.
+
+   **Progression and trap are separated by hue alone, and that is a real limitation rather than a
+   claim not worth making.** An earlier version of this comment asserted a lightness gap as well;
+   there is none -- pure purple and pure red land within 0.3% luminance of each other on white, and
+   the same is true of the two in dark. So a reader with red-green or blue-yellow deficiency may see
+   them as one color. What carries the distinction instead is the item's own name and the rarity of
+   traps; if that turns out not to be enough, the fix is a marker on the trap rows rather than a
+   hue nobody can reach. */
 .journal {
   --feed-bg: light-dark(#ffffff, #16181c);
   --feed-stripe: light-dark(#f4f5f7, #1b1e24);
   --feed-rule: light-dark(#e2e4e8, #333842);
   --feed-fg: light-dark(#24272d, #d7dae0);
-  --feed-dim: light-dark(#6b7280, #6d7480);
-  --feed-verb: light-dark(#7a828f, #9aa2af);
+  --feed-dim: light-dark(#5f6875, #6d7480);
+  --feed-verb: light-dark(#5b6472, #9aa2af);
   --feed-who: light-dark(#111318, #e6e7ea);
-  --feed-where: light-dark(#15803d, #6ac48a);
-  --feed-item: light-dark(#0e7490, #56c8d8);
-  --feed-progression: light-dark(#7e22ce, #c58af9);
-  --feed-useful: light-dark(#1d4ed8, #7cb0f0);
-  --feed-trap: light-dark(#b91c1c, #f08a7c);
-  --feed-kind: light-dark(#a16207, #d7a65a);
-  --feed-gap: light-dark(#a16207, #f0c86a);
+  --feed-where: light-dark(#007a29, #6ac48a);
+  --feed-item: light-dark(#007e91, #56c8d8);
+  --feed-progression: light-dark(#a800c8, #c58af9);
+  --feed-useful: light-dark(#0048e0, #7cb0f0);
+  --feed-trap: light-dark(#cc0000, #f08a7c);
+  --feed-kind: light-dark(#985c00, #d7a65a);
+  --feed-gap: light-dark(#985c00, #f0c86a);
   background: var(--feed-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1475,4 +1483,15 @@ h1 .scope {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+/* The backfill control, above the feed rather than inside it: it acts on the whole view, and a
+   control that scrolled away with the records it loads would be unreachable exactly when a reader
+   wants it again. */
+.feed-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin: 0 0 0.5rem;
 }

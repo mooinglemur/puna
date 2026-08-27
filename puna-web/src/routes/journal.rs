@@ -311,6 +311,13 @@ struct Anchor {
 #[derive(serde::Deserialize, Default)]
 struct FeedRequest {
     from: Option<Anchor>,
+    /// Page **backwards**: the records immediately before this byte offset.
+    ///
+    /// Sent repeatedly by the page's "load the whole feed" control, each time with the `start` the
+    /// previous answer reported, until that reaches zero. The server holds no per-viewer position —
+    /// the offset the client returns *is* the position — so a viewer that reconnects mid-backfill
+    /// simply carries on, and two tabs backfilling at once cost nothing between them.
+    before: Option<u64>,
 }
 
 /// The live feed: replay from a point, then follow.
@@ -364,14 +371,24 @@ async fn feed(
             let mut cursor = match opening {
                 Ok(Ok(replay)) => {
                     let cursor = replay.cursor;
-                    let frame = batch(
+                    // `start` rides the opening frame as well as every backfill page, because it is
+                    // what the page anchors its walk on -- and it has to be re-sent on every replay,
+                    // including after a reconnect, or a viewer that dropped mid-backfill would ask
+                    // for a region its current view no longer joins on to.
+                    let mut frame: serde_json::Value = serde_json::from_str(&batch(
                         "replay",
                         &replay.lines,
                         cursor,
                         Some(replay.size),
                         visibility,
-                    );
-                    if stream.send(ws::Message::Text(frame)).await.is_err() {
+                    ))
+                    .unwrap_or_default();
+                    frame["start"] = replay.start.into();
+                    if stream
+                        .send(ws::Message::Text(frame.to_string()))
+                        .await
+                        .is_err()
+                    {
                         return Ok(());
                     }
                     cursor
@@ -416,8 +433,35 @@ async fn feed(
                     }
                     incoming = stream.next() => match incoming {
                         Some(Ok(ws::Message::Close(_))) | Some(Err(_)) | None => return Ok(()),
-                        // Anything else is a client re-anchoring or a pong; the follow loop is
-                        // the contract and a mid-stream re-anchor is a reconnect on the page's side.
+
+                        // **A backfill page, on the same socket as the follow.** One connection
+                        // rather than a second endpoint: the viewer is already authorized here, the
+                        // tier is already decided, and a page walking backwards while records
+                        // arrive at the bottom is exactly what the `select!` above makes free.
+                        Some(Ok(ws::Message::Text(text))) => {
+                            let request: FeedRequest =
+                                serde_json::from_str(&text).unwrap_or_default();
+                            let Some(end) = request.before else { continue };
+
+                            let path = path.clone();
+                            let Ok(Ok(page)) = tokio::task::spawn_blocking(move ||
+                                journal::before(&path, end, journal::MAX_REPLAY_LINES)).await
+                            else { continue };
+
+                            // `start` is what the client sends back next time, and zero is how it
+                            // knows to stop. It travels even when the page is empty, or a viewer
+                            // whose backfill found nothing would ask forever.
+                            let mut frame: serde_json::Value = serde_json::from_str(&batch(
+                                "earlier", &page.lines, cursor, None, visibility,
+                            ))
+                            .unwrap_or_default();
+                            frame["start"] = page.start.into();
+                            if stream.send(ws::Message::Text(frame.to_string())).await.is_err() {
+                                return Ok(());
+                            }
+                        }
+
+                        // A pong, or a frame this build has no use for.
                         _ => {}
                     }
                 }

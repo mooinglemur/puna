@@ -50,6 +50,14 @@ nothing.{% endif %}</p>
 {# `aria-live="polite"` rather than `assertive`: a busy room appends several lines a second, and a
    screen reader interrupting itself for each one would make the page unusable for the reader it is
    meant to help. Polite lets it finish a sentence first. #}
+{# Server-rendered and hidden until the socket has replayed, because until then there is nothing to
+   load earlier THAN -- the control needs a boundary from the first frame before it can ask for
+   anything. `journal.js` reveals it and updates its label as the walk goes back. #}
+<p class="feed-controls">
+<button type="button" id="journal-earlier" hidden>Load the whole feed</button>
+<span id="journal-progress" class="hint"></span>
+</p>
+
 <div id="journal" class="journal" role="log" aria-live="polite" aria-label="Room feed"></div>
 
 {% endblock %}

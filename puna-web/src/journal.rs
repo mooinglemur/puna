@@ -76,6 +76,13 @@ pub type Cursor = u64;
 pub struct Replay {
     pub lines: Vec<String>,
     pub cursor: Cursor,
+    /// Where the first line returned begins.
+    ///
+    /// The other end of [`cursor`](Replay::cursor), and what makes paging **backwards** possible: a
+    /// viewer that has the last hundred records asks for the hundred before `start`, and repeats
+    /// until it is zero. Zero therefore means "this is the beginning of the file" and is how the
+    /// page knows to stop asking.
+    pub start: Cursor,
     /// Total bytes in the file when this was taken, so a caller can report how much it skipped.
     pub size: u64,
 }
@@ -85,15 +92,40 @@ pub struct Replay {
 /// Walks **backwards** in chunks rather than reading the file: on a 250 MB journal, "the last 500
 /// lines" must not cost 250 MB of I/O, and a viewer opening the page is asking for exactly that.
 pub fn tail(path: &Path, wanted: usize) -> std::io::Result<Replay> {
+    let mut file = std::fs::File::open(path)?;
+    let size = file.seek(SeekFrom::End(0))?;
+    tail_to(&mut file, size, wanted, size)
+}
+
+/// The `wanted` complete lines immediately **before** a known record boundary.
+///
+/// The backfill step. `end` comes from a previous read's [`Replay::start`], so it is already a
+/// boundary — which is what lets a page walk a journal backwards a screenful at a time without ever
+/// re-reading what it has, and without the server holding any per-viewer position.
+pub fn before(path: &Path, end: Cursor, wanted: usize) -> std::io::Result<Replay> {
+    let mut file = std::fs::File::open(path)?;
+    let size = file.seek(SeekFrom::End(0))?;
+    tail_to(&mut file, end.min(size), wanted, size)
+}
+
+/// The shared walk: the last `wanted` complete lines ending at `limit`.
+///
+/// One implementation for the opening tail and for every backfill page, because they differ only in
+/// where they stop. Two would be two places for the partial-line rule to be got wrong.
+fn tail_to(
+    file: &mut std::fs::File,
+    limit: u64,
+    wanted: usize,
+    size: u64,
+) -> std::io::Result<Replay> {
     const CHUNK: usize = 64 * 1024;
 
     let wanted = wanted.min(MAX_REPLAY_LINES);
-    let mut file = std::fs::File::open(path)?;
-    let size = file.seek(SeekFrom::End(0))?;
-    if size == 0 || wanted == 0 {
+    if limit == 0 || wanted == 0 {
         return Ok(Replay {
             lines: Vec::new(),
-            cursor: size,
+            cursor: limit,
+            start: 0,
             size,
         });
     }
@@ -102,7 +134,7 @@ pub fn tail(path: &Path, wanted: usize) -> std::io::Result<Replay> {
     // the cursor must stop before it so the next read sees it whole.
     let end;
     let mut buffer: Vec<u8> = Vec::new();
-    let mut start = size;
+    let mut start = limit;
 
     // Grow backwards until the buffer holds one more newline than we need, or we reach the start.
     while start > 0 {
@@ -111,6 +143,7 @@ pub fn tail(path: &Path, wanted: usize) -> std::io::Result<Replay> {
         let mut chunk = vec![0u8; step as usize];
         file.seek(SeekFrom::Start(start))?;
         file.read_exact(&mut chunk)?;
+        chunk.truncate((limit - start) as usize);
         chunk.extend_from_slice(&buffer);
         buffer = chunk;
 
@@ -128,8 +161,30 @@ pub fn tail(path: &Path, wanted: usize) -> std::io::Result<Replay> {
         return Ok(Replay {
             lines: Vec::new(),
             cursor: 0,
+            start: 0,
             size,
         });
+    }
+
+    // The first line is only whole if the walk reached the start of the file; otherwise the chunk
+    // began mid-record. Dropping it moves `start` past its newline, which is what keeps the
+    // reported boundary exact — a backfill page that misreported it would skip or repeat a record.
+    let mut first = start;
+    if start > 0 {
+        match buffer.iter().position(|b| *b == b'\n') {
+            Some(at) => {
+                first = start + at as u64 + 1;
+                buffer.drain(..=at);
+            }
+            None => {
+                return Ok(Replay {
+                    lines: Vec::new(),
+                    cursor: end,
+                    start: end,
+                    size,
+                });
+            }
+        }
     }
 
     let text = String::from_utf8_lossy(&buffer);
@@ -138,18 +193,18 @@ pub fn tail(path: &Path, wanted: usize) -> std::io::Result<Replay> {
         .filter(|l| !l.trim().is_empty())
         .map(str::to_string)
         .collect();
-    // The first line is only whole if we reached the start of the file; otherwise the chunk began
-    // mid-record.
-    if start > 0 && !lines.is_empty() {
-        lines.remove(0);
-    }
     if lines.len() > wanted {
-        lines.drain(..lines.len() - wanted);
+        let dropped: usize = lines
+            .drain(..lines.len() - wanted)
+            .map(|l| l.len() + 1)
+            .sum();
+        first += dropped as u64;
     }
 
     Ok(Replay {
         lines,
         cursor: end,
+        start: first,
         size,
     })
 }
@@ -173,6 +228,7 @@ pub fn read_from(path: &Path, cursor: Cursor) -> std::io::Result<Replay> {
         return Ok(Replay {
             lines: Vec::new(),
             cursor,
+            start: cursor,
             size,
         });
     }
@@ -186,6 +242,7 @@ pub fn read_from(path: &Path, cursor: Cursor) -> std::io::Result<Replay> {
         return Ok(Replay {
             lines: Vec::new(),
             cursor,
+            start: cursor,
             size,
         });
     };
@@ -200,6 +257,7 @@ pub fn read_from(path: &Path, cursor: Cursor) -> std::io::Result<Replay> {
             .map(str::to_string)
             .collect(),
         cursor: advanced,
+        start: cursor,
         size,
     })
 }
@@ -220,6 +278,7 @@ pub fn since(path: &Path, at: f64) -> std::io::Result<Replay> {
         return Ok(Replay {
             lines: Vec::new(),
             cursor: 0,
+            start: 0,
             size,
         });
     }
@@ -449,6 +508,67 @@ mod tests {
         let options = r#"{"at":1787729495.026,"hint_cost":10,"type":"options"}"#;
         assert_eq!(timestamp_of(options), Some(1787729495.026));
         assert_eq!(timestamp_of(r#"{"type":"gap","dropped":3}"#), None);
+    }
+
+    /// **Paging backwards reconstructs the file exactly — no gap, no repeat.**
+    ///
+    /// This is the assertion the backfill button rests on, and the failure it guards is silent: an
+    /// off-by-one in the reported `start` shows up as one record missing between two pages, or one
+    /// rendered twice, in the middle of a wall of similar-looking lines. Nobody would notice, and a
+    /// history that quietly drops a record is the thing this whole feature must not do.
+    ///
+    /// Deliberately walked in an awkward page size (7) against a line count that is not a multiple
+    /// of it, so the last page is short and the boundary arithmetic is exercised rather than
+    /// aligned away.
+    #[test]
+    fn paging_backwards_rebuilds_the_journal_without_gaps_or_repeats() {
+        // **Larger than the 64 KiB read chunk, deliberately.** The first version used 200 lines —
+        // about 40 KiB — so every backwards walk reached offset zero in one chunk and the branch
+        // where a page begins mid-record never ran. A mutation returning the chunk's start instead
+        // of the first whole record's start passed cleanly against it. This fixture is this size
+        // because of that mutation.
+        let lines: Vec<String> = (0..2000).map(|n| check(1000.0 + n as f64, "a")).collect();
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let (_dir, path) = journal(&refs);
+        assert!(
+            std::fs::metadata(&path).unwrap().len() > 64 * 1024,
+            "the fixture must exceed one read chunk or the mid-record path is never taken"
+        );
+
+        let mut seen: Vec<String> = Vec::new();
+        let mut page = tail(&path, 137).expect("tail");
+        let mut pages = 0;
+        while !page.lines.is_empty() {
+            let mut front = page.lines.clone();
+            front.extend(seen);
+            seen = front;
+            pages += 1;
+            if page.start == 0 {
+                break;
+            }
+            page = before(&path, page.start, 137).expect("before");
+            assert!(pages < 200, "paging did not terminate");
+        }
+
+        assert_eq!(seen, lines, "walking backwards did not rebuild the file");
+        assert!(
+            pages > 10,
+            "only {pages} pages: the walk is not being exercised"
+        );
+    }
+
+    /// The other half: `start` is a real record boundary, so the page before it joins on cleanly.
+    #[test]
+    fn the_reported_start_is_a_record_boundary() {
+        let lines: Vec<String> = (0..50).map(|n| check(n as f64, "a")).collect();
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let (_dir, path) = journal(&refs);
+
+        let page = tail(&path, 10).expect("tail");
+        assert!(page.start > 0);
+        // Reading forward from `start` yields exactly what the tail showed.
+        let forward = read_from(&path, page.start).expect("read_from");
+        assert_eq!(forward.lines, page.lines);
     }
 
     #[test]

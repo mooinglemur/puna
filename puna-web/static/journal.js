@@ -41,9 +41,20 @@
   var RETRY_MAX = 30000;
   var retry = RETRY_MIN;
 
+  var earlier = document.getElementById("journal-earlier");
+  var progress = document.getElementById("journal-progress");
+
   var socket = null;
   var cursor = null;
   var stuckToBottom = true;
+  // The offset the oldest line on the page begins at. `null` until the first replay lands, `0` once
+  // the walk has reached the beginning of the file and there is nothing earlier to ask for.
+  var oldest = null;
+  var backfilling = false;
+  // Set once the reader asks for the whole feed. It turns the DOM trim off: the trim exists so a
+  // page left open overnight does not accumulate a node per check, and it would otherwise eat the
+  // top of exactly what the reader just asked to see.
+  var keepEverything = false;
   // The local calendar day of the last line drawn, so a day break is inserted when it changes.
   // Held out here rather than per batch: a batch boundary is a network artifact and must not
   // produce a heading, and a day can change between two frames as easily as inside one.
@@ -230,15 +241,85 @@
     if (withheld) batch.appendChild(line({ type: "withheld", count: withheld }));
     log.appendChild(batch);
 
-    while (log.childElementCount > MAX_LINES) log.removeChild(log.firstElementChild);
+    // Off once the reader has asked for the whole feed: the trim exists to stop an overnight page
+    // accumulating a node per check, and it would otherwise eat the top of what they just loaded.
+    if (!keepEverything) {
+      while (log.childElementCount > MAX_LINES) log.removeChild(log.firstElementChild);
+    }
     // Only follow if the reader was already at the bottom. Yanking the view back down while
     // somebody is reading upward is the single most annoying thing a live feed can do.
     if (stuckToBottom) log.scrollTop = log.scrollHeight;
   }
 
+  // Older records, on the front.
+  //
+  // **The reader's position is held by pixel offset, not by scroll top.** Prepending shifts
+  // everything down by exactly the height of what was added, so a naive prepend teleports the view
+  // and the reader loses the line they were on — which is the whole reason to backfill in place
+  // rather than clear and reload. Measuring the scroll height on both sides and adding the
+  // difference back keeps the same record under the same pixel.
+  function prepend(events, withheld) {
+    if (!events.length && !withheld) return;
+
+    var batch = document.createDocumentFragment();
+    var previousDay = null;
+    events.forEach(function (event) {
+      var when = at(event.at);
+      if (when) {
+        var key = dayKey(when);
+        if (key !== previousDay) {
+          batch.appendChild(daybreak(when));
+          previousDay = key;
+        }
+      }
+      batch.appendChild(line(event));
+    });
+    if (withheld) batch.appendChild(line({ type: "withheld", count: withheld }));
+
+    var before = log.scrollHeight;
+    log.insertBefore(batch, log.firstChild);
+    log.scrollTop += log.scrollHeight - before;
+
+    // The page below this batch already has a heading for its own first day, and the batch has just
+    // ended on some day of its own. If they agree, that heading is now a repeat.
+    var headings = log.querySelectorAll(".daybreak");
+    for (var i = headings.length - 1; i > 0; i--) {
+      if (headings[i].textContent === headings[i - 1].textContent) {
+        headings[i].remove();
+      }
+    }
+  }
+
   function say(text, className) {
     status.textContent = text;
     status.className = className || "notice";
+  }
+
+  // Ask for the page of records immediately before what is on screen.
+  //
+  // One request in flight at a time. The alternative — firing every page at once — would put a
+  // thousand backwards seeks on a 250 MB file at a server that is also following it, to fill a DOM
+  // the reader cannot scroll through anyway.
+  function askForEarlier() {
+    if (backfilling || oldest === null || oldest <= 0) return;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    backfilling = true;
+    keepEverything = true;
+    setEarlier(false, "Loading earlier records…");
+    socket.send(JSON.stringify({ before: oldest }));
+  }
+
+  function setEarlier(enabled, note) {
+    if (!earlier) return;
+    earlier.hidden = !enabled && !note;
+    earlier.disabled = !enabled;
+    if (progress) progress.textContent = note || "";
+  }
+
+  if (earlier) {
+    earlier.addEventListener("click", function () {
+      askForEarlier();
+    });
   }
 
   function open() {
@@ -263,6 +344,22 @@
         return;
       }
       if (typeof frame.cursor === "number") cursor = frame.cursor;
+
+      // A backfill page goes on the front and never touches the follow cursor.
+      if (frame.kind === "earlier") {
+        prepend(frame.events || [], frame.withheld || 0);
+        oldest = typeof frame.start === "number" ? frame.start : 0;
+        if (oldest > 0) {
+          // Keep walking. One page in flight at a time, so a slow disk backs the walk up rather
+          // than queueing a thousand requests at a server reading a 250 MB file.
+          askForEarlier();
+        } else {
+          backfilling = false;
+          setEarlier(false, "Showing the whole feed.");
+        }
+        return;
+      }
+
       append(frame.events || [], frame.withheld || 0);
       if (frame.kind === "replay") {
         // The backoff resets on a connection that got as far as a replay, not on one that merely
@@ -271,6 +368,18 @@
         retry = RETRY_MIN;
         say("Live — following this room's feed.", "notice");
         log.scrollTop = log.scrollHeight;
+
+        // **Re-anchored on every replay, including after a reconnect.** A socket that dropped and
+        // came back replays the tail, so the page's oldest line is whatever that replay began with
+        // — carrying the previous `start` across would ask for a region the page no longer joins on
+        // to, leaving a hole in the middle of the feed.
+        oldest = typeof frame.start === "number" ? frame.start : null;
+        backfilling = false;
+        if (keepEverything && oldest > 0) {
+          askForEarlier();
+        } else {
+          setEarlier(oldest === null || oldest > 0, "");
+        }
       }
     });
 
