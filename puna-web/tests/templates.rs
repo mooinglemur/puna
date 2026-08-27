@@ -585,6 +585,31 @@ fn code_only(source: &str) -> String {
         .join("\n")
 }
 
+/// **The whole-journal download refuses anything but an organizer, in the route.**
+///
+/// The file carries `chat` — every line anybody typed in the room — where the feed beside it carries
+/// item movements and is public. So the difference between those two routes *is* the tier, and it
+/// lives in one `if` that no unit test reaches: removing it left every test in `routes::journal`
+/// green while serving the room's chat to anyone holding the link.
+///
+/// Found by mutation, which is the only reason this exists. The same shape as `a_restart_would_land`
+/// — a rule with a good test and an unpinned call site.
+#[test]
+fn the_journal_download_is_gated_in_the_route() {
+    let source = std::fs::read_to_string(source("src/routes/journal.rs")).expect("journal.rs");
+    let code = code_only(&source);
+    let download = code
+        .split_once("async fn download(")
+        .expect("a download route")
+        .1;
+    let body = download.split_once("\n}\n").map_or(download, |(b, _)| b);
+    assert!(
+        body.contains("visibility != Visibility::Everything"),
+        "the journal download does not refuse a non-organizer. The file carries chat; the feed \
+         beside it does not, and that check is the only thing separating them."
+    );
+}
+
 /// **No template reads a credential straight off the `Room`.**
 ///
 /// `RoomTemplate` and `PanelTemplate` both carry the whole `Room`, which has `password` and

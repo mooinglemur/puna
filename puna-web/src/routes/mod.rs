@@ -7,6 +7,7 @@ pub mod filters;
 pub mod fleet;
 pub mod gates;
 pub mod generations;
+pub mod journal;
 pub mod rooms;
 pub mod tracker;
 pub mod users;

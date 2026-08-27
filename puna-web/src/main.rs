@@ -15,6 +15,7 @@ mod error;
 mod flash;
 mod gate;
 mod guards;
+mod journal;
 mod metrics_listener;
 mod params;
 mod routes;
@@ -240,6 +241,7 @@ fn build(
             .mount("/", routes::gates::routes())
             .mount("/", routes::fleet::routes())
             .mount("/", routes::users::routes())
+            .mount("/", routes::journal::routes())
             .mount("/", routes::rooms::routes())
             .mount("/auth", auth::routes())
             .attach(rocket_oauth2::OAuth2::<auth::Discord>::fairing("discord")),

@@ -46,6 +46,8 @@ zip = "7"
 # additionally modernises base64 0.22 / hyper-rustls 0.27 / rand 0.10, keeping second copies of
 # those out of the tree. `Discord` remains a built-in provider, so Rocket.toml is unchanged.
 rocket_oauth2 = "0.5.1-rc.1"
+rocket_ws = "0.1.1"
+flate2 = "1.1.9"
 
 [build-dependencies]
 sha2 = "0.10"
@@ -59,4 +61,5 @@ walkdir = "2"
 # test links a library, and there is none here -- the same reason puna-orchestrator has its own.
 [dev-dependencies]
 futures-util.workspace = true
+tempfile = "3.27.0"
 tokio-postgres.workspace = true

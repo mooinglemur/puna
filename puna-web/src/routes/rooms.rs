@@ -847,7 +847,7 @@ fn transition_began(room: &Room) -> chrono::DateTime<chrono::Utc> {
 ///
 /// Factored out because `show` and `start` must answer it identically — the page decides whether to
 /// render a control from this, and the route decides whether to honor one.
-async fn resolve_role(
+pub(crate) async fn resolve_role(
     conn: &mut diesel_async::AsyncPgConnection,
     session: &Session,
     room: puna_core::ids::RoomId,
