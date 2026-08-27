@@ -126,7 +126,11 @@ async fn creating_a_room_populates_slots_membership_and_credentials() {
             .expect("present");
         assert_eq!(stored.slot_auth, SlotAuth::None);
         assert_eq!(stored.password, None);
-        assert_eq!(stored.desired_state, "stopped", "a new room starts stopped");
+        // **A new room is created running, as the reference implementation does.** An organizer
+        // preparing one days early does not share the link yet, and Puna offers Stop and Close —
+        // controls upstream has none of — so the unusual case is one click away while the ordinary
+        // one is no clicks at all.
+        assert_eq!(stored.desired_state, "running", "a new room starts running");
         assert_eq!(stored.state, "provisioning");
         // Not a race, so the permissive defaults.
         assert_eq!(stored.spoiler_policy, SpoilerPolicy::AdminOnly);
@@ -699,6 +703,12 @@ async fn requesting_a_state_is_idempotent() {
         .await
         .expect("create");
 
+        // Created running, so the room has to be stopped before "start it" is a change at all.
+        assert!(
+            room::request_state(&mut conn, id, DesiredState::Stopped)
+                .await
+                .expect("stop")
+        );
         assert!(
             room::request_state(&mut conn, id, DesiredState::Running)
                 .await

@@ -665,6 +665,25 @@ pub async fn create(
             });
             let patch_policy = new.patch_policy.unwrap_or(PatchPolicy::Open);
 
+            // **A new room is created RUNNING, and the `desired_state` column's `stopped` default
+            // is deliberately not what creation uses.**
+            //
+            // The reference implementation starts a room the moment it is made, so that is what
+            // anybody who has run an Archipelago game expects — and Puna is the side with the
+            // controls to disagree, since it offers Stop and Close where upstream offers neither.
+            // An organizer preparing a room days early simply does not share the link yet, and can
+            // stop it with one click if they would rather it were down.
+            //
+            // The column keeps `stopped` because it is the right answer for a row somebody inserts
+            // by hand, and because the planner's own fixtures rest on it. Creation states its
+            // intent instead of inheriting one.
+            //
+            // **This also removes a race rather than working around it.** The redirect after
+            // creation lands on `/room/<id>` while the room is still `provisioning`, and D8's
+            // implicit start fires only on `idle` — so the one navigation that would have started
+            // it always arrived too early, while a manual reload a few seconds later worked. A
+            // desired state needs no timing to be correct: the orchestrator reaches it whenever it
+            // gets there, which is what that column is for.
             let id = RoomId::new();
             // Only `room` mode has a room-wide password, and the `room_password_matches_mode`
             // CHECK enforces exactly that -- so getting this wrong is a failed insert, not a
@@ -680,10 +699,11 @@ pub async fn create(
                      idempotency_key, cloned_from, created_by, spoiler_policy, tracker_id,
                      tracker_policy, journal_policy, patch_policy, slot_auth, password,
                      server_password, wants_filtered, use_embedded_options, save_interval_secs,
-                     admin_token)
+                     admin_token, desired_state)
                  VALUES ($1, $2::puna_environment, $3, $4, $5::room_source, $6, $7, $8, $9, $10,
                          $11::spoiler_policy, $12, $13::tracker_policy, $14::journal_policy,
-                         $15::patch_policy, $16::slot_auth_mode, $17, $18, $19, $20, $21, $22)",
+                         $15::patch_policy, $16::slot_auth_mode, $17, $18, $19, $20, $21, $22,
+                         'running')",
             )
             .bind::<SqlUuid, _>(id)
             .bind::<Text, _>(new.environment.as_str())
