@@ -122,7 +122,35 @@
 </svg>
 </button>
 </p>
-<p class="hint">Everyone joining this room needs it. Your client asks for it when you connect.</p>
+<p class="hint">Everyone joining this room needs it. Your client asks for it when you connect.
+{%+ if is_organizer %}
+{# **A restart, unlike the per-slot rotation in the roster** -- pahoa reads this one from the
+   environment at startup and has no live setter for it, deliberately, so the room learns a new
+   shared password by starting again.
+
+   The cost is in the VISIBLE sentence rather than a confirm dialog, because this page has no such
+   mechanism: `data-confirm` is read by `bulk.js`, which the room page does not load, so the
+   attribute here would be a confirmation that never appears. Stop and Close disconnect everyone
+   from this same panel with no dialog either -- the convention is that the words carry it.
+
+   Organizer, where rotating one slot is a helper's: this is the room's configuration and it takes
+   the room down, which is the line M20 drew. #}
+Changing it restarts the room, which disconnects everyone for about a minute.
+{% endif %}
+</p>
+
+{% if is_organizer %}
+<form method="post" action="/room/{{ room.id }}/settings/rotate-password" class="inline">
+<button type="submit" class="linklike"
+        title="Generate a new password and restart the room so it takes effect">New password</button>
+</form>
+{% endif %}
+{% else if needs_password %}
+{# Everybody else, in the shared-password mode: the VALUE is withheld and the requirement is not.
+   Without this a player who has not claimed a slot sees an address, is refused when they connect,
+   and has no reason to think the room is anything but broken. #}
+<p class="hint">This room needs a password to join. Ask whoever invited you &mdash; the room&rsquo;s
+staff and anyone holding a slot here can see it on this page.</p>
 {% endif %}
 
 {% if let Some(filtered) = room.advertised_filtered_port %}

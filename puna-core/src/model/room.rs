@@ -806,6 +806,50 @@ pub async fn mark_secret_stale(
     Ok(())
 }
 
+/// Give a room in the shared-password mode a new shared password.
+///
+/// Returns the new value, or `None` when the room is not in that mode — which the caller renders as
+/// a refusal rather than silently doing nothing, because "rotate" on a room with no shared password
+/// is a question with no answer rather than a no-op.
+///
+/// ## This one cannot be live, and the asymmetry is not an oversight
+///
+/// A per-slot password is rotated on the running room by
+/// `POST /admin/v1/slots/<n>/password`, so it costs no restart. There is no equivalent for the
+/// room-wide one and there will not be: pahoa declined a live setter outright, on the grounds that
+/// it persists no password, so a change it cannot persist reverts at the next start whoever ran it.
+/// The rule they extracted is worth keeping because it predicts the whole surface — **a setter is
+/// honest exactly where the save is authoritative.** Gameplay options persist, so they got one.
+/// Passwords deliberately do not: keeping them out of `room.save` is what stops a stale on-disk
+/// value shadowing the configured one, which is the same reason the environment outranks the seed.
+///
+/// So the room learns this the only way it can, by starting again — which is why the caller pairs
+/// this with [`crate::model::fleet::request_redeploy`] for a room that is up, and why the UI has to
+/// say so before it is pressed. A stopped room needs nothing: its next start renders the Secret
+/// from the column.
+///
+/// **The value is not passed in.** Generated here, from the same alphabet `set_slot_auth` uses, so
+/// there is one definition of what a room password looks like and no route can weaken it.
+pub async fn rotate_password(
+    conn: &mut AsyncPgConnection,
+    id: RoomId,
+) -> Result<Option<String>, diesel::result::Error> {
+    let password = crate::secret::room_password();
+
+    // Scoped to the mode in the WHERE rather than checked first, so a mode change landing between a
+    // read and this write cannot leave a password on a room that does not want one -- the
+    // `room_password_matches_mode` CHECK would refuse it, loudly and at the wrong layer.
+    let updated = diesel::sql_query(
+        "UPDATE rooms SET password = $2 WHERE id = $1 AND slot_auth = 'room'::slot_auth_mode",
+    )
+    .bind::<SqlUuid, _>(id)
+    .bind::<Text, _>(&password)
+    .execute(conn)
+    .await?;
+
+    Ok((updated > 0).then_some(password))
+}
+
 /// Why a proposed room name is not one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum NameError {

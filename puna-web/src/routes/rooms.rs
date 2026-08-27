@@ -18,7 +18,7 @@ use puna_core::model::slot::{self, Slot};
 use puna_core::model::user;
 use rocket::form::Form;
 use rocket::http::Status;
-use rocket::response::Redirect;
+use rocket::response::{Flash, Redirect};
 use rocket::serde::json::Json;
 use rocket::{FromForm, State, get, post, routes};
 
@@ -170,6 +170,8 @@ pub struct RoomTemplate {
     /// The room-wide password. Same field, same gate and same reason as [`PanelTemplate`]'s — this
     /// page `{% include %}`s that template, so both structs must offer the name it renders.
     room_password: Option<String>,
+    /// Same field and same reason as [`PanelTemplate`]'s. `is_organizer` is already above.
+    needs_password: bool,
 }
 
 /// One row of the room page's slot table.
@@ -737,6 +739,7 @@ async fn show(
         is_working: is_working(&room),
         owns_a_slot,
         room_password: room_password_for(&room, role.is_some(), owns_a_slot),
+        needs_password: room.slot_auth == SlotAuth::Room,
         room,
         slots,
         is_staff: role.is_some(),
@@ -893,6 +896,12 @@ pub struct PanelTemplate {
     /// screen ever showed it to anyone. Choosing that mode made the room unjoinable by everybody,
     /// the organizer who chose it included.
     room_password: Option<String>,
+    /// Whether this room asks for a shared password at all, which everybody may know even where the
+    /// value is withheld — a refused connection with no explanation reads as a broken room.
+    needs_password: bool,
+    /// Whether this viewer may rotate it. The panel is rendered for anonymous visitors, so this is
+    /// decided in the route like every other control's tier.
+    is_organizer: bool,
 }
 
 /// The room-wide password, for a viewer who may have it.
@@ -941,6 +950,8 @@ async fn panel(id: RoomParam, session: Session, pool: &State<Pool>) -> Result<Pa
         may_start: may_start(&room, role),
         is_working: is_working(&room),
         room_password: room_password_for(&room, role.is_some(), owns_a_slot),
+        needs_password: room.slot_auth == SlotAuth::Room,
+        is_organizer: role.is_some_and(|r| r >= RoomRole::Organizer),
         room,
         message,
         elapsed,
@@ -1421,6 +1432,64 @@ async fn set_slot_auth(
     Ok(Redirect::to(format!("/room/{id}")))
 }
 
+/// Give the room a new shared password.
+///
+/// **Organizer, where the per-slot rotation beside it is a helper's**, and the line is the one M20
+/// drew: a helper runs the multiworld, an organizer decides how it is configured and whether it
+/// runs at all. This costs a restart, which disconnects everybody — the same reason changing the
+/// mode is an organizer's.
+///
+/// **It is a restart because pahoa has no live setter for this and will not get one**, so the room
+/// learns its new password the only way it can. See [`room::rotate_password`] for the reasoning,
+/// which is theirs and is good: the environment is authoritative precisely so a stale on-disk value
+/// cannot shadow it, and a setter that cannot persist reverts at the next start.
+///
+/// A stopped room is not redeployed — there is nothing to restart, and its next start renders the
+/// Secret from the column — so the flash says which of the two happened rather than making the
+/// organizer guess whether anybody was disconnected.
+#[post("/room/<id>/settings/rotate-password")]
+async fn rotate_room_password(
+    id: RoomParam,
+    access: RoomAccess<Organizer>,
+    pool: &State<Pool>,
+) -> Result<Flash<Redirect>> {
+    let mut conn = pool.get().await?;
+
+    let Some(_password) = room::rotate_password(&mut conn, id.0).await? else {
+        return Ok(Flash::warning(
+            Redirect::to(format!("/room/{id}")),
+            "This room does not use one shared password, so there is none to rotate.",
+        ));
+    };
+
+    // Deliberately NOT logged, and not carried back in the flash either: the value is on the page a
+    // reload away, for exactly the people entitled to it. A credential in an orchestrator's log is
+    // a credential in whatever ships those logs.
+    let live = access.room.state == "running";
+    if live {
+        // The same signal the admin console's restart button and a mode change both use. A restart
+        // re-renders the Secret from scratch, so `mark_secret_stale` would be redundant here.
+        puna_core::model::fleet::request_redeploy(&mut conn, &[id.0]).await?;
+    }
+
+    tracing::info!(
+        room = %id,
+        by = access.user_id(),
+        restarting = live,
+        "the room-wide password was rotated"
+    );
+
+    Ok(Flash::success(
+        Redirect::to(format!("/room/{id}")),
+        if live {
+            "New password set. The room is restarting so it takes effect, which drops everyone \
+             connected for about a minute."
+        } else {
+            "New password set. The room will use it the next time it starts."
+        },
+    ))
+}
+
 #[derive(FromForm)]
 struct RenameForm {
     name: String,
@@ -1491,6 +1560,7 @@ pub fn routes() -> Vec<rocket::Route> {
         rotate_slot_password,
         slot_password,
         set_slot_auth,
+        rotate_room_password,
         rename_room,
     ]
 }
@@ -1937,6 +2007,7 @@ mod tests {
             is_working: false,
             owns_a_slot: false,
             room_password: None,
+            needs_password: false,
         }
     }
 
@@ -2126,6 +2197,67 @@ mod tests {
         );
     }
 
+    /// **The panel tells three viewers three different things about one password.**
+    ///
+    /// Rendered rather than reasoned about, because the gate and the notice and the control are
+    /// three separate conditions over two fields, and the failure that matters is a combination:
+    /// a viewer who gets the value they should not, or an organizer offered a control the route
+    /// would refuse. `room_password_for` is unit-tested above; this is the markup honouring it.
+    #[test]
+    fn the_panel_shows_the_password_to_participants_the_control_to_organizers_and_neither_to_a_visitor()
+     {
+        let running = |password: Option<&str>, is_organizer: bool| {
+            let mut panel = a_panel();
+            panel.room.state = "running".into();
+            panel.room.advertised_host = Some("mw.example".into());
+            panel.room.advertised_port = Some(40000);
+            panel.room.slot_auth = SlotAuth::Room;
+            panel.needs_password = true;
+            panel.room_password = password.map(str::to_string);
+            panel.is_organizer = is_organizer;
+            panel.render().expect("renders")
+        };
+
+        // A participant: the value and the label, and no control that would 403.
+        let participant = running(Some("abcde-fghij-klmno"), false);
+        assert!(participant.contains("abcde-fghij-klmno"));
+        assert!(
+            !participant.contains("rotate-password"),
+            "a participant is offered a control only an organizer may use"
+        );
+
+        // An organizer: both, and the restart named before the button rather than after.
+        let organizer = running(Some("abcde-fghij-klmno"), true);
+        assert!(organizer.contains("abcde-fghij-klmno"));
+        assert!(organizer.contains("/settings/rotate-password"));
+        assert!(
+            organizer.contains("disconnects everyone"),
+            "the rotate control does not say what it costs"
+        );
+
+        // Somebody holding nothing but the link: told that a password is needed, never which.
+        let visitor = running(None, false);
+        assert!(
+            !visitor.contains("abcde-fghij-klmno") && !visitor.contains("rotate-password"),
+            "a public room page leaked the password that gates the room"
+        );
+        assert!(
+            visitor.contains("needs a password to join"),
+            "a visitor is refused by the room with no hint that a password is why"
+        );
+
+        // And a room with no shared password says nothing about one at all.
+        let mut none = a_panel();
+        none.room.state = "running".into();
+        none.room.advertised_host = Some("mw.example".into());
+        none.room.advertised_port = Some(40000);
+        let html = none.render().expect("renders");
+        assert!(
+            !html.contains("needs a password to join") && !html.contains("rotate-password"),
+            "a passwordless room advertises a password it does not have"
+        );
+    }
+
     fn a_panel() -> PanelTemplate {
         PanelTemplate {
             room: a_room(),
@@ -2135,6 +2267,8 @@ mod tests {
             message: None,
             elapsed: "12s".into(),
             room_password: None,
+            needs_password: false,
+            is_organizer: false,
         }
     }
 
