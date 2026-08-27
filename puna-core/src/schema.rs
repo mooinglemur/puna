@@ -10,6 +10,10 @@ pub mod sql_types {
     pub struct GateMode;
 
     #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
+    #[diesel(postgres_type(name = "journal_policy"))]
+    pub struct JournalPolicy;
+
+    #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "puna_environment"))]
     pub struct PunaEnvironment;
 
@@ -260,6 +264,7 @@ diesel::table! {
     use super::sql_types::TrackerPolicy;
     use super::sql_types::SlotAuthMode;
     use super::sql_types::RoomState;
+    use super::sql_types::JournalPolicy;
 
     rooms (id) {
         id -> Uuid,
@@ -317,6 +322,7 @@ diesel::table! {
         pinned_by -> Nullable<Int8>,
         last_check_at -> Nullable<Timestamptz>,
         journal_id -> Uuid,
+        journal_policy -> JournalPolicy,
     }
 }
 

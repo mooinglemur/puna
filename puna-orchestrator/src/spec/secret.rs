@@ -144,7 +144,7 @@ mod tests {
     use puna_core::artifact::SlotKind;
     use puna_core::ids::{GenerationId, RoomId, TrackerId};
     use puna_core::model::RoomSource;
-    use puna_core::model::room::{SpoilerPolicy, TrackerPolicy};
+    use puna_core::model::room::{JournalPolicy, SpoilerPolicy, TrackerPolicy};
 
     fn room(slot_auth: SlotAuth, password: Option<&str>) -> Room {
         Room {
@@ -163,6 +163,7 @@ mod tests {
             tracker_id: TrackerId::new(),
             journal_id: puna_core::ids::JournalId::new(),
             tracker_policy: TrackerPolicy::Link,
+            journal_policy: JournalPolicy::Full,
             wants_filtered: true,
             state: "idle".into(),
             state_changed_at: chrono::Utc::now(),

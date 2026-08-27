@@ -19,7 +19,8 @@ use puna_core::artifact::SlotKind;
 use puna_core::ids::{GenerationId, RoomId};
 use puna_core::model::member::{self, RoomRole};
 use puna_core::model::room::{
-    self, DesiredState, NewRoom, Relationship, SlotAuth, SpoilerPolicy, TrackerPolicy,
+    self, DesiredState, JournalPolicy, NewRoom, Relationship, SlotAuth, SpoilerPolicy,
+    TrackerPolicy,
 };
 use puna_core::model::{slot, user};
 
@@ -130,6 +131,10 @@ async fn creating_a_room_populates_slots_membership_and_credentials() {
         // Not a race, so the permissive defaults.
         assert_eq!(stored.spoiler_policy, SpoilerPolicy::AdminOnly);
         assert_eq!(stored.tracker_policy, TrackerPolicy::Link);
+        // **Open, where the other two are not.** Those guard what the seed knows and a player has
+        // not earned; this guards what the room's own participants said to each other, and the
+        // feed link reaches exactly as far as the room link does.
+        assert_eq!(stored.journal_policy, JournalPolicy::Full);
     })
     .await;
 }
@@ -155,6 +160,92 @@ async fn a_race_seed_defaults_to_the_closed_policies() {
             .expect("present");
         assert_eq!(stored.spoiler_policy, SpoilerPolicy::Never);
         assert_eq!(stored.tracker_policy, TrackerPolicy::Members);
+        // **Not `Disabled`, and the difference matters.** A race's history is a live scoreboard —
+        // who found what, in order — so the chat and hints come out; the item feed stays, because
+        // it is the same information the room already broadcasts to every unfiltered client and a
+        // racer's own client is showing it to them anyway.
+        assert_eq!(stored.journal_policy, JournalPolicy::Feed);
+    })
+    .await;
+}
+
+/// The setting an organizer changes, and the one thing it must not do.
+///
+/// **A journal policy is not a restart**, unlike every other control beside it in that section:
+/// nothing here reaches pahoa, moves the spec hash, or queues a redeploy. Getting that wrong would
+/// disconnect a room full of people to change a gate that lives entirely in the web tier — and it
+/// would look like the setting working, because the gate would also change.
+#[tokio::test]
+async fn changing_the_journal_policy_changes_nothing_about_the_room() {
+    with_db(|pool| async move {
+        let mut conn = pool.get().await.expect("connection");
+        users(&mut conn).await;
+        let generation = seed_generation(&mut conn, false).await;
+
+        let id = room::create(
+            &mut conn,
+            &NewRoom::direct(Environment::Dev, "async", generation, OWNER),
+        )
+        .await
+        .expect("create");
+
+        for policy in [
+            JournalPolicy::Disabled,
+            JournalPolicy::Feed,
+            JournalPolicy::Full,
+        ] {
+            room::set_journal_policy(&mut conn, id, policy)
+                .await
+                .expect("set");
+            let stored = room::get(&mut conn, id)
+                .await
+                .expect("get")
+                .expect("present");
+            assert_eq!(stored.journal_policy, policy);
+            assert!(
+                !common::redeploy_requested(&mut conn, id).await,
+                "{} queued a restart to change a gate the room cannot see",
+                policy.as_sql()
+            );
+        }
+    })
+    .await;
+}
+
+/// A clone carries the source room's answer rather than re-deriving it from the seed.
+///
+/// The seed is not a race, so a re-derivation would silently reopen a room whose organizer had
+/// closed it — and a clone is usually the *same group playing again*, which is exactly when the
+/// decision they already made should carry.
+#[tokio::test]
+async fn a_clone_keeps_the_journal_policy_it_was_cloned_from() {
+    with_db(|pool| async move {
+        let mut conn = pool.get().await.expect("connection");
+        users(&mut conn).await;
+        let generation = seed_generation(&mut conn, false).await;
+
+        let source = room::create(
+            &mut conn,
+            &NewRoom::direct(Environment::Dev, "async", generation, OWNER),
+        )
+        .await
+        .expect("create");
+        room::set_journal_policy(&mut conn, source, JournalPolicy::Disabled)
+            .await
+            .expect("set");
+
+        let clone = room::clone_room(&mut conn, source, "async 2".into(), OWNER, true)
+            .await
+            .expect("clone");
+        let stored = room::get(&mut conn, clone)
+            .await
+            .expect("get")
+            .expect("present");
+        assert_eq!(
+            stored.journal_policy,
+            JournalPolicy::Disabled,
+            "the clone reopened a history its organizer had closed"
+        );
     })
     .await;
 }

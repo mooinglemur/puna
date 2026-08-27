@@ -143,6 +143,14 @@ pub struct RoomTemplate {
     /// is most of its life -- that fallback is a designed feature, and hiding the link while it
     /// applies would conceal the page exactly when it is most useful.
     can_see_tracker: bool,
+    /// Whether to offer the feed link at all.
+    ///
+    /// **Two gates, not one, which is why this is separate from `can_see_tracker`.** The feed
+    /// routes ask `may_see_tracker` *and* the room's own `journal_policy`, so a room with a public
+    /// tracker and a `disabled` journal is an ordinary configuration — and a page keyed on the
+    /// tracker alone would offer a link that answers `404`. That is the failure this project has
+    /// now met from both directions: a control with no door, and a door onto nothing.
+    can_see_journal: bool,
     /// The latest event in words, for the transient states. `None` renders the state itself, which
     /// is worse but never wrong.
     message: Option<&'static str>,
@@ -664,6 +672,11 @@ async fn show(
         .is_some_and(|user_id| room_slots.iter().any(|s| s.owner_id == Some(user_id)));
     let can_see_spoiler = room::may_see_spoiler(room.spoiler_policy, role.is_some(), owns_a_slot);
     let can_see_tracker = room::may_see_tracker(room.tracker_policy, role.is_some(), owns_a_slot);
+    // **The feed's own two gates, asked through the function the feed routes ask.** Not a second
+    // opinion about the policy: a page that reimplemented this would be one edit away from
+    // offering a link the socket refuses, which is the failure mode a link is worst at reporting.
+    let can_see_journal = can_see_tracker
+        && crate::routes::journal::visibility_for(role, room.journal_policy).is_some();
 
     // Who is playing, for anybody entitled to the roster. Same tier as the `players` spoiler
     // policy: the room's staff, or somebody who holds a slot in it -- the people the roster is
@@ -748,6 +761,7 @@ async fn show(
         siblings,
         can_see_spoiler,
         can_see_tracker,
+        can_see_journal,
         message,
         elapsed,
     })
@@ -1396,6 +1410,54 @@ struct SlotAuthForm {
     mode: String,
 }
 
+#[derive(FromForm)]
+struct JournalPolicyForm {
+    policy: String,
+}
+
+/// Change how much of the room's history a non-organizer may read.
+///
+/// **The one control in this section that is not a restart**, and the form says so in as many
+/// words. Everything beside it changes something pahoa reads once at startup; this changes a gate
+/// that lives entirely in the web tier, over a file Puna mounts read-only and never sends to a
+/// room. It applies to the next frame on a socket that is already open, because the filter runs
+/// per batch rather than at connect.
+///
+/// Organizer rather than helper, on M20's line: this is who is trusted with the room's
+/// conversation, which is the same class of decision as who is staff.
+#[post("/room/<id>/settings/journal", data = "<form>")]
+async fn set_journal_policy(
+    id: RoomParam,
+    access: RoomAccess<Organizer>,
+    form: Form<JournalPolicyForm>,
+    pool: &State<Pool>,
+) -> Result<Flash<Redirect>> {
+    let policy = room::JournalPolicy::parse(&form.policy)
+        .ok_or_else(|| Error::new(Status::BadRequest, anyhow::anyhow!("unknown policy")))?;
+
+    let mut conn = pool.get().await?;
+    room::set_journal_policy(&mut conn, id.0, policy).await?;
+
+    tracing::info!(
+        room = %id,
+        by = access.user_id(),
+        policy = policy.as_sql(),
+        "journal_policy changed"
+    );
+    Ok(Flash::success(
+        Redirect::to(format!("/room/{id}")),
+        match policy {
+            room::JournalPolicy::Disabled => "The feed is now visible to staff only.",
+            room::JournalPolicy::Feed => {
+                "The feed now shows item movements only. Chat and hints are withheld from it."
+            }
+            room::JournalPolicy::Full => {
+                "The feed now shows the whole history, and anyone who can open it can download it."
+            }
+        },
+    ))
+}
+
 /// Change the room's password mode.
 ///
 /// **Every transition is a restart**, because pahoa reads the mode from the environment at startup
@@ -1578,6 +1640,7 @@ pub fn routes() -> Vec<rocket::Route> {
         rotate_slot_password,
         slot_password,
         set_slot_auth,
+        set_journal_policy,
         rotate_room_password,
         rename_room,
     ]
@@ -1976,6 +2039,7 @@ pub(crate) mod tests {
             tracker_id: puna_core::ids::TrackerId::new(),
             journal_id: puna_core::ids::JournalId::new(),
             tracker_policy: puna_core::model::room::TrackerPolicy::Link,
+            journal_policy: puna_core::model::room::JournalPolicy::Full,
             wants_filtered: true,
             state: "running".into(),
             // A room that has been up for a while, which is the situation the elapsed-time bug
@@ -1994,23 +2058,29 @@ pub(crate) mod tests {
         page_as(is_staff, is_staff)
     }
 
-    /// **The history has a door, and it is the same door the tracker has.**
+    /// **The history has a door, and it opens exactly when the routes answer.**
     ///
-    /// Both are gated by `may_see_tracker` — the room page decides once and the journal routes
-    /// decide again for themselves — so the link must appear exactly when the page would answer.
-    /// Offering one the route refuses is a bug report; withholding one it would serve teaches people
-    /// to guess URLs.
+    /// The feed passes two gates — `may_see_tracker`, then the room's own `journal_policy` — and
+    /// the page renders the link from the same two, so it cannot offer one the socket refuses or
+    /// withhold one it would serve. Offering a link that 404s is a bug report; withholding a
+    /// working one teaches people to guess URLs.
     ///
     /// Asserted because "correct, gated, and unreachable" has now happened three times here: M26's
     /// two controls, M31's filter editor behind a chip that only rendered once a slot already
     /// diverged, and this viewer, which for its first day existed only for somebody who typed its
     /// URL. A feature with no link is a feature nobody has.
+    ///
+    /// **The two gates are asserted separately**, because they came apart the moment the policy
+    /// became a per-room setting: a public tracker on a staff-only feed is an ordinary
+    /// configuration, and a page still keyed on the tracker alone would render a dead link on
+    /// every one of them.
     #[test]
-    fn the_room_history_is_linked_wherever_the_tracker_is() {
+    fn the_room_history_is_linked_exactly_where_it_can_be_read() {
         use askama::Template;
 
         let mut visible = page(false);
         visible.can_see_tracker = true;
+        visible.can_see_journal = true;
         let html = visible.render().expect("renders");
         assert!(
             html.contains(&format!("/journal/{}", visible.room.journal_id)),
@@ -2025,13 +2095,28 @@ pub(crate) mod tests {
             "the feed is addressed through the room, which leaks the room to anyone given the link"
         );
 
-        // `disabled` policy 404s the journal routes too, so the link must go with it.
-        let mut hidden = page(false);
-        hidden.can_see_tracker = false;
-        let html = hidden.render().expect("renders");
+        // A `disabled` tracker 404s the journal routes as well, so both links go.
+        let mut no_tracker = page(false);
+        no_tracker.can_see_tracker = false;
+        no_tracker.can_see_journal = false;
+        let html = no_tracker.render().expect("renders");
         assert!(
             !html.contains("/journal"),
             "a viewer who cannot read the history is offered a link to it"
+        );
+
+        // And the case the per-room policy created: the tracker is public, the feed is not.
+        let mut tracker_only = page(false);
+        tracker_only.can_see_tracker = true;
+        tracker_only.can_see_journal = false;
+        let html = tracker_only.render().expect("renders");
+        assert!(
+            !html.contains("/journal"),
+            "a room with a staff-only feed still offers everyone a link that 404s"
+        );
+        assert!(
+            html.contains("/tracker/"),
+            "the feed's policy took the tracker link with it"
         );
     }
 
@@ -2060,6 +2145,7 @@ pub(crate) mod tests {
             siblings: Vec::new(),
             can_see_spoiler: false,
             can_see_tracker: true,
+            can_see_journal: true,
             message: None,
             elapsed: "1m".into(),
             is_closed: false,

@@ -15,16 +15,17 @@
 <h1>{{ room.name }}</h1>
 <p class="hint">Everything found in this room, as it happens.</p>
 
-{# **The download is an organizer's and the feed is not**, and the difference is not cosmetic: the
-   file carries every line anybody typed in the room, where the feed below is item movements. The
-   route refuses a non-organizer regardless -- this only decides whether to offer a link that would
-   be refused, which is the rule the room page follows for every other control. #}
+{# **The file goes to whoever is entitled to every record in it** -- an organizer, or anybody at
+   all on a room whose feed policy is `full`. Serving it to a viewer the socket is filtering would
+   hand over precisely what was filtered, since the file is where those records live, which is why
+   the two move together. The route refuses regardless; this only decides whether to offer a link
+   that would be refused, which is the rule the room page follows for every other control. #}
 {% if may_download %}
 <p>
 {% if let Some(size) = size %}
 <a href="/journal/{{ room.journal_id }}/download" download>Download the feed history</a>
 <span class="hint">&mdash; {{+ size|filesizeformat +}} on disk, sent compressed. One JSON object per
-line, including chat and hints, which is why this is staff-only.</span>
+line, including chat and hints.</span>
 {% else %}
 <span class="hint">There is no feed history to download yet. It is written while the room
 runs.</span>

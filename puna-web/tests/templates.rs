@@ -695,15 +695,21 @@ fn styles(css: &str, class: &str) -> bool {
         })
 }
 
-/// **The whole-journal download refuses anything but an organizer, in the route.**
+/// **The whole-journal download refuses a filtered viewer, in the route.**
 ///
-/// The file carries `chat` — every line anybody typed in the room — where the feed beside it carries
-/// item movements and is public. So the difference between those two routes *is* the tier, and it
-/// lives in one `if` that no unit test reaches: removing it left every test in `routes::journal`
-/// green while serving the room's chat to anyone holding the link.
+/// The file carries `chat` — every line anybody typed in the room — and is therefore *where the
+/// records the socket withholds actually live*. So on a room whose policy is `feed`, serving the
+/// file hands over exactly what was just filtered, and the filter becomes decorative. That
+/// difference lives in one `if` that no unit test reaches: removing it left every test in
+/// `routes::journal` green while serving the room's chat to anyone holding the link.
 ///
 /// Found by mutation, which is the only reason this exists. The same shape as `a_restart_would_land`
 /// — a rule with a good test and an unpinned call site.
+///
+/// **Still one `if` after the policy became per-room**, because the policy is resolved into
+/// `Visibility` by `readable` and never re-read here. A route that branched on `journal_policy`
+/// itself would be a second copy of the rule, and the copies would differ the day a fourth value
+/// is added.
 #[test]
 fn the_journal_download_is_gated_in_the_route() {
     let source = std::fs::read_to_string(source("src/routes/journal.rs")).expect("journal.rs");
@@ -715,8 +721,61 @@ fn the_journal_download_is_gated_in_the_route() {
     let body = download.split_once("\n}\n").map_or(download, |(b, _)| b);
     assert!(
         body.contains("visibility != Visibility::Everything"),
-        "the journal download does not refuse a non-organizer. The file carries chat; the feed \
-         beside it does not, and that check is the only thing separating them."
+        "the journal download does not refuse a filtered viewer. The file is where the withheld \
+         records live, and that check is the only thing separating it from the feed."
+    );
+}
+
+/// **The feed's second gate is a refusal, and it is asked in `readable`.**
+///
+/// `journal_policy` decides how much of the history a non-organizer gets, and `disabled` means
+/// none — but the whole of that decision is one `?` on an `Option` in a function whose other gate
+/// looks very similar. Delete it and everything keeps working: the page renders, the socket
+/// streams, the download behaves, and the setting an organizer chose does nothing at all, on every
+/// room, silently.
+///
+/// Pinned in the route rather than only in `visibility_for`'s unit tests for the reason the
+/// download above records: a rule can be perfectly tested and never called.
+#[test]
+fn a_disabled_journal_is_refused_where_the_room_is_resolved() {
+    let source = std::fs::read_to_string(source("src/routes/journal.rs")).expect("journal.rs");
+    let code = code_only(&source);
+    let readable = code
+        .split_once("async fn readable(")
+        .expect("a readable()")
+        .1;
+    let body = readable.split_once("\n}\n").map_or(readable, |(b, _)| b);
+    assert!(
+        body.contains("visibility_for(role, room.journal_policy)"),
+        "readable() does not consult the room's journal policy, so `disabled` reads as `feed` and \
+         the setting is inert"
+    );
+    assert!(
+        body.contains("ok_or_else"),
+        "readable() reads the journal policy without refusing on it -- a `disabled` room must 404, \
+         never fall back to a narrower feed"
+    );
+}
+
+/// **The room page offers the feed link on the same two gates the feed answers.**
+///
+/// They came apart the moment the policy became per-room: a public tracker over a staff-only feed
+/// is an ordinary configuration, so a page keyed on `can_see_tracker` alone renders a link that
+/// 404s for every viewer of every such room. The failure is quiet from both ends — the page is
+/// valid, the route is correct, and only somebody who clicks finds out.
+///
+/// Asserted against the route rather than the markup because the markup half is covered by a render
+/// test; what cannot be seen there is whether the flag it renders was ever computed from the
+/// policy.
+#[test]
+fn the_feed_link_is_gated_on_the_policy_as_well_as_the_tracker() {
+    let source = std::fs::read_to_string(source("src/routes/rooms.rs")).expect("rooms.rs");
+    let code = code_only(&source);
+    assert!(
+        code.contains("let can_see_journal = can_see_tracker")
+            && code.contains("journal::visibility_for(role, room.journal_policy)"),
+        "the room page decides the feed link without asking the room's journal policy, so a \
+         staff-only feed is still linked to everybody"
     );
 }
 

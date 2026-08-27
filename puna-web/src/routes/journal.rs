@@ -1,18 +1,31 @@
-//! The journal viewer: a public feed of item movements, and the whole file for staff.
+//! The journal viewer: a feed of item movements, and the file behind it.
 //!
-//! ## Two surfaces, two tiers, and the split is the whole design
+//! ## Two questions, asked in order
 //!
-//! `history.jsonl` carries nine record types, and they do not belong to one audience:
+//! `history.jsonl` carries nine record types and they do not belong to one audience, so reaching a
+//! feed and reading all of it are separate decisions:
 //!
-//! | | records | who |
-//! |---|---|---|
-//! | the **feed** | `check`, `gap` | `tracker_policy` — anyone with the room link, on an ordinary room |
-//! | the **file** | all nine, including `chat`, `cheat`, `hints`, `deathlink` | organizer |
+//! 1. **May this viewer reach the feed at all?** `may_see_tracker`, the same rule and the same
+//!    per-room policy the tracker uses. A race room's feed is behind a login exactly as its
+//!    tracker is.
+//! 2. **How much do they get?** [`room::JournalPolicy`], per room. `disabled` is staff-only,
+//!    `feed` is `check` and `gap` with everything else withheld and counted, `full` is the file as
+//!    written plus the download.
 //!
-//! The feed is exactly the wall of *"X sent Y to Z (location)"* the room broadcasts to every
-//! unfiltered client, so it is public for the same reason the tracker is, and gated by the same
-//! `may_see_tracker` on a race room. The **file** additionally holds every line anybody typed in
-//! the room, so it stays at the organizer tier the plan always specified.
+//! An organizer reads everything under all three, so the column names what the tier below them
+//! gets. The `feed` records are exactly the wall of *"X sent Y to Z (location)"* the room already
+//! broadcasts to every unfiltered client; the rest — `chat` above all, every line anybody typed —
+//! is the part a room may reasonably want to keep among its participants, or may not.
+//!
+//! **Why this is a room's decision rather than a constant.** The feed link is rendered on the room
+//! page wherever the tracker link is, so the people holding it are the people holding the room
+//! link — which for most rooms means withholding the history protects nobody and only makes the
+//! ordinary case need a setting change. For a streamed race it is the opposite. Neither answer is
+//! right for every room, and a single default was wrong for one of them whichever way it pointed.
+//!
+//! **Half of this is not expressible.** If the download served the file while the socket filtered
+//! it, the filter would be decorative: the file is *where the withheld records are*. So `full`
+//! opens both and `feed` opens neither, and there is no arm that opens one.
 //!
 //! ## This module previously said the opposite, and the mistake is worth keeping
 //!
@@ -93,6 +106,11 @@ pub enum Visibility {
 /// the page would not link. `404` rather than `403` for a refusal, matching the tracker: the room's
 /// existence is not the secret, but under a `disabled` policy neither is anything else, and a
 /// distinguishable refusal is a probe oracle.
+///
+/// **Both gates answer the same `404`**, and that is what keeps `journal_policy` from being an
+/// oracle in its own right: a viewer refused by the room's tracker policy and one refused by its
+/// journal policy cannot tell which of the two turned them away, so neither refusal reports a
+/// setting to somebody who is not entitled to read it.
 async fn readable(
     conn: &mut diesel_async::AsyncPgConnection,
     session: &Session,
@@ -112,18 +130,35 @@ async fn readable(
     if !room::may_see_tracker(room.tracker_policy, role.is_some(), owns_a_slot) {
         return Err(not_found("this room's history is not available"));
     }
-    Ok((room, visibility_for(role)))
+    let visibility = visibility_for(role, room.journal_policy)
+        .ok_or_else(|| not_found("this room's history is not available"))?;
+    Ok((room, visibility))
 }
 
-/// How much of the history a role may read.
+/// How much of the history a role may read under a room's policy.
 ///
-/// Its own function so the rule is testable without a database and stated once. **Organizer, not
-/// helper**: the file carries every line anybody typed in the room, and M20's line puts "who is
-/// trusted with the room" on the organizer's side of it.
-fn visibility_for(role: Option<RoomRole>) -> Visibility {
-    match role {
-        Some(r) if r >= RoomRole::Organizer => Visibility::Everything,
-        _ => Visibility::Feed,
+/// Its own function so the rule is testable without a database and stated once — the page, the
+/// socket and the download all reach it through [`readable`], so none of them can hold a different
+/// opinion about what a viewer is owed.
+///
+/// **`None` is a refusal, not a default.** Returning [`Visibility::Feed`] for a `disabled` room
+/// would be the quietest possible way to widen this: every caller would go on working, and the
+/// setting would appear in the UI doing nothing.
+///
+/// **Organizer, not helper**, for the tier that reads regardless: the file carries every line
+/// anybody typed in the room, and M20's line puts "who is trusted with the room" on the
+/// organizer's side of it. A helper is bound by the room's policy like anybody else.
+pub(crate) fn visibility_for(
+    role: Option<RoomRole>,
+    policy: room::JournalPolicy,
+) -> Option<Visibility> {
+    if role.is_some_and(|r| r >= RoomRole::Organizer) {
+        return Some(Visibility::Everything);
+    }
+    match policy {
+        room::JournalPolicy::Disabled => None,
+        room::JournalPolicy::Feed => Some(Visibility::Feed),
+        room::JournalPolicy::Full => Some(Visibility::Everything),
     }
 }
 
@@ -213,9 +248,11 @@ async fn download(
 ) -> Result<Journal> {
     let mut conn = pool.get().await?;
     let (room, visibility) = readable(&mut conn, &session, id).await?;
-    // **The file is organizer-only and the feed is not**, because the file carries every line
-    // anybody typed in the room. `404` rather than `403`, so a refusal says nothing a probe could
-    // use -- the same answer the policy gate above gives.
+    // **The file is where the withheld records are**, so it goes only to a viewer entitled to all
+    // of them -- an organizer, or anybody at all on a `full` room. Serving it to a `Feed` viewer
+    // would hand over precisely what the socket just filtered, which is the one combination
+    // `JournalPolicy` deliberately cannot express. `404` rather than `403`, so a refusal says
+    // nothing a probe could use -- the same answer the gates above give.
     if visibility != Visibility::Everything {
         return Err(not_found("this room's history is not available"));
     }
@@ -647,28 +684,68 @@ mod tests {
         assert!(frame.get("size").is_none());
     }
 
-    /// Only an organizer reads the file, and a helper is not one.
+    /// An organizer reads the whole file whatever the room says, and nobody else does.
     ///
     /// The download route is what this guards, and its refusal is additionally pinned by a source
     /// lint in `tests/templates.rs` — a mutation removing the check from the route left every test
     /// here green, which is the same gap `a_restart_would_land` had.
+    ///
+    /// **A helper is not an organizer here**, which is the one place this tier disagrees with M20's
+    /// "a helper runs the multiworld": running it does not include reading everything anybody said
+    /// in it, and a helper on a `disabled` room is refused like any other viewer.
     #[test]
-    fn the_whole_file_is_an_organizers_and_the_feed_is_everybody_elses() {
-        assert_eq!(
-            visibility_for(Some(RoomRole::Organizer)),
-            Visibility::Everything
-        );
-        assert_eq!(visibility_for(Some(RoomRole::Helper)), Visibility::Feed);
-        assert_eq!(visibility_for(None), Visibility::Feed);
+    fn an_organizer_reads_everything_and_the_room_decides_for_everybody_else() {
+        use room::JournalPolicy as P;
+
+        for policy in [P::Disabled, P::Feed, P::Full] {
+            assert_eq!(
+                visibility_for(Some(RoomRole::Organizer), policy),
+                Some(Visibility::Everything),
+                "an organizer is bound by {} — the policy names the tier BELOW them",
+                policy.as_sql()
+            );
+        }
+
+        // Everybody else, including a helper, takes the room's answer.
+        for role in [Some(RoomRole::Helper), None] {
+            assert_eq!(visibility_for(role, P::Disabled), None);
+            assert_eq!(visibility_for(role, P::Feed), Some(Visibility::Feed));
+            assert_eq!(visibility_for(role, P::Full), Some(Visibility::Everything));
+        }
     }
 
-    /// **The page offers the download to an organizer and to nobody else.**
+    /// **A refused viewer gets nothing, never a quieter feed.**
     ///
-    /// The route refuses a non-organizer regardless, so this is about not offering a link that would
-    /// 404 — but it is also the page saying, in words, why the file is staff-only where the feed is
-    /// not. A viewer who cannot have it should not be left wondering whether it is missing.
+    /// Its own test because the failure is silent in the direction that matters: `visibility_for`
+    /// returning `Some(Feed)` instead of `None` leaves every caller working, the page still
+    /// renders, the socket still streams — and the setting an organizer just chose does nothing at
+    /// all. Nothing else in the suite would notice, because `Feed` is a legitimate answer
+    /// everywhere it appears.
     #[test]
-    fn only_an_organizer_is_offered_the_file() {
+    fn a_disabled_journal_refuses_rather_than_narrowing() {
+        assert_eq!(
+            visibility_for(None, room::JournalPolicy::Disabled),
+            None,
+            "a disabled journal must refuse; a narrower feed is not a refusal"
+        );
+        assert_eq!(
+            visibility_for(Some(RoomRole::Helper), room::JournalPolicy::Disabled),
+            None
+        );
+    }
+
+    /// **The page offers the file exactly where the socket is not filtering.**
+    ///
+    /// The route refuses regardless, so this is about not offering a link that would 404 — but it
+    /// is also the page saying, in words, what is in the file. A viewer who cannot have it should
+    /// not be left wondering whether it is missing.
+    ///
+    /// The flag it renders is `visibility == Everything`, so it tracks the room's policy without
+    /// the template ever seeing one: `may_download` is decided in the handler, which is the same
+    /// rule `SlotView` follows and for the same reason — a template cannot prove it withheld
+    /// something.
+    #[test]
+    fn the_file_is_offered_only_where_nothing_is_being_withheld() {
         use askama::Template;
 
         let render = |may_download| {
@@ -685,17 +762,17 @@ mod tests {
         let staff = render(true);
         assert!(
             staff.contains("/download"),
-            "an organizer is not offered the file"
+            "a viewer entitled to the whole history is not offered the file"
         );
         assert!(
             staff.contains("chat"),
-            "the page does not say why the file is staff-only"
+            "the page does not say what is in the file it is handing over"
         );
 
         let viewer = render(false);
         assert!(
             !viewer.contains("/download"),
-            "a public viewer is offered a download the route would refuse"
+            "a filtered viewer is offered a download carrying exactly what was filtered"
         );
         // The feed itself is still there: that is the whole point of the tier split.
         assert!(viewer.contains("journal-status"));

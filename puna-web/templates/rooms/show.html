@@ -80,10 +80,10 @@
 {# OUTSIDE the state branch on purpose. The tracker serves its last cached document with an "as of"
    banner while the room is down, which for an async is most of the time -- so this is exactly when
    a player wants it, and gating it on `running` would hide a page that works. #}
-{# **Both behind `can_see_tracker`, and that is not a convenience.** The journal viewer is gated by
-   `room::may_see_tracker` on its own routes, so this is the same question answered in the same
-   place -- the page cannot offer a link the viewer would be refused, and cannot hide one they are
-   entitled to. A separate condition here would be a second copy of a policy decision.
+{# **Two conditions, because the feed answers two gates and the tracker answers one.** Both flags
+   are computed in the route from the same functions the target routes call, so this page cannot
+   offer a link that 404s and cannot hide one the viewer is entitled to. A room with a public
+   tracker and a `disabled` journal is an ordinary configuration, so these genuinely differ.
 
    The tracker answers "where is everybody up to"; the history answers "what just happened". They
    sit together because a reader who wants one usually wants to know the other exists -- the history
@@ -91,6 +91,8 @@
    in this project something correct and gated turned out to have no door. #}
 {% if can_see_tracker %}
 <p class="tracker"><a href="/tracker/{{ room.tracker_id }}">Multiworld Tracker</a></p>
+{% endif %}
+{% if can_see_journal %}
 <p class="tracker"><a href="/journal/{{ room.journal_id }}">Room Feed</a>
 <span class="hint">&mdash; every item found here, live. Shareable without sharing this page.</span></p>
 {% endif %}
@@ -626,6 +628,25 @@ organizers able to reopen it. Either way the room keeps its address, its save an
 <p class="hint"><strong>Changing this restarts the room.</strong> The server reads passwords when it
 starts, so the change cannot take effect on a running room. Switching away from per-slot passwords
 discards them and they cannot be recovered.</p>
+</form>
+
+{# Sits beside the password mode because both answer "who is trusted with what", and deliberately
+   says it is NOT a restart -- everything else in this section is one, so silence here would be
+   read as the same cost. #}
+<form method="post" action="/room/{{ room.id }}/settings/journal">
+<p>
+<label for="journal-policy">Room feed</label>
+<select id="journal-policy" name="policy">
+<option value="full"{% if room.journal_policy == puna_core::model::room::JournalPolicy::Full +%} selected{% endif %}>everything &mdash; chat and hints included, downloadable</option>
+<option value="feed"{% if room.journal_policy == puna_core::model::room::JournalPolicy::Feed +%} selected{% endif %}>items only &mdash; chat and hints withheld</option>
+<option value="disabled"{% if room.journal_policy == puna_core::model::room::JournalPolicy::Disabled +%} selected{% endif %}>staff only &mdash; no feed for anyone else</option>
+</select>
+<button type="submit">Change</button>
+</p>
+<p class="hint">What everyone <em>except</em> this room's staff sees at the feed link; organizers
+always read the whole history. <strong>No restart</strong> &mdash; it applies to open pages too.
+The feed link reaches as far as the tracker link does, so treat this as what you would tell anyone
+holding the room's address.</p>
 </form>
 {% endif %}
 </details>

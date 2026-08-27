@@ -159,6 +159,51 @@ impl TrackerPolicy {
     }
 }
 
+/// How much of a room's journal somebody who is **not an organizer** may read.
+///
+/// This is a second question on top of [`may_see_tracker`], not a replacement for it. That one
+/// decides whether `/journal/<id>` answers at all; this decides what it answers with. Both are
+/// needed because the two capabilities have genuinely different shapes: a tracker shows progress,
+/// and the journal's file carries `chat` — every line anybody typed in the room — so a room can
+/// reasonably want its tracker public and its conversation not, or want both wide open, and neither
+/// answer is right for every room.
+///
+/// **An organizer reads everything regardless.** This names what the tier below them gets, which is
+/// why the variants are ordered from least to most and why the enum is not `Ord`: they are three
+/// answers to one question rather than rungs somebody climbs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JournalPolicy {
+    /// Staff only. A non-organizer gets the same `404` an unknown feed id gets, so the refusal
+    /// discloses nothing — including whether the room has a journal worth asking about.
+    Disabled,
+    /// `check` and `gap`. Everything else is withheld **and counted**, so the page can say the
+    /// history is incomplete without saying what is in it. No download: the file is where the
+    /// withheld records are, so handing it over would make the filter decorative.
+    Feed,
+    /// The history as pahoa wrote it, and the download with it. What an ordinary room gets, on the
+    /// grounds that whoever holds the feed link already holds the room link.
+    Full,
+}
+
+impl JournalPolicy {
+    pub fn as_sql(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Feed => "feed",
+            Self::Full => "full",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "disabled" => Some(Self::Disabled),
+            "feed" => Some(Self::Feed),
+            "full" => Some(Self::Full),
+            _ => None,
+        }
+    }
+}
+
 /// What a room wants to be doing. The **desired** half of the two column families: the web tier
 /// writes it, the orchestrator only reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -320,6 +365,15 @@ pub struct NewRoom {
     pub spoiler_policy: Option<SpoilerPolicy>,
     /// `None` defaults from `race_mode` too: `members` for a race, `link` otherwise.
     pub tracker_policy: Option<TrackerPolicy>,
+    /// `None` defaults from `race_mode` as well: `feed` for a race, `full` otherwise.
+    ///
+    /// **Open by default, unlike the two above**, and deliberately so. Those guard information the
+    /// seed holds and a player has not earned yet; this guards a record of things the room's own
+    /// participants said and did in front of each other. The feed link is rendered on the room page
+    /// to everyone the tracker is, so in practice the people holding it are the people holding the
+    /// room link — and withholding the history from them by default protects nobody while making
+    /// the ordinary case need a setting change.
+    pub journal_policy: Option<JournalPolicy>,
     pub wants_filtered: bool,
     pub use_embedded_options: bool,
     pub save_interval_secs: i32,
@@ -346,6 +400,7 @@ impl NewRoom {
             slot_auth: SlotAuth::None,
             spoiler_policy: None,
             tracker_policy: None,
+            journal_policy: None,
             wants_filtered: true,
             use_embedded_options: true,
             save_interval_secs: 30,
@@ -378,6 +433,8 @@ pub struct Room {
     /// hands over neither the room nor its tracker — see the migration that added it.
     pub journal_id: JournalId,
     pub tracker_policy: TrackerPolicy,
+    /// How much of the journal a non-organizer gets, once `tracker_policy` has let them reach it.
+    pub journal_policy: JournalPolicy,
     pub wants_filtered: bool,
 
     pub state: String,
@@ -433,6 +490,8 @@ struct RoomRow {
     journal_id: JournalId,
     #[diesel(sql_type = Text)]
     tracker_policy: String,
+    #[diesel(sql_type = Text)]
+    journal_policy: String,
     #[diesel(sql_type = Bool)]
     wants_filtered: bool,
     #[diesel(sql_type = Text)]
@@ -479,6 +538,10 @@ impl From<RoomRow> for Room {
             journal_id: row.journal_id,
             tracker_policy: TrackerPolicy::parse(&row.tracker_policy)
                 .unwrap_or(TrackerPolicy::Disabled),
+            // Same rule as the two policies above: an unrecognized value from a newer database
+            // reads as the most restrictive answer, never the default one.
+            journal_policy: JournalPolicy::parse(&row.journal_policy)
+                .unwrap_or(JournalPolicy::Disabled),
             wants_filtered: row.wants_filtered,
             state: row.state,
             state_changed_at: row.state_changed_at,
@@ -495,7 +558,8 @@ const ROOM_COLUMNS: &str = "id, name, environment::text AS environment, generati
                             source::text AS source, created_by, created_at, cloned_from, \
                             desired_state::text AS desired_state, slot_auth::text AS slot_auth, \
                             password, spoiler_policy::text AS spoiler_policy, tracker_id, journal_id, \
-                            tracker_policy::text AS tracker_policy, wants_filtered, \
+                            tracker_policy::text AS tracker_policy, \
+                            journal_policy::text AS journal_policy, wants_filtered, \
                             state::text AS state, state_changed_at, desired_at, advertised_host, \
                             advertised_port, advertised_filtered_port, last_error";
 
@@ -540,6 +604,15 @@ pub async fn create(
             } else {
                 TrackerPolicy::Link
             });
+            // A race is the case where the history is a live scoreboard rather than a record: it
+            // says who found what and when, in order, which is the one thing a racer must not be
+            // able to read about the field. So a race gets the item feed and nothing else, and an
+            // ordinary room gets the lot.
+            let journal_policy = new.journal_policy.unwrap_or(if race_mode {
+                JournalPolicy::Feed
+            } else {
+                JournalPolicy::Full
+            });
 
             let id = RoomId::new();
             // Only `room` mode has a room-wide password, and the `room_password_matches_mode`
@@ -554,11 +627,11 @@ pub async fn create(
                 "INSERT INTO rooms
                     (id, environment, name, generation_id, source, lobby_room_id, lobby_job_id,
                      idempotency_key, cloned_from, created_by, spoiler_policy, tracker_id,
-                     tracker_policy, slot_auth, password, wants_filtered, use_embedded_options,
-                     save_interval_secs, admin_token)
+                     tracker_policy, journal_policy, slot_auth, password, wants_filtered,
+                     use_embedded_options, save_interval_secs, admin_token)
                  VALUES ($1, $2::puna_environment, $3, $4, $5::room_source, $6, $7, $8, $9, $10,
-                         $11::spoiler_policy, $12, $13::tracker_policy, $14::slot_auth_mode, $15,
-                         $16, $17, $18, $19)",
+                         $11::spoiler_policy, $12, $13::tracker_policy, $14::journal_policy,
+                         $15::slot_auth_mode, $16, $17, $18, $19, $20)",
             )
             .bind::<SqlUuid, _>(id)
             .bind::<Text, _>(new.environment.as_str())
@@ -573,6 +646,7 @@ pub async fn create(
             .bind::<Text, _>(spoiler_policy.as_sql())
             .bind::<SqlUuid, _>(TrackerId::new())
             .bind::<Text, _>(tracker_policy.as_sql())
+            .bind::<Text, _>(journal_policy.as_sql())
             .bind::<Text, _>(new.slot_auth.as_sql())
             .bind::<Nullable<Text>, _>(password.as_deref())
             .bind::<Bool, _>(new.wants_filtered)
@@ -989,6 +1063,26 @@ pub async fn set_slot_auth(
     .await
 }
 
+/// Change how much of the journal a non-organizer may read.
+///
+/// **Not a restart, and the form says so.** Every other control in that section changes something
+/// pahoa reads at startup; this one changes nothing the room can see at all. The journal is a file
+/// on a volume Puna mounts read-only, the gate is Puna's own, and it applies to the next request —
+/// including one on a socket already open, since every frame is filtered as it is sent rather than
+/// at connect.
+pub async fn set_journal_policy(
+    conn: &mut AsyncPgConnection,
+    id: RoomId,
+    policy: JournalPolicy,
+) -> Result<(), diesel::result::Error> {
+    diesel::sql_query("UPDATE rooms SET journal_policy = $2::journal_policy WHERE id = $1")
+        .bind::<SqlUuid, _>(id)
+        .bind::<Text, _>(policy.as_sql())
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
 /// Open a new room from an existing room's generation.
 ///
 /// A fresh playthrough, not a copy of one: new id, its own port reservation, its own empty state
@@ -1018,6 +1112,7 @@ pub async fn clone_room(
         slot_auth: existing.slot_auth,
         spoiler_policy: Some(existing.spoiler_policy),
         tracker_policy: Some(existing.tracker_policy),
+        journal_policy: Some(existing.journal_policy),
         wants_filtered: existing.wants_filtered,
         use_embedded_options: true,
         save_interval_secs: 30,
