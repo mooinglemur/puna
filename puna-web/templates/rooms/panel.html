@@ -97,62 +97,6 @@
 </div>
 {% endif %}
 
-{# The shared room password, beside the address because it is the other half of "how do I get in"
-   and somebody copying one wants the other in the same breath.
-
-   Rendered only when `room_password` is `Some`, which the ROUTE decides -- participants and staff,
-   and only in the shared-password mode. The template deliberately does not test `room.slot_auth`
-   or reach for `room.password`, both of which are in scope here: `room` is the whole `Room` and it
-   carries the value, so a condition around it would put an authorization decision in markup that
-   cannot prove what it did not render. See `room_password_for`.
-
-   Same monospace-and-clipboard treatment as the address above and the per-slot passwords in the
-   roster, so the three things a player copies off this page all behave alike. #}
-{% if let Some(password) = room_password %}
-<p class="address-password">
-<span class="address-label">Password</span>
-<code>{{ password }}</code>
-<button type="button" class="copy" data-copy="{{ password }}"
-        title="Copy this password"
-        aria-label="Copy this room&rsquo;s password">
-<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
-<rect x="5.5" y="5.5" width="8" height="8" rx="1.5" fill="none" stroke="currentColor"/>
-<path d="M10.5 5.5v-3a1 1 0 0 0-1-1h-7a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h3" fill="none"
-      stroke="currentColor" stroke-linecap="round"/>
-</svg>
-</button>
-</p>
-<p class="hint">Everyone joining this room needs it. Your client asks for it when you connect.
-{%+ if is_organizer %}
-{# **A restart, unlike the per-slot rotation in the roster** -- pahoa reads this one from the
-   environment at startup and has no live setter for it, deliberately, so the room learns a new
-   shared password by starting again.
-
-   The cost is in the VISIBLE sentence rather than a confirm dialog, because this page has no such
-   mechanism: `data-confirm` is read by `bulk.js`, which the room page does not load, so the
-   attribute here would be a confirmation that never appears. Stop and Close disconnect everyone
-   from this same panel with no dialog either -- the convention is that the words carry it.
-
-   Organizer, where rotating one slot is a helper's: this is the room's configuration and it takes
-   the room down, which is the line M20 drew. #}
-Changing it restarts the room, which disconnects everyone for about a minute.
-{% endif %}
-</p>
-
-{% if is_organizer %}
-<form method="post" action="/room/{{ room.id }}/settings/rotate-password" class="inline">
-<button type="submit" class="linklike"
-        title="Generate a new password and restart the room so it takes effect">New password</button>
-</form>
-{% endif %}
-{% else if needs_password %}
-{# Everybody else, in the shared-password mode: the VALUE is withheld and the requirement is not.
-   Without this a player who has not claimed a slot sees an address, is refused when they connect,
-   and has no reason to think the room is anything but broken. #}
-<p class="hint">This room needs a password to join. Ask whoever invited you &mdash; the room&rsquo;s
-staff and anyone holding a slot here can see it on this page.</p>
-{% endif %}
-
 {% if let Some(filtered) = room.advertised_filtered_port %}
 {# The summary names the SYMPTOM, not the feature. "Don't want the full item feed?" asks somebody to
    already know what the item feed is; a player whose client is stuttering in a 200-slot async does
@@ -205,6 +149,75 @@ start an empty room in its place.</p>
    build does not understand, which a newer orchestrator could legitimately write. Saying so beats
    rendering nothing at all. #}
 <p>This room is {{+ room.state }}.</p>
+{% endif %}
+
+{# The shared room password, below the state chain rather than inside the `running` arm.
+
+   **It began inside it, and that was the original bug one branch over.** A room that is not up
+   showed no password, no requirement and no control -- and rotating on a stopped room answered
+   "the room will use it the next time it starts" while showing nothing, which is the same defect
+   this whole change exists to remove. Idle is most of an async's life, patches are already
+   downloadable there, and somebody getting ready to join a room that is down is exactly who needs
+   the credential.
+
+   So it renders in EVERY state, the transient ones included: a player watching a start is the most
+   likely person on this page to want it in hand. One rule with no holes beats a shorter one that
+   has to say which states are exempt and why.
+
+   It follows the address rather than sitting beside it because it is the other half of "how do I
+   get in" and somebody copying one wants the other in the same breath.
+
+   Rendered only when `room_password` is `Some`, which the ROUTE decides -- participants and staff,
+   and only in the shared-password mode. The template deliberately does not test `room.slot_auth`
+   or reach for `room.password`, both of which are in scope here: `room` is the whole `Room` and it
+   carries the value, so a condition around it would put an authorization decision in markup that
+   cannot prove what it did not render. See `room_password_for`.
+
+   Same monospace-and-clipboard treatment as the address above and the per-slot passwords in the
+   roster, so the three things a player copies off this page all behave alike. #}
+{% if let Some(password) = room_password %}
+<p class="address-password">
+<span class="address-label">Password</span>
+<code>{{ password }}</code>
+<button type="button" class="copy" data-copy="{{ password }}"
+        title="Copy this password"
+        aria-label="Copy this room&rsquo;s password">
+<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+<rect x="5.5" y="5.5" width="8" height="8" rx="1.5" fill="none" stroke="currentColor"/>
+<path d="M10.5 5.5v-3a1 1 0 0 0-1-1h-7a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h3" fill="none"
+      stroke="currentColor" stroke-linecap="round"/>
+</svg>
+</button>
+</p>
+<p class="hint">Everyone joining this room needs it. Your client asks for it when you connect.
+{%+ if is_organizer %}
+{# **A restart, unlike the per-slot rotation in the roster** -- pahoa reads this one from the
+   environment at startup and has no live setter for it, deliberately, so the room learns a new
+   shared password by starting again.
+
+   The cost is in the VISIBLE sentence rather than a confirm dialog, because this page has no such
+   mechanism: `data-confirm` is read by `bulk.js`, which the room page does not load, so the
+   attribute here would be a confirmation that never appears. Stop and Close disconnect everyone
+   from this same panel with no dialog either -- the convention is that the words carry it.
+
+   Organizer, where rotating one slot is a helper's: this is the room's configuration and it takes
+   the room down, which is the line M20 drew. #}
+Changing it restarts the room, which disconnects everyone for about a minute.
+{% endif %}
+</p>
+
+{% if is_organizer %}
+<form method="post" action="/room/{{ room.id }}/settings/rotate-password" class="inline">
+<button type="submit" class="linklike"
+        title="Generate a new password and restart the room so it takes effect">New password</button>
+</form>
+{% endif %}
+{% else if needs_password %}
+{# Everybody else, in the shared-password mode: the VALUE is withheld and the requirement is not.
+   Without this a player who has not claimed a slot sees an address, is refused when they connect,
+   and has no reason to think the room is anything but broken. #}
+<p class="hint">This room needs a password to join. Ask whoever invited you &mdash; the room&rsquo;s
+staff and anyone holding a slot here can see it on this page.</p>
 {% endif %}
 
 </div>

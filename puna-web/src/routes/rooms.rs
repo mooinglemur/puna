@@ -13,7 +13,7 @@ use puna_core::model::command::{self, RoomCommand};
 use puna_core::model::event;
 use puna_core::model::generation;
 use puna_core::model::member::{self, MemberError, RoomRole};
-use puna_core::model::room::{self, DesiredState, MyRoom, Room, SlotAuth};
+use puna_core::model::room::{self, DesiredState, MyRoom, Room, RoomState, SlotAuth};
 use puna_core::model::slot::{self, Slot};
 use puna_core::model::user;
 use rocket::form::Form;
@@ -1432,6 +1432,23 @@ async fn set_slot_auth(
     Ok(Redirect::to(format!("/room/{id}")))
 }
 
+/// Would a redeploy request actually restart this room, or sit waiting for somebody to start it?
+///
+/// **`is_live`, not `state == "running"`**, because that is the set the *planner* sees: its redeploy
+/// arm fires only where a Deployment exists, so `starting` and `degraded` both take the request —
+/// and both would otherwise be told "next time it starts" while coming up on the Secret they
+/// already had.
+///
+/// A room with no Deployment must **not** get one. The request would sit pending and fire the
+/// instant somebody started the room, bouncing it out from under them — the hazard `plan.rs` names
+/// where it puts the reaper arm below the redeploy arm.
+///
+/// Its own function so the rule has one definition and a test can hold it against `RoomState::ALL`
+/// rather than against a list repeated here.
+fn a_restart_would_land(state: &str) -> bool {
+    RoomState::parse(state).is_some_and(RoomState::is_live)
+}
+
 /// Give the room a new shared password.
 ///
 /// **Organizer, where the per-slot rotation beside it is a helper's**, and the line is the one M20
@@ -1465,7 +1482,8 @@ async fn rotate_room_password(
     // Deliberately NOT logged, and not carried back in the flash either: the value is on the page a
     // reload away, for exactly the people entitled to it. A credential in an orchestrator's log is
     // a credential in whatever ships those logs.
-    let live = access.room.state == "running";
+    //
+    let live = a_restart_would_land(&access.room.state);
     if live {
         // The same signal the admin console's restart button and a mode change both use. A restart
         // re-renders the Secret from scratch, so `mark_secret_stale` would be redundant here.
@@ -2206,9 +2224,10 @@ mod tests {
     #[test]
     fn the_panel_shows_the_password_to_participants_the_control_to_organizers_and_neither_to_a_visitor()
      {
-        let running = |password: Option<&str>, is_organizer: bool| {
+        let in_state = |state: &str, password: Option<&str>, is_organizer: bool| {
             let mut panel = a_panel();
-            panel.room.state = "running".into();
+            panel.room.state = state.into();
+            panel.is_working = state == "starting";
             panel.room.advertised_host = Some("mw.example".into());
             panel.room.advertised_port = Some(40000);
             panel.room.slot_auth = SlotAuth::Room;
@@ -2217,6 +2236,36 @@ mod tests {
             panel.is_organizer = is_organizer;
             panel.render().expect("renders")
         };
+        let running = |password: Option<&str>, is_organizer: bool| {
+            in_state("running", password, is_organizer)
+        };
+
+        // **Every state, because the first version of this rendered only in `running`** -- so a
+        // stopped room showed no password at all, and rotating on one answered "the room will use
+        // it the next time it starts" while showing nothing. Idle is most of an async's life, and a
+        // player watching a start is the most likely person here to want the credential in hand.
+        for state in [
+            "running",
+            "idle",
+            "failed",
+            "stopped",
+            "starting",
+            "integrity_fault",
+        ] {
+            let html = in_state(state, Some("abcde-fghij-klmno"), true);
+            assert!(
+                html.contains("abcde-fghij-klmno"),
+                "{state}: the password is withheld from somebody entitled to it"
+            );
+            assert!(
+                html.contains("/settings/rotate-password"),
+                "{state}: an organizer cannot rotate a password they can see"
+            );
+            assert!(
+                in_state(state, None, false).contains("needs a password to join"),
+                "{state}: a visitor is not told the room needs a password"
+            );
+        }
 
         // A participant: the value and the label, and no control that would 403.
         let participant = running(Some("abcde-fghij-klmno"), false);
@@ -3107,5 +3156,95 @@ mod tests {
                 "{command} has no title, so its dialog is headed \"Confirm\" with nothing confirmed"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod db_tests {
+    use super::*;
+    use crate::testdb::{insert_generation, insert_room, with_db};
+    use diesel_async::RunQueryDsl;
+    use puna_core::model::fleet;
+
+    /// **Rotating the shared password refuses every other mode, and restarts only a live room.**
+    ///
+    /// The mode is scoped in the `WHERE` rather than checked first, so this is what says a room in
+    /// another mode is left alone entirely rather than being handed a password the
+    /// `room_password_matches_mode` CHECK would then refuse.
+    ///
+    /// The redeploy half is the one worth a database: the planner's redeploy arm fires only where a
+    /// Deployment exists, so requesting one on a room with none leaves it pending to fire the
+    /// instant somebody starts the room — bouncing it out from under them. `is_live` is the same
+    /// three states the planner sees, which is why the route uses it rather than `== "running"`.
+    #[tokio::test]
+    async fn rotating_the_room_password_needs_the_mode_and_restarts_only_a_live_room() {
+        with_db(|pool| async move {
+            let conn = &mut pool.get().await.expect("connection");
+            let generation = insert_generation(conn).await;
+
+            // Every other mode: refused, and nothing written.
+            for mode in ["none", "per_slot"] {
+                let id = insert_room(conn, generation, "running", mode).await;
+                assert!(
+                    room::rotate_password(conn, id).await.unwrap().is_none(),
+                    "{mode}: rotated a shared password on a room that has none"
+                );
+            }
+
+            // Shared mode: a new value, and it really is new.
+            let id = insert_room(conn, generation, "running", "room").await;
+            let before = room::get(conn, id).await.unwrap().unwrap().password;
+            let rotated = room::rotate_password(conn, id).await.unwrap();
+            assert!(rotated.is_some());
+            let after = room::get(conn, id).await.unwrap().unwrap().password;
+            assert_eq!(
+                after, rotated,
+                "the row does not hold what the caller was handed"
+            );
+            assert_ne!(
+                after, before,
+                "rotation returned the password it was already using"
+            );
+
+            // Live states get the restart; a room with no Deployment must not.
+            for (state, expect_redeploy) in [
+                ("running", true),
+                ("starting", true),
+                ("degraded", true),
+                ("idle", false),
+                ("failed", false),
+            ] {
+                let id = insert_room(conn, generation, state, "room").await;
+                // Through the function the ROUTE calls, so the rule and its use are one thing.
+                let live = a_restart_would_land(state);
+                assert_eq!(
+                    live, expect_redeploy,
+                    "{state}: the restart predicate disagrees with the planner"
+                );
+                if live {
+                    fleet::request_redeploy(conn, &[id]).await.unwrap();
+                }
+                // `Room` does not carry the column -- only the fleet projection does -- so read it
+                // directly rather than widening a struct for a test.
+                #[derive(diesel::QueryableByName)]
+                struct Pending {
+                    #[diesel(sql_type = diesel::sql_types::Bool)]
+                    queued: bool,
+                }
+                let pending: Vec<Pending> = diesel::sql_query(
+                    "SELECT redeploy_requested_at IS NOT NULL AS queued FROM rooms WHERE id = $1",
+                )
+                .bind::<diesel::sql_types::Uuid, _>(id)
+                .load(conn)
+                .await
+                .unwrap();
+                assert_eq!(
+                    pending[0].queued, expect_redeploy,
+                    "{state}: a redeploy left pending on a room with no Deployment fires the \
+                     moment somebody starts it"
+                );
+            }
+        })
+        .await;
     }
 }
