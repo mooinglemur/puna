@@ -1993,6 +1993,40 @@ pub(crate) mod tests {
         page_as(is_staff, is_staff)
     }
 
+    /// **The history has a door, and it is the same door the tracker has.**
+    ///
+    /// Both are gated by `may_see_tracker` — the room page decides once and the journal routes
+    /// decide again for themselves — so the link must appear exactly when the page would answer.
+    /// Offering one the route refuses is a bug report; withholding one it would serve teaches people
+    /// to guess URLs.
+    ///
+    /// Asserted because "correct, gated, and unreachable" has now happened three times here: M26's
+    /// two controls, M31's filter editor behind a chip that only rendered once a slot already
+    /// diverged, and this viewer, which for its first day existed only for somebody who typed its
+    /// URL. A feature with no link is a feature nobody has.
+    #[test]
+    fn the_room_history_is_linked_wherever_the_tracker_is() {
+        use askama::Template;
+
+        let mut visible = page(false);
+        visible.can_see_tracker = true;
+        let html = visible.render().expect("renders");
+        assert!(
+            html.contains(&format!("/room/{}/journal", visible.room.id)),
+            "the room page does not link its history, so nothing reaches it"
+        );
+        assert!(html.contains("/tracker/"), "the tracker link went missing");
+
+        // `disabled` policy 404s the journal routes too, so the link must go with it.
+        let mut hidden = page(false);
+        hidden.can_see_tracker = false;
+        let html = hidden.render().expect("renders");
+        assert!(
+            !html.contains("/journal"),
+            "a viewer who cannot read the history is offered a link to it"
+        );
+    }
+
     fn page_as(is_staff: bool, is_organizer: bool) -> RoomTemplate {
         RoomTemplate {
             base: crate::tpl::TplContext {

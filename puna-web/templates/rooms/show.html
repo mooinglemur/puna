@@ -80,8 +80,19 @@
 {# OUTSIDE the state branch on purpose. The tracker serves its last cached document with an "as of"
    banner while the room is down, which for an async is most of the time -- so this is exactly when
    a player wants it, and gating it on `running` would hide a page that works. #}
+{# **Both behind `can_see_tracker`, and that is not a convenience.** The journal viewer is gated by
+   `room::may_see_tracker` on its own routes, so this is the same question answered in the same
+   place -- the page cannot offer a link the viewer would be refused, and cannot hide one they are
+   entitled to. A separate condition here would be a second copy of a policy decision.
+
+   The tracker answers "where is everybody up to"; the history answers "what just happened". They
+   sit together because a reader who wants one usually wants to know the other exists -- the history
+   in particular was unreachable except by typing its URL until this line, which is the third time
+   in this project something correct and gated turned out to have no door. #}
 {% if can_see_tracker %}
 <p class="tracker"><a href="/tracker/{{ room.tracker_id }}">Multiworld Tracker</a></p>
+<p class="tracker"><a href="/room/{{ room.id }}/journal">Room History</a>
+<span class="hint">&mdash; every item found here, live.</span></p>
 {% endif %}
 
 <h2>Slots</h2>
