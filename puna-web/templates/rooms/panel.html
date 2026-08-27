@@ -97,6 +97,34 @@
 </div>
 {% endif %}
 
+{# The shared room password, beside the address because it is the other half of "how do I get in"
+   and somebody copying one wants the other in the same breath.
+
+   Rendered only when `room_password` is `Some`, which the ROUTE decides -- participants and staff,
+   and only in the shared-password mode. The template deliberately does not test `room.slot_auth`
+   or reach for `room.password`, both of which are in scope here: `room` is the whole `Room` and it
+   carries the value, so a condition around it would put an authorization decision in markup that
+   cannot prove what it did not render. See `room_password_for`.
+
+   Same monospace-and-clipboard treatment as the address above and the per-slot passwords in the
+   roster, so the three things a player copies off this page all behave alike. #}
+{% if let Some(password) = room_password %}
+<p class="address-password">
+<span class="address-label">Password</span>
+<code>{{ password }}</code>
+<button type="button" class="copy" data-copy="{{ password }}"
+        title="Copy this password"
+        aria-label="Copy this room&rsquo;s password">
+<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+<rect x="5.5" y="5.5" width="8" height="8" rx="1.5" fill="none" stroke="currentColor"/>
+<path d="M10.5 5.5v-3a1 1 0 0 0-1-1h-7a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h3" fill="none"
+      stroke="currentColor" stroke-linecap="round"/>
+</svg>
+</button>
+</p>
+<p class="hint">Everyone joining this room needs it. Your client asks for it when you connect.</p>
+{% endif %}
+
 {% if let Some(filtered) = room.advertised_filtered_port %}
 {# The summary names the SYMPTOM, not the feature. "Don't want the full item feed?" asks somebody to
    already know what the item feed is; a player whose client is stuttering in a 200-slot async does

@@ -471,6 +471,40 @@ code {
 /* The description column is prose and is the one column here allowed to wrap; the address column
    must not. */
 
+/* The shared room password, beside the address because it is the other half of getting in.
+   Deliberately the same treatment as the address it sits under -- monospace, boxed, one token that
+   must not break -- so the two things a player copies off this page look and behave alike. Its own
+   selector rather than the `.address` class because that one is a TABLE and this is a line. */
+.address-password {
+  margin: 0 0 0.35rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  /* Long enough on a phone to need it, and a password must never break mid-token. */
+  flex-wrap: wrap;
+}
+
+.address-password code {
+  font-size: 1.15rem;
+  font-weight: 600;
+  padding: 0.1rem 0.3rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.address-label {
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* The copy control is a flex item here rather than an inline one, so the margin the inline case
+   needs would push it away from the code it belongs to. */
+.address-password .copy { margin-left: 0; }
+
 /* --- copy to clipboard ---------------------------------------------------------------------------
    Hidden until `room.js` has confirmed the clipboard is actually reachable. `navigator.clipboard`
    needs a secure context, so on plain HTTP the API is simply absent -- and a copy button that

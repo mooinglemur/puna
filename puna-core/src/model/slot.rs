@@ -49,7 +49,7 @@
 //! `crate::probe::http::parse` reads named fields and ignores the rest, so the extra field arrives
 //! and is dropped. Its admin commands take an optional `team`, which Puna does not send.
 
-use diesel::sql_types::{BigInt, Integer, Nullable, Text, Timestamptz, Uuid as SqlUuid};
+use diesel::sql_types::{BigInt, Bool, Integer, Nullable, Text, Timestamptz, Uuid as SqlUuid};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 
 use crate::artifact::SlotKind;
@@ -240,6 +240,38 @@ pub async fn owned_by(
     .load(conn)
     .await?;
     Ok(rows.into_iter().map(Slot::from).collect())
+}
+
+/// Does this person hold a slot in this room?
+///
+/// The **participant** half of the room page's two-tier rule: staff, or somebody playing here. It
+/// answers the same question the room page already derives from a full `list`, and exists because
+/// the lifecycle panel needs it on a path where loading every slot would be absurd — a 2000-slot
+/// room's roster, fetched to decide whether to render one password.
+///
+/// One indexed lookup, on `room_slots_owner_idx`.
+pub async fn owns_a_slot(
+    conn: &mut AsyncPgConnection,
+    room_id: RoomId,
+    user_id: i64,
+) -> Result<bool, diesel::result::Error> {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = Bool)]
+        present: bool,
+    }
+
+    let rows: Vec<Row> = diesel::sql_query(
+        "SELECT EXISTS (SELECT 1 FROM room_slots WHERE room_id = $1 AND owner_id = $2) AS present",
+    )
+    .bind::<SqlUuid, _>(room_id)
+    .bind::<BigInt, _>(user_id)
+    .load(conn)
+    .await?;
+
+    // `EXISTS` returns exactly one row, so an empty result is an impossibility rather than an
+    // absence -- treat it as "not a participant", which is the closed direction.
+    Ok(rows.into_iter().next().is_some_and(|row| row.present))
 }
 
 /// May this person see this slot's patch and password?

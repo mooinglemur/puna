@@ -223,7 +223,7 @@ fn a_glyph_only_control_names_itself_twice() {
     // the menu's own button is. A change that leaves none is a change this lint stopped guarding.
     // Set it by reading the count this assertion prints, not by guessing.
     assert!(
-        examined >= 25,
+        examined >= 27,
         "only {examined} glyph-only controls found -- this lint is no longer looking at anything"
     );
     assert!(
@@ -583,6 +583,38 @@ fn code_only(source: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// **No template reads a credential straight off the `Room`.**
+///
+/// `RoomTemplate` and `PanelTemplate` both carry the whole `Room`, which has `password` and
+/// `admin_token` on it — so on the room page, which is **public**, the room's shared password and
+/// the bearer token that drives its admin API are both sitting in the rendering context of a page
+/// an anonymous visitor is looking at.
+///
+/// Nothing renders them, and nothing may: the password goes out through `room_password`, a separate
+/// field the *route* fills in only for participants and staff. The distinction matters because a
+/// template cannot prove a negative — `{% if is_staff %}{{ room.password }}{% endif %}` looks like
+/// a gate and is one, right up until the condition is edited, moved, or copied into a branch that
+/// renders for somebody else. Deciding it in Rust means the value is simply absent.
+///
+/// The same argument `SlotView` has carried since M19, asserted here because the room page acquired
+/// a second way to make the mistake the day the shared password got a reader at all.
+#[test]
+fn no_template_renders_a_credential_off_the_room() {
+    for path in templates() {
+        let source = std::fs::read_to_string(&path).expect("a template");
+        let code = blank_comments(&source);
+        for forbidden in ["room.password", "room.admin_token"] {
+            assert!(
+                !code.contains(forbidden),
+                "{}: renders `{forbidden}` directly. Credentials reach a template through a field \
+                 the route gated -- see `room_password_for` -- because a condition in markup cannot \
+                 prove what it did not render.",
+                label(&path)
+            );
+        }
+    }
 }
 
 /// **`localtime.js` is the only file that decides how an instant is spelled.**

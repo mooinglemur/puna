@@ -167,6 +167,9 @@ pub struct RoomTemplate {
     /// visible to them, and the "only my slots" toggle is worth offering. Somebody holding none
     /// would get a control that hides every row.
     owns_a_slot: bool,
+    /// The room-wide password. Same field, same gate and same reason as [`PanelTemplate`]'s — this
+    /// page `{% include %}`s that template, so both structs must offer the name it renders.
+    room_password: Option<String>,
 }
 
 /// One row of the room page's slot table.
@@ -733,6 +736,7 @@ async fn show(
         may_start: may_start(&room, role),
         is_working: is_working(&room),
         owns_a_slot,
+        room_password: room_password_for(&room, role.is_some(), owns_a_slot),
         room,
         slots,
         is_staff: role.is_some(),
@@ -874,6 +878,37 @@ pub struct PanelTemplate {
     is_working: bool,
     message: Option<&'static str>,
     elapsed: String,
+    /// The room-wide password, for the people entitled to it — `None` for everybody else, and for
+    /// every room not in that mode.
+    ///
+    /// **Decided here and never in the template**, the same rule `SlotView` follows and for a
+    /// sharper reason: `room` on this struct is the whole [`Room`], which *carries*
+    /// `password`, so the raw value is in the context of a page rendered for anonymous visitors. A
+    /// template cannot prove it did not render something, so the gate has to be a different field
+    /// rather than a condition around the same one. A source lint holds the template to it.
+    ///
+    /// Until this existed the value was in the context and reachable and **nothing rendered it at
+    /// all**, which is the bug this closes: `set_slot_auth` generates the password, ships it to the
+    /// room as `PAHOA_PASSWORD` and restarts the room to enforce it, and no page, route or admin
+    /// screen ever showed it to anyone. Choosing that mode made the room unjoinable by everybody,
+    /// the organizer who chose it included.
+    room_password: Option<String>,
+}
+
+/// The room-wide password, for a viewer who may have it.
+///
+/// **Participants and staff** — Troy's call, and the same tier the roster's usernames and the
+/// `players` spoiler policy already use: the room's staff, or somebody who holds a slot in it.
+/// `GET /room/<id>` is public, so rendering it to everyone would make the password exactly as
+/// secret as the link and the mode meaningless.
+///
+/// `None` outside [`SlotAuth::Room`], so the per-slot and passwordless modes cannot leak a stale
+/// value left in the column by a mode change.
+fn room_password_for(room: &Room, is_staff: bool, owns_a_slot: bool) -> Option<String> {
+    if room.slot_auth != SlotAuth::Room || !(is_staff || owns_a_slot) {
+        return None;
+    }
+    room.password.clone()
 }
 
 #[get("/room/<id>/panel")]
@@ -892,10 +927,20 @@ async fn panel(id: RoomParam, session: Session, pool: &State<Pool>) -> Result<Pa
         .and_then(|e| phrase(&e.kind));
     let elapsed = human_duration(since_ms(transition_began(&room)));
 
+    // One indexed lookup, and only for a room that has a shared password to show -- so the ordinary
+    // room pays nothing for this on a path the page re-fetches on every state change.
+    let owns_a_slot = match session.user_id {
+        Some(user_id) if room.slot_auth == SlotAuth::Room => {
+            slot::owns_a_slot(&mut conn, room.id, user_id).await?
+        }
+        _ => false,
+    };
+
     Ok(PanelTemplate {
         is_closed: room.desired_state == DesiredState::Closed.as_sql(),
         may_start: may_start(&room, role),
         is_working: is_working(&room),
+        room_password: room_password_for(&room, role.is_some(), owns_a_slot),
         room,
         message,
         elapsed,
@@ -1477,6 +1522,48 @@ mod tests {
     /// rendering the passwords into the slot table means the gate is the only thing between a
     /// shared room link and every player's credential. This is the rule `SlotAccess` applies to the
     /// JSON route, asserted here because the table now shows the value rather than linking to it.
+    /// **The shared room password reaches participants and staff, and nobody else.**
+    ///
+    /// The mode's whole point is that the address alone is not enough to join, and `GET /room/<id>`
+    /// is public — so a viewer who merely holds the link must not get the value, or the password is
+    /// exactly as secret as the link and the mode means nothing.
+    ///
+    /// The other half is the mode check, and it is not decoration: switching a room *away* from the
+    /// shared password leaves nothing behind today, but a value stranded in the column by any
+    /// future path would otherwise render as though it were live — a password people would try, on
+    /// a room that no longer wants one.
+    #[test]
+    fn the_room_password_reaches_participants_and_staff_and_nobody_else() {
+        let mut room = a_room();
+        room.slot_auth = SlotAuth::Room;
+        room.password = Some("abcde-fghij-klmno".into());
+
+        // staff, participant, both
+        for (is_staff, owns_a_slot) in [(true, false), (false, true), (true, true)] {
+            assert_eq!(
+                room_password_for(&room, is_staff, owns_a_slot).as_deref(),
+                Some("abcde-fghij-klmno"),
+                "staff={is_staff} participant={owns_a_slot}: entitled and not shown the password"
+            );
+        }
+
+        // Somebody holding nothing but the link.
+        assert!(
+            room_password_for(&room, false, false).is_none(),
+            "a shared room link must not carry the password that gates the room"
+        );
+
+        // Every other mode, for a viewer who WOULD be entitled in the shared mode.
+        for mode in [SlotAuth::None, SlotAuth::PerSlot] {
+            let mut other = room.clone();
+            other.slot_auth = mode;
+            assert!(
+                room_password_for(&other, true, true).is_none(),
+                "{mode:?}: a stale column value rendered as this room's password"
+            );
+        }
+    }
+
     #[test]
     fn a_slot_password_reaches_its_owner_and_staff_and_nobody_else() {
         let mine = 100_i64;
@@ -1849,6 +1936,7 @@ mod tests {
             may_start: true,
             is_working: false,
             owns_a_slot: false,
+            room_password: None,
         }
     }
 
@@ -2046,6 +2134,7 @@ mod tests {
             is_working: false,
             message: None,
             elapsed: "12s".into(),
+            room_password: None,
         }
     }
 
