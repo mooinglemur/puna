@@ -76,6 +76,79 @@
     return "item";
   }
 
+  // **Who the room says it was.** Every record carrying a person carries `player` off the
+  // authenticated connection, and the slot number as a fallback for a record written before a name
+  // was known. This is the only thing that ever fills the identity cell — never `source`, which is
+  // the sending client's own claim.
+  function who(row, event) {
+    cell(row, event.player || "slot " + event.slot, "who");
+  }
+
+  // **What the sending client said its name was, when that is not the slot's.**
+  //
+  // `source` is copied straight out of the bounce payload and nothing in the protocol validates it,
+  // so it must never stand in for the authenticated identity. It is not noise either: one slot can
+  // be a whole group of people, which is exactly what Archipelago's Minecraft world does — several
+  // accounts play through a single server that holds the slot, and `source` is the only thing in
+  // the record that says which of them died. Withholding it would drop the one fact the room
+  // cannot otherwise report.
+  //
+  // So it renders BESIDE the room's answer rather than instead of it, and only when the two
+  // disagree — the case the reader is being told about. Identical values say nothing, and on a busy
+  // feed a parenthetical after every link would train the eye to skip exactly the one that matters.
+  //
+  // `title` says where the value came from, because a name in parentheses reads as authority and
+  // this one has none: a client that wants to name somebody else can.
+  function claimed(row, event) {
+    var source = event.source;
+    if (typeof source !== "string") return;
+    source = source.trim();
+    // Untrusted, unbounded text on a one-line row. `textContent` makes it inert; the cap keeps one
+    // client from pushing the rest of the record off the end of the line.
+    if (source.length > 48) source = source.slice(0, 48) + "…";
+    if (!source || source === event.player) return;
+    var span = cell(row, " (" + source + ")", "claimed");
+    span.title = "Reported by the sending client, not verified by the room";
+  }
+
+  // How many other slots a link reached. Suppressed at zero rather than rendered as "0 slots",
+  // which reads as a failure where it usually means a solo room or a convention nobody else runs.
+  function recipients(row, event) {
+    if (!event.recipients) return;
+    cell(
+      row,
+      " → " + event.recipients + (event.recipients === 1 ? " slot" : " slots"),
+      "hint"
+    );
+  }
+
+  // A connection's tags, which are what tell three connections on one slot apart. No leading
+  // space: the call sites differ in what precedes them, and building the separator in here is how
+  // `tags_changed` came out with a double space between its verb and its first list.
+  function tags(list) {
+    if (!Array.isArray(list) || !list.length) return "(no tags)";
+    return "[" + list.join(", ") + "]";
+  }
+
+  // The build behind a `started`/`stopped` pair. `build_rev` ending in `+` means the tree was
+  // dirty, which on a room off a CI image means something was built outside the pipeline.
+  function build(event) {
+    if (!event.version) return "";
+    return " — pahoa " + event.version + (event.build_rev ? " (" + event.build_rev + ")" : "");
+  }
+
+  // An admin command's arguments. Rendered as JSON on purpose: the shape is per verb and open, so
+  // any prettier rendering would be a table to keep in step with sixteen handlers in another
+  // repository — and would quietly render the next verb as nothing.
+  function detail(value) {
+    if (!value || typeof value !== "object") return "";
+    var parts = Object.keys(value).map(function (key) {
+      var v = value[key];
+      return key + ": " + (typeof v === "object" ? JSON.stringify(v) : String(v));
+    });
+    return parts.length ? " — " + parts.join(", ") : "";
+  }
+
   function at(seconds) {
     var d = new Date(seconds * 1000);
     return isNaN(d.getTime()) ? "" : d;
@@ -126,6 +199,155 @@
       // `slot 1: MooingYacht1: meow`, saying the same thing twice and in the less useful order.
       case "chat":
         cell(row, event.text || "", "chat-text");
+        break;
+
+      // The three link conventions, and the one rule that matters is whose name is shown.
+      //
+      // **`player` is the room's answer; `source` is the sending client's claim.** They are
+      // recorded separately precisely because they can disagree — nothing in the protocol stops a
+      // client putting somebody else's name in the payload — so a page rendering `source` as "who
+      // killed you" would be rendering an assertion an attacker picks. Every one of these reads
+      // `player`, which comes off the authenticated connection the packet arrived on. `source` is
+      // never displayed at all; `RingLink` does not even carry a usable one.
+      case "deathlink":
+        who(row, event);
+        claimed(row, event);
+        cell(row, " died", "verb");
+        if (event.cause) {
+          cell(row, " — ", "verb");
+          cell(row, event.cause, "where");
+        }
+        recipients(row, event);
+        break;
+
+      case "traplink":
+        who(row, event);
+        claimed(row, event);
+        cell(row, " sent ", "verb");
+        cell(row, event.trap_name || "a trap", "item trap");
+        recipients(row, event);
+        break;
+
+      // `amount` is a number and keeps its own type, so it is legitimately negative — a ring link
+      // relays a loss as readily as a gain. **The sign is the whole event**, so it is rendered as
+      // the word rather than as a signed number: "sent -25 rings" describes half of these
+      // backwards, and a bare `-25` beside a name is exactly the sort of thing a reader rounds off
+      // to "sent".
+      case "ringlink":
+        who(row, event);
+        // RingLink has no usable `source` -- that convention puts a client instance id where the
+        // others put a name -- so pahoa records null rather than something wrong. `claimed` is
+        // called anyway: the guard belongs in one place, and a convention that starts sending a
+        // real name should surface without a change here.
+        claimed(row, event);
+        if (typeof event.amount !== "number") {
+          cell(row, " changed rings", "verb");
+        } else {
+          cell(row, event.amount < 0 ? " lost " : " gained ", "verb");
+          cell(row, Math.abs(event.amount) + " rings", "item useful");
+        }
+        recipients(row, event);
+        break;
+
+      // **The incarnation markers.** A file spans every run of a room, so without these a jump in
+      // the timestamps could be a quiet night or a crash and there is no way to tell. A `started`
+      // with no `stopped` before it is an unclean stop — that absence IS the signal, so the pair is
+      // worth drawing plainly rather than interpreting here.
+      case "started":
+        cell(row, "▶ room started", "kind");
+        cell(row, build(event), "hint");
+        break;
+
+      case "stopped":
+        cell(row, "■ room stopped", "kind");
+        // pahoa's own word, unchanged: `SIGTERM` is an orchestrated drain, `admin request` is the
+        // shutdown endpoint, `SIGINT` is a person at a terminal. It matches the room's log line
+        // exactly, so the two can be read together without a translation table.
+        cell(row, event.reason ? " (" + event.reason + ")" : "", "where");
+        cell(row, build(event), "hint");
+        break;
+
+      // One record per CONNECTION, not per player: a slot running a game client, a text client and
+      // a tracker produces three. So the tags are worth showing — they are what tells those three
+      // apart, and they decide whether a connection may claim the goal or receives chat at all.
+      case "connected":
+        who(row, event);
+        cell(row, " connected", "verb");
+        cell(row, event.game ? " — " + event.game : "", "where");
+        cell(row, " " + tags(event.tags), "hint");
+        break;
+
+      // `slot_empty` is the field worth building on: closing one of three clients is ordinary, the
+      // slot going dark is the thing somebody asks about later. Deriving it would mean replaying
+      // every join and part from the top of the file.
+      case "disconnected":
+        who(row, event);
+        cell(row, " disconnected", "verb");
+        cell(row, event.slot_empty ? " — slot is now empty" : "", "hint");
+        break;
+
+      case "tags_changed":
+        who(row, event);
+        cell(row, " tags ", "verb");
+        cell(row, tags(event.from) + " → " + tags(event.to), "where");
+        break;
+
+      // Written BEFORE the checks it causes, so it sits above the release burst rather than buried
+      // under three thousand lines of it. Worth rendering as an arrival rather than a status.
+      case "goal":
+        who(row, event);
+        cell(row, " finished", "verb");
+        cell(row, event.game ? " " + event.game : "", "where");
+        break;
+
+      // Every mutating admin verb, recorded at the dispatch point as it was ASKED FOR -- so a
+      // refused command still appears, which is equally interesting to somebody reconstructing a
+      // dispute. What came of it is in the reply the operator got, not here.
+      case "admin":
+        cell(row, "admin ", "kind");
+        cell(row, event.command || "command", "item");
+        cell(row, typeof event.slot === "number" ? " on slot " + event.slot : "", "who");
+        cell(row, detail(event.detail), "hint");
+        break;
+
+      // `!getitem`. It exists because no `check` can account for it: the item moves with no location
+      // behind it, so without this line the history would show an item nobody found.
+      case "cheat":
+        who(row, event);
+        cell(row, " conjured ", "verb");
+        cell(row, event.item_name || "item " + event.item, itemClass(event.flags));
+        break;
+
+      // **Both balances, not just the cost.** Hint price is a percentage of a slot's own location
+      // count and can be changed mid-room, so a cost in isolation cannot be checked against
+      // anything afterwards. Equal balances mean a free hint -- an item at an already-checked
+      // location -- which is usually the thing being adjudicated.
+      case "hints":
+        who(row, event);
+        var granted = Array.isArray(event.granted) ? event.granted : [];
+        cell(row, granted.length === 1 ? " hinted " : " hinted " + granted.length + "× ", "verb");
+        cell(row, granted.join("; ") || "nothing", "where");
+        if (typeof event.points_before === "number") {
+          cell(
+            row,
+            " (" + (event.cost || 0) + " points: " + event.points_before + " → " +
+              event.points_after + ")",
+            "hint"
+          );
+        }
+        break;
+
+      case "option_changed":
+        cell(row, "option ", "kind");
+        cell(row, event.option || "?", "item");
+        cell(row, " → ", "verb");
+        cell(row, String(event.value), "where");
+        break;
+
+      // The VALUE is never in this record, by pahoa's design -- only whether one now exists.
+      case "slot_password_changed":
+        cell(row, "slot " + event.slot + " password ", "kind");
+        cell(row, event.set ? "set" : "cleared", "where");
         break;
 
       // **pahoa's own "this history is incomplete" marker.** It is rendered loudly and never

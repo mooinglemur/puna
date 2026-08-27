@@ -585,6 +585,131 @@ fn code_only(source: &str) -> String {
         .join("\n")
 }
 
+/// **A link's `source` is shown, and never shown as the identity.**
+///
+/// The three link records carry two names. `team`/`slot`/`player` come off the authenticated
+/// connection the `Bounce` arrived on; `source` is copied straight out of the payload — the sending
+/// client's own claim, with nothing in the protocol stopping one from naming somebody else. pahoa
+/// records them separately *because they can disagree*, and pins that they can.
+///
+/// **Both halves of this are load-bearing, and the first draft got the second one wrong by dropping
+/// `source` entirely.** It is not noise: one slot can be a whole group of people — Archipelago's
+/// Minecraft world puts several accounts behind a single server holding the slot — so `source` is
+/// the only field saying which of them died, and withholding it drops the one fact the room cannot
+/// otherwise report.
+///
+/// What must not happen is `source` filling the identity cell, where a name an attacker picks would
+/// read as the room's answer. That mistake never shows up in testing, because the two agree for
+/// every honest client — which is all of them until one is not.
+///
+/// So the lint pins the shape rather than the field: `who()` is the identity and reads only the
+/// authenticated name, and `source` reaches the page through `claimed()`, dimmed and carrying a
+/// `title` that says where it came from.
+#[test]
+fn a_links_claimed_sender_is_shown_but_never_as_the_identity() {
+    let script = std::fs::read_to_string(source("static/journal.js")).expect("journal.js");
+    let css = std::fs::read_to_string(source("static/css/puna.css")).expect("puna.css");
+    let code = code_only(&script);
+
+    let who = code
+        .split_once("function who(row, event) {")
+        .expect("who()")
+        .1;
+    let who = who.split_once("\n  }").expect("a closed who()").0;
+    assert!(
+        !who.contains("source"),
+        "the identity cell reads `source`, which is a name the sending client chose for itself"
+    );
+
+    // It is still rendered, through the one helper that marks it as a claim.
+    assert!(
+        code.contains("function claimed(row, event)") && code.contains("\"claimed\""),
+        "nothing renders a link's `source`, so a slot shared by several people cannot say which \
+         of them the event was about"
+    );
+    assert!(
+        code.contains("event.source"),
+        "`claimed()` no longer reads `source`"
+    );
+    // Dimmed and footnoted rather than styled like a verified name — the whole point is that it
+    // must not read as authority.
+    assert!(
+        styles(&css, "claimed"),
+        "`.claimed` has no rule, so a client-supplied name renders identically to the room's own"
+    );
+    let claimed = code
+        .split_once("function claimed(row, event) {")
+        .expect("claimed()")
+        .1;
+    let claimed = claimed.split_once("\n  }").expect("a closed claimed()").0;
+    assert!(
+        claimed.contains(".title ="),
+        "`claimed()` renders an unverified name with nothing saying it is unverified"
+    );
+
+    // Every link type offers it. Missing one is silent: the field simply never appears for that
+    // convention, on the records where it is most likely to differ.
+    for kind in ["deathlink", "traplink", "ringlink"] {
+        let arm = code
+            .split_once(&format!("case \"{kind}\":"))
+            .unwrap_or_else(|| panic!("a `{kind}` arm"))
+            .1;
+        let arm = arm.split_once("break;").expect("a terminated arm").0;
+        assert!(
+            arm.contains("claimed(row, event)"),
+            "`{kind}` does not render the sender the client reported"
+        );
+    }
+}
+
+/// **Every record type the public feed carries has a renderer.**
+///
+/// `PUBLIC_KINDS` decides what reaches a viewer at the `feed` tier, and `journal.js` decides what
+/// that viewer *sees*. They are two lists in two languages with nothing tying them together, and
+/// the failure mode is one-directional and ugly: a kind admitted by the filter with no `case` in
+/// the renderer falls through to the raw-JSON default, so the general public gets a wall of
+/// `{"type":"traplink","at":1787159859.507,…}` where the feed should be.
+///
+/// That is not hypothetical — `deathlink` had no renderer for as long as it was withheld, and
+/// admitting it is what made the gap visible. The default exists for a type this build has never
+/// heard of; a type it deliberately publishes is not that.
+#[test]
+fn every_publicly_visible_record_has_a_renderer() {
+    let script = std::fs::read_to_string(source("static/journal.js")).expect("journal.js");
+    let code = code_only(&script);
+    let routes = std::fs::read_to_string(source("src/routes/journal.rs")).expect("journal.rs");
+
+    // Past the `=` before looking for the `;`: the type annotation is `[&str; N]`, so a naive
+    // "everything up to the first semicolon" reads the declaration's own length and finds no
+    // strings at all. The floor assertion below is what caught that, which is the entire reason a
+    // lint that scans for a list states a minimum.
+    let list = routes
+        .split_once("pub const PUBLIC_KINDS")
+        .expect("PUBLIC_KINDS")
+        .1;
+    let list = list.split_once('=').expect("an initializer").1;
+    let list = list.split_once(';').expect("a terminated list").0;
+    let kinds: Vec<&str> = list
+        .split('"')
+        .skip(1)
+        .step_by(2)
+        .filter(|k| !k.is_empty())
+        .collect();
+
+    assert!(
+        kinds.len() >= 5,
+        "read {} public kinds out of PUBLIC_KINDS, so this lint is checking almost nothing",
+        kinds.len()
+    );
+    for kind in kinds {
+        assert!(
+            code.contains(&format!("case \"{kind}\":")),
+            "`{kind}` is sent to a public viewer and `journal.js` has no case for it, so it \
+             renders as raw JSON to everybody holding the feed link"
+        );
+    }
+}
+
 /// **The whole-feed walk clears its in-flight flag before asking for the next page.**
 ///
 /// `askForEarlier` refuses to send while `backfilling` is set — one request in flight at a time,
@@ -696,6 +821,9 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
         "gap-note",
         "daybreak",
         "day",
+        // A name the sending client supplied. Losing its rule makes it identical to the verified
+        // name beside it, which is the one thing that must never be true of it.
+        "claimed",
     ] {
         assert!(
             code.contains(class),

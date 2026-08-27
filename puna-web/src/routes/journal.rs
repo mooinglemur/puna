@@ -79,17 +79,34 @@ const POLL: std::time::Duration = std::time::Duration::from_secs(1);
 /// without any script running.
 const PING: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Record types a viewer at the tracker tier may see.
+/// Record types a viewer at the `feed` tier may see.
 ///
-/// **Transcribed from `JournalEvent`'s constructors**, not from a corpus — see the module note. The
-/// two here are the only ones that describe item movement rather than people: `check` is the feed,
-/// and `gap` is pahoa's own marker that records were dropped, which must never be filtered because
-/// it is the only evidence the history is incomplete.
+/// **Transcribed from pahoa's `docs/journal.md`**, which is the authoritative table, not from a
+/// corpus — see the module note. Every entry here describes *a cross-game effect landing on
+/// somebody*, which is the thing this feed is for:
 ///
-/// Everything else — `chat`, `cheat`, `hints`, `deathlink`, `options`, `option_changed`,
-/// `slot_password_changed` — is withheld from a public viewer and counted, so the page can say that
-/// something happened without saying what.
-pub const PUBLIC_KINDS: [&str; 2] = ["check", "gap"];
+///   * `check` — an item moved. The wall of "X sent Y to Z", and the reason the page exists.
+///   * `gap` — pahoa's own marker that records were dropped. **Never filtered under any policy**:
+///     it is the only evidence the history is incomplete, and a viewer that dropped it would
+///     present a partial history as a whole one.
+///   * `deathlink`, `traplink`, `ringlink` — the three link conventions. A link is the same kind of
+///     event as a check: discrete, player-affecting and cross-game, and *"why did I get a trap I
+///     never earned"* is exactly what a feed is opened to answer. DeathLink was only ever the
+///     popular one rather than the only one; upstream has three, pahoa records them from one table,
+///     and treating them differently here would be an editorial guess rather than a property of
+///     the protocol.
+///
+/// Everything else is withheld from a `feed` viewer and counted. That is the whole list of what a
+/// room's participants said and did to each other rather than to each other's *games*: `chat`,
+/// `admin`, `cheat`, `hints`, `goal`, `connected`, `disconnected`, `tags_changed`, `started`,
+/// `stopped`, `options`, `option_changed`, `slot_password_changed`.
+///
+/// **pahoa proposed a wider set** — `started`, `stopped`, `goal` and `disconnected`, on the grounds
+/// that none is player-authored text and `started`/`stopped` let a page draw a restart boundary
+/// rather than an unexplained jump in timestamps. Not taken: they are true statements about the
+/// room's operation rather than about play, and a room that wants them public has `full` to say so.
+/// The narrower set needs no argument about which non-text records happen to be harmless.
+pub const PUBLIC_KINDS: [&str; 5] = ["check", "gap", "deathlink", "traplink", "ringlink"];
 
 /// How much of the history this viewer gets.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -587,11 +604,24 @@ mod tests {
     /// recover what the tier withholds.
     #[test]
     fn a_public_viewer_is_never_sent_chat_or_anything_like_it() {
+        // **Every type pahoa's `docs/journal.md` lists that is not in `PUBLIC_KINDS`**, which is
+        // the whole point of enumerating them here rather than asserting the complement: a record
+        // type added upstream and quietly admitted is the failure this guards, and a complement
+        // would admit it by construction.
+        //
+        // The three link types are deliberately absent — they are a *feed* event, the same kind of
+        // cross-game effect a check is, and they are asserted as public in the test below.
         let private = [
             "chat",
+            "admin",
             "cheat",
             "hints",
-            "deathlink",
+            "goal",
+            "connected",
+            "disconnected",
+            "tags_changed",
+            "started",
+            "stopped",
             "option_changed",
             "slot_password_changed",
             "options",
@@ -616,18 +646,31 @@ mod tests {
         assert!(parsed["events"].as_array().expect("events").is_empty());
     }
 
-    /// The feed itself — the screenshot — is entirely `check`, and `gap` rides with it because it is
-    /// the only evidence the history has holes.
+    /// The feed itself — the screenshot — is `check`, the three link conventions, and `gap`.
+    ///
+    /// **The links belong here for the same reason a check does**: a discrete cross-game effect
+    /// landing on somebody. DeathLink was only ever the popular convention rather than the only
+    /// one — pahoa records all three from one table — so admitting one and withholding the others
+    /// would be an editorial guess rather than a property of the protocol, and *"why did I get a
+    /// trap I never earned"* is precisely what a reader opens a feed to answer.
+    ///
+    /// `gap` rides with them because it is the only evidence the history has holes.
     #[test]
-    fn the_feed_carries_checks_and_the_gap_marker() {
-        let lines = vec![line("check"), r#"{"type":"gap","dropped":7}"#.to_string()];
+    fn the_feed_carries_checks_links_and_the_gap_marker() {
+        let lines = vec![
+            line("check"),
+            line("deathlink"),
+            line("traplink"),
+            line("ringlink"),
+            r#"{"type":"gap","dropped":7}"#.to_string(),
+        ];
         let parsed: serde_json::Value =
             serde_json::from_str(&batch("append", &lines, 9, None, Visibility::Feed))
                 .expect("valid JSON");
 
         let events = parsed["events"].as_array().expect("events");
-        assert_eq!(events.len(), 2, "the feed dropped a record it should carry");
-        assert_eq!(events[1]["dropped"], 7);
+        assert_eq!(events.len(), 5, "the feed dropped a record it should carry");
+        assert_eq!(events[4]["dropped"], 7);
         assert!(parsed.get("withheld").is_none());
     }
 

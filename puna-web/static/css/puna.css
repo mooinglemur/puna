@@ -1450,6 +1450,20 @@ h1 .scope {
 .journal .kind { color: var(--feed-kind); }
 .journal .hint { color: var(--feed-dim); }
 
+/* A name the SENDING CLIENT supplied, beside the name the room authenticated.
+ *
+ * It earns its place because one slot can be a group of people -- Archipelago's Minecraft world
+ * puts several accounts behind a single server that holds the slot, and this is the only field
+ * saying which of them died. But nothing validates it, so it must not look like the identity next
+ * to it: dimmed rather than `--feed-who`, and underlined the way a footnote is, which is what the
+ * `title` on it answers. Never bold, never the same color as a verified name. */
+.journal .claimed {
+  color: var(--feed-dim);
+  text-decoration: underline dotted;
+  text-underline-offset: 0.2em;
+  cursor: help;
+}
+
 /* pahoa's own marker that records are missing. It is the one line here that must not be skimmable:
    everything else says what happened, and this says the record is incomplete. */
 .journal .gap-note {
