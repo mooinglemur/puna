@@ -1544,8 +1544,20 @@ h1 .scope {
  * outer one moves the frame off the screen while the inner one is where the records actually are.
  *
  * So the body becomes the column: topbar, banner, main, footer, with `main` taking the slack and
- * passing it down to `.journal`. `min-height` rather than `height`, so a window too short for the
- * feed's own floor still scrolls rather than clipping the footer.
+ * passing it down to `.journal`.
+ *
+ * **`height`, NOT `min-height`, and the first version of this got that wrong.** `min-height` is the
+ * sticky-footer idiom and it is the wrong tool here, because the two cases are opposites: a sticky
+ * footer needs a short page to GROW, and this needs a long one to be CAPPED. `min-height` states a
+ * floor and no ceiling, so the flex container has no definite size to distribute -- nothing is ever
+ * forced to shrink, `.journal` (which no longer carries a height of its own) grows with every record
+ * it appends, and the whole document scrolls. That is exactly the failure this section exists to
+ * remove, reintroduced by the mechanism meant to fix it.
+ *
+ * `height` makes the size definite, so the free space is a real number, `main` shrinks into it
+ * (hence `min-height: 0` below) and the feed ends where the window does. A window too short for the
+ * feed's own floor overflows and the page scrolls -- deliberately, since `body` keeps `overflow:
+ * visible` and clipping the footer would be worse than a scrollbar at that size.
  *
  * `100dvh` is the point of the pair: on a phone `100vh` is the tallest the viewport ever gets, so
  * sizing to it puts the foot of the feed under the browser's own toolbar. The `100vh` line is the
@@ -1553,8 +1565,8 @@ h1 .scope {
 .feed-page {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
-  min-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
 }
 
 /* `width` and `box-sizing` are NOT tidiness here -- they are what keeps the measure. `main` centers

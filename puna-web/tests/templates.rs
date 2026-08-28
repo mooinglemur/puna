@@ -1006,16 +1006,30 @@ fn the_feed_page_is_sized_to_the_window() {
         "`.feed-page main` no longer allows itself to shrink, so the page scrolls again: {main}"
     );
 
-    // `dvh` is the one that matters on a phone, where `100vh` is the viewport at its tallest and
-    // sizing to it hides the foot of the feed behind the browser's own toolbar. The `vh` line is
-    // the fallback, so both have to be here and in that order.
     let page = css
         .split(".feed-page {")
         .nth(1)
         .and_then(|rest| rest.split('}').next())
         .expect("a `.feed-page` rule");
-    let vh = page.find("100vh");
-    let dvh = page.find("100dvh");
+
+    // **`height`, not `min-height`, and this assertion exists because I shipped the other one.**
+    // `min-height` is the sticky-footer idiom, and the two cases are opposites: a sticky footer
+    // needs a short page to grow, this needs a long one to be capped. A floor with no ceiling leaves
+    // the flex container with no definite size to distribute, so nothing shrinks, `.journal` grows
+    // with every record, and the whole document scrolls -- the exact failure this page's layout
+    // exists to remove. It looks right, it passes every other check here, and it is only visible to
+    // somebody scrolling a busy feed.
+    assert!(
+        page.contains("height: 100vh") && !page.contains("min-height: 100"),
+        "`.feed-page` sizes itself with `min-height`, which states a floor and no ceiling -- so the \
+         feed is never capped and the page scrolls instead of the feed: {page}"
+    );
+
+    // `dvh` is the one that matters on a phone, where `100vh` is the viewport at its tallest and
+    // sizing to it hides the foot of the feed behind the browser's own toolbar. The `vh` line is
+    // the fallback, so both have to be here and in that order.
+    let vh = page.find("height: 100vh");
+    let dvh = page.find("height: 100dvh");
     assert!(
         matches!((vh, dvh), (Some(v), Some(d)) if v < d),
         "`.feed-page` must set `100vh` and then `100dvh`: the second is the real value and the \
