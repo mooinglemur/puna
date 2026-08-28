@@ -114,6 +114,14 @@ pub struct MyRoomsTemplate {
 #[template(path = "rooms/show.html")]
 pub struct RoomTemplate {
     base: TplContext,
+    /// The one-shot message from whatever redirected here.
+    ///
+    /// **This page is the target of every `Flash` in this module and read none of them until
+    /// 2026-08-28.** "Saved", "New password", the rename confirmation and every import result were
+    /// produced, stored in a cookie and then dropped by the page they were addressed to. Nothing
+    /// failed and nothing logged: the redirect worked, the page rendered, and the sentence was
+    /// simply absent.
+    notice: Option<crate::flash::Notice>,
     room: Room,
     slots: Vec<SlotView>,
     /// Precomputed rather than left as an `Option<RoomRole>` for the template to compare against.
@@ -690,10 +698,12 @@ async fn create(
         }
     };
 
-    room::set_lobby_room(&mut conn, id, lobby_room).await?;
-
+    // Only on success -- see the note in `import_lobby_owners`. An association recorded for an
+    // import that never happened turns on a room-page notice that explains the unclaimed slots
+    // wrongly and permanently.
     match crate::lobby::import(&mut conn, configured, id, lobby_room).await {
         Ok(outcome) => {
+            room::set_lobby_room(&mut conn, id, lobby_room).await?;
             tracing::info!(
                 room = %id,
                 lobby_room = %lobby_room,
@@ -740,6 +750,7 @@ async fn show(
     session: Session,
     navigation: Navigation,
     pool: &State<Pool>,
+    flash: Option<rocket::request::FlashMessage<'_>>,
 ) -> Result<RoomTemplate> {
     let mut conn = pool.get().await?;
     let room = room::get(&mut conn, id.0)
@@ -906,6 +917,7 @@ async fn show(
     let is_closed = room.desired_state == DesiredState::Closed.as_sql();
     Ok(RoomTemplate {
         base: TplContext::new(&session),
+        notice: crate::flash::Notice::take(flash),
         unclaimed_after_import,
         // Both from `may_start`, so the page and the route cannot disagree about who gets a door.
         is_closed,
@@ -1335,6 +1347,9 @@ async fn clone_room(
 #[template(path = "rooms/members.html")]
 pub struct MembersTemplate {
     base: TplContext,
+    /// Same as [`RoomTemplate`]'s: every membership and invite action flashes here, and this page
+    /// dropped all of them until 2026-08-28.
+    notice: Option<crate::flash::Notice>,
     room: Room,
     members: Vec<member::Member>,
     /// **Empty for a helper, and that is a credential decision rather than a tidier page.**
@@ -1360,11 +1375,13 @@ async fn members(
     id: RoomParam,
     access: RoomAccess<Helper>,
     pool: &State<Pool>,
+    flash: Option<rocket::request::FlashMessage<'_>>,
 ) -> Result<MembersTemplate> {
     let may_manage = access.role() >= RoomRole::Organizer;
     let mut conn = pool.get().await?;
     Ok(MembersTemplate {
         base: TplContext::new(access.session.session()),
+        notice: crate::flash::Notice::take(flash),
         members: member::list(&mut conn, id.0).await?,
         invites: if may_manage {
             member::list_invites(&mut conn, id.0).await?
@@ -1730,6 +1747,8 @@ impl RedeemTemplate {
 #[template(path = "rooms/options.html")]
 pub struct OptionsTemplate {
     base: TplContext,
+    /// Same as [`RoomTemplate`]'s, and dropped for the same reason until 2026-08-28.
+    notice: Option<crate::flash::Notice>,
     room: Room,
     /// Whether a remote-admin password exists. **Never the value** — see
     /// [`room::has_server_password`].
@@ -1771,11 +1790,13 @@ async fn options_page(
     access: RoomAccess<Organizer>,
     pool: &State<Pool>,
     lobby: &State<LobbyConfig>,
+    flash: Option<rocket::request::FlashMessage<'_>>,
 ) -> Result<OptionsTemplate> {
     let mut conn = pool.get().await?;
     let has_server_password = room::has_server_password(&mut conn, id.0).await?;
     Ok(OptionsTemplate {
         base: TplContext::new(access.session.session()),
+        notice: crate::flash::Notice::take(flash),
         restart_would_land: a_restart_would_land(&access.room.state),
         room: access.room.clone(),
         has_server_password,
@@ -1818,13 +1839,18 @@ async fn import_lobby_owners(
 
     let mut conn = pool.get().await?;
 
-    // **Associated before the fetch, so a failed import still leaves the room pointed at the right
-    // lobby room.** The alternative loses what the organizer typed on every transient failure, and
-    // makes them re-paste a link to retry something that was never their mistake.
-    room::set_lobby_room(&mut conn, id.0, lobby_room).await?;
-
+    // **Associated only once the import has SUCCEEDED**, which is the opposite of what this did
+    // first. Setting it up front was meant to save the organizer re-pasting a link after a
+    // transient failure -- but `lobby_room_id` is also what turns on the room page's unclaimed-slot
+    // notice, and that notice says the lobby "named an account for every YAML it could match".
+    // After a failed fetch the lobby named nothing, so the room acquired a permanent, confident,
+    // false explanation for slots that simply had not been imported yet.
+    //
+    // The flash carries the failure and the field is empty on the retry, which is a smaller cost
+    // than a page that misreports the state of a room.
     match crate::lobby::import(&mut conn, configured, id.0, lobby_room).await {
         Ok(outcome) => {
+            room::set_lobby_room(&mut conn, id.0, lobby_room).await?;
             tracing::info!(
                 room = %id,
                 by = access.user_id(),
@@ -2688,6 +2714,7 @@ pub(crate) mod tests {
 
     fn page_as(is_staff: bool, is_organizer: bool) -> RoomTemplate {
         RoomTemplate {
+            notice: None,
             base: crate::tpl::TplContext {
                 is_logged_in: true,
                 is_admin: false,
@@ -3081,6 +3108,7 @@ pub(crate) mod tests {
 
         let render = |restart_would_land| {
             OptionsTemplate {
+                notice: None,
                 base: crate::tpl::TplContext::new(&Session::default()),
                 room: a_room(),
                 has_server_password: false,
@@ -3167,6 +3195,7 @@ pub(crate) mod tests {
             let mut room = a_room();
             room.slot_auth = mode;
             let html = OptionsTemplate {
+                notice: None,
                 base: crate::tpl::TplContext::new(&Session::default()),
                 room,
                 has_server_password: false,

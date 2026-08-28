@@ -5,6 +5,12 @@
 <h1>Options for {{+ room.name }}</h1>
 <p class="hint"><a href="/room/{{ room.id }}">Back to the room</a></p>
 
+{# The result of whatever was just saved or imported. See rooms/show.html: these were produced and
+   discarded until 2026-08-28. #}
+{% if let Some(notice) = notice %}
+<p class="{{ notice.class }}">{{ notice.message }}</p>
+{% endif %}
+
 {# **Two forms, split on one question: does pressing this disconnect anybody?**
 
    That division is invisible from the options themselves — a password mode and a feed policy both

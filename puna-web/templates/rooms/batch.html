@@ -4,6 +4,12 @@
 {% block content %}
 
 <h1>{{ room_name }}</h1>
+
+{# What the action that redirected here had to say. See rooms/show.html for why this was
+   missing everywhere in this module until 2026-08-28. #}
+{% if let Some(notice) = notice %}
+<p class="{{ notice.class }}">{{ notice.message }}</p>
+{% endif %}
 <p class="hint"><a href="/room/{{ room_id }}/bulk">Back to bulk actions</a> &mdash; {{+ action }}</p>
 
 {# --- the three buckets, and they are three on purpose ------------------------------------------

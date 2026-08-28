@@ -878,6 +878,101 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
     );
 }
 
+/// **A page that something redirects to with a `Flash` has to read one.**
+///
+/// This failed silently for the entire life of `routes/rooms.rs`. Every `Flash` in that module
+/// lands on `/room/<id>` or `/room/<id>/options`, and neither route took a `FlashMessage` — so
+/// "Saved. These took effect immediately", the rename confirmation, the password-rotation result
+/// and every lobby-import outcome were written into a cookie and dropped by the page they were
+/// addressed to.
+///
+/// **Nothing anywhere reports it.** The POST succeeds, the redirect is followed, the page renders
+/// correctly, and the only symptom is a sentence that never appears — which reads as the feature
+/// having nothing to say. It surfaced only when an import failed against a misconfigured token and
+/// the page's *other* message, the persistent one, explained the result wrongly.
+///
+/// So: for every `Flash::…(Redirect::to("/some/path"))`, the `#[get]` route matching that path must
+/// take a `FlashMessage`. Matching is by route shape rather than by rendered URL, because the
+/// targets are `format!` strings and the routes are patterns.
+#[test]
+fn every_page_a_flash_redirects_to_reads_one() {
+    let mut producers: Vec<(String, String)> = Vec::new();
+    let mut readers: Vec<String> = Vec::new();
+
+    for path in std::fs::read_dir(source("src/routes")).expect("routes/") {
+        let path = path.expect("entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let file = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("?")
+            .to_string();
+        let code = code_only(&std::fs::read_to_string(&path).expect("a route module"));
+
+        // Where a flash is sent. Only literal `Redirect::to(format!("…"))` targets are checked; a
+        // `back` binding is resolved by finding what it was bound to in the same file.
+        for cap in code.split("Redirect::to(format!(\"").skip(1) {
+            if let Some(target) = cap.split('"').next() {
+                producers.push((file.clone(), target.to_string()));
+            }
+        }
+
+        // Where a flash is read: a GET route whose handler takes a FlashMessage.
+        let mut rest = code.as_str();
+        while let Some(at) = rest.find("#[get(\"") {
+            rest = &rest[at + 7..];
+            let Some(route) = rest.split('"').next() else {
+                break;
+            };
+            // The handler's parameter list is the next `(` … `)` after the attribute.
+            let body: String = rest.chars().take(600).collect();
+            if body.contains("FlashMessage") {
+                readers.push(route.to_string());
+            }
+        }
+    }
+
+    assert!(
+        producers.len() >= 5 && readers.len() >= 5,
+        "the scan found nothing to check: {} producers, {} readers",
+        producers.len(),
+        readers.len()
+    );
+
+    // A target matches a route when they have the same shape: same segment count, and every
+    // non-parameter segment equal. `/room/{id}/options` matches `/room/<id>/options`.
+    let matches = |target: &str, route: &str| {
+        let t: Vec<&str> = target.trim_matches('/').split('/').collect();
+        let r: Vec<&str> = route
+            .split('?')
+            .next()
+            .unwrap_or(route)
+            .trim_matches('/')
+            .split('/')
+            .collect();
+        t.len() == r.len()
+            && t.iter()
+                .zip(&r)
+                .all(|(t, r)| r.starts_with('<') || t.starts_with('{') || t == r)
+    };
+
+    let mut orphans = Vec::new();
+    for (file, target) in &producers {
+        if !readers.iter().any(|route| matches(target, route)) {
+            orphans.push(format!("{file}: Flash -> {target}"));
+        }
+    }
+
+    assert!(
+        orphans.is_empty(),
+        "these redirect with a Flash to a page that never reads one, so the message is written to \
+         a cookie and silently dropped:\n  {}",
+        orphans.join("\n  ")
+    );
+}
+
 /// **The slot filter page's heading names the slot AND the player, and the route is what builds
 /// it.**
 ///

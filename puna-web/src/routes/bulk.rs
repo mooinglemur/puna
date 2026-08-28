@@ -103,6 +103,9 @@ pub struct BulkTemplate {
 #[template(path = "rooms/batch.html")]
 pub struct BatchTemplate {
     base: TplContext,
+    /// The sentence the enqueue left behind -- notably the release-claims counts, which are Puna's
+    /// own work rather than anything the batch rows record. Dropped until 2026-08-28.
+    notice: Option<crate::flash::Notice>,
     room_id: String,
     room_name: String,
     batch_id: String,
@@ -532,6 +535,7 @@ async fn results(
     batch: &str,
     access: RoomAccess<Helper>,
     pool: &State<Pool>,
+    flash: Option<rocket::request::FlashMessage<'_>>,
 ) -> Result<BatchTemplate> {
     let batch: BatchId = batch
         .parse()
@@ -588,6 +592,7 @@ async fn results(
         .collect();
 
     Ok(BatchTemplate {
+        notice: crate::flash::Notice::take(flash),
         base: TplContext::new(access.session.session()),
         room_id: access.room.id.to_string(),
         room_name: access.room.name.clone(),

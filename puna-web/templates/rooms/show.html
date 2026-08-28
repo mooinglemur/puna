@@ -73,6 +73,13 @@
 {% endif %}
 </div>
 
+{# Whatever redirected here had to say. Every Flash in routes/rooms.rs lands on this page or the
+   options page, and neither read one until 2026-08-28 -- so "Saved", the rename confirmation and
+   every lobby-import result were written into a cookie and dropped by the page they were for. #}
+{% if let Some(notice) = notice %}
+<p class="{{ notice.class }}">{{ notice.message }}</p>
+{% endif %}
+
 {# The lifecycle panel. One template, two entry points: this include paints it, and
    `GET /room/<id>/panel` re-renders the same file for the poller. See rooms/panel.html. #}
 {% include "rooms/panel.html" %}

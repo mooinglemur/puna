@@ -2,6 +2,12 @@
 {% block title %}{{ room.name +}} &mdash; members{% endblock %}
 {% block content %}
 <h1>{{ room.name +}} &mdash; members</h1>
+
+{# What the action that redirected here had to say. See rooms/show.html for why this was
+   missing everywhere in this module until 2026-08-28. #}
+{% if let Some(notice) = notice %}
+<p class="{{ notice.class }}">{{ notice.message }}</p>
+{% endif %}
 <p><a href="/room/{{ room.id }}">back to the room</a></p>
 
 {# Helpers see this table and nothing else on the page: who the staff are is ordinary context for
