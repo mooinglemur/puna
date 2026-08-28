@@ -61,8 +61,8 @@ takes effect the next time it starts.</p>
          an operator who knows `/hint_location` looks for that word. Hints at what is IN a place,
          where `hint` hints at where a THING is. #}
       <option value="hint_location"{% if preselect_kind.as_deref() == Some("hint_location") +%} selected{% endif %}>hint location &mdash; what is in a place</option>
-      <option value="release"{% if preselect_kind.as_deref() == Some("release") +%} selected{% endif %}>release &mdash; send a slot&rsquo;s remaining items</option>
-      <option value="collect"{% if preselect_kind.as_deref() == Some("collect") +%} selected{% endif %}>collect &mdash; gather a slot&rsquo;s own items</option>
+      <option value="release"{% if preselect_kind.as_deref() == Some("release") +%} selected{% endif %}>release &mdash; send a slot's remaining items</option>
+      <option value="collect"{% if preselect_kind.as_deref() == Some("collect") +%} selected{% endif %}>collect &mdash; gather a slot's own items</option>
       <option value="send_item"{% if preselect_kind.as_deref() == Some("send_item") +%} selected{% endif %}>send item &mdash; give a slot an item</option>
       <option value="send_multiple"{% if preselect_kind.as_deref() == Some("send_multiple") +%} selected{% endif %}>send multiple &mdash; give a slot several of one item</option>
       {# One step past hinting: this CHECKS the location and sends out whatever it holds. #}
@@ -71,7 +71,7 @@ takes effect the next time it starts.</p>
          slot to the room's `release_mode`, which may well still permit releasing. It does not
          forbid anything. The reference calls the second half `/forbid_release` and that name is
          exactly the misreading this avoids. #}
-      <option value="allow_release"{% if preselect_kind.as_deref() == Some("allow_release") +%} selected{% endif %}>allow release &mdash; exempt one slot from the room&rsquo;s release mode</option>
+      <option value="allow_release"{% if preselect_kind.as_deref() == Some("allow_release") +%} selected{% endif %}>allow release &mdash; exempt one slot from the room's release mode</option>
       {# Sets somebody ELSE's alias, which `!alias` cannot. Empty clears it. #}
       <option value="alias"{% if preselect_kind.as_deref() == Some("alias") +%} selected{% endif %}>alias &mdash; rename a player, or clear their alias</option>
       {# **A disconnect, not a ban.** Every socket the slot holds closes, the reason is delivered as
@@ -86,12 +86,12 @@ takes effect the next time it starts.</p>
       {# **Irreversible, including by the player**: upstream refuses any status change away from
          goal, so declaring one is final. Still a helper's, because it acts on one slot's game and
          because the auto rules make it a release by another name -- see `required_role`. #}
-      <option value="set_status"{% if preselect_kind.as_deref() == Some("set_status") +%} selected{% endif %}>set status &mdash; set a slot&rsquo;s Archipelago status, such as Goaled</option>
+      <option value="set_status"{% if preselect_kind.as_deref() == Some("set_status") +%} selected{% endif %}>set status &mdash; set a slot's Archipelago status, such as Goaled</option>
       {% if is_organizer %}
       {# **The one command a helper may not run**, and the only one that changes the room rather
          than a game inside it -- see `RoomCommand::required_role`. Hidden rather than disabled: a
          visible control that refuses teaches people the tool is broken. The route re-checks. #}
-      <option value="option"{% if preselect_kind.as_deref() == Some("option") +%} selected{% endif %}>option &mdash; change one of the room&rsquo;s rules</option>
+      <option value="option"{% if preselect_kind.as_deref() == Some("option") +%} selected{% endif %}>option &mdash; change one of the room's rules</option>
       {% endif %}
     </select>
   </label>
@@ -126,8 +126,8 @@ takes effect the next time it starts.</p>
   <label>Release exemption
     <select name="allowed">
       <option value="">&mdash;</option>
-      <option value="true">grant &mdash; this slot may release whatever the room&rsquo;s mode says</option>
-      <option value="false">clear &mdash; return this slot to the room&rsquo;s mode</option>
+      <option value="true">grant &mdash; this slot may release whatever the room's mode says</option>
+      <option value="false">clear &mdash; return this slot to the room's mode</option>
     </select>
   </label>
 
@@ -181,7 +181,7 @@ takes effect the next time it starts.</p>
      as `!hint` would, and MAY GRANT FEWER THAN ASKED OR NONE -- so the answer below is the truth,
      not this checkbox. Applies to `hint` and `hint location` alike. #}
   <label class="inline"><input type="checkbox" name="force" value="true"> Force the hint (grant it
-  without spending the slot&rsquo;s points)</label>
+  without spending the slot's points)</label>
 
   <button type="submit">Run</button>
 </form>
@@ -191,7 +191,7 @@ takes effect the next time it starts.</p>
    whose effect outlives the pod, and §7's "gameplay flags are only an initial value" rule is
    exactly what makes that true: after the first save the room's own copy wins, so what is set here
    survives a restart and what the manifest says does not. #}
-<p class="hint"><strong>An option change persists.</strong> The room&rsquo;s save is authoritative
+<p class="hint"><strong>An option change persists.</strong> The room's save is authoritative
 for its rules, so a restart restores what you set here rather than what the room was started
 with.</p>
 {% endif %}

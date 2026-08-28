@@ -120,7 +120,7 @@
    marking these required there would make Lock and Kick silently refuse to submit whenever the
    filter table happened to be empty, which it always is. There it is refused by the route instead,
    with a sentence. #}
-<label><input type="radio" name="state" value="follow"{% if empty_choice_required +%} required{% endif %}{% if empty_choice == Some("follow") +%} checked{% endif %}{% if has_rules +%} disabled{% endif %}> <strong>Follow the room&rsquo;s filter</strong> &mdash; whatever the room drops is dropped as well.</label>
+<label><input type="radio" name="state" value="follow"{% if empty_choice_required +%} required{% endif %}{% if empty_choice == Some("follow") +%} checked{% endif %}{% if has_rules +%} disabled{% endif %}> <strong>Follow the room's filter</strong> &mdash; whatever the room drops is dropped as well.</label>
 <label><input type="radio" name="state" value="exempt"{% if empty_choice_required +%} required{% endif %}{% if empty_choice == Some("exempt") +%} checked{% endif %}{% if has_rules +%} disabled{% endif %}> <strong>Exempt from every filter</strong> &mdash; nothing is dropped at all, not even what the room drops.</label>
 </fieldset>
 {% else %}

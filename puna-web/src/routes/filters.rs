@@ -187,9 +187,12 @@ pub struct FilterTemplate {
     base: TplContext,
     room_id: String,
     room_name: String,
-    /// What this page edits, in words — `Room filter`, or the slot with its player's name. It is
-    /// rendered **inside the `<h1>`**, because a slot named only in the dimmed line under the room
-    /// name is a slot readers do not see.
+    /// What this page edits, in words: `Room filter`, or `Filter for slot 3 (Troy)`. It is rendered
+    /// **inside the `<h1>`**, because a slot named only in the dimmed line under the room name is a
+    /// slot readers do not see.
+    ///
+    /// It is also the `<title>`, with the room name after it — so it carries no trailing
+    /// punctuation of its own and nothing that would read as a separator twice.
     scope: String,
     /// `None` for the room's own filter; the slot number otherwise. The template branches on it for
     /// every difference between the two scopes, so there is one page rather than two that drift.
@@ -614,7 +617,12 @@ async fn show_slot(
         base: TplContext::new(access.session.session()),
         room_id: room.id.to_string(),
         room_name: room.name.clone(),
-        scope: format!("Filter for slot {n} — {}", slot.player_name),
+        // **Parenthesised rather than dashed**, for two reasons beyond the em dash itself: this
+        // string is also the `<title>`, where the template puts the room name after it, so a dash
+        // here produced `Filter for slot 3 — Troy — Friday async`. And it keeps "Filter for", which
+        // is what makes it a sibling of `Room filter` above rather than a bare slot label on a page
+        // whose own identity would then rest on the `<h2>`.
+        scope: format!("Filter for slot {n} ({})", slot.player_name),
         slot: Some(n),
         rules: editor_rows(match &state {
             SlotFilter::Own(rules) => rules,
@@ -989,7 +997,7 @@ mod tests {
             room_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into(),
             room_name: "Initial Sync".into(),
             scope: match slot {
-                Some(n) => format!("Filter for slot {n} — MooingYacht1"),
+                Some(n) => format!("Filter for slot {n} (MooingYacht1)"),
                 None => "Room filter".into(),
             },
             slot,

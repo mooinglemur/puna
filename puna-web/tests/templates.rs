@@ -878,6 +878,85 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
     );
 }
 
+/// **The slot filter page's heading names the slot AND the player, and the route is what builds
+/// it.**
+///
+/// M31 added it after a report: somebody opened this page, read the whole thing, and still did not
+/// know which slot they were editing. The room name is the bold thing on the page and the eye stops
+/// there, so the scope has to be inside the `<h1>` and has to say who.
+///
+/// **The render test beside it cannot catch this.** It constructs `FilterTemplate` with a fixture
+/// `scope`, so it asserts the template renders whatever string it is handed — true and worth having,
+/// and silent about whether the route builds a useful one. Dropping the player name from the
+/// `format!` passes every test in the crate.
+///
+/// So the format string itself is pinned. It is also the `<title>`, which is why it carries no
+/// trailing punctuation: the template puts the room name after it.
+#[test]
+fn the_slot_filter_heading_names_the_slot_and_the_player() {
+    let source = std::fs::read_to_string(source("src/routes/filters.rs")).expect("filters.rs");
+    let code = code_only(&source);
+
+    let scope = code
+        .split("scope: format!(")
+        .nth(1)
+        .and_then(|rest| rest.split(&['\n'][..]).next())
+        .expect("the slot page's scope");
+
+    assert!(
+        scope.contains("{n}"),
+        "the slot filter heading no longer names the slot: {scope}"
+    );
+    assert!(
+        scope.contains("player_name"),
+        "the slot filter heading no longer names the player, which is the report that put it \
+         there: {scope}"
+    );
+}
+
+/// **A patch carries the port the room leads with, and the route is the only place that decides.**
+///
+/// `port::reserved_pair` returns the pair's BASE port and the filtered listener is `base + 1`, so
+/// the whole difference between a correct patch and a wrong one is one addition in one expression.
+/// Removing it looks like a simplification — `base_port` is right there, already named, and the
+/// route still compiles, still serves, and still round-trips its own address.
+///
+/// **Nothing else would notice.** `embed_server`'s tests assert the address it writes is the address
+/// it was given; the room page reads its own value; and the symptom is a player on a 500-slot room
+/// whose game client drowns in the full feed — which is the exact failure the `Filtered` setting
+/// exists to prevent, arriving through the file that setting is supposed to configure.
+///
+/// So the rule is pinned where it lives: the port handed to `embed_server` is derived, never the
+/// bare reservation.
+#[test]
+fn a_patch_embeds_the_port_the_room_leads_with() {
+    let source = std::fs::read_to_string(source("src/routes/downloads.rs")).expect("downloads.rs");
+    let code = code_only(&source);
+
+    assert!(
+        code.contains("leads_with_filtered()"),
+        "the patch route no longer asks which port the room leads with, so a filtered room's \
+         patches carry the full port -- the one that drowns the clients the setting exists for"
+    );
+    assert!(
+        code.contains("base_port + 1"),
+        "nothing in the patch route reaches the filtered half of the pair"
+    );
+
+    // The call itself, which is where the two could still part company: deriving the port and then
+    // passing the base one compiles and reads fine.
+    let call = code
+        .split("embed_server(")
+        .nth(1)
+        .and_then(|rest| rest.split(')').next())
+        .expect("the embed_server call");
+    assert!(
+        !call.contains("base_port"),
+        "`embed_server` is handed the reservation's base port directly, so the room's choice is \
+         computed and then thrown away: {call}"
+    );
+}
+
 /// **The plain-text summary is served only where the tracker is open to the world.**
 ///
 /// `/tracker/<id>/summary.txt` exists to be fetched by a chat bot holding no credential at all, so

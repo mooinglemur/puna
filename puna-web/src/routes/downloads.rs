@@ -132,7 +132,26 @@ async fn slot_patch(
                 slot_name: &access.slot.player_name,
                 password,
             });
-            embed_server(stored, &advertise_host.0, base_port, credential)?
+            // **The port the room leads with, not the base port.** A patch is what a GAME client
+            // launches with, and game clients are precisely who the filtered listener exists for --
+            // so a 500-slot room whose organizer chose `Filtered` because the full feed drowns
+            // clients was, until this line, handing every player who downloaded a patch the address
+            // that drowns them.
+            //
+            // `base_port + 1` is the pair's filtered half by construction: reservations are
+            // allocated as an adjacent even/odd pair and `spec::args` passes exactly that. Read from
+            // the reservation rather than from `advertised_filtered_port` for the reason this whole
+            // route exists -- the reservation outlives the Service, so a torn-down room still
+            // embeds the address it will come back on.
+            //
+            // Already-downloaded patches keep whatever they were built with, which is what the
+            // option's hint means by "at download time".
+            let port = if access.room.leads_with_filtered() {
+                base_port + 1
+            } else {
+                base_port
+            };
+            embed_server(stored, &advertise_host.0, port, credential)?
         }
         None => {
             tracing::info!(

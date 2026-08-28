@@ -93,7 +93,11 @@
 {% else if room.state == "running" %}
 {% if let Some(host) = room.advertised_host %}
 
-{% if room.primary_port == puna_core::model::room::PrimaryPort::Filtered && room.advertised_filtered_port.is_some() %}
+{# `leads_with_filtered()` rather than the comparison spelled out here, because the patch download
+   asks the same question to decide which port to EMBED. Two spellings of one decision is a player
+   told to use one port and handed a file that connects to the other. The extra condition is this
+   surface's own: the page can only lead with an address it has. #}
+{% if room.leads_with_filtered() && room.advertised_filtered_port.is_some() %}
 {# --- the filtered port leads -------------------------------------------------------------------
    A large sync, where the full feed is what breaks clients. The wording differs from the branch
    below rather than being reused: here the address on offer is the one that leaves traffic out, so
@@ -109,7 +113,7 @@
 </div>
 <p class="hint">This room is large enough that the full item feed overwhelms many game clients, so
 this address leaves out item traffic your slot is not part of. You still get your own items, chat
-and announcements &mdash; you just will not see other people&rsquo;s finds go by.</p>
+and announcements &mdash; you just will not see other people's finds go by.</p>
 {% endif %}
 
 {% if let Some(port) = room.advertised_port %}
@@ -155,10 +159,10 @@ why it is not the address above.</p>
    nobody without the problem opens it. #}
 <details class="alt-address">
 <summary><strong>Client lagging or dropping out?</strong> There is a second address.</summary>
-<p class="hint">Same room, same save, same slot &mdash; it just leaves out other players&rsquo; item
+<p class="hint">Same room, same save, same slot &mdash; it just leaves out other players' item
 traffic, which is what floods a client in a large multiworld. You still get your own items, chat and
 announcements. <strong>Use the address above unless you are having trouble</strong>: on this one you
-will not see other people&rsquo;s finds go by.</p>
+will not see other people's finds go by.</p>
 <div class="scroll-x">
 <table class="address">
 {% call address_head() %}{% endcall %}
@@ -233,7 +237,7 @@ start an empty room in its place.</p>
 <code>{{ password }}</code>
 <button type="button" class="copy" data-copy="{{ password }}"
         title="Copy this password"
-        aria-label="Copy this room&rsquo;s password">
+        aria-label="Copy this room's password">
 <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
 <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" fill="none" stroke="currentColor"/>
 <path d="M10.5 5.5v-3a1 1 0 0 0-1-1h-7a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h3" fill="none"
@@ -268,7 +272,7 @@ Changing it restarts the room, which disconnects everyone for about a minute.
 {# Everybody else, in the shared-password mode: the VALUE is withheld and the requirement is not.
    Without this a player who has not claimed a slot sees an address, is refused when they connect,
    and has no reason to think the room is anything but broken. #}
-<p class="hint">This room needs a password to join. Ask whoever invited you &mdash; the room&rsquo;s
+<p class="hint">This room needs a password to join. Ask whoever invited you &mdash; the room's
 staff and anyone holding a slot here can see it on this page.</p>
 {% endif %}
 

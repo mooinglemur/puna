@@ -587,6 +587,32 @@ pub struct Room {
     pub last_error: Option<String>,
 }
 
+impl Room {
+    /// Does this room lead with the filtered port?
+    ///
+    /// **One answer for two surfaces**, which is the whole reason it is a method rather than a
+    /// comparison written twice: the room page decides which address to show with it, and the patch
+    /// download decides which port to embed with it. Those two disagreeing is not a rendering bug —
+    /// it is a player told to use one port and handed a file that connects to the other, on the
+    /// setting whose entire purpose is keeping game clients off the feed that drowns them.
+    ///
+    /// `wants_filtered` is part of the question rather than an assumption: it defaults on and is
+    /// what makes the room publish a second listener at all, so a room without one leads with the
+    /// full port whatever `primary_port` says. Nothing turns it off today, which is exactly why it
+    /// is checked here rather than remembered as a fact about the default.
+    pub fn leads_with_filtered(&self) -> bool {
+        leads_with_filtered(self.primary_port, self.wants_filtered)
+    }
+}
+
+/// The rule behind [`Room::leads_with_filtered`], over the two values it actually depends on.
+///
+/// Split out only so it can be tested as a truth table: `Room` has thirty-odd fields and building
+/// four of them to assert a two-input rule would bury the rule in the fixture.
+pub fn leads_with_filtered(primary_port: PrimaryPort, wants_filtered: bool) -> bool {
+    primary_port == PrimaryPort::Filtered && wants_filtered
+}
+
 #[derive(diesel::QueryableByName)]
 struct RoomRow {
     #[diesel(sql_type = SqlUuid)]
@@ -1464,19 +1490,50 @@ pub async fn clone_room(
     Ok(id)
 }
 
-/// Sibling rooms built from the same generation, so the room page can link to them.
+/// Sibling rooms built from the same generation **that this person organizes**.
+///
+/// ## The scope is the whole point, and this used to have none
+///
+/// It returned every room sharing the generation, to anybody who opened the page. Generations are
+/// **content-addressed and deduplicated**, so two organizers who upload the same zip land on one
+/// `generations` row and their rooms become each other's siblings — strangers, sharing nothing but
+/// a seed somebody else also happened to have. The page then handed each of them the other's room
+/// name and **id**, and a room id is a capability: `/room/<id>` is public, its holder can start an
+/// idle room, read the roster, and download patches from an `open` room.
+///
+/// That is the disclosure `generation_uploads` already closed one layer down — telling a second
+/// uploader "these contents were already on file" told them another account had their seed — with
+/// the room named and linked this time.
+///
+/// ## Organizer, not staff, and that is deliberate
+///
+/// Membership is per room: **an organizer may run two rooms from one seed with different helpers on
+/// each.** So a helper on this room is not entitled to learn that the other one exists, let alone
+/// reach it — their trust is in this room, granted by an organizer who made a separate decision
+/// about the other. Only an organizer of the sibling itself sees it.
+///
+/// **The function cannot leak whoever calls it wrong.** Every row it can return is a room the named
+/// user already organizes, so the caller's own gate decides whether to show the section at all, not
+/// whether the answer is safe.
 pub async fn siblings(
     conn: &mut AsyncPgConnection,
     id: RoomId,
     generation: GenerationId,
+    organizer: i64,
 ) -> Result<Vec<Room>, diesel::result::Error> {
     let rows: Vec<RoomRow> = diesel::sql_query(format!(
         "SELECT {ROOM_COLUMNS} FROM rooms
           WHERE generation_id = $1 AND id <> $2
+            AND EXISTS (
+              SELECT 1 FROM room_members
+               WHERE room_members.room_id = rooms.id
+                 AND room_members.user_id = $3
+                 AND room_members.role = 'organizer'::room_role)
           ORDER BY created_at DESC"
     ))
     .bind::<SqlUuid, _>(generation)
     .bind::<SqlUuid, _>(id)
+    .bind::<BigInt, _>(organizer)
     .load(conn)
     .await?;
     Ok(rows.into_iter().map(Room::from).collect())
@@ -1504,6 +1561,27 @@ pub async fn count(conn: &mut AsyncPgConnection) -> Result<i64, diesel::result::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **Which port a room leads with, including the half that is easy to forget.**
+    ///
+    /// `primary_port` is the organizer's choice; `wants_filtered` is whether the room publishes a
+    /// second listener at all. Only the first appears on any form, so the second reads as a fact
+    /// about the default rather than a condition — and a room with no filtered listener that "leads
+    /// with filtered" would advertise a port nothing is bound to *and* write it into every patch.
+    ///
+    /// Two callers, deliberately one rule: the room page picks which address to show with it, and
+    /// the patch download picks which port to embed. Those disagreeing is a player told one port and
+    /// handed a file that connects to the other.
+    #[test]
+    fn a_room_leads_with_filtered_only_when_it_has_a_filtered_port_to_lead_with() {
+        assert!(leads_with_filtered(PrimaryPort::Filtered, true));
+        assert!(!leads_with_filtered(PrimaryPort::Full, true));
+        assert!(
+            !leads_with_filtered(PrimaryPort::Filtered, false),
+            "a room with no filtered listener cannot lead with one, whatever the setting says"
+        );
+        assert!(!leads_with_filtered(PrimaryPort::Full, false));
+    }
 
     #[test]
     fn modes_and_policies_round_trip_through_their_sql_spelling() {

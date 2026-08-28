@@ -584,7 +584,7 @@ unclaimed
    box -- which is why the result below renders `output` verbatim. #}
 <p data-mod-field="force">
 <label class="inline"><input type="checkbox" name="force" value="true"> Force &mdash; grant it
-without spending this slot&rsquo;s points</label>
+without spending this slot's points</label>
 </p>
 
 <p class="buttons">
@@ -625,18 +625,18 @@ without spending this slot&rsquo;s points</label>
 {# `is_staff` is the helper floor, which is exactly the console's own guard -- so this link is
    never offered to somebody the route would refuse. The console itself shows only the commands
    the viewer's tier can run. #}
-<li><a href="/room/{{ room.id }}/console">Console</a> &mdash; hints, releases, announcements</li>
+<li><a href="/room/{{ room.id }}/console">Console</a>: hints, releases, announcements</li>
 {# Its own page rather than a control in the roster: a selection held in a table that filters and
    sorts means something different after a re-sort, which is the failure the panel exists to avoid. #}
-<li><a href="/room/{{ room.id }}/bulk">Bulk actions</a> &mdash; one action across many slots</li>
+<li><a href="/room/{{ room.id }}/bulk">Bulk actions</a>: one action across many slots</li>
 {% if is_organizer %}
 {# Organizer-only, because a room-wide filter configures the room and persists into its save -- the
    `option` argument. A SLOT's filter is a helper's, and is reached from the roster chip. #}
-<li><a href="/room/{{ room.id }}/filter">Room filter</a> &mdash; drop or thin traffic for everyone</li>
+<li><a href="/room/{{ room.id }}/filter">Room filter</a>: drop or thin traffic for everyone</li>
 {# Where the password mode and the feed policy went. They were two forms in this section; on their
    own page they sit beside the tracker, patch and port settings that had no control at all, split
    by whether saving restarts the room. #}
-<li><a href="/room/{{ room.id }}/options">Options</a> &mdash; passwords, tracker, feed, patches and
+<li><a href="/room/{{ room.id }}/options">Options</a>: passwords, tracker, feed, patches and
 which port the page leads with</li>
 {% endif %}
 <li><a href="/room/{{ room.id }}/members">Members and invites</a></li>
@@ -667,13 +667,28 @@ organizers able to reopen it. Either way the room keeps its address, its save an
 {% endif %}
 {% endif %}
 
+{# **Organizers only, and only their own rooms.** The route already returns nothing to anybody else
+   and the query cannot return a room this viewer does not organize, so this is the third gate on
+   one fact. It is here because the list carries room ids, and a room id is a capability: whoever
+   holds one can open the page, start an idle room and download patches from an open one.
+
+   Generations are content-addressed, so two strangers who upload the same zip share a generation
+   and their rooms are each other's siblings. Staff are excluded rather than merely players: an
+   organizer may run two rooms from one seed with different helpers on each, so a helper here is not
+   entitled to know the other exists. See `room::siblings`. #}
+{% if is_organizer %}
 {% if !siblings.is_empty() %}
-<h2>Other rooms from this seed</h2>
+{# **"Your", because the list is scoped and a heading that hides that is a heading that lies.**
+   "Other rooms from this seed" invites a reader to take it as the complete set, so an organizer
+   who knows a colleague also opened one would read a short list as rooms having gone missing. The
+   word says the list is theirs and stops the question being asked. #}
+<h2>Your other rooms from this seed</h2>
 <ul>
 {% for sibling in siblings %}
-<li><a href="/room/{{ sibling.id }}">{{ sibling.name }}</a> &mdash; {{+ sibling.state }}</li>
+<li><a href="/room/{{ sibling.id }}">{{ sibling.name }}</a>: {{+ sibling.state }}</li>
 {% endfor %}
 </ul>
+{% endif %}
 {% endif %}
 {% endblock %}
 

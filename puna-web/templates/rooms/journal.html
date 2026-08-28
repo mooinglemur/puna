@@ -46,7 +46,7 @@ runs.</span>
 {# The FEED's id, not the room's. `journal.js` builds its socket URL from this, so putting the room
    id here would leak it into the page's markup for every viewer -- the exact thing the separate id
    exists to prevent, arriving through a data attribute instead of an href. #}
-<p id="journal-status" class="notice" data-feed="{{ room.journal_id }}">Connecting to the room&rsquo;s
+<p id="journal-status" class="notice" data-feed="{{ room.journal_id }}">Connecting to the room's
 feed&hellip;</p>
 
 <noscript>

@@ -593,7 +593,9 @@ async fn a_clone_carries_the_people_and_none_of_the_credentials() {
         assert_eq!(after[0].owner_id, Some(PLAYER));
         assert_eq!(after[0].password, source_slots[0].password);
 
-        let siblings = room::siblings(&mut conn, source, generation)
+        // OWNER organizes both the source and the clone (membership is copied), so the clone is a
+        // sibling from their side. The scoping itself has its own test below.
+        let siblings = room::siblings(&mut conn, source, generation, OWNER)
             .await
             .expect("siblings");
         assert_eq!(siblings.len(), 1);
@@ -1329,6 +1331,117 @@ async fn importing_owners_never_overwrites_a_slot_somebody_already_claimed() {
         assert!(
             after[1].claimed_at.is_some(),
             "an imported slot has no claim time"
+        );
+    })
+    .await;
+}
+
+/// **A sibling list is scoped to rooms the reader organizes, and to nothing else.**
+///
+/// Generations are content-addressed and deduplicated, so two people who upload the same zip land
+/// on one `generations` row and their rooms become each other's siblings — strangers sharing nothing
+/// but a seed. This query used to take no reader at all and return every one of them, and the room
+/// page rendered the lot to anybody holding the URL.
+///
+/// **The leak was a capability, not a fact.** A room id is what `/room/<id>` is authorized by: its
+/// holder can open the page, start an idle room, read the roster, and download patches from an
+/// `open` room. So the page handed a stranger's room away, complete with a link.
+///
+/// The tier is **organizer, not staff**, and that is a separate decision from the scoping. An
+/// organizer may run two rooms from one seed with different helpers on each, so a helper here has
+/// no standing to learn that the other exists.
+#[tokio::test]
+async fn siblings_are_only_rooms_the_reader_organizes() {
+    with_db(|pool| async move {
+        let mut conn = pool.get().await.expect("connection");
+        users(&mut conn).await;
+        let generation = seed_generation(&mut conn, false).await;
+
+        // Three rooms on ONE generation, which is the ordinary consequence of dedup.
+        let mine = room::create(
+            &mut conn,
+            &NewRoom::direct(Environment::Dev, "mine", generation, OWNER),
+        )
+        .await
+        .expect("create");
+        let also_mine = room::create(
+            &mut conn,
+            &NewRoom::direct(Environment::Dev, "also mine", generation, OWNER),
+        )
+        .await
+        .expect("create");
+        let theirs = room::create(
+            &mut conn,
+            &NewRoom::direct(Environment::Dev, "a stranger's", generation, STRANGER),
+        )
+        .await
+        .expect("create");
+
+        // **HELPER is a helper on BOTH rooms**, which is what makes the tier the thing under test
+        // rather than the scoping. A helper only on `mine` is excluded by the scoping alone — they
+        // are not a member of the sibling — so relaxing `organizer` to "any member" would still
+        // show them nothing, and the assertion below would pass against the wrong rule.
+        //
+        // With a membership on the sibling too, the only thing standing between them and it is the
+        // role. An organizer may deliberately staff two rooms from one seed differently, and being
+        // trusted to run this one is not standing to learn the other exists.
+        member::set_role(&mut conn, mine, HELPER, RoomRole::Helper, Some(OWNER))
+            .await
+            .expect("helper here");
+        member::set_role(&mut conn, also_mine, HELPER, RoomRole::Helper, Some(OWNER))
+            .await
+            .expect("helper there");
+
+        async fn seen(
+            pool: &puna_core::db::Pool,
+            room: puna_core::ids::RoomId,
+            generation: puna_core::ids::GenerationId,
+            who: i64,
+        ) -> Vec<String> {
+            let mut conn = pool.get().await.expect("connection");
+            room::siblings(&mut conn, room, generation, who)
+                .await
+                .expect("siblings")
+                .into_iter()
+                .map(|r| r.name)
+                .collect()
+        }
+
+        assert_eq!(
+            seen(&pool, mine, generation, OWNER).await,
+            vec!["also mine".to_string()],
+            "an organizer should see their own other room and nobody else's"
+        );
+        assert!(
+            !seen(&pool, mine, generation, OWNER)
+                .await
+                .contains(&"a stranger's".to_string()),
+            "a room built from the same seed by somebody else was disclosed"
+        );
+        assert!(
+            seen(&pool, mine, generation, HELPER).await.is_empty(),
+            "a helper OF THE SIBLING was shown it: the rule is organizer, not membership"
+        );
+        assert!(
+            seen(&pool, mine, generation, PLAYER).await.is_empty(),
+            "somebody with no membership at all was shown a sibling"
+        );
+        assert!(
+            seen(&pool, mine, generation, STRANGER)
+                .await
+                .contains(&"a stranger's".to_string()),
+            "the stranger organizes their own room and should see it from a room they organize"
+        );
+
+        // And the stranger's view of THEIR room does not include mine.
+        let mut conn = pool.get().await.expect("connection");
+        let theirs_view = room::siblings(&mut conn, theirs, generation, STRANGER)
+            .await
+            .expect("siblings");
+        assert!(
+            theirs_view.is_empty(),
+            "the stranger was shown rooms they do not organize: {:?}",
+            theirs_view.iter().map(|r| &r.name).collect::<Vec<_>>()
         );
     })
     .await;

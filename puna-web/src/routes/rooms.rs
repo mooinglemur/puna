@@ -882,7 +882,22 @@ async fn show(
         &slot_filters,
         room.patch_policy,
     );
-    let siblings = room::siblings(&mut conn, room.id, room.generation_id).await?;
+    // **Only an organizer of THIS room, and only their own rooms come back.**
+    //
+    // Two gates on one fact, and neither is the other's backup. The query returns nothing but rooms
+    // this person already organizes, so it cannot leak a stranger's room whoever calls it. This
+    // condition decides whether to ask at all: membership is per room, so a helper here has no
+    // standing to learn that a second room from this seed exists — an organizer may deliberately
+    // have put different helpers on it.
+    //
+    // No admin bypass. `/admin/rooms` is the fleet view; this list answers "which of MY rooms came
+    // from this seed", and an admin reading a room page is reading it as its viewer.
+    let siblings = match session.user_id {
+        Some(user_id) if role.is_some_and(|r| r >= RoomRole::Organizer) => {
+            room::siblings(&mut conn, room.id, room.generation_id, user_id).await?
+        }
+        _ => Vec::new(),
+    };
     let message = event::latest(&mut conn, room.id)
         .await?
         .and_then(|e| phrase(&e.kind));
@@ -3397,10 +3412,12 @@ pub(crate) mod tests {
         );
         // And it warns, at the point of copying, about the thing that has no other symptom.
         //
-        // Asserted around the apostrophe rather than through it: the template writes `&rsquo;`
-        // literally, askama would write `&#x27;` for the same character in an expression, and a
-        // test that pins either spelling breaks on a rewording that changed nothing. This codebase
-        // has made that mistake once already.
+        // Asserted around the apostrophe rather than through it. That used to be because the
+        // template wrote `&rsquo;` while askama writes `&#x27;` for the same character out of an
+        // expression, so pinning either spelling broke on a rewording that changed nothing. The
+        // templates use a plain apostrophe now and the hazard is smaller, but the assertion stays
+        // clear of it: an apostrophe in literal text and one in an interpolated value still reach
+        // the page as different bytes.
         assert!(
             html.contains("finds go by"),
             "the second address does not say what it costs"

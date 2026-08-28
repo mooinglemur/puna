@@ -26,7 +26,7 @@
 <p class="hint">Nothing is filtered{% if slot.is_some() +%} for this slot{% endif %}.</p>
 {% else %}
 {% if effective_from_room %}
-<p class="notice">These come from the <a href="/room/{{ room_id }}/filter">room&rsquo;s filter</a>.
+<p class="notice">These come from the <a href="/room/{{ room_id }}/filter">room's filter</a>.
 This slot has no rules of its own, so it follows whatever the room does.</p>
 {% endif %}
 <ul class="rules">
@@ -40,11 +40,11 @@ This slot has no rules of its own, so it follows whatever the room does.</p>
 {# The whole hazard, in the two directions it runs, shown only when a room filter exists to be lost
    or gained. Silent otherwise, because a warning that is always there is not read. #}
 {% if slot_state == Some("follows") %}
-<p class="warning">Giving this slot rules of its own <strong>stops the room&rsquo;s filter reaching
-it</strong> &mdash; the room&rsquo;s rules are not added to what you write here, they are replaced by
+<p class="warning">Giving this slot rules of its own <strong>stops the room's filter reaching
+it</strong>. The room's rules are not added to what you write here, they are replaced by
 it. The room currently drops:</p>
 {% else %}
-<p class="warning">Emptying this table and choosing <strong>Follow the room&rsquo;s filter</strong>
+<p class="warning">Emptying this table and choosing <strong>Follow the room's filter</strong>
 makes these apply to this slot <strong>at once</strong>:</p>
 {% endif %}
 <ul class="rules">
@@ -57,7 +57,7 @@ makes these apply to this slot <strong>at once</strong>:</p>
 {# --- the editor ------------------------------------------------------------------------------
    One table, edited in place, saved in one go. `rooms/_rule_table.html` is the whole of it and is
    shared with the bulk panel, so the knobs cannot differ between the two. #}
-<h2>{% if slot.is_some() %}This slot&rsquo;s own rules{% else %}This room&rsquo;s rules{% endif %}</h2>
+<h2>{% if slot.is_some() %}This slot's own rules{% else %}This room's rules{% endif %}</h2>
 <form method="post" data-rule-form
       action="{% if let Some(n) = slot %}/room/{{ room_id }}/slot/{{ n }}/filter{% else %}/room/{{ room_id }}/filter{% endif %}">
 
@@ -83,10 +83,10 @@ makes these apply to this slot <strong>at once</strong>:</p>
    because "has its own rules" and "is exempt from everything" are opposite facts. #}
 {% if slot.is_none() && !missed.is_empty() %}
 <p class="warning">Changes here do <strong>not</strong> reach these slots &mdash; each has replaced or
-opted out of the room&rsquo;s filter:</p>
+opted out of the room's filter:</p>
 <ul class="rules">
 {% for m in missed %}
-<li><a href="/room/{{ room_id }}/slot/{{ m.slot_number }}/filter">Slot {{+ m.slot_number +}} &mdash;
+<li><a href="/room/{{ room_id }}/slot/{{ m.slot_number }}/filter">Slot {{+ m.slot_number +}}:
 {{+ m.player_name }}</a> {{+ m.because }}</li>
 {% endfor %}
 </ul>

@@ -18,7 +18,7 @@
    a room nobody has joined and a warning on this page. #}
 
 <section class="panel create-room">
-<h2>Applies immediately</h2>
+<h2>Applies immediately upon save</h2>
 <p class="hint">These are decisions this site makes when it answers a request, so they take effect
 on the next page load &mdash; including for people already looking at one. Nobody is disconnected
 and the room is not restarted.</p>
@@ -50,8 +50,8 @@ is.</p>
 <p class="hint" data-for="full">Anyone who can open the feed reads the whole history &mdash; chat,
 hints, admin actions, joins and parts &mdash; and can download the raw file. <strong>This applies
 to everything already written</strong>, not only to what happens next.</p>
-<p class="hint" data-for="feed">Item movements and Link events only. Organizers always read
-everything.</p>
+<p class="hint" data-for="feed">The feed shows item movements and Link events only. Organizers can always see
+everything and download the raw file.</p>
 <p class="hint" data-for="disabled">The feed is staff-only. Anyone holding a feed link gets the same
 answer as somebody holding a made-up one.</p>
 </div>
@@ -81,9 +81,9 @@ without being told anything.</p>
 all but the largest syncs. The filtered port stays available behind a collapsed heading.</p>
 <p class="hint" data-for="filtered">The room page leads with the filtered port, which leaves out
 item traffic the connected slot is not a party to. Large syncs usually want this: many games cannot
-cope with the bursts a 500-slot room produces. <strong>Players who already connected on the other
-port stay where they are</strong> until they reconnect &mdash; this changes what the page
-recommends, not any live connection.</p>
+cope with the bursts a 500-slot+ room produces. <strong>Players who already connected on the other
+port stay where they are</strong> unless they switch. Patches carry whichever port leads the room
+at download time. This changes only what the page recommends, not what each port does.</p>
 </div>
 </div>
 

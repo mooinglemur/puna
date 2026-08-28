@@ -9,14 +9,14 @@
 <p class="{{ shown.class }}">{{ shown.message }}</p>
 {% endif %}
 
-<h2>The tracker&rsquo;s name cache</h2>
+<h2>The tracker's name cache</h2>
 
 {# Why this page exists rather than a one-line explanation: the names item and location ids resolve
    to live in a generation's seed, on a volume the TRACKER tier deliberately cannot read. They are
    extracted at upload and cached in Postgres, so a generation ingested before that existed -- or one
    whose extraction failed -- shows raw ids on its tracker until somebody rebuilds it. That is the
    only repair, and this is where it lives. #}
-<p>Item and location names are extracted from each generation&rsquo;s seed at upload and cached, so
+<p>Item and location names are extracted from each generation's seed at upload and cached, so
 the tracker can name things without reading the volume. A generation with nothing cached still
 works &mdash; its tracker shows raw ids instead of names.</p>
 

@@ -175,14 +175,17 @@ later.</p>
 <div class="choices">
 <label><input type="radio" name="primary_port" value="full"{% if primary_port_default == puna_core::model::room::PrimaryPort::Full +%} checked{% endif %}> Full</label>
 <label><input type="radio" name="primary_port" value="filtered"{% if primary_port_default == puna_core::model::room::PrimaryPort::Filtered +%} checked{% endif %}> Filtered</label>
-<p class="hint" data-for="full">The room page leads with the full feed port. The right choice for
-all but the largest syncs. The filtered port stays available behind a collapsed heading for anyone
-who wants it.</p>
+{# Patches are named in both branches rather than only under `filtered`, because the fact worth
+   knowing is that they follow this choice at all -- and somebody reading only the option they are
+   about to pick should not have to open the other one to learn that. #}
+<p class="hint" data-for="full">The room page leads with the full feed port, and patches are built
+with it. The right choice for all but the largest syncs. The filtered port stays available behind a
+collapsed heading for anyone who wants it.</p>
 <p class="hint" data-for="filtered">The room page leads with the filtered port, which leaves out
-item traffic the connected slot is not a party to. Large syncs usually want this: many games cannot
-cope with the bursts a 500-slot room produces. The full feed port stays available behind a collapsed
-heading &mdash; text clients and trackers want it, since seeing everybody&rsquo;s finds is the whole
-point of those.</p>
+item traffic the connected slot is not a party to, and patches are built with it. Large syncs usually want this: many
+games cannot cope with the bursts a 500-slot+ room produces. The full feed port stays available
+behind a collapsed heading. Text clients and trackers want it, since seeing
+everybody's finds is the whole point of those.</p>
 </div>
 </div>
 
