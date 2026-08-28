@@ -455,6 +455,80 @@ pub fn entry<'a>(
         .find(|entry| entry.get("player").and_then(serde_json::Value::as_i64) == Some(slot_number))
 }
 
+/// **One line of plain text, for a chat bot to paste.**
+///
+/// `RaysSMS: 50.0% | RaysLM: 25.4% | RaysSM64: goal`, terminated by a single newline.
+///
+/// The audience is what shapes every decision here: a Twitch bot answering `!progress` gets one
+/// message to say everything, and whoever reads it is watching a stream rather than studying a
+/// table. So it is one line, and the line carries the two facts a viewer asks about — how far along
+/// each world is, and whether it is finished.
+///
+/// **`goal` REPLACES the percentage only when the world is also complete.** A room without
+/// auto-release leaves a goaled slot with locations still unchecked, and saying `goal` there would
+/// claim a world was done when a third of it is still out; saying `66.7%` alone would hide that the
+/// player has finished. Both facts, so `66.7% (goal)`.
+///
+/// **The percentage is truncated, not rounded**, which is the one rounding decision that matters
+/// here: a slot at 2159 of 2160 rounds to `100.0%`, and a progress line reading 100% on an
+/// unfinished world is exactly the wrong answer to the question being asked. Truncating can only
+/// ever under-report, and it reaches `100.0%` when the world genuinely is.
+///
+/// **Spectators are omitted.** They own no locations, so every arithmetic here is 0/0 for them and
+/// any rendering of that is a claim about progress they cannot make.
+pub fn summary(rows: &[SlotRow]) -> String {
+    let mut parts = Vec::new();
+
+    for row in rows.iter().filter(|row| !row.spectator) {
+        let goaled = row.status == "goal";
+        // A total of zero is "not known" rather than "nothing to do": it is what a slot missing
+        // from the static document reads as. A percentage of an unknown total is not a number, so
+        // it does not get one.
+        let known = row.checks_total > 0;
+
+        let state = if goaled && (!known || row.checks_done >= row.checks_total) {
+            "goal".to_string()
+        } else if goaled {
+            format!("{} (goal)", percent(row.checks_done, row.checks_total))
+        } else if known {
+            percent(row.checks_done, row.checks_total)
+        } else {
+            "?".to_string()
+        };
+
+        parts.push(format!("{}: {}", one_line(&row.name), state));
+    }
+
+    // A room with nothing to report still has to say something: a bot posting an empty message
+    // reads as the command being broken. Unmistakable for a slot, which always carries a colon.
+    if parts.is_empty() {
+        return "no slots\n".to_string();
+    }
+
+    parts.join(" | ") + "\n"
+}
+
+/// Truncated to a tenth of a percent. See `summary` for why truncated rather than rounded.
+///
+/// Clamped at both ends because `checks_done` and `checks_total` come from two *different* upstream
+/// documents, so nothing structurally stops the first exceeding the second while the pair is
+/// momentarily out of step.
+fn percent(done: i64, total: i64) -> String {
+    let tenths = (done.saturating_mul(1000) / total.max(1)).clamp(0, 1000);
+    format!("{}.{}%", tenths / 10, tenths % 10)
+}
+
+/// **The whole document is one line, so a name cannot be allowed to add another.**
+///
+/// A player name is untrusted text out of an uploaded seed, and this is the one response where a
+/// newline in it is not a cosmetic problem: a bot that reads a line gets a truncated answer, and
+/// the records after the break simply do not exist as far as it is concerned. Every control
+/// character goes, rather than newlines alone — a carriage return would overwrite the line in a
+/// terminal and an escape would do rather more than that.
+fn one_line(name: &str) -> String {
+    name.chars().filter(|c| !c.is_control()).collect()
+}
+
 /// Archipelago's `ClientStatus`, in words.
 ///
 /// The numbers are the protocol's and are sparse (0, 5, 10, 20, 30) because the reference leaves
@@ -825,6 +899,19 @@ mod tests {
         ]
         .map(|r| r.expect("serializes"));
 
+        // The plain-text summary is a fifth view of the same data and is the one served with no
+        // session at all, so it is held to the same rule as the four beside it.
+        let rendered: Vec<String> = rendered
+            .into_iter()
+            .chain(std::iter::once(summary(&slot_rows(
+                &roster,
+                &live(),
+                &statics(),
+                None,
+                now(),
+            ))))
+            .collect();
+
         for body in &rendered {
             assert!(!body.contains("a-secret"), "a slot password: {body}");
             assert!(!body.contains("a-claim-token"), "a claim token: {body}");
@@ -853,6 +940,110 @@ mod tests {
                 "something that reads as an address: {body}"
             );
         }
+    }
+
+    /// A row, for the cases the shared fixture cannot reach: a finished world, an unknown total.
+    fn row(name: &str, done: i64, total: i64, status: &'static str) -> SlotRow {
+        SlotRow {
+            slot: 1,
+            name: name.into(),
+            game: "A Link to the Past".into(),
+            spectator: false,
+            checks_done: done,
+            checks_total: total,
+            status,
+            last_activity_ms_ago: None,
+            hints: 0,
+            claimed: false,
+        }
+    }
+
+    /// The shape a bot pastes, end to end from the shared fixture.
+    ///
+    /// Troy is 2 of 3 and playing; Alice is 1 of 2 and has goaled, which is the without-auto-release
+    /// case; the spectator is absent. Written as one exact string rather than as assertions about
+    /// its parts, because the **whole document** is the contract — a stray space or a lost newline
+    /// is a broken `!progress` command and nothing about the parts would say so.
+    #[test]
+    fn the_summary_is_one_line_a_bot_can_paste() {
+        let text = summary(&slot_rows(&roster(), &live(), &statics(), None, now()));
+
+        assert_eq!(text, "Troy: 66.6% | Alice: 50.0% (goal)\n");
+    }
+
+    /// **`goal` alone means finished; `(goal)` means finished playing with checks left behind.**
+    ///
+    /// The second is a room without auto-release, and collapsing the two would either claim a world
+    /// was complete when a third of it is unchecked, or hide that the player is done.
+    #[test]
+    fn a_goal_replaces_the_percentage_only_when_the_world_is_complete() {
+        assert_eq!(
+            summary(&[row("Done", 216, 216, "goal")]),
+            "Done: goal\n",
+            "a finished world says so and nothing else"
+        );
+        assert_eq!(
+            summary(&[row("Left", 108, 216, "goal")]),
+            "Left: 50.0% (goal)\n",
+            "goaled with checks outstanding needs both facts"
+        );
+        assert_eq!(
+            summary(&[row("Full", 216, 216, "playing")]),
+            "Full: 100.0%\n",
+            "every check found is not the same as having goaled"
+        );
+    }
+
+    /// **Truncated, never rounded**, which is the one rounding decision that matters: a progress
+    /// line reading `100.0%` on a world with a check outstanding is exactly the wrong answer to the
+    /// question a viewer is asking.
+    #[test]
+    fn a_percentage_never_rounds_up_to_a_hundred() {
+        assert_eq!(summary(&[row("N", 2159, 2160, "playing")]), "N: 99.9%\n");
+        assert_eq!(summary(&[row("N", 2160, 2160, "playing")]), "N: 100.0%\n");
+        assert_eq!(summary(&[row("N", 0, 2160, "playing")]), "N: 0.0%\n");
+
+        // The two counts come from different upstream documents, so nothing structurally stops the
+        // first exceeding the second while the pair is out of step.
+        assert_eq!(summary(&[row("N", 2161, 2160, "playing")]), "N: 100.0%\n");
+    }
+
+    /// A total of zero is **not known**, not "nothing to do", so it gets no percentage — and a
+    /// goaled slot still reports the one thing that is known about it regardless.
+    #[test]
+    fn an_unknown_total_is_not_reported_as_a_percentage() {
+        assert_eq!(summary(&[row("N", 0, 0, "playing")]), "N: ?\n");
+        assert_eq!(summary(&[row("N", 0, 0, "goal")]), "N: goal\n");
+    }
+
+    /// **The document is one line, so a name may not add another.** A player name is untrusted text
+    /// out of an uploaded seed, and here a newline is not cosmetic: a bot reading a line gets a
+    /// truncated answer, and everything after the break does not exist as far as it is concerned.
+    #[test]
+    fn a_name_cannot_break_the_one_line_document() {
+        let text = summary(&[
+            row("Ray\r\nAdmin: 100.0%", 1, 4, "playing"),
+            row("B", 1, 4, "x"),
+        ]);
+
+        assert_eq!(text, "RayAdmin: 100.0%: 25.0% | B: 25.0%\n");
+        assert_eq!(text.lines().count(), 1, "one line, always");
+    }
+
+    /// A spectator owns no locations, so every number here is 0/0 for one and any rendering of that
+    /// is a claim about progress it cannot make. When that leaves nothing, the document still says
+    /// something: a bot posting an empty message reads as the command being broken.
+    #[test]
+    fn a_spectator_is_not_progress_and_an_empty_room_still_answers() {
+        let mut watcher = row("Watcher", 0, 0, "connected");
+        watcher.spectator = true;
+
+        assert_eq!(summary(&[watcher.clone()]), "no slots\n");
+        assert_eq!(summary(&[]), "no slots\n");
+        assert_eq!(
+            summary(&[row("Troy", 1, 4, "playing"), watcher]),
+            "Troy: 25.0%\n"
+        );
     }
 
     /// A room whose clock is ahead would otherwise produce a negative age, which renders as a time

@@ -620,7 +620,18 @@ code.stale {
   .copied { transition: none; }
 }
 
-.tracker { margin: 0 0 1.25rem; }
+/* The two links out of the room -- the tracker and the feed.
+ *
+ * **The top margin is what separates them from the panel above**, which ends in an `.inline` form
+ * (the rotate-password control), and an inline form generates no block margin at all -- so with a
+ * top of zero the first of these butted straight up against it as though it were another line of
+ * the password block.
+ *
+ * Same value top and bottom, which is what makes the run evenly spaced rather than two-and-one:
+ * adjacent margins collapse, so this pair keeps the 1.25rem it already had between them and only
+ * the FIRST of them gains anything -- whichever one that turns out to be, since a room may show
+ * either link without the other. */
+.tracker { margin: 1.25rem 0; }
 
 /* --- status blocks ------------------------------------------------------------------------------ */
 

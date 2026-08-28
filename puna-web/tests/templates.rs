@@ -878,6 +878,67 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
     );
 }
 
+/// **The plain-text summary is served only where the tracker is open to the world.**
+///
+/// `/tracker/<id>/summary.txt` exists to be fetched by a chat bot holding no credential at all, so
+/// it takes **no session** and decides purely on the room: `tracker_policy == Link` or `404`. Three
+/// things follow from that, and each is one edit away from being lost:
+///
+/// - **A `members` room's progress must not leave through it.** That policy exists to say the
+///   multiworld's state is not public, and this is the one route here that answers without knowing
+///   who is asking.
+/// - **`404`, never `403`.** A refusal that distinguishes a restricted tracker from an id that
+///   names nothing is itself an answer about which unguessable ids are real — the rule `access`
+///   already states and the reason it 404s a disabled tracker.
+/// - **No `Session`, which is what makes the response publicly cacheable.** Take one and the answer
+///   can vary by viewer, and the `public` `Cache-Control` beside it silently becomes a way to hand
+///   one viewer's document to another.
+///
+/// The realistic regression is somebody folding this onto `access()` — which looks like removing a
+/// duplicate, is how every other view here resolves, and quietly widens this one to `members`.
+/// Nothing else would notice: the route keeps working, and it works for more people.
+#[test]
+fn the_text_summary_is_served_only_to_a_world_open_tracker() {
+    let source = std::fs::read_to_string(source("src/routes/tracker.rs")).expect("tracker.rs");
+    let code = code_only(&source);
+
+    let body = code
+        .split("async fn summary_text(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}\n").next())
+        .expect("the summary_text handler");
+
+    assert!(
+        body.contains("TrackerPolicy::Link"),
+        "summary_text no longer requires a world-open tracker, so a `members` room's progress \
+         leaves through a route that asks nobody who they are: {body}"
+    );
+    assert!(
+        body.contains("not_found"),
+        "summary_text refuses with something other than a 404, which tells a prober that a \
+         restricted tracker id is real: {body}"
+    );
+    assert!(
+        !body.contains("access("),
+        "summary_text resolves through `access`, which admits a `members` room to anyone the room \
+         knows -- this route answers without a session, so it must gate on the ROOM alone: {body}"
+    );
+
+    // The signature, not the body: a `Session` here would make the answer viewer-dependent, and the
+    // `public` cache directive below it is only sound because it cannot be.
+    let signature = body.split(')').next().unwrap_or_default();
+    assert!(
+        !signature.contains("Session"),
+        "summary_text takes a session, so its answer can vary by viewer -- while still being served \
+         `public` to any shared cache in front of it: {signature}"
+    );
+    assert!(
+        body.contains("public, max-age="),
+        "summary_text no longer marks its answer publicly cacheable, which is the whole benefit of \
+         it being identical for every reader: {body}"
+    );
+}
+
 /// **The feed's height comes from the page, and both halves of that are silent when broken.**
 ///
 /// `.journal` deliberately carries no height of its own: `.feed-page` makes the body a column and

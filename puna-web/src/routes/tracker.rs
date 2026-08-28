@@ -200,6 +200,14 @@ struct Cached {
     cache_control: Header<'static>,
 }
 
+/// The one response here that is not JSON and not per-viewer. See `summary_text`.
+#[derive(Responder)]
+#[response(content_type = "text/plain; charset=utf-8")]
+struct PlainText {
+    body: String,
+    cache_control: Header<'static>,
+}
+
 /// A `304`, which is the whole point of having sent an `ETag`.
 #[derive(Responder)]
 #[response(status = 304)]
@@ -645,6 +653,76 @@ async fn page(id: TrackerParam, session: Session, pool: &State<Pool>) -> Result<
     render(&mut conn, &session, id.0, access, scope).await
 }
 
+/// **One line of plain text, for a chat bot.**
+///
+/// `RaysSMS: 50.0% | RaysLM: 25.4% | RaysSM64: goal`, and nothing else. Built for a Twitch bot
+/// answering `!progress` while somebody streams a solo multiworld: one request, one line, no JSON
+/// to walk and no HTML to scrape. `digest::summary` owns the wording; this owns who may ask.
+///
+/// **Served only where the tracker is open to the world, and `404` everywhere else** — including
+/// to an organizer of a `members` room, which is the part worth stating because it looks like an
+/// oversight. Two reasons, and the second is the one that decides it:
+///
+/// - The endpoint exists to be fetched by something holding no credential at all. A bot cannot log
+///   in, so a summary that a room's staff could read and a bot could not would be a URL that works
+///   in a browser and fails in the only place it is meant to be used.
+/// - **It is what lets the answer be the same for everybody.** No viewer identity can change this
+///   response, so it needs no `Session` guard, cannot leak one viewer's document to another, and is
+///   `public` rather than `private` to any cache in front of it — unlike every other view here.
+///
+/// `404` rather than `403` for the same reason [`access`] gives: a restricted tracker and an id
+/// that names nothing must be indistinguishable, or the refusal is itself an answer about which
+/// unguessable ids are real.
+///
+/// A slot's own tracker id resolves to that slot alone, exactly as every other view scopes — so a
+/// player can hand out a summary URL for their world without handing over the multiworld's.
+#[get("/tracker/<id>/summary.txt")]
+async fn summary_text(
+    id: TrackerParam,
+    pool: &State<Pool>,
+    state: TrackerState<'_>,
+) -> Result<PlainText> {
+    let mut conn = pool.get().await?;
+
+    let target = tracker::resolve(&mut conn, id.0)
+        .await?
+        .ok_or_else(|| not_found("no such tracker"))?;
+    let room = room::get(&mut conn, target.room_id())
+        .await?
+        .ok_or_else(|| not_found("no such tracker"))?;
+
+    // The whole access rule, and it is a property of the ROOM rather than of the reader.
+    if room.tracker_policy != TrackerPolicy::Link {
+        return Err(not_found("no such tracker"));
+    }
+
+    let roster = slot::list(&mut conn, room.id).await?;
+    // Both documents, for the same reason the slots view needs both: progress comes from one and
+    // the location totals from the other.
+    let live = obtain(&mut conn, &state, &room, Document::Live).await?;
+    let statics = obtain(&mut conn, &state, &room, Document::Static).await?;
+
+    let rows = digest::slot_rows(
+        &roster,
+        &parsed(&live.body),
+        &parsed(&statics.body),
+        target.slot_number(),
+        Utc::now(),
+    );
+
+    Ok(PlainText {
+        body: digest::summary(&rows),
+        // `public`, which no other response here can be: this one is identical for every reader by
+        // construction, so a shared cache in front of it is free rate limiting rather than a way to
+        // hand one viewer another's document. The window is pahoa's own for the live document, so a
+        // bot polled hard costs a cache hit rather than a room.
+        cache_control: Header::new(
+            "Cache-Control",
+            format!("public, max-age={}", Document::Live.ttl().as_secs()),
+        ),
+    })
+}
+
 /// The reference implementation's per-slot URL, so tools that construct it keep working.
 ///
 /// It leaks nothing new: anyone who can build this path already holds the multiworld's tracker id.
@@ -903,6 +981,7 @@ pub fn routes() -> Vec<rocket::Route> {
     routes![
         page,
         slot_page,
+        summary_text,
         live,
         statics,
         view_slots,
@@ -915,6 +994,61 @@ pub fn routes() -> Vec<rocket::Route> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **`summary.txt` does not collide with the reference-compatible per-slot URL**, which is the
+    /// open question about putting it under `/tracker/<id>/`: that space is otherwise the slot
+    /// page's.
+    ///
+    /// It does not, because the shapes differ in length — `/tracker/<id>/summary.txt` is three
+    /// segments and `/tracker/<id>/<team>/<player>` is four — but "differ in length" is a claim
+    /// about Rocket's matcher rather than about this file, and the next path added here may not be
+    /// so lucky. Rocket refuses to ignite on a collision, so building the client **is** the
+    /// assertion; the dispatches after it are what says each URL reaches the handler it names.
+    ///
+    /// Neither request can get further than its state guards here, so a `500` means "routed, and
+    /// then found no database" while a `404` means the route table never matched it at all.
+    #[rocket::async_test]
+    async fn the_text_summary_does_not_shadow_the_slot_page() {
+        use rocket::http::Status;
+        use rocket::local::asynchronous::Client;
+
+        // A pool that is never connected to. `get_database_pool` with no migrations builds the
+        // deadpool and nothing else -- connections are made on `get()` -- so this is here to
+        // satisfy Rocket's `&State<Pool>` sentinel, which aborts ignite for unmanaged state and
+        // would otherwise be indistinguishable from the collision this test is looking for.
+        let pool = puna_core::db::get_database_pool("postgres://127.0.0.1:1/none", None)
+            .await
+            .expect("a pool, unconnected");
+
+        let client = Client::untracked(rocket::build().manage(pool).mount("/", routes()))
+            .await
+            .expect("the tracker routes ignite, which is to say none of them collide");
+
+        let id = puna_core::ids::TrackerId::new();
+        for path in [
+            format!("/tracker/{id}/summary.txt"),
+            format!("/tracker/{id}/0/1"),
+            format!("/tracker/{id}"),
+        ] {
+            assert_ne!(
+                client.get(&path).dispatch().await.status(),
+                Status::NotFound,
+                "{path} matched no route at all"
+            );
+        }
+
+        // And the static segment is static: it is not a slot name, a team, or anything else the
+        // shapes beside it would accept.
+        assert_eq!(
+            client
+                .get(format!("/tracker/{id}/summary.json"))
+                .dispatch()
+                .await
+                .status(),
+            Status::NotFound,
+            "something other than summary.txt is being routed to the summary"
+        );
+    }
 
     #[test]
     fn the_memo_expires() {
