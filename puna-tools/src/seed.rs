@@ -589,7 +589,23 @@ fn package(
 
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
+        .compression_method(zip::CompressionMethod::Deflated)
+        // **A fixed timestamp, because the default is the wall clock and that makes `--seed` a
+        // lie.** `SimpleFileOptions::default()` calls `DateTime::default_for_write()`, which under
+        // the `time` feature — enabled in this graph — stamps *now* into every entry. DOS time has
+        // two-second resolution, so two runs of one seed produce identical multidata inside a zip
+        // whose bytes differ, at four offsets: the time field of each local header and of each
+        // central-directory entry.
+        //
+        // That is not only a flaky test. **Puna content-addresses generations by the sha256 of this
+        // file**, so `--seed 42` twice would ingest as two separate generations — which is exactly
+        // the deduplication that reproducing a run is supposed to give. The seed is printed so a
+        // reported failure can be rebuilt; rebuilding it has to produce the same artifact.
+        //
+        // 1980-01-01 is the zip epoch and is what the crate itself falls back to without the `time`
+        // feature, so this is the deterministic half of its own default rather than a value chosen
+        // here.
+        .last_modified_time(zip::DateTime::default());
 
     zip.start_file(format!("AP_{seed_name}.archipelago"), options)?;
     zip.write_all(&archipelago)?;
@@ -836,6 +852,42 @@ mod tests {
         assert_eq!(first, again, "--seed did not reproduce the run");
         assert_ne!(first, other, "two seeds produced the same zip");
         assert_ne!(s1.seed_name, s2.seed_name);
+    }
+
+    /// **Nothing in the zip is stamped with the wall clock**, which the assertion above can only
+    /// catch by luck.
+    ///
+    /// `SimpleFileOptions::default()` writes *now* into every entry — `default_for_write()`, under
+    /// the `time` feature this graph enables — and DOS time has two-second resolution. So two builds
+    /// of one seed differ only when they straddle a boundary, which is a coin weighted by how long
+    /// a build takes: it flaked **once in fifty** nightly runs and passes every time anybody runs it
+    /// by hand.
+    ///
+    /// The consequence is bigger than the flake. **Puna content-addresses generations by the sha256
+    /// of this file**, so a clock-stamped zip makes `--seed 42` ingest as a different generation
+    /// every time — defeating the deduplication that reproducing a run exists to give.
+    ///
+    /// Asserted on the stored timestamp rather than by building twice across a real boundary: that
+    /// version reproduces the bug faithfully and costs two seconds of every test run, and this one
+    /// names the actual property.
+    #[test]
+    fn no_zip_entry_carries_the_wall_clock() {
+        let (zip, _) = build(&spec(2, 0, 1, 5)).expect("build");
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip)).expect("a zip");
+
+        assert!(
+            archive.len() >= 2,
+            "this seed should carry seed and spoiler"
+        );
+        for i in 0..archive.len() {
+            let entry = archive.by_index(i).expect("member");
+            let name = entry.name().to_string();
+            assert_eq!(
+                entry.last_modified(),
+                Some(zip::DateTime::default()),
+                "{name} is stamped with the clock, so this seed's bytes depend on when it was built"
+            );
+        }
     }
 
     /// The seed adopts release-on-goal, and carries no password. Puna passes
