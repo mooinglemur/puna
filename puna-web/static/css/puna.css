@@ -455,7 +455,10 @@ code {
    Copying is now an explicit control, which is better than a selection trick on its own terms: it
    takes one click instead of a click-drag-copy, it cannot take half the string, and it says it
    worked. The text is ordinary selectable text again for anyone who wants to select it. */
-.address { margin: 0 0 1.25rem; }
+/* No bottom margin: the wording that explains WHICH address this is follows immediately, and it is
+   part of the same statement rather than the next one. The gap this used to hold now sits above the
+   password instead -- see `.address-password`. */
+.address { margin: 0; }
 
 .address code {
   font-size: 1.15rem;
@@ -476,7 +479,10 @@ code {
    must not break -- so the two things a player copies off this page look and behave alike. Its own
    selector rather than the `.address` class because that one is a TABLE and this is a line. */
 .address-password {
-  margin: 0 0 0.35rem;
+  /* The gap that used to sit under the address table sits here instead. It is the same value, moved:
+     the address and the sentence explaining it are one thing, and the password is the next thing --
+     so the space belongs at the break rather than in the middle of the first half. */
+  margin: 1.25rem 0 0.35rem;
   display: flex;
   align-items: center;
   gap: 0.5rem;
