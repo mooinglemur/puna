@@ -878,6 +878,46 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
     );
 }
 
+/// **The lobby import gates on the lobby room's author, and `import` is the only place it can.**
+///
+/// The rule is a pure function with its own truth table, but a rule nothing calls guards nothing —
+/// and this one cannot be reached in a test, because everything around it needs a live lobby
+/// answering an HTTP request. Deleting the call compiles, passes every test, and turns the import
+/// back into a way to read a stranger's lobby room: paste any room id, and its players' names and
+/// Discord accounts arrive in your roster.
+///
+/// So the call site is pinned, along with the two things that make it correct: the check happens
+/// **before** any owner is written, and the admin bypass is passed in rather than decided here.
+#[test]
+fn the_lobby_import_refuses_a_room_whose_author_has_no_standing() {
+    let code = code_only(&std::fs::read_to_string(source("src/lobby.rs")).expect("lobby.rs"));
+
+    let body = code
+        .split("pub async fn import(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}\n").next())
+        .expect("the import function");
+
+    assert!(
+        body.contains("may_import("),
+        "`import` no longer gates on the lobby room's author, so any room id can be bound to this \
+         room and its player list read into the roster: {body}"
+    );
+    assert!(
+        body.contains("AuthorIsNotAnOrganizer"),
+        "the gate no longer refuses: {body}"
+    );
+
+    // Before anything is claimed. A check after the writes would leave the owners in place and
+    // report a refusal, which is the worst of both.
+    let gate = body.find("may_import(").expect("the gate");
+    let write = body.find("claim_for_owners").expect("the write");
+    assert!(
+        gate < write,
+        "the author check runs after slots have already been claimed"
+    );
+}
+
 /// **A page that something redirects to with a `Flash` has to read one.**
 ///
 /// This failed silently for the entire life of `routes/rooms.rs`. Every `Flash` in that module

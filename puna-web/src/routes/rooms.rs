@@ -701,7 +701,15 @@ async fn create(
     // Only on success -- see the note in `import_lobby_owners`. An association recorded for an
     // import that never happened turns on a room-page notice that explains the unclaimed slots
     // wrongly and permanently.
-    match crate::lobby::import(&mut conn, configured, id, lobby_room).await {
+    match crate::lobby::import(
+        &mut conn,
+        configured,
+        id,
+        lobby_room,
+        gate.session().session().is_admin,
+    )
+    .await
+    {
         Ok(outcome) => {
             room::set_lobby_room(&mut conn, id, lobby_room).await?;
             tracing::info!(
@@ -1848,7 +1856,15 @@ async fn import_lobby_owners(
     //
     // The flash carries the failure and the field is empty on the retry, which is a smaller cost
     // than a page that misreports the state of a room.
-    match crate::lobby::import(&mut conn, configured, id.0, lobby_room).await {
+    match crate::lobby::import(
+        &mut conn,
+        configured,
+        id.0,
+        lobby_room,
+        access.session.session().is_admin,
+    )
+    .await
+    {
         Ok(outcome) => {
             room::set_lobby_room(&mut conn, id.0, lobby_room).await?;
             tracing::info!(

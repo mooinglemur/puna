@@ -78,6 +78,39 @@ pub enum LobbyError {
     Unreachable(String),
     #[error("the lobby answered something this build could not read: {0}")]
     Unreadable(String),
+    /// The lobby room was made by somebody who has no standing in this room.
+    ///
+    /// **This is what stops the import being a way to read a stranger's lobby room.** Without it,
+    /// anyone who can open a room here could point it at any lobby room id and pull that room's
+    /// player names and Discord accounts into their own roster.
+    ///
+    /// The message deliberately names nobody: the reader may not be entitled to know who created
+    /// that lobby room, and if they are, they already do.
+    #[error(
+        "the person who created that lobby room is not an organizer of this room. Add them as an \
+         organizer, or ask them to run the import."
+    )]
+    AuthorIsNotAnOrganizer,
+}
+
+/// A lobby room, reduced to what an import needs: who made it, and who owns each YAML.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LobbyRoom {
+    /// The Discord account that created the room in the lobby.
+    ///
+    /// **`-1` is the lobby's sentinel for "nobody"**, not a user id — `db/room.rs` uses it where the
+    /// column is null and the API flattens `Option<i64>` to a bare number on the way out. Treated as
+    /// absent everywhere here, which matters because it would otherwise be a perfectly valid
+    /// argument to `user::ensure_exists`.
+    pub author_id: i64,
+    pub yamls: Vec<LobbyYaml>,
+}
+
+impl LobbyRoom {
+    /// The author, or `None` where the lobby recorded nobody.
+    pub fn author(&self) -> Option<i64> {
+        (self.author_id >= 0).then_some(self.author_id)
+    }
 }
 
 /// One YAML in a lobby room, reduced to the three fields an import needs.
@@ -110,8 +143,8 @@ impl Lobby {
         uuid::Uuid::parse_str(candidate).map_err(|_| LobbyError::NotARoomLink)
     }
 
-    /// Fetch a lobby room's YAML list.
-    pub async fn yamls(&self, room: uuid::Uuid) -> Result<Vec<LobbyYaml>, LobbyError> {
+    /// Fetch a lobby room: its author, and its YAML list.
+    pub async fn room(&self, room: uuid::Uuid) -> Result<LobbyRoom, LobbyError> {
         // **Built from the configured base and a uuid**, never from anything a request supplied as
         // text. `room` has already been through `Uuid::parse_str`, so it cannot carry a path.
         let url = format!("{}/api/room/{room}", self.base.trim_end_matches('/'));
@@ -144,6 +177,7 @@ impl Lobby {
         // Reading past what is needed is how a field nobody meant to store ends up in a log.
         #[derive(serde::Deserialize)]
         struct RoomInfo {
+            author_id: i64,
             yamls: Vec<LobbyYaml>,
         }
 
@@ -152,7 +186,10 @@ impl Lobby {
             .await
             .map_err(|e| LobbyError::Unreadable(e.to_string()))?;
 
-        Ok(body.yamls)
+        Ok(LobbyRoom {
+            author_id: body.author_id,
+            yamls: body.yamls,
+        })
     }
 }
 
@@ -217,6 +254,34 @@ pub fn plan(roster: &[Slot], yamls: &[LobbyYaml]) -> Plan {
     }
 }
 
+/// May this import proceed?
+///
+/// **Pure, because the check itself cannot be reached in a test.** Everything around it needs a live
+/// lobby answering an HTTP request, so the rule lives here where a truth table can hold it and
+/// `import` is the only caller.
+///
+/// Three inputs and one decision:
+///
+/// * **A site admin passes regardless.** They can already read every room here and, holding the
+///   outbound token, every room there — so the gate would withhold nothing from them.
+/// * **No author fails.** The lobby records `-1` where a room has none, and `author()` has already
+///   turned that into `None`; an absent author is nobody to have standing.
+/// * **Otherwise the author must be an ORGANIZER**, not merely a member. A helper is trusted to run
+///   this room, not to decide which lobby room it is bound to — and binding is what hands a
+///   stranger's player list to this roster.
+fn may_import(
+    is_admin: bool,
+    author: Option<i64>,
+    author_role: Option<puna_core::model::member::RoomRole>,
+) -> bool {
+    use puna_core::model::member::RoomRole;
+
+    if is_admin {
+        return true;
+    }
+    author.is_some() && author_role.is_some_and(|role| role >= RoomRole::Organizer)
+}
+
 /// What an import actually did, for the sentence the organizer is shown.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Imported {
@@ -242,10 +307,30 @@ pub async fn import(
     lobby: &Lobby,
     room: RoomId,
     lobby_room: uuid::Uuid,
+    is_admin: bool,
 ) -> anyhow::Result<Imported> {
-    let yamls = lobby.yamls(lobby_room).await?;
+    let fetched = lobby.room(lobby_room).await?;
+
+    // **The lobby room's author must be an organizer here.**
+    //
+    // Otherwise the import is a way to read somebody else's lobby room: paste any room id and its
+    // players' names and Discord accounts arrive in your roster. Tying the two rooms together
+    // requires standing in both, and the lobby's author is the only identity its API offers to
+    // check against.
+    //
+    // **Inside `import` rather than in the two routes**, so neither can forget it and a third
+    // caller inherits it. A site admin bypasses it entirely, which is the one exception: they can
+    // already read every room here and every room there.
+    let author_role = match fetched.author() {
+        Some(author) => puna_core::model::member::role_of(conn, room, author).await?,
+        None => None,
+    };
+    if !may_import(is_admin, fetched.author(), author_role) {
+        return Err(LobbyError::AuthorIsNotAnOrganizer.into());
+    }
+
     let roster = puna_core::model::slot::list(conn, room).await?;
-    let plan = plan(&roster, &yamls);
+    let plan = plan(&roster, &fetched.yamls);
 
     // **Rows first, and for every owner, before any slot points at one.** `room_slots.owner_id`
     // references `users`, so a slot claimed for an account that has never signed in would be a
@@ -328,6 +413,64 @@ mod tests {
             player_name: name.into(),
             discord_id: id,
         }
+    }
+
+    /// **The gate that stops the import being a way to read somebody else's lobby room.**
+    ///
+    /// Without it, anyone who can open a room here could paste any lobby room id and pull that
+    /// room's player names and Discord accounts into their own roster. Binding two rooms together
+    /// should require standing in both, and the lobby's `author_id` is the only identity its API
+    /// offers to check against.
+    ///
+    /// Note what this means at CREATION time: a new room's only organizer is whoever created it, so
+    /// the rule reduces to "you must be the lobby room's author, or an admin". A colleague opening
+    /// the room adds the author as an organizer first and then backfills from the options page,
+    /// which is the flow the refusal message names.
+    #[test]
+    fn only_an_organizer_of_both_rooms_may_bind_them() {
+        use puna_core::model::member::RoomRole;
+
+        assert!(may_import(false, Some(7), Some(RoomRole::Organizer)));
+
+        assert!(
+            !may_import(false, Some(7), Some(RoomRole::Helper)),
+            "a helper is trusted to run this room, not to decide which lobby room it is bound to"
+        );
+        assert!(
+            !may_import(false, Some(7), None),
+            "the lobby room's author has no standing here at all"
+        );
+
+        // The lobby writes -1 where a room has no author; `author()` turns that into None, and an
+        // absent author is nobody to have standing.
+        assert!(!may_import(false, None, None));
+        assert!(
+            !may_import(false, None, Some(RoomRole::Organizer)),
+            "a role with no author behind it must not pass"
+        );
+
+        // A site admin already reads every room on both sides, so the gate withholds nothing.
+        for (author, role) in [
+            (None, None),
+            (Some(7), None),
+            (Some(7), Some(RoomRole::Helper)),
+        ] {
+            assert!(may_import(true, author, role), "an admin is not gated");
+        }
+    }
+
+    /// `-1` is the lobby's "no author", not a user id -- and it would be a perfectly valid argument
+    /// to `user::ensure_exists`, which is what makes reading it as one worth preventing here.
+    #[test]
+    fn the_lobbys_no_author_sentinel_is_not_a_user() {
+        let room = |author_id| LobbyRoom {
+            author_id,
+            yamls: Vec::new(),
+        };
+
+        assert_eq!(room(7).author(), Some(7));
+        assert_eq!(room(-1).author(), None);
+        assert_eq!(room(0).author(), Some(0), "only negatives are the sentinel");
     }
 
     #[test]
