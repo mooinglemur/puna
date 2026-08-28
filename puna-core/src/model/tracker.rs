@@ -108,22 +108,36 @@ pub async fn resolve(
     }))
 }
 
-/// The last documents a proxy fetch saw, and when.
+/// One cached document: its JSON **text**, exactly as it will be served, and when it was stored.
 ///
-/// Each is the document's own JSON **text**, exactly as it will be served — see the note at the top
-/// of this module for why it is not a `serde_json::Value`.
+/// See the note at the top of this module for why it is not a `serde_json::Value`.
+#[derive(Debug, Clone)]
+pub struct CachedDocument {
+    pub body: String,
+    /// **When THIS document was written**, never when its neighbor was.
+    ///
+    /// The two are written on different schedules and under different rules — the static one every
+    /// five minutes and always successfully, the live one every minute and only while it fits under
+    /// the size cap — so a timestamp shared between them describes whichever wrote last and is
+    /// evidence about the other only by coincidence. It stopped being a coincidence on a 2000-slot
+    /// room, where the live document permanently exceeds the cap: the stored copy froze, the static
+    /// writes kept the shared stamp current, and the frozen copy was served as fresh. See the
+    /// migration for the measurement.
+    pub at: DateTime<Utc>,
+}
+
+/// The last documents a proxy fetch saw.
 #[derive(Debug, Clone)]
 pub struct CachedDocuments {
-    pub live: Option<String>,
-    pub statics: Option<String>,
-    pub at: DateTime<Utc>,
+    pub live: Option<CachedDocument>,
+    pub statics: Option<CachedDocument>,
 }
 
 impl CachedDocuments {
     /// Take one document out, rather than cloning it.
     ///
     /// A caller wants exactly one of the two and then owns it; at 17.6 MiB a clone is not a detail.
-    pub fn take(&mut self, kind: Kind) -> Option<String> {
+    pub fn take(&mut self, kind: Kind) -> Option<CachedDocument> {
         match kind {
             Kind::Live => self.live.take(),
             Kind::Static => self.statics.take(),
@@ -172,6 +186,8 @@ pub async fn cached(
         statics: Option<String>,
         #[diesel(sql_type = Nullable<Timestamptz>)]
         last_tracker_at: Option<DateTime<Utc>>,
+        #[diesel(sql_type = Nullable<Timestamptz>)]
+        last_static_tracker_at: Option<DateTime<Utc>>,
     }
 
     // **Postgres renders each document to text and this process never parses it.** The keys are
@@ -182,7 +198,8 @@ pub async fn cached(
     let rows: Vec<Row> = diesel::sql_query(
         "SELECT (last_tracker_doc -> $2)::text AS live,
                 (last_tracker_doc -> $3)::text AS statics,
-                last_tracker_at
+                last_tracker_at,
+                last_static_tracker_at
            FROM rooms WHERE id = $1",
     )
     .bind::<SqlUuid, _>(room)
@@ -194,17 +211,22 @@ pub async fn cached(
     let Some(row) = rows.into_iter().next() else {
         return Ok(None);
     };
-    let Some(at) = row.last_tracker_at else {
-        return Ok(None);
-    };
-    if row.live.is_none() && row.statics.is_none() {
+
+    // **A document with no timestamp is not a cache entry.** Pairing them here rather than at the
+    // call site is what makes "a body without the moment it was written" unrepresentable — the
+    // caller cannot then reach for a body and a stamp separately and pair the wrong two, which is
+    // the whole of the defect this replaced.
+    let live = row.live.zip(row.last_tracker_at);
+    let statics = row.statics.zip(row.last_static_tracker_at);
+    if live.is_none() && statics.is_none() {
         return Ok(None);
     }
 
+    let pair =
+        |it: Option<(String, DateTime<Utc>)>| it.map(|(body, at)| CachedDocument { body, at });
     Ok(Some(CachedDocuments {
-        live: row.live,
-        statics: row.statics,
-        at,
+        live: pair(live),
+        statics: pair(statics),
     }))
 }
 
@@ -239,13 +261,22 @@ pub async fn store(
         return Ok(false);
     }
 
-    diesel::sql_query(
+    // **Only this document's own timestamp moves**, which is the fix for the defect described in
+    // `2026-08-29-000003_per_document_tracker_at`. Written as two statements chosen by the caller's
+    // `kind` rather than one with a `CASE`, so a column and the key beside it cannot disagree about
+    // which document is being written.
+    let column = match kind {
+        Kind::Live => "last_tracker_at",
+        Kind::Static => "last_static_tracker_at",
+    };
+
+    diesel::sql_query(format!(
         "UPDATE rooms
-            SET last_tracker_doc = COALESCE(last_tracker_doc, '{}'::jsonb)
+            SET last_tracker_doc = COALESCE(last_tracker_doc, '{{}}'::jsonb)
                                    || jsonb_build_object($2::text, $3::jsonb),
-                last_tracker_at = now()
-          WHERE id = $1",
-    )
+                {column} = now()
+          WHERE id = $1"
+    ))
     .bind::<SqlUuid, _>(room)
     .bind::<Text, _>(kind.key())
     .bind::<Text, _>(body)

@@ -476,6 +476,12 @@ pub fn entry<'a>(
 ///
 /// **Spectators are omitted.** They own no locations, so every arithmetic here is 0/0 for them and
 /// any rendering of that is a claim about progress they cannot make.
+///
+/// **The order is the roster's, which is slot order** — `slot::list` sorts on `slot_number`, and
+/// nothing here reorders. That is worth keeping rather than sorting by progress: this line is read
+/// repeatedly by the same people, so a world stays in the same position from one `!progress` to the
+/// next and a viewer can find theirs without reading the whole thing. Sorting by completion would
+/// reshuffle it every time somebody found a check.
 pub fn summary(rows: &[SlotRow]) -> String {
     let mut parts = Vec::new();
 

@@ -350,23 +350,38 @@ async fn obtain(
     // free. Were that ever reordered, the second take would answer `None` and the request would
     // degrade to "this room cannot be reached", which is a visible failure rather than a silent one.
     let mut cached = tracker::cached(conn, room.id).await?;
-    let fresh = cached.as_ref().is_some_and(|c| {
-        chrono::Utc::now()
-            .signed_duration_since(c.at)
-            .to_std()
-            .ok()
-            .is_some_and(|age| age < which.ttl())
-    });
 
-    if fresh
-        && let Some(cache) = cached.as_mut()
-        && let Some(body) = cache.take(which.kind())
-    {
-        memo.put((room.id, which), body.clone());
-        return Ok(Fetched {
-            body,
-            stale_since: None,
-        });
+    // **Freshness is judged against the document being asked for, and nothing else.**
+    //
+    // This read the room's single `last_tracker_at`, which the STATIC document's write also moved.
+    // A room whose live document has outgrown `PUNA_TRACKER_CACHE_MAX` keeps the last copy that fit
+    // -- `store` refuses to truncate -- and the static writes kept stamping that copy as current, so
+    // the tier served an hours-old live document with `stale: false` for a minute out of every five.
+    // Measured on a 2000-slot room reporting 233 checks against the 169,938 it actually had.
+    let entry = cached.as_mut().and_then(|c| c.take(which.kind()));
+
+    if let Some(entry) = entry {
+        let age = chrono::Utc::now()
+            .signed_duration_since(entry.at)
+            .to_std()
+            .ok();
+        if age.is_some_and(|age| age < which.ttl()) {
+            memo.put((room.id, which), entry.body.clone());
+            return Ok(Fetched {
+                body: entry.body,
+                stale_since: None,
+            });
+        }
+
+        // Not fresh, and it is the only copy anybody has. Put it back so the fallback below can
+        // serve it **with its real age attached** if the room does not answer -- which is what the
+        // column is for, and is the honest version of what the old code was doing by accident.
+        if let Some(cache) = cached.as_mut() {
+            match which.kind() {
+                tracker::Kind::Live => cache.live = Some(entry),
+                tracker::Kind::Static => cache.statics = Some(entry),
+            }
+        }
     }
 
     // Nothing fresh: ask the room.
@@ -389,12 +404,16 @@ async fn obtain(
                 tracing::debug!(
                     room = %room.id,
                     document = which.as_str(),
+                    stored_at = %stale.at,
                     error = %e,
                     "serving a stale tracker document"
                 );
+                // **This document's own timestamp, which is the point of the pair.** The banner says
+                // "as of <time>", so taking the neighbor's would have told a reader a three-day-old
+                // document was minutes old.
                 return Ok(Fetched {
-                    body: stale,
-                    stale_since: Some(cache.at),
+                    body: stale.body,
+                    stale_since: Some(stale.at),
                 });
             }
             Err(unreachable_room(e))

@@ -335,6 +335,7 @@ diesel::table! {
         journal_policy -> JournalPolicy,
         patch_policy -> PatchPolicy,
         primary_port -> PrimaryPort,
+        last_static_tracker_at -> Nullable<Timestamptz>,
     }
 }
 
