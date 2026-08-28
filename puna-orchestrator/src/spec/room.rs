@@ -412,18 +412,41 @@ fn expected_connections(slot_count: i32) -> i64 {
 ///
 /// ## The floor is deliberately far above what a small room measured
 ///
-/// 192 MiB against 46-70 MiB observed, which is chosen so that **no room's limit gets smaller than
-/// the one it runs under today**: below 228 slots the outbound budget is its own 64 MiB floor, and
-/// `64 + 192 × 3/2` is exactly the 352 MiB the previous formula produced. Large rooms grow, nothing
-/// shrinks.
+/// It began at 192 MiB against 46-70 MiB observed, chosen so no room's limit got smaller than the
+/// one it already ran under. Troy's call, and the reasoning was that those small-room samples come
+/// from rooms with one or two connections — nothing about them says what a 200-slot room does
+/// mid-cascade — so generosity cost little and tightening later could be done against data.
 ///
-/// Troy's call, and the reasoning is that the three small-room samples come from rooms with one or
-/// two connections — nothing about them says what a 200-slot room does mid-cascade. A limit is not
-/// a reservation, so generosity costs nothing here beyond a fleet-wide bug having more rope, and
-/// tightening it later is a decision that can be made against data rather than instead of it.
+/// ## It is 160 MiB now, and the 32 MiB came off for a reason rather than a preference
+///
+/// **Every measurement in that table included a term that no longer exists.** pahoa's journal
+/// writer used a flat `sync_channel(1 << 19)`, sized for the worst burst a 2000-slot seed can
+/// produce and then allocated in *every* room — 28 MiB resident from startup whether or not
+/// anything was ever queued. It now sizes from the seed's own location count, which pahoa measured
+/// as a flat **30.7 MB** off every room from 1 slot to 96.
+///
+/// So the fit was carrying a constant that has been removed, and it was carrying it in the one term
+/// that is itself a constant. `PER_SLOT` is untouched: a 2000-slot seed's ring is what the old
+/// figure was sized for, so the largest rooms saved nothing and their term should not move.
+///
+/// **This is still generous, which is the point of doing it without new load.** A minimal room is
+/// ~14 MB after the change (pahoa's breakdown: ~10 MB of mimalloc arena, ~2 MB of binary and
+/// runtime, ~2 MB of journal), so 160 MiB is an order of magnitude above the floor case and around
+/// 4× the largest small-room observation once its ring is subtracted.
+///
+/// It does give up the "nothing shrinks" property the 192 was chosen for: a room under 228 slots
+/// now limits at ~330 MiB rather than 352. That was a transition rule for a fleet already running,
+/// not a standing invariant, and the room it applies to has 30 MB less in it than when the rule was
+/// written.
+///
+/// **The measurements below are deliberately left alone.** They are pre-repin, so they overstate
+/// every room by the ring — holding the limit to them is stricter than reality, which is the safe
+/// direction, and re-fitting them properly wants a week of `process_resident_memory_bytes` from a
+/// fleet on the new image. `PUNA_PAHOA_IMAGE` reaching every room is what makes that data exist.
 fn non_queue_bytes(slot_count: i32) -> i64 {
-    /// See above: sized to hold the small end at its current limit, not to the 46-70 MiB measured.
-    const FLOOR: i64 = 192 * 1024 * 1024;
+    /// See above. **160 MiB, down from 192**, because every measurement the fit was drawn from
+    /// included a term pahoa has since removed.
+    const FLOOR: i64 = 160 * 1024 * 1024;
     /// Fitted to the 2000-slot room under churn: 2000 × 288 KiB = 562 MiB over the floor, so 754
     /// against 494 measured.
     ///
@@ -451,6 +474,49 @@ pub fn memory_request_bytes(slot_count: i32) -> i64 {
     non_queue_bytes(slot_count)
         + shard_queue_bytes(slot_count)
         + outbound_budget_bytes(slot_count) / 4
+}
+
+/// What to request, in **millicores**: steady-state demand, which scales with the room.
+///
+/// ## A flat request prices every room like the largest one
+///
+/// This was 50m for every room, which Troy measured as overstating the smallest by nearly an order
+/// of magnitude. The request is what the scheduler subtracts from a node and what a ResourceQuota
+/// charges, so it decides how many rooms fit on the fleet — and a one-slot async holding three
+/// sockets and writing a save every thirty seconds is not the same workload as a 2000-slot sync
+/// mid-cascade. Sizing them alike means either over-reserving the small end or under-reserving the
+/// large one, and 50m did the first.
+///
+/// **10m at the floor, one core at 2000 slots, linear between.** Troy's numbers. The top of the
+/// scale is generous against measurement rather than fitted to it: a 2000-slot room under a full
+/// goal cascade measured **0.6 of 2 cores**, and 0.2 during a clean connect ramp, so a whole core
+/// reserved is roughly 1.7× the worst thing observed.
+///
+/// ## Capped at a core, which is a correctness guard and not only a policy
+///
+/// Kubernetes **rejects a pod whose request exceeds its limit**, and the limit is 2 cores. Extended
+/// linearly this crosses 2000m at about 4000 slots, and **nothing bounds a room's slot count**: it
+/// is whatever the uploaded seed's `slot_info` declares, ingest imposes no maximum, and
+/// `generations.slots` is a plain `INTEGER`. (The port range bounds how many rooms run at once, not
+/// how large one is.) M38's sizing table already reasons out to 6000 slots.
+///
+/// So an uncapped ramp makes a large room unschedulable, with the failure arriving as an admission
+/// error naming resources rather than anything about the room.
+///
+/// Capping at the top of Troy's stated scale keeps the request honest and leaves the burst headroom
+/// where it belongs: a 4000-slot room still bursts to the 2-core limit, it just does not reserve
+/// more than the largest measured room needs.
+pub fn cpu_request_millicores(slot_count: i32) -> i64 {
+    /// What a room costs while it is doing nothing, which is nearly all of the time.
+    const FLOOR: i64 = 10;
+    /// The top of the ramp, and the cap. See above for why the cap is load-bearing.
+    const CEILING: i64 = 1000;
+    /// The slot count at which the ceiling is reached.
+    const FULL_AT: i64 = 2000;
+
+    let slots = i64::from(slot_count.max(0));
+    let scaled = FLOOR + (CEILING - FLOOR) * slots / FULL_AT;
+    scaled.min(CEILING)
 }
 
 /// What to limit at, in bytes: the **whole** outbound budget, plus half again the base.
@@ -1053,6 +1119,59 @@ mod tests {
         }
     }
 
+    /// **The ramp, and the guard that stops a large room becoming unschedulable.**
+    ///
+    /// Troy's numbers: 10m at the floor, a whole core at 2000 slots. The values in between are
+    /// linear and are asserted so a change to the shape has to be deliberate.
+    ///
+    /// The cap is the half worth testing hardest. Kubernetes **rejects a pod whose request exceeds
+    /// its limit**, and `limits.cpu` is 2 cores; extended linearly this ramp crosses 2000m at about
+    /// 4000 slots. **Nothing bounds a room's slot count** — it is whatever the uploaded seed
+    /// declares, and M38's sizing table reasons out to 6000 — so without the cap that room fails
+    /// admission with an error about resources and nothing about the room.
+    #[test]
+    fn the_cpu_request_ramps_from_a_floor_to_one_core_and_stops_there() {
+        assert_eq!(cpu_request_millicores(0), 10, "the floor");
+        assert_eq!(cpu_request_millicores(1), 10);
+        assert_eq!(cpu_request_millicores(96), 57);
+        assert_eq!(cpu_request_millicores(200), 109);
+        assert_eq!(cpu_request_millicores(2000), 1000, "a core at the top");
+
+        // Past the anchor it stops rather than continuing, and the reason is admission rather than
+        // policy: `limits.cpu` is 2 cores and a request above a limit is a pod Kubernetes refuses.
+        for slots in [2001, 4000, 6000, i32::MAX] {
+            assert_eq!(
+                cpu_request_millicores(slots),
+                1000,
+                "{slots} slots requests more than the top of the ramp"
+            );
+        }
+
+        // The invariant behind the cap, stated over the limit rather than over the constant, so it
+        // still holds if either moves.
+        const LIMIT_MILLICORES: i64 = 2000;
+        for slots in [0, 1, 96, 200, 2000, 6000, i32::MAX] {
+            assert!(
+                cpu_request_millicores(slots) <= LIMIT_MILLICORES,
+                "{slots} slots requests more CPU than the limit allows, so the pod is rejected"
+            );
+        }
+    }
+
+    /// Nothing here reserves more than it is allowed to burst to, in either resource.
+    ///
+    /// The memory pair has held since M37 and is asserted there; this is the CPU half, which had no
+    /// upper relationship at all while the request was a constant somebody could raise.
+    #[test]
+    fn no_room_requests_more_than_its_limit() {
+        for slots in [0, 1, 4, 96, 200, 500, 2000, 6000] {
+            assert!(
+                memory_request_bytes(slots) <= memory_limit_bytes(slots),
+                "{slots} slots reserves more memory than it may use"
+            );
+        }
+    }
+
     /// The rendered numbers, pinned, because two of the terms are too small to be held by any
     /// assertion about the invariant.
     ///
@@ -1063,18 +1182,38 @@ mod tests {
     /// edit with the arithmetic re-done, not a test updated to whatever the code now returns.
     #[test]
     fn the_memory_numbers_are_pinned() {
-        // 96 slots: 64 MiB budget (its floor) + 2×4096×72 envelopes + (192 MiB + 96×288 KiB) base.
-        assert_eq!(memory_request_bytes(96), 240_640 * 1024 + 589_824);
-        assert_eq!(memory_limit_bytes(96), 412_155_904);
+        // Spelled as the arithmetic rather than as a number, so a reader can check the terms rather
+        // than trust the total. Each is `base + envelopes + budget/4` for the request and
+        // `budget + envelopes + base × 3/2` for the limit; `base` is the 160 MiB floor plus the
+        // per-slot term.
 
-        // 2000 slots: 563 MiB budget + 12×32000×72 envelopes + (192 MiB + 2000×288 KiB) base.
+        // 96 slots: 64 MiB budget (its floor) + 2×4096×72 envelopes + (160 MiB + 96×288 KiB) base.
+        const BASE_96: i64 = 160 * 1024 * 1024 + 96 * 288 * 1024;
+        assert_eq!(memory_request_bytes(96), BASE_96 + 589_824 + 67_108_864 / 4);
+        assert_eq!(
+            memory_limit_bytes(96),
+            67_108_864 + 589_824 + BASE_96 * 3 / 2
+        );
+
+        // 2000 slots: 563 MiB budget + 12×32000×72 envelopes + (160 MiB + 2000×288 KiB) base.
         // The envelope term is 26.4 MiB here rather than 3.4 -- the depth is Puna's own, sized for
         // sixteen simultaneous releases rather than pahoa's flat 4,096.
+        const BASE_2000: i64 = 160 * 1024 * 1024 + 2000 * 288 * 1024;
         assert_eq!(
             memory_request_bytes(2000),
-            791_150_592 + 27_648_000 + 590_348_288 / 4
+            BASE_2000 + 27_648_000 + 590_348_288 / 4
         );
-        assert_eq!(memory_limit_bytes(2000), 1_804_722_176);
+        assert_eq!(
+            memory_limit_bytes(2000),
+            590_348_288 + 27_648_000 + BASE_2000 * 3 / 2
+        );
+
+        // The totals, as flat numbers, because the expressions above would follow the constants if
+        // somebody changed one -- these are what a reviewer compares against a manifest.
+        assert_eq!(memory_request_bytes(96), 213_450_752);
+        assert_eq!(memory_limit_bytes(96), 361_824_256);
+        assert_eq!(memory_request_bytes(2000), 932_831_232);
+        assert_eq!(memory_limit_bytes(2000), 1_754_390_528);
     }
 
     /// The sizing is held to what the cluster actually measured, so tightening it later means

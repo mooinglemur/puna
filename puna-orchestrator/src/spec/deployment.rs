@@ -264,20 +264,26 @@ fn probe(failure_threshold: i32) -> Probe {
 fn resources(spec: &RoomSpec) -> ResourceRequirements {
     ResourceRequirements {
         requests: Some(BTreeMap::from([
-            // 50m, lowered from 250m before the first real deployment. A room is idle almost all of
-            // the time: it holds sockets, applies the occasional check and writes a save every 30
-            // seconds. The bursts that matter -- a seed loading, a wave of clients reconnecting --
-            // are what `limits.cpu` covers, and a request is a RESERVATION rather than a ceiling.
+            // **Scaled with the room**, 10m at the floor to a core at 2000 slots. It was flat at
+            // 50m -- itself lowered from 250m before the first deployment -- and a flat request
+            // prices a one-slot async like a 2000-slot sync. See `cpu_request_millicores` for the
+            // derivation, the measurements it is generous against, and why it is capped.
             //
-            // The request is what the scheduler subtracts from a node and what a ResourceQuota
-            // charges, so setting it to steady-state demand rather than to burst demand is what
-            // decides how many rooms fit on the fleet. At 250m a hundred rooms reserved 25 cores
-            // that were doing nothing; at 50m they reserve 5 and still burst to 2 each.
+            // A room is idle almost all of the time: it holds sockets, applies the occasional check
+            // and writes a save every thirty seconds. The bursts that matter -- a seed loading, a
+            // wave of clients reconnecting -- are what `limits.cpu` covers, and a request is a
+            // RESERVATION rather than a ceiling.
             //
             // Revise it from measurement, not from argument -- container_cpu_usage_seconds_total
             // by pod over a week of real rooms. Too LOW shows up as rooms landing on a node that
             // cannot actually feed them, which reads as lag rather than as a scheduling fault.
-            ("cpu".to_string(), Quantity("50m".to_string())),
+            (
+                "cpu".to_string(),
+                Quantity(format!(
+                    "{}m",
+                    crate::spec::room::cpu_request_millicores(spec.slot_count)
+                )),
+            ),
             (
                 "memory".to_string(),
                 quantity_bytes(crate::spec::room::memory_request_bytes(spec.slot_count)),
@@ -556,7 +562,20 @@ mod tests {
         assert_eq!(limits["cpu"], Quantity("2".to_string()));
         // Steady state, not burst -- see the note on `resources`. The gap between the two is the
         // point: a room reserves little and is allowed to spike.
-        assert_eq!(requests["cpu"], Quantity("50m".to_string()));
+        //
+        // Rendered from the same function the manifest uses rather than pinned as a literal, so the
+        // assertion is that the deployment carries the derivation and not that the derivation still
+        // produces one number. `cpu_request_millicores` has its own tests for the values.
+        assert_eq!(
+            requests["cpu"],
+            Quantity(format!(
+                "{}m",
+                crate::spec::room::cpu_request_millicores(spec.slot_count)
+            ))
+        );
+        // And it is not the old flat value, which is what this test would otherwise keep passing
+        // against: 96 slots must land between the floor and the ceiling rather than on either.
+        assert_ne!(requests["cpu"], Quantity("50m".to_string()));
 
         assert_eq!(
             requests["memory"],
@@ -567,9 +586,13 @@ mod tests {
             quantity_bytes(crate::spec::room::memory_limit_bytes(spec.slot_count))
         );
         // A 96-slot room sits on pahoa's 64 MiB budget floor, so its request is the base --
-        // 192 MiB plus 96 slots at 288 KiB -- plus a quarter of that budget, plus the 576 KiB of
+        // 160 MiB plus 96 slots at 288 KiB -- plus a quarter of that budget, plus the 576 KiB of
         // shard envelopes, which the outbound budget does not account for.
-        assert_eq!(requests["memory"], Quantity("241216Ki".to_string()));
+        //
+        // Spelled as a rendered quantity rather than by calling the function again, deliberately:
+        // the assertion above already checks the manifest carries the derivation, and this one
+        // checks the derivation still produces the number somebody would read off a pod.
+        assert_eq!(requests["memory"], Quantity("208448Ki".to_string()));
     }
 
     #[test]
