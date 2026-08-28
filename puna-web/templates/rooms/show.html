@@ -583,11 +583,12 @@ without spending this slot&rsquo;s points</label>
 {% endif %}
 
 {% if is_staff %}
-{# Collapsed by default: this is the half of the page a player never needs, and it is longer than
-   everything above it. `<details>` rather than a scripted toggle -- it works with scripting off and
-   the browser remembers nothing, which is right for a section whose contents change a room. #}
-<details class="manage">
-<summary><h2>Manage</h2></summary>
+{# **Open, since the options moved out of it.** It was collapsed because it was longer than
+   everything above it and a player never needs any of it -- but what made it long was two forms
+   full of policy controls, and those now live on their own page. What is left is a short list of
+   links plus the lifecycle buttons, which is not worth a click to reach, and a staff member on this
+   page is usually here to use one of them. #}
+<h2>Manage</h2>
 <ul>
 {# `is_staff` is the helper floor, which is exactly the console's own guard -- so this link is
    never offered to somebody the route would refuse. The console itself shows only the commands
@@ -600,6 +601,11 @@ without spending this slot&rsquo;s points</label>
 {# Organizer-only, because a room-wide filter configures the room and persists into its save -- the
    `option` argument. A SLOT's filter is a helper's, and is reached from the roster chip. #}
 <li><a href="/room/{{ room.id }}/filter">Room filter</a> &mdash; drop or thin traffic for everyone</li>
+{# Where the password mode and the feed policy went. They were two forms in this section; on their
+   own page they sit beside the tracker, patch and port settings that had no control at all, split
+   by whether saving restarts the room. #}
+<li><a href="/room/{{ room.id }}/options">Options</a> &mdash; passwords, tracker, feed, patches and
+which port the page leads with</li>
 {% endif %}
 <li><a href="/room/{{ room.id }}/members">Members and invites</a></li>
 </ul>
@@ -626,41 +632,7 @@ without spending this slot&rsquo;s points</label>
 an async that goes quiet comes back. <strong>Closing</strong> takes it down and leaves only
 organizers able to reopen it. Either way the room keeps its address, its save and its files.</p>
 
-<form method="post" action="/room/{{ room.id }}/settings/slot-auth">
-<p>
-<label for="mode">Password mode</label>
-<select id="mode" name="mode">
-<option value="none"{% if room.slot_auth == puna_core::model::room::SlotAuth::None +%} selected{% endif %}>none &mdash; anyone with the address</option>
-<option value="room"{% if room.slot_auth == puna_core::model::room::SlotAuth::Room +%} selected{% endif %}>one shared room password</option>
-<option value="per_slot"{% if room.slot_auth == puna_core::model::room::SlotAuth::PerSlot +%} selected{% endif %}>a password per slot</option>
-</select>
-<button type="submit">Change</button>
-</p>
-<p class="hint"><strong>Changing this restarts the room.</strong> The server reads passwords when it
-starts, so the change cannot take effect on a running room. Switching away from per-slot passwords
-discards them and they cannot be recovered.</p>
-</form>
-
-{# Sits beside the password mode because both answer "who is trusted with what", and deliberately
-   says it is NOT a restart -- everything else in this section is one, so silence here would be
-   read as the same cost. #}
-<form method="post" action="/room/{{ room.id }}/settings/journal">
-<p>
-<label for="journal-policy">Room feed</label>
-<select id="journal-policy" name="policy">
-<option value="full"{% if room.journal_policy == puna_core::model::room::JournalPolicy::Full +%} selected{% endif %}>everything &mdash; chat and hints included, downloadable</option>
-<option value="feed"{% if room.journal_policy == puna_core::model::room::JournalPolicy::Feed +%} selected{% endif %}>items only &mdash; chat and hints withheld</option>
-<option value="disabled"{% if room.journal_policy == puna_core::model::room::JournalPolicy::Disabled +%} selected{% endif %}>staff only &mdash; no feed for anyone else</option>
-</select>
-<button type="submit">Change</button>
-</p>
-<p class="hint">What everyone <em>except</em> this room's staff sees at the feed link; organizers
-always read the whole history. <strong>No restart</strong> &mdash; it applies to open pages too.
-The feed link reaches as far as the tracker link does, so treat this as what you would tell anyone
-holding the room's address.</p>
-</form>
 {% endif %}
-</details>
 {% endif %}
 
 {% if !siblings.is_empty() %}

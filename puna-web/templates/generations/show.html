@@ -60,7 +60,8 @@ before rather than a second copy of it.</p>
    its own explanation, and enough room to say what the option means in words.
 
    The hints under each group are rendered for EVERY option and revealed one at a time by
-   `create-room.js`. Server-rendered rather than built in script so the page explains itself with
+   `options-form.js`, which the room's own options page shares. Server-rendered rather than built
+   in script so the page explains itself with
    nothing loaded -- unscripted, all of them show, which is verbose and never wrong. #}
 <section class="panel create-room">
 <h2>Open a room from this seed</h2>
@@ -159,6 +160,25 @@ link. (Not built yet)</p>
 </div>
 </div>
 
+{# **Last, deliberately.** It is the only choice here about how the room PRESENTS itself rather
+   than about who may do what, and it is the one with a recommendation already made for you --
+   preselected from this seed's slot count, so the common answer needs no thought. #}
+<div class="field" data-hints="primary_port">
+<span class="label">Primary room port</span>
+<div class="choices">
+<label><input type="radio" name="primary_port" value="full"{% if primary_port_default == puna_core::model::room::PrimaryPort::Full +%} checked{% endif %}> Full</label>
+<label><input type="radio" name="primary_port" value="filtered"{% if primary_port_default == puna_core::model::room::PrimaryPort::Filtered +%} checked{% endif %}> Filtered</label>
+<p class="hint" data-for="full">The room page leads with the full feed port. The right choice for
+all but the largest syncs. The filtered port stays available behind a collapsed heading for anyone
+who wants it.</p>
+<p class="hint" data-for="filtered">The room page leads with the filtered port, which leaves out
+item traffic the connected slot is not a party to. Large syncs usually want this: many games cannot
+cope with the bursts a 500-slot room produces. The full feed port stays available behind a collapsed
+heading &mdash; text clients and trackers want it, since seeing everybody&rsquo;s finds is the whole
+point of those.</p>
+</div>
+</div>
+
 <div class="actions">
 <button type="submit">Create the room</button>
 <button type="reset" class="secondary">Reset to defaults</button>
@@ -168,5 +188,5 @@ link. (Not built yet)</p>
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/create-room.js?v={{ base.static_version }}" defer></script>
+<script src="/static/options-form.js?v={{ base.static_version }}" defer></script>
 {% endblock %}

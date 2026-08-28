@@ -133,7 +133,7 @@ async fn creating_a_room_populates_slots_membership_and_credentials() {
         assert_eq!(stored.desired_state, "running", "a new room starts running");
         assert_eq!(stored.state, "provisioning");
         // Not a race, so the permissive defaults.
-        assert_eq!(stored.spoiler_policy, SpoilerPolicy::AdminOnly);
+        assert_eq!(stored.spoiler_policy, SpoilerPolicy::Staff);
         assert_eq!(stored.tracker_policy, TrackerPolicy::Link);
         // **Open, where the other two are not.** Those guard what the seed knows and a player has
         // not earned; this guards what the room's own participants said to each other, and the
@@ -162,7 +162,12 @@ async fn a_race_seed_defaults_to_the_closed_policies() {
             .await
             .expect("get")
             .expect("present");
-        assert_eq!(stored.spoiler_policy, SpoilerPolicy::Never);
+        // **The spoiler does NOT vary with the seed, and no longer does.** It used to be `never`
+        // for a race — nobody at all, the organizer included — which is a real choice and a bad
+        // one to be handed silently: the person it locks out is the one who would need the file to
+        // settle an argument. Every room now starts staff-only, and the options page offers all
+        // four settings including `never`.
+        assert_eq!(stored.spoiler_policy, SpoilerPolicy::Staff);
         assert_eq!(stored.tracker_policy, TrackerPolicy::Members);
         // **Not `Disabled`, and the difference matters.** A race's history is a live scoreboard —
         // who found what, in order — so the chat and hints come out; the item feed stays, because

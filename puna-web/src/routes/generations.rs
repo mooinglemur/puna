@@ -51,6 +51,12 @@ pub struct ShowTemplate {
     /// label rather than an instant, and one that disagreed with the creator's calendar by a few
     /// hours would be a worse kind of wrong than one that is simply the server's day.
     default_room_name: String,
+    /// Which port this seed's size recommends leading with.
+    ///
+    /// **Computed from the same function the room is stored with**, so the radio that arrives
+    /// preselected and the value written on submit cannot disagree — a form recommending one thing
+    /// while creation did another would be worse than either.
+    primary_port_default: puna_core::model::room::PrimaryPort,
 }
 
 #[derive(Template, WebTemplate)]
@@ -109,12 +115,16 @@ async fn show(
         .await?
         .ok_or_else(|| Error::new(Status::NotFound, anyhow::anyhow!("no such generation")))?;
     let slots = generation::slots(&mut conn, id).await?;
+    // Read before the move into the template, and off `generations.slots` rather than the rows
+    // above: that column is what `room::create` reads to make the same recommendation.
+    let primary_port_default = puna_core::model::room::PrimaryPort::for_slots(generation.slots);
 
     Ok(ShowTemplate {
         base: TplContext::new(session.session()),
         generation,
         slots,
         deduplicated: dedup.unwrap_or(false),
+        primary_port_default,
         default_room_name: format!(
             "{}'s multiworld {}",
             session.session().username.as_deref().unwrap_or("a"),
@@ -681,6 +691,7 @@ mod tests {
             generation: a_generation(),
             slots: Vec::new(),
             deduplicated: false,
+            primary_port_default: puna_core::model::room::PrimaryPort::Full,
             default_room_name: "troy's multiworld 2026-08-29".into(),
         }
         .render()
@@ -735,14 +746,56 @@ mod tests {
         for value in ["open", "claimed"] {
             assert!(puna_core::model::room::PatchPolicy::parse(value).is_some());
         }
+        for value in ["full", "filtered"] {
+            assert!(puna_core::model::room::PrimaryPort::parse(value).is_some());
+        }
+
+        // **The primary port is preselected from the seed's size**, which is the one default here
+        // computed rather than fixed — so it is asserted against the same function `room::create`
+        // calls rather than against a literal. A form recommending one port while creation stored
+        // the other would be invisible until somebody compared the page with the room.
+        for slots in [1, 199, 200, 2000] {
+            let expected = puna_core::model::room::PrimaryPort::for_slots(slots);
+            let rendered = ShowTemplate {
+                base: crate::tpl::TplContext::new(&crate::auth::Session::default()),
+                generation: generation::Generation {
+                    slots,
+                    ..a_generation()
+                },
+                slots: Vec::new(),
+                deduplicated: false,
+                primary_port_default: puna_core::model::room::PrimaryPort::for_slots(slots),
+                default_room_name: "n".into(),
+            }
+            .render()
+            .expect("renders");
+            assert!(
+                rendered.contains(&format!(
+                    r#"name="primary_port" value="{}" checked"#,
+                    expected.as_sql()
+                )),
+                "a {slots}-slot seed does not preselect {}",
+                expected.as_sql()
+            );
+        }
+        // The threshold itself, stated here so moving it is a deliberate edit in two places rather
+        // than a silent change to what every large sync tells its players to connect to.
+        assert_eq!(
+            puna_core::model::room::PrimaryPort::for_slots(199),
+            puna_core::model::room::PrimaryPort::Full
+        );
+        assert_eq!(
+            puna_core::model::room::PrimaryPort::for_slots(200),
+            puna_core::model::room::PrimaryPort::Filtered
+        );
 
         // **A hint per option, not per group.** They are server-rendered and revealed one at a
         // time, so a page with no scripting shows all of them — verbose and correct — where
         // building the text in script would leave an unscripted reader with unlabelled radios.
         let hints = html.matches("data-for=").count();
         assert_eq!(
-            hints, 11,
-            "expected one hint for each of the 11 explained options, found {hints}"
+            hints, 13,
+            "expected one hint for each of the 13 explained options, found {hints}"
         );
 
         // Unchecked, and it says what it is for: this is pahoa's in-game `!admin login` and not
@@ -760,6 +813,16 @@ mod tests {
         assert!(
             html.contains(r#"type="reset""#),
             "no way back to the defaults"
+        );
+
+        // **The creation form does not ask about the spoiler, deliberately.** It is the one thing
+        // on a room whose disclosure cannot be taken back, so a new room starts at the tightest
+        // setting anybody can still reach and widening it is a deliberate visit to the options
+        // page — not a radio somebody passes on the way to making a room.
+        assert!(
+            !html.contains("spoiler_policy"),
+            "the creation form offers a spoiler setting, which is a decision to make on purpose \
+             rather than in passing"
         );
     }
 

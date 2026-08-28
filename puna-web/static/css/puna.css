@@ -1555,7 +1555,18 @@ h1 .scope {
 /* Every hint is rendered and all of them show until the script says otherwise, so a page with no
  * scripting explains all the options rather than none. */
 .create-room .hint { margin: 0.15rem 0 0; }
-.js-create-room .create-room .hint[data-for][hidden] { display: none; }
+.js-options-form .create-room .hint[data-for][hidden] { display: none; }
+
+/* "Unsaved changes", beside the button rather than at the top of the form.
+ *
+ * It appears when a control differs from what the server sent and goes away when it is set back,
+ * so it is a statement about the button next to it. Warning colors, not error: nothing is wrong,
+ * there is just something the room does not know about yet. */
+.create-room .unsaved {
+  color: var(--warn-fg);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
 
 .create-room .actions {
   display: flex;

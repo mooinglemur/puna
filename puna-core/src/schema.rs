@@ -18,6 +18,10 @@ pub mod sql_types {
     pub struct PatchPolicy;
 
     #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
+    #[diesel(postgres_type(name = "primary_port"))]
+    pub struct PrimaryPort;
+
+    #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "puna_environment"))]
     pub struct PunaEnvironment;
 
@@ -270,6 +274,7 @@ diesel::table! {
     use super::sql_types::RoomState;
     use super::sql_types::JournalPolicy;
     use super::sql_types::PatchPolicy;
+    use super::sql_types::PrimaryPort;
 
     rooms (id) {
         id -> Uuid,
@@ -329,6 +334,7 @@ diesel::table! {
         journal_id -> Uuid,
         journal_policy -> JournalPolicy,
         patch_policy -> PatchPolicy,
+        primary_port -> PrimaryPort,
     }
 }
 

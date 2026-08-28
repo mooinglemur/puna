@@ -564,6 +564,8 @@ struct CreateRoomForm {
     name: String,
     slot_auth: String,
     patch_policy: String,
+    /// Which of the room's two ports its page leads with.
+    primary_port: String,
     /// `full` / `feed` / `disabled`, spelled on the form as open / feed-only / closed.
     journal_policy: String,
     /// `link` / `members` / `disabled`, spelled on the form as open / participant / closed.
@@ -616,6 +618,8 @@ async fn create(
             anyhow::anyhow!("unknown tracker policy"),
         )
     })?;
+    let primary_port = room::PrimaryPort::parse(&form.primary_port)
+        .ok_or_else(|| Error::new(Status::BadRequest, anyhow::anyhow!("unknown primary port")))?;
 
     let mut conn = pool.get().await?;
 
@@ -626,6 +630,7 @@ async fn create(
     let mut new = room::NewRoom::direct(**environment, name, generation_id, gate.user_id());
     new.slot_auth = slot_auth;
     new.patch_policy = Some(patch_policy);
+    new.primary_port = Some(primary_port);
     new.journal_policy = Some(journal_policy);
     new.tracker_policy = Some(tracker_policy);
     // **Generated here, never typed.** The checkbox says whether the room has one at all; a field
@@ -1601,55 +1606,168 @@ impl RedeemTemplate {
 
 // ---- settings --------------------------------------------------------------
 
-#[derive(FromForm)]
-struct SlotAuthForm {
-    mode: String,
+/// The room's options, as a page rather than a strip of controls in the roster.
+///
+/// **Two forms, split on whether pressing the button disconnects anybody.** That is the only
+/// division a reader cares about here, and it is not visible from the options themselves — a
+/// password mode and a feed policy both look like settings, and one of them takes the room down for
+/// about a minute. Grouping them by that consequence is what lets each form's button carry an
+/// honest promise instead of a per-control warning nobody reads twice.
+///
+/// **Deliberately not shared with the creation form**, though the markup is nearly the same. The
+/// wording is not: creating a room describes what it *will* do, and changing one describes what it
+/// will do *to a room people may be connected to right now* — "switching away discards every slot
+/// password" is a footnote on a form for a room with no players and a warning on this one. A
+/// shared partial would have forced one voice on both.
+#[derive(askama::Template, askama_web::WebTemplate)]
+#[template(path = "rooms/options.html")]
+pub struct OptionsTemplate {
+    base: TplContext,
+    room: Room,
+    /// Whether a remote-admin password exists. **Never the value** — see
+    /// [`room::has_server_password`].
+    has_server_password: bool,
+    /// Whether a change to the restart form would actually bounce the room now, or wait for
+    /// somebody to start it. The same question the password rotation asks, and the same function.
+    restart_would_land: bool,
 }
 
 #[derive(FromForm)]
-struct JournalPolicyForm {
-    policy: String,
+struct LiveOptionsForm {
+    tracker_policy: String,
+    journal_policy: String,
+    patch_policy: String,
+    primary_port: String,
+    spoiler_policy: String,
 }
 
-/// Change how much of the room's history a non-organizer may read.
-///
-/// **The one control in this section that is not a restart**, and the form says so in as many
-/// words. Everything beside it changes something pahoa reads once at startup; this changes a gate
-/// that lives entirely in the web tier, over a file Puna mounts read-only and never sends to a
-/// room. It applies to the next frame on a socket that is already open, because the filter runs
-/// per batch rather than at connect.
-///
-/// Organizer rather than helper, on M20's line: this is who is trusted with the room's
-/// conversation, which is the same class of decision as who is staff.
-#[post("/room/<id>/settings/journal", data = "<form>")]
-async fn set_journal_policy(
+#[derive(FromForm)]
+struct RestartOptionsForm {
+    slot_auth: String,
+    /// Absent when unticked, as every checkbox is.
+    server_password: Option<String>,
+}
+
+/// The options page.
+#[get("/room/<id>/options")]
+async fn options_page(
     id: RoomParam,
     access: RoomAccess<Organizer>,
-    form: Form<JournalPolicyForm>,
+    pool: &State<Pool>,
+) -> Result<OptionsTemplate> {
+    let mut conn = pool.get().await?;
+    let has_server_password = room::has_server_password(&mut conn, id.0).await?;
+    Ok(OptionsTemplate {
+        base: TplContext::new(access.session.session()),
+        restart_would_land: a_restart_would_land(&access.room.state),
+        room: access.room.clone(),
+        has_server_password,
+    })
+}
+
+/// Everything that takes effect on the next request.
+///
+/// **Nothing here touches the room**, which is what the form promises above the button: these are
+/// gates and rendering decisions in the web tier, so an organizer changing four of them at once
+/// disconnects nobody and needs no confirmation.
+#[post("/room/<id>/options/live", data = "<form>")]
+async fn set_live_options(
+    id: RoomParam,
+    access: RoomAccess<Organizer>,
+    form: Form<LiveOptionsForm>,
     pool: &State<Pool>,
 ) -> Result<Flash<Redirect>> {
-    let policy = room::JournalPolicy::parse(&form.policy)
-        .ok_or_else(|| Error::new(Status::BadRequest, anyhow::anyhow!("unknown policy")))?;
+    let bad = |what: &'static str| Error::new(Status::BadRequest, anyhow::anyhow!(what));
+    let options = room::LiveOptions {
+        tracker_policy: room::TrackerPolicy::parse(&form.tracker_policy)
+            .ok_or_else(|| bad("unknown tracker policy"))?,
+        journal_policy: room::JournalPolicy::parse(&form.journal_policy)
+            .ok_or_else(|| bad("unknown feed policy"))?,
+        patch_policy: room::PatchPolicy::parse(&form.patch_policy)
+            .ok_or_else(|| bad("unknown patch policy"))?,
+        primary_port: room::PrimaryPort::parse(&form.primary_port)
+            .ok_or_else(|| bad("unknown primary port"))?,
+        spoiler_policy: room::SpoilerPolicy::parse(&form.spoiler_policy)
+            .ok_or_else(|| bad("unknown spoiler policy"))?,
+    };
 
     let mut conn = pool.get().await?;
-    room::set_journal_policy(&mut conn, id.0, policy).await?;
+    room::set_live_options(&mut conn, id.0, options).await?;
 
     tracing::info!(
         room = %id,
         by = access.user_id(),
-        policy = policy.as_sql(),
-        "journal_policy changed"
+        tracker = options.tracker_policy.as_sql(),
+        feed = options.journal_policy.as_sql(),
+        patches = options.patch_policy.as_sql(),
+        port = options.primary_port.as_sql(),
+        spoiler = options.spoiler_policy.as_sql(),
+        "live room options changed"
     );
     Ok(Flash::success(
-        Redirect::to(format!("/room/{id}")),
-        match policy {
-            room::JournalPolicy::Disabled => "The feed is now visible to staff only.",
-            room::JournalPolicy::Feed => {
-                "The feed now shows item movements only. Chat and hints are withheld from it."
-            }
-            room::JournalPolicy::Full => {
-                "The feed now shows the whole history, and anyone who can open it can download it."
-            }
+        Redirect::to(format!("/room/{id}/options")),
+        "Saved. These took effect immediately — nobody was disconnected.",
+    ))
+}
+
+/// Everything the room reads once, at startup.
+///
+/// **The mode is written only when it actually changes**, and that is not an optimization.
+/// `set_slot_auth` regenerates every slot password on its way into `per_slot`, so re-submitting the
+/// mode a room is already in would rotate the lot — invalidating a password every player is holding,
+/// on a form somebody pressed to change something else entirely.
+#[post("/room/<id>/options/restart", data = "<form>")]
+async fn set_restart_options(
+    id: RoomParam,
+    access: RoomAccess<Organizer>,
+    form: Form<RestartOptionsForm>,
+    pool: &State<Pool>,
+) -> Result<Flash<Redirect>> {
+    let mode = SlotAuth::parse(&form.slot_auth)
+        .ok_or_else(|| Error::new(Status::BadRequest, anyhow::anyhow!("unknown mode")))?;
+
+    let mut conn = pool.get().await?;
+    let mode_changed = mode != access.room.slot_auth;
+    if mode_changed {
+        room::set_slot_auth(&mut conn, id.0, mode).await?;
+    }
+
+    // Same rule for the remote-admin password: a ticked box on a room that already has one leaves
+    // it alone rather than rotating a credential nobody asked to change.
+    let had = room::has_server_password(&mut conn, id.0).await?;
+    let wants = form.server_password.is_some();
+    let password_changed = had != wants;
+    if password_changed {
+        let value = wants.then(puna_core::secret::room_password);
+        room::set_server_password(&mut conn, id.0, value.as_deref()).await?;
+    }
+
+    if !mode_changed && !password_changed {
+        return Ok(Flash::success(
+            Redirect::to(format!("/room/{id}/options")),
+            "Nothing to change — the room already has these settings, so it was left alone.",
+        ));
+    }
+
+    // The Secret is what the room reads these from, so it has to be re-rendered whether or not the
+    // room is up; the redeploy is what makes a running room pick them up.
+    room::mark_secret_stale(&mut conn, id.0).await?;
+    puna_core::model::fleet::request_redeploy(&mut conn, &[id.0]).await?;
+
+    tracing::info!(
+        room = %id,
+        by = access.user_id(),
+        mode = mode.as_sql(),
+        mode_changed,
+        password_changed,
+        "room options changed; a restart is queued"
+    );
+    Ok(Flash::success(
+        Redirect::to(format!("/room/{id}/options")),
+        if a_restart_would_land(&access.room.state) {
+            "Saved. The room is restarting now, which takes about a minute."
+        } else {
+            "Saved. The room will use these the next time it starts."
         },
     ))
 }
@@ -1665,31 +1783,6 @@ async fn set_journal_policy(
 /// per-slot passwords went on accepting unauthenticated connections until something else happened
 /// to restart it. The person making that change is usually reacting to something, which is exactly
 /// when "it will apply eventually" is the wrong answer.
-#[post("/room/<id>/settings/slot-auth", data = "<form>")]
-async fn set_slot_auth(
-    id: RoomParam,
-    access: RoomAccess<Organizer>,
-    form: Form<SlotAuthForm>,
-    pool: &State<Pool>,
-) -> Result<Redirect> {
-    let mode = SlotAuth::parse(&form.mode)
-        .ok_or_else(|| Error::new(Status::BadRequest, anyhow::anyhow!("unknown mode")))?;
-
-    let mut conn = pool.get().await?;
-    room::set_slot_auth(&mut conn, id.0, mode).await?;
-    // The same signal the admin console's restart button uses. One mechanism, because a room that
-    // needs a bounce should not care which half of Puna asked for it.
-    puna_core::model::fleet::request_redeploy(&mut conn, &[id.0]).await?;
-
-    tracing::info!(
-        room = %id,
-        by = access.user_id(),
-        mode = mode.as_sql(),
-        "slot_auth changed; a restart is queued so it takes effect now rather than eventually"
-    );
-    Ok(Redirect::to(format!("/room/{id}")))
-}
-
 /// Would a redeploy request actually restart this room, or sit waiting for somebody to start it?
 ///
 /// **`is_live`, not `state == "running"`**, because that is the set the *planner* sees: its redeploy
@@ -1837,8 +1930,9 @@ pub fn routes() -> Vec<rocket::Route> {
         release_slot,
         rotate_slot_password,
         slot_password,
-        set_slot_auth,
-        set_journal_policy,
+        options_page,
+        set_live_options,
+        set_restart_options,
         rotate_room_password,
         rename_room,
     ]
@@ -2318,12 +2412,13 @@ pub(crate) mod tests {
             desired_state: "running".into(),
             slot_auth: puna_core::model::room::SlotAuth::None,
             password: None,
-            spoiler_policy: puna_core::model::room::SpoilerPolicy::AdminOnly,
+            spoiler_policy: puna_core::model::room::SpoilerPolicy::Staff,
             tracker_id: puna_core::ids::TrackerId::new(),
             journal_id: puna_core::ids::JournalId::new(),
             tracker_policy: puna_core::model::room::TrackerPolicy::Link,
             journal_policy: puna_core::model::room::JournalPolicy::Full,
             patch_policy: puna_core::model::room::PatchPolicy::Claimed,
+            primary_port: puna_core::model::room::PrimaryPort::Full,
             wants_filtered: true,
             state: "running".into(),
             // A room that has been up for a while, which is the situation the elapsed-time bug
@@ -2508,7 +2603,10 @@ pub(crate) mod tests {
         for (fragment, what) in [
             ("/stop", "stopping the room"),
             ("/close", "closing the room"),
-            ("/settings/slot-auth", "changing the password mode"),
+            // The password mode and the feed policy moved onto their own page, so what this room
+            // page offers is the link — which is still an organizer's, and is the thing a helper
+            // must not be pointed at.
+            ("/options", "reaching the room's options"),
             ("/settings/name", "renaming the room"),
         ] {
             assert!(!html.contains(fragment), "a helper was offered {what}");
@@ -2518,7 +2616,7 @@ pub(crate) mod tests {
         let mut organizer = page_as(true, true);
         organizer.room.slot_auth = SlotAuth::PerSlot;
         let html = organizer.render().expect("renders");
-        for fragment in ["/stop", "/close", "/settings/slot-auth", "/settings/name"] {
+        for fragment in ["/stop", "/close", "/options", "/settings/name"] {
             assert!(html.contains(fragment), "an organizer lost {fragment}");
         }
     }
@@ -2731,6 +2829,189 @@ pub(crate) mod tests {
             needs_password: false,
             is_organizer: false,
         }
+    }
+
+    /// **The options page is split on one question: does saving disconnect anybody?**
+    ///
+    /// That division is invisible from the options themselves — a password mode and a feed policy
+    /// both look like settings, and one of them takes the room down for about a minute. If a
+    /// control ended up in the wrong form, its button would carry a promise that is simply false,
+    /// and the page would still render perfectly.
+    ///
+    /// So this asserts which form each control is in, by splitting the page on the second `<form>`
+    /// rather than by counting occurrences.
+    #[test]
+    fn each_option_sits_in_the_form_whose_promise_is_true_of_it() {
+        use askama::Template;
+
+        let render = |restart_would_land| {
+            OptionsTemplate {
+                base: crate::tpl::TplContext::new(&Session::default()),
+                room: a_room(),
+                has_server_password: false,
+                restart_would_land,
+            }
+            .render()
+            .expect("renders")
+        };
+
+        let html = render(true);
+        let (live, restarting) = html
+            .split_once("/options/restart")
+            .expect("a restart form follows the live one");
+
+        // Everything the web tier decides per request, where saving costs nothing.
+        for name in [
+            "tracker_policy",
+            "journal_policy",
+            "patch_policy",
+            "primary_port",
+            // Live like the rest despite guarding the least recoverable thing here: the policy is
+            // asked per request, so widening it discloses the file the moment it is saved.
+            "spoiler_policy",
+        ] {
+            assert!(
+                live.contains(&format!(r#"name="{name}""#)),
+                "`{name}` is not in the form that promises nobody is disconnected"
+            );
+            assert!(
+                !restarting.contains(&format!(r#"name="{name}""#)),
+                "`{name}` is also in the restart form, so saving it would bounce the room for a \
+                 change that takes effect on the next page load"
+            );
+        }
+
+        // And everything the room reads once, at startup.
+        for name in ["slot_auth", "server_password"] {
+            assert!(
+                restarting.contains(&format!(r#"name="{name}""#)),
+                "`{name}` is not in the restart form, so its form promises nobody is disconnected \
+                 while the room reads it at startup"
+            );
+        }
+
+        // The live form's promise, in words, since that is what makes the split worth having.
+        assert!(live.contains("Nobody is disconnected"));
+
+        // **All four spoiler settings, `never` included.** It is the only one that withholds the
+        // file from the organizer as well, so it cannot be reached by picking the "tightest" of a
+        // three-way control — and it is the setting a race wants.
+        for value in ["never", "staff", "players", "public"] {
+            assert!(
+                live.contains(&format!(r#"name="spoiler_policy" value="{value}""#)),
+                "the spoiler policy does not offer `{value}`"
+            );
+            assert!(puna_core::model::room::SpoilerPolicy::parse(value).is_some());
+        }
+
+        // **What the restart costs depends on whether the room is up**, and saying "it restarts
+        // now" about a stopped room would have somebody waiting for something that is not going to
+        // happen.
+        assert!(html.contains("saving here restarts it now"));
+        assert!(
+            render(false).contains("nothing happens until somebody starts it"),
+            "a stopped room is told its restart lands immediately"
+        );
+    }
+
+    /// The warning that belongs to a transition rather than to a value.
+    ///
+    /// Leaving per-slot mode destroys every slot password irrecoverably, and the person who needs
+    /// to be told is whoever is *in* that mode — not whoever happens to hover the option. So it is
+    /// rendered on the room's current state, and a room that is not in per-slot mode has nothing to
+    /// lose and is not warned about it.
+    #[test]
+    fn leaving_per_slot_mode_is_warned_about_where_it_can_happen() {
+        use askama::Template;
+
+        // Collapsed, because the markup wraps and a browser renders it as one sentence — an
+        // assertion that broke on a line break would be about the source rather than about what
+        // anybody reads.
+        let render = |mode| {
+            let mut room = a_room();
+            room.slot_auth = mode;
+            let html = OptionsTemplate {
+                base: crate::tpl::TplContext::new(&Session::default()),
+                room,
+                has_server_password: false,
+                restart_would_land: true,
+            }
+            .render()
+            .expect("renders");
+            html.split_whitespace().collect::<Vec<_>>().join(" ")
+        };
+
+        assert!(
+            render(SlotAuth::PerSlot).contains("discards every one of them permanently"),
+            "a per-slot room is not warned that switching away destroys its passwords"
+        );
+        assert!(!render(SlotAuth::None).contains("discards every one of them permanently"));
+        assert!(!render(SlotAuth::Room).contains("discards every one of them permanently"));
+    }
+
+    /// **One address leads, the other is behind a click, and each says which it is.**
+    ///
+    /// The two ports fail asymmetrically: the full one drops a client that cannot keep up and says
+    /// so, while the filtered one works perfectly and simply never shows anybody else's finds — so
+    /// a player on the wrong one concludes the multiworld is dead. That is why a room shows one
+    /// address rather than two, and why the leading one is never unlabeled.
+    ///
+    /// **Both orders are asserted, because the swap is the whole feature.** A 500-slot sync leading
+    /// with the full port is the failure this exists to stop; a small room leading with the
+    /// filtered port would be the same failure pointed the other way.
+    #[test]
+    fn the_room_leads_with_the_port_it_was_configured_to_lead_with() {
+        use askama::Template;
+        use puna_core::model::room::PrimaryPort;
+
+        let render = |primary| {
+            let mut panel = a_panel();
+            panel.room.state = "running".into();
+            panel.room.primary_port = primary;
+            panel.room.advertised_port = Some(40000);
+            panel.room.advertised_filtered_port = Some(40001);
+            panel.render().expect("renders")
+        };
+
+        // The address that leads is the one OUTSIDE the collapsed section, so the halves are read
+        // either side of it rather than by counting occurrences.
+        let leading = |html: &str| {
+            html.split("<details")
+                .next()
+                .expect("a first half")
+                .to_string()
+        };
+
+        let full = render(PrimaryPort::Full);
+        assert!(
+            leading(&full).contains("40000"),
+            "full-first leads with 40001"
+        );
+        assert!(
+            full.contains("40001"),
+            "the second address vanished entirely"
+        );
+        // Named for the symptom, because somebody whose client is stuttering does not think in
+        // terms of item feeds.
+        assert!(full.contains("lagging or dropping out"));
+
+        let filtered = render(PrimaryPort::Filtered);
+        assert!(
+            leading(&filtered).contains("40001"),
+            "a room configured to lead with the filtered port led with the full one, which is the \
+             failure the setting exists to prevent"
+        );
+        assert!(
+            filtered.contains("40000"),
+            "the full feed is unreachable, so a text client has nowhere to connect"
+        );
+        // And the leading address says what it is, rather than leaving somebody to notice that
+        // nobody else's items ever appear.
+        assert!(
+            leading(&filtered).contains("leaves out item traffic"),
+            "the filtered address leads without saying it is filtered"
+        );
+        assert!(filtered.contains("Want to see every item found?"));
     }
 
     /// **The poller's contract with the template, which nothing else checks.**

@@ -67,8 +67,13 @@ impl SlotAuth {
 /// Who may read a room's spoiler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpoilerPolicy {
+    /// Nobody at all, an organizer included. The route answers `404`, so a room withholding a
+    /// spoiler is indistinguishable from a seed that never had one.
     Never,
-    AdminOnly,
+    /// **This room's staff** — any roster role, plus a site admin, which is what
+    /// [`may_see_spoiler`] has always resolved it to.
+    Staff,
+    /// Staff, and anyone holding a slot in the room.
     Players,
     Public,
 }
@@ -77,16 +82,27 @@ impl SpoilerPolicy {
     pub fn as_sql(self) -> &'static str {
         match self {
             Self::Never => "never",
-            Self::AdminOnly => "admin_only",
+            Self::Staff => "staff",
             Self::Players => "players",
             Self::Public => "public",
         }
     }
 
+    /// **`admin_only` is still accepted, and nothing emits it.**
+    ///
+    /// It was this value's name until the migration that renamed it, and "admin" said the wrong
+    /// thing twice: the value admits any roster role — a helper included — and it is a fact about
+    /// one room's staff rather than about the site.
+    ///
+    /// The alias covers the window a rollout opens. Migrations run from the orchestrator while web
+    /// pods are already serving, so for a few seconds a process and the database can disagree about
+    /// which spelling exists. Without it an unrecognized value falls to `Never`, which fails closed
+    /// — the right direction, and still a room that briefly hides its spoiler from its own staff
+    /// for no reason anybody could see. One line is cheaper than that.
     pub fn parse(raw: &str) -> Option<Self> {
         match raw {
             "never" => Some(Self::Never),
-            "admin_only" => Some(Self::AdminOnly),
+            "staff" | "admin_only" => Some(Self::Staff),
             "players" => Some(Self::Players),
             "public" => Some(Self::Public),
             _ => None,
@@ -107,7 +123,7 @@ pub fn may_see_spoiler(policy: SpoilerPolicy, is_staff: bool, owns_a_slot: bool)
         // Not "hidden": absent. A race's spoiler is not served to anyone, including an admin, and
         // the route answers 404 rather than 403 so the refusal discloses nothing either.
         SpoilerPolicy::Never => false,
-        SpoilerPolicy::AdminOnly => is_staff,
+        SpoilerPolicy::Staff => is_staff,
         SpoilerPolicy::Players => is_staff || owns_a_slot,
         SpoilerPolicy::Public => true,
     }
@@ -189,6 +205,55 @@ impl PatchPolicy {
         match raw {
             "open" => Some(Self::Open),
             "claimed" => Some(Self::Claimed),
+            _ => None,
+        }
+    }
+}
+
+/// Which of a room's two ports its page leads with.
+///
+/// **The two ports are one room, and choosing wrongly fails asymmetrically.** On the full port a
+/// client that cannot keep up is dropped and told so — loud, and it points at itself. On the
+/// filtered port everything works: the game plays, your own items arrive, and you simply never see
+/// anybody else's finds and conclude the multiworld is dead. That failure is silent and gives its
+/// victim no reason to suspect the address they pasted.
+///
+/// So a room shows one address and puts the other behind a click, with wording of its own on each
+/// side — never the same position holding different values, which is what makes this a per-room
+/// decision an organizer makes once rather than a control a viewer toggles.
+///
+/// The threshold is 200 slots, where a game client starts drowning in other players' item traffic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrimaryPort {
+    Full,
+    Filtered,
+}
+
+impl PrimaryPort {
+    /// What a seed of this size should lead with.
+    ///
+    /// Its own function because the creation form preselects it and the room is stored with it, and
+    /// a form that recommended one thing while the room did another would be worse than either.
+    pub fn for_slots(slots: i32) -> Self {
+        const FILTERED_FROM: i32 = 200;
+        if slots >= FILTERED_FROM {
+            Self::Filtered
+        } else {
+            Self::Full
+        }
+    }
+
+    pub fn as_sql(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Filtered => "filtered",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "full" => Some(Self::Full),
+            "filtered" => Some(Self::Filtered),
             _ => None,
         }
     }
@@ -395,13 +460,24 @@ pub struct NewRoom {
     pub source: RoomSource,
     pub created_by: i64,
     pub slot_auth: SlotAuth,
-    /// `None` defaults from the generation's `race_mode`: `never` for a race, `admin_only`
-    /// otherwise. Races are the case where a leaked spoiler is not recoverable.
+    /// `None` is **always [`SpoilerPolicy::Staff`]**, regardless of the seed.
+    ///
+    /// The creation form deliberately does not ask. A spoiler is the one thing on a room whose
+    /// disclosure cannot be taken back, and it is not a decision worth making on the way past on a
+    /// page somebody sees once — so a new room starts at the tightest setting that anybody can
+    /// still reach, and widening it is a deliberate visit to the room's options.
+    ///
+    /// **This no longer branches on `race_mode`, which used to yield `never` for a race.** `never`
+    /// means nobody at all, an organizer included, and that is a defensible choice an organizer can
+    /// still make — but it is a poor thing to be given silently, because the person it locks out is
+    /// the one who would need the file to settle a dispute.
     pub spoiler_policy: Option<SpoilerPolicy>,
     /// `None` defaults from `race_mode` too: `members` for a race, `link` otherwise.
     pub tracker_policy: Option<TrackerPolicy>,
     /// `None` keeps the column default, `open`. The creation form sends `claimed`.
     pub patch_policy: Option<PatchPolicy>,
+    /// `None` derives it from the generation's slot count via [`PrimaryPort::for_slots`].
+    pub primary_port: Option<PrimaryPort>,
     /// A remote-admin password for pahoa's `!admin login`. `None` sets none, which is the
     /// ordinary case: Puna's console drives a room over the bearer-token admin API instead.
     pub server_password: Option<String>,
@@ -442,6 +518,7 @@ impl NewRoom {
             tracker_policy: None,
             journal_policy: None,
             patch_policy: None,
+            primary_port: None,
             server_password: None,
             wants_filtered: true,
             use_embedded_options: true,
@@ -479,6 +556,8 @@ pub struct Room {
     pub journal_policy: JournalPolicy,
     /// Whether a served patch carries the credential to connect, or only the address.
     pub patch_policy: PatchPolicy,
+    /// Which port the room page leads with.
+    pub primary_port: PrimaryPort,
     pub wants_filtered: bool,
 
     pub state: String,
@@ -538,6 +617,8 @@ struct RoomRow {
     journal_policy: String,
     #[diesel(sql_type = Text)]
     patch_policy: String,
+    #[diesel(sql_type = Text)]
+    primary_port: String,
     #[diesel(sql_type = Bool)]
     wants_filtered: bool,
     #[diesel(sql_type = Text)]
@@ -591,6 +672,8 @@ impl From<RoomRow> for Room {
             // Unknown reads as `Open`, which embeds no credential -- the restrictive direction
             // here is the one that discloses less, same rule as the policies above.
             patch_policy: PatchPolicy::parse(&row.patch_policy).unwrap_or(PatchPolicy::Open),
+            // Unknown reads as `Full`, the address that fails loudly rather than silently.
+            primary_port: PrimaryPort::parse(&row.primary_port).unwrap_or(PrimaryPort::Full),
             wants_filtered: row.wants_filtered,
             state: row.state,
             state_changed_at: row.state_changed_at,
@@ -609,7 +692,8 @@ const ROOM_COLUMNS: &str = "id, name, environment::text AS environment, generati
                             password, spoiler_policy::text AS spoiler_policy, tracker_id, journal_id, \
                             tracker_policy::text AS tracker_policy, \
                             journal_policy::text AS journal_policy, \
-                            patch_policy::text AS patch_policy, wants_filtered, \
+                            patch_policy::text AS patch_policy, \
+                            primary_port::text AS primary_port, wants_filtered, \
                             state::text AS state, state_changed_at, desired_at, advertised_host, \
                             advertised_port, advertised_filtered_port, last_error";
 
@@ -629,26 +713,31 @@ pub async fn create(
             struct RaceRow {
                 #[diesel(sql_type = Bool)]
                 race_mode: bool,
+                /// **Read from the same row rather than counted from `room_slots`.** The slots are
+                /// copied in later in this transaction, so counting them here would be counting
+                /// rows that do not exist yet.
+                #[diesel(sql_type = Integer)]
+                slots: i32,
             }
 
             // The seed decides the defaults, and a race is the case where a leaked spoiler or an
             // open tracker cannot be taken back.
             let race: Vec<RaceRow> =
-                diesel::sql_query("SELECT race_mode FROM generations WHERE id = $1")
+                diesel::sql_query("SELECT race_mode, slots FROM generations WHERE id = $1")
                     .bind::<SqlUuid, _>(new.generation_id)
                     .load(conn)
                     .await?;
-            let race_mode = race
+            let seed = race
                 .into_iter()
                 .next()
-                .ok_or(diesel::result::Error::NotFound)?
-                .race_mode;
+                .ok_or(diesel::result::Error::NotFound)?;
+            let race_mode = seed.race_mode;
 
-            let spoiler_policy = new.spoiler_policy.unwrap_or(if race_mode {
-                SpoilerPolicy::Never
-            } else {
-                SpoilerPolicy::AdminOnly
-            });
+            // **Staff-only for every room, race or not.** The tightest setting somebody can still
+            // reach: `never` withholds the file from the organizer too, which is a real choice and
+            // a bad default, since the person it locks out is the one who would need it to settle
+            // an argument. Widened, or closed further, on the room's options page.
+            let spoiler_policy = new.spoiler_policy.unwrap_or(SpoilerPolicy::Staff);
             let tracker_policy = new.tracker_policy.unwrap_or(if race_mode {
                 TrackerPolicy::Members
             } else {
@@ -664,6 +753,9 @@ pub async fn create(
                 JournalPolicy::Full
             });
             let patch_policy = new.patch_policy.unwrap_or(PatchPolicy::Open);
+            let primary_port = new
+                .primary_port
+                .unwrap_or_else(|| PrimaryPort::for_slots(seed.slots));
 
             // **A new room is created RUNNING, and the `desired_state` column's `stopped` default
             // is deliberately not what creation uses.**
@@ -699,11 +791,11 @@ pub async fn create(
                      idempotency_key, cloned_from, created_by, spoiler_policy, tracker_id,
                      tracker_policy, journal_policy, patch_policy, slot_auth, password,
                      server_password, wants_filtered, use_embedded_options, save_interval_secs,
-                     admin_token, desired_state)
+                     admin_token, primary_port, desired_state)
                  VALUES ($1, $2::puna_environment, $3, $4, $5::room_source, $6, $7, $8, $9, $10,
                          $11::spoiler_policy, $12, $13::tracker_policy, $14::journal_policy,
                          $15::patch_policy, $16::slot_auth_mode, $17, $18, $19, $20, $21, $22,
-                         'running')",
+                         $23::primary_port, 'running')",
             )
             .bind::<SqlUuid, _>(id)
             .bind::<Text, _>(new.environment.as_str())
@@ -727,6 +819,7 @@ pub async fn create(
             .bind::<Bool, _>(new.use_embedded_options)
             .bind::<Integer, _>(new.save_interval_secs)
             .bind::<Text, _>(crate::secret::admin_token())
+            .bind::<Text, _>(primary_port.as_sql())
             .execute(conn)
             .await?;
 
@@ -805,6 +898,31 @@ pub struct RoomSecrets {
     /// Pahoa's remote-admin gate. Rarely set: Puna's console drives the bearer-token API rather
     /// than in-game `!admin`, so a Puna room normally has no remote-admin path at all.
     pub server_password: Option<String>,
+}
+
+/// Whether the room has a remote-admin password, without reading it.
+///
+/// **The options page needs the checkbox's state and has no business holding the value.**
+/// [`secrets`] exists to make reaching a credential a separate, greppable call, and answering
+/// "is one set" by fetching one and testing it for `Some` would walk straight past that — the
+/// value would then be in the rendering context of a page, which is the shape
+/// `no_template_renders_a_credential_off_the_room` forbids.
+pub async fn has_server_password(
+    conn: &mut AsyncPgConnection,
+    id: RoomId,
+) -> Result<bool, diesel::result::Error> {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = Bool)]
+        present: bool,
+    }
+
+    let rows: Vec<Row> =
+        diesel::sql_query("SELECT server_password IS NOT NULL AS present FROM rooms WHERE id = $1")
+            .bind::<SqlUuid, _>(id)
+            .load(conn)
+            .await?;
+    Ok(rows.into_iter().next().is_some_and(|row| row.present))
 }
 
 /// Read a room's credentials. Orchestrator-facing; nothing in a page needs these.
@@ -1137,6 +1255,78 @@ pub async fn set_slot_auth(
     .await
 }
 
+/// The room options that take effect on the next request.
+///
+/// **Grouped because they share a consequence, not because they are alike.** Every one of these is
+/// a gate or a rendering decision that lives entirely in the web tier: nothing here reaches the
+/// room, moves `spec_hash`, or queues a redeploy, so the options page can put them under one button
+/// and promise that pressing it disconnects nobody. That promise is the whole reason the page has
+/// two forms — see [`set_slot_auth`] for the other kind.
+#[derive(Debug, Clone, Copy)]
+pub struct LiveOptions {
+    pub tracker_policy: TrackerPolicy,
+    pub journal_policy: JournalPolicy,
+    pub patch_policy: PatchPolicy,
+    pub primary_port: PrimaryPort,
+    /// **Live like the rest, even though it guards the least recoverable thing here.**
+    /// `may_see_spoiler` is asked per request, so widening this discloses the file to its new
+    /// audience the moment it is saved — which is exactly why the creation form does not offer it
+    /// and this page states the consequence next to each option.
+    pub spoiler_policy: SpoilerPolicy,
+}
+
+/// Apply every live option at once.
+///
+/// One statement rather than four, so a form submission either lands whole or not at all. Four
+/// separate updates would let a connection drop between them and leave a room configured half the
+/// way the organizer asked for, with the page showing the new values and the room behaving on a
+/// mixture.
+pub async fn set_live_options(
+    conn: &mut AsyncPgConnection,
+    id: RoomId,
+    options: LiveOptions,
+) -> Result<(), diesel::result::Error> {
+    diesel::sql_query(
+        "UPDATE rooms
+            SET tracker_policy = $2::tracker_policy,
+                journal_policy = $3::journal_policy,
+                patch_policy   = $4::patch_policy,
+                primary_port   = $5::primary_port,
+                spoiler_policy = $6::spoiler_policy
+          WHERE id = $1",
+    )
+    .bind::<SqlUuid, _>(id)
+    .bind::<Text, _>(options.tracker_policy.as_sql())
+    .bind::<Text, _>(options.journal_policy.as_sql())
+    .bind::<Text, _>(options.patch_policy.as_sql())
+    .bind::<Text, _>(options.primary_port.as_sql())
+    .bind::<Text, _>(options.spoiler_policy.as_sql())
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// Set or clear the room's remote-admin password.
+///
+/// **A restart, like every other credential the room reads from its environment.** pahoa takes
+/// `PAHOA_SERVER_PASSWORD` at startup and persists nothing, which is exactly what makes rotation
+/// trustworthy — so the caller marks the Secret stale and bounces the room.
+///
+/// `None` clears it, which turns `!admin login` off entirely rather than leaving a password nobody
+/// remembers setting.
+pub async fn set_server_password(
+    conn: &mut AsyncPgConnection,
+    id: RoomId,
+    password: Option<&str>,
+) -> Result<(), diesel::result::Error> {
+    diesel::sql_query("UPDATE rooms SET server_password = $2 WHERE id = $1")
+        .bind::<SqlUuid, _>(id)
+        .bind::<Nullable<Text>, _>(password)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
 /// Change how much of the journal a non-organizer may read.
 ///
 /// **Not a restart, and the form says so.** Every other control in that section changes something
@@ -1188,6 +1378,7 @@ pub async fn clone_room(
         tracker_policy: Some(existing.tracker_policy),
         journal_policy: Some(existing.journal_policy),
         patch_policy: Some(existing.patch_policy),
+        primary_port: Some(existing.primary_port),
         server_password: None,
         wants_filtered: existing.wants_filtered,
         use_embedded_options: true,
@@ -1289,7 +1480,7 @@ mod tests {
         }
         for policy in [
             SpoilerPolicy::Never,
-            SpoilerPolicy::AdminOnly,
+            SpoilerPolicy::Staff,
             SpoilerPolicy::Players,
             SpoilerPolicy::Public,
         ] {
@@ -1336,8 +1527,8 @@ mod tests {
         let cases = [
             (Never, false, false, false),
             (Never, true, true, false),
-            (AdminOnly, true, false, true),
-            (AdminOnly, false, true, false),
+            (Staff, true, false, true),
+            (Staff, false, true, false),
             (Players, false, true, true),
             (Players, true, false, true),
             (Players, false, false, false),

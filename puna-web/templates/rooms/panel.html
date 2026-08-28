@@ -73,19 +73,70 @@
 
 {# The address is the thing players came for, so it leads -- and **only one address does.**
 
-   The two ports are one room, and the wrong choice fails ASYMMETRICALLY. Take the standard port
-   when your client cannot keep up and pahoa drops the connection and says so: loud, and it points
-   at itself. Take the filtered port by accident and everything works -- the game plays, your own
-   items arrive -- you simply never see anybody else's finds, and conclude the multiworld is dead.
-   That failure is silent and gives its victim no reason to suspect the address they pasted.
+   The two ports are one room, and the wrong choice fails ASYMMETRICALLY. Take the full port when
+   your client cannot keep up and the room drops the connection and says so: loud, and it points at
+   itself. Take the filtered port by accident and everything works -- the game plays, your own items
+   arrive -- you simply never see anybody else's finds, and conclude the multiworld is dead. That
+   failure is silent and gives its victim no reason to suspect the address they pasted.
 
-   So the filtered one goes behind a deliberate click. Merely de-emphasising it would not do: a
-   muted second URL is still a second URL on screen, and the thing being guarded against is somebody
-   copying the first address they see without reading. A control that SWAPPED which address is shown
-   would be worse than either, because the same position would then hold different values at
-   different times and nothing on screen would say which one you have. #}
+   So one goes behind a deliberate click. Merely de-emphasising it would not do: a muted second URL
+   is still a second URL on screen, and the thing being guarded against is somebody copying the
+   first address they see without reading.
+
+   **WHICH one leads is `room.primary_port`, and this comment used to argue that could never be.**
+   The old objection was that swapping "would put different values in the same position at different
+   times, with nothing on screen saying which one you have" -- and it holds exactly against a
+   control a VIEWER toggles. This is not that. It is chosen once by the organizer, from the seed's
+   slot count, and fixed for the room's life; and each branch below carries its own wording, so the
+   leading address always says what it is. A 500-slot sync whose players are told to use the full
+   port first is the failure this exists to stop, and it is not a rare one. #}
 {% else if room.state == "running" %}
 {% if let Some(host) = room.advertised_host %}
+
+{% if room.primary_port == puna_core::model::room::PrimaryPort::Filtered && room.advertised_filtered_port.is_some() %}
+{# --- the filtered port leads -------------------------------------------------------------------
+   A large sync, where the full feed is what breaks clients. The wording differs from the branch
+   below rather than being reused: here the address on offer is the one that leaves traffic out, so
+   the page says so up front instead of letting somebody discover it by seeing nothing happen. #}
+{% if let Some(filtered) = room.advertised_filtered_port %}
+<div class="scroll-x">
+<table class="address">
+{% call address_head() %}{% endcall %}
+<tbody>
+{% call address_row(host, filtered) %}{% endcall %}
+</tbody>
+</table>
+</div>
+<p class="hint">This room is large enough that the full item feed overwhelms many game clients, so
+this address leaves out item traffic your slot is not part of. You still get your own items, chat
+and announcements &mdash; you just will not see other people&rsquo;s finds go by.</p>
+{% endif %}
+
+{% if let Some(port) = room.advertised_port %}
+{# Named for who WANTS it rather than for a symptom: unlike the case below there is no symptom to
+   name, because nothing is going wrong for the person who opens this. They want to watch the whole
+   multiworld, which is what a text client or a tracker is for. #}
+<details class="alt-address">
+<summary><strong>Want to see every item found?</strong> There is a second address.</summary>
+<p class="hint">Same room, same save, same slot &mdash; this one carries the full item feed, so you
+see the whole multiworld go by. That is what a text client or a tracker wants. <strong>A game client
+in a room this size may not keep up with it</strong> and can be dropped for falling behind, which is
+why it is not the address above.</p>
+<div class="scroll-x">
+<table class="address">
+{% call address_head() %}{% endcall %}
+<tbody>
+{% call address_row(host, port) %}{% endcall %}
+</tbody>
+</table>
+</div>
+</details>
+{% endif %}
+
+{% else %}
+{# --- the full port leads ----------------------------------------------------------------------
+   The ordinary room, and what every Archipelago player expects: one address that shows everything.
+#}
 {% if let Some(port) = room.advertised_port %}
 <div class="scroll-x">
 <table class="address">
@@ -117,6 +168,7 @@ will not see other people&rsquo;s finds go by.</p>
 </table>
 </div>
 </details>
+{% endif %}
 {% endif %}
 {% endif %}
 

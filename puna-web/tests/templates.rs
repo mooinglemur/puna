@@ -585,6 +585,41 @@ fn code_only(source: &str) -> String {
         .join("\n")
 }
 
+/// **Saving the restart form only rewrites the password mode when it actually changed.**
+///
+/// `room::set_slot_auth` regenerates every slot password on its way into `per_slot` — correctly,
+/// since that is what switching modes means. So re-submitting the mode a room is already in rotates
+/// the lot, invalidating a password every player is holding, on a form somebody pressed to change
+/// the remote-admin checkbox beside it.
+///
+/// **Nothing else can catch it.** The route returns success, the page renders the same values, and
+/// the damage surfaces later as players who cannot connect with the password they were given. The
+/// guard is one comparison, and a source lint is the only thing that notices if it goes.
+#[test]
+fn the_password_mode_is_only_rewritten_when_it_changed() {
+    let source = std::fs::read_to_string(source("src/routes/rooms.rs")).expect("rooms.rs");
+    let code = code_only(&source);
+    let route = code
+        .split_once("async fn set_restart_options(")
+        .expect("the restart route")
+        .1;
+    let body = route.split_once("\n}\n").map_or(route, |(b, _)| b);
+
+    assert!(
+        body.contains("mode != access.room.slot_auth"),
+        "the restart form rewrites the password mode without comparing it to the room's, so \
+         pressing Save rotates every slot password whether or not the mode was touched"
+    );
+    let compared = body
+        .find("mode != access.room.slot_auth")
+        .expect("the guard");
+    let applied = body.find("set_slot_auth").expect("the write");
+    assert!(
+        compared < applied,
+        "the mode is written before it is compared, so the comparison guards nothing"
+    );
+}
+
 /// **A link's `source` is shown, and never shown as the identity.**
 ///
 /// The three link records carry two names. `team`/`slot`/`player` come off the authenticated

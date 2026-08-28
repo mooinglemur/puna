@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+{% block title %}Options &mdash; {{+ room.name }}{% endblock %}
+
+{% block content %}
+<h1>Options for {{+ room.name }}</h1>
+<p class="hint"><a href="/room/{{ room.id }}">Back to the room</a></p>
+
+{# **Two forms, split on one question: does pressing this disconnect anybody?**
+
+   That division is invisible from the options themselves — a password mode and a feed policy both
+   look like settings, and one of them takes the room down for about a minute. Grouping by the
+   consequence lets each button carry an honest promise instead of a per-control warning that stops
+   being read after the second one.
+
+   The wording here is NOT the creation form's, though the controls are nearly identical. Creating a
+   room describes what it will do; changing one describes what it will do to a room people may be
+   connected to right now. "Switching away discards every slot password" is a footnote on a form for
+   a room nobody has joined and a warning on this page. #}
+
+<section class="panel create-room">
+<h2>Applies immediately</h2>
+<p class="hint">These are decisions this site makes when it answers a request, so they take effect
+on the next page load &mdash; including for people already looking at one. Nobody is disconnected
+and the room is not restarted.</p>
+
+<form method="post" action="/room/{{ room.id }}/options/live" data-options-form>
+<div class="field" data-hints="tracker_policy">
+<span class="label">Tracker</span>
+<div class="choices">
+<label><input type="radio" name="tracker_policy" value="link"{% if room.tracker_policy == puna_core::model::room::TrackerPolicy::Link +%} checked{% endif %}> Open</label>
+<label><input type="radio" name="tracker_policy" value="members"{% if room.tracker_policy == puna_core::model::room::TrackerPolicy::Members +%} checked{% endif %}> Participant</label>
+<label><input type="radio" name="tracker_policy" value="disabled"{% if room.tracker_policy == puna_core::model::room::TrackerPolicy::Disabled +%} checked{% endif %}> Closed</label>
+<p class="hint" data-for="link">The link is the authorization, just as Archipelago's own tracker
+works. Shareable with an audience who will never sign in.</p>
+<p class="hint" data-for="members">A Discord sign-in and a slot or a staff role in this room are
+required to view the tracker. Links you have already shared will stop working for anyone outside
+the room.</p>
+<p class="hint" data-for="disabled">Nobody but staff can see the tracker. Links you have already
+shared stop working, and the feed goes with it &mdash; it is reachable only where the tracker
+is.</p>
+</div>
+</div>
+
+<div class="field" data-hints="journal_policy">
+<span class="label">Feed</span>
+<div class="choices">
+<label><input type="radio" name="journal_policy" value="full"{% if room.journal_policy == puna_core::model::room::JournalPolicy::Full +%} checked{% endif %}> Open</label>
+<label><input type="radio" name="journal_policy" value="feed"{% if room.journal_policy == puna_core::model::room::JournalPolicy::Feed +%} checked{% endif %}> Items only</label>
+<label><input type="radio" name="journal_policy" value="disabled"{% if room.journal_policy == puna_core::model::room::JournalPolicy::Disabled +%} checked{% endif %}> Closed</label>
+<p class="hint" data-for="full">Anyone who can open the feed reads the whole history &mdash; chat,
+hints, admin actions, joins and parts &mdash; and can download the raw file. <strong>This applies
+to everything already written</strong>, not only to what happens next.</p>
+<p class="hint" data-for="feed">Item movements and Link events only. Organizers always read
+everything.</p>
+<p class="hint" data-for="disabled">The feed is staff-only. Anyone holding a feed link gets the same
+answer as somebody holding a made-up one.</p>
+</div>
+</div>
+
+<div class="field" data-hints="patch_policy">
+<span class="label">Patch downloads</span>
+<div class="choices">
+<label><input type="radio" name="patch_policy" value="open"{% if room.patch_policy == puna_core::model::room::PatchPolicy::Open +%} checked{% endif %}> Open</label>
+<label><input type="radio" name="patch_policy" value="claimed"{% if room.patch_policy == puna_core::model::room::PatchPolicy::Claimed +%} checked{% endif %}> Claimed</label>
+<p class="hint" data-for="open"><em>Anyone with the room URL can download any patch</em>, as
+archipelago.gg does. The patch carries only the room's address, so a player with a password types it
+in themselves. <strong>Patches already downloaded still carry whatever they were built with</strong>
+&mdash; this changes what is served from now on.</p>
+<p class="hint" data-for="claimed"><em>Only the slot's owner and this room's staff can download
+it.</em> The patch carries the address and the slot's credential, so the client it launches connects
+without being told anything.</p>
+</div>
+</div>
+
+<div class="field" data-hints="primary_port">
+<span class="label">Primary room port</span>
+<div class="choices">
+<label><input type="radio" name="primary_port" value="full"{% if room.primary_port == puna_core::model::room::PrimaryPort::Full +%} checked{% endif %}> Full</label>
+<label><input type="radio" name="primary_port" value="filtered"{% if room.primary_port == puna_core::model::room::PrimaryPort::Filtered +%} checked{% endif %}> Filtered</label>
+<p class="hint" data-for="full">The room page leads with the full feed port. The right choice for
+all but the largest syncs. The filtered port stays available behind a collapsed heading.</p>
+<p class="hint" data-for="filtered">The room page leads with the filtered port, which leaves out
+item traffic the connected slot is not a party to. Large syncs usually want this: many games cannot
+cope with the bursts a 500-slot room produces. <strong>Players who already connected on the other
+port stay where they are</strong> until they reconnect &mdash; this changes what the page
+recommends, not any live connection.</p>
+</div>
+</div>
+
+{# **Last in this form, and absent from the creation form entirely.** A spoiler is the one thing on
+   a room whose disclosure cannot be taken back, so a new room starts staff-only and widening it is
+   a deliberate visit here rather than a radio somebody passes on the way to making a room.
+
+   Four settings rather than three because `never` is genuinely different from `admin_only`: it
+   withholds the file from the organizer too, and answers 404 to everybody so the refusal discloses
+   nothing either. That is a real choice for a race, and a bad thing to be handed silently. #}
+<div class="field" data-hints="spoiler_policy">
+<span class="label">Spoiler</span>
+<div class="choices">
+<label><input type="radio" name="spoiler_policy" value="never"{% if room.spoiler_policy == puna_core::model::room::SpoilerPolicy::Never +%} checked{% endif %}> Nobody</label>
+<label><input type="radio" name="spoiler_policy" value="staff"{% if room.spoiler_policy == puna_core::model::room::SpoilerPolicy::Staff +%} checked{% endif %}> Staff</label>
+<label><input type="radio" name="spoiler_policy" value="players"{% if room.spoiler_policy == puna_core::model::room::SpoilerPolicy::Players +%} checked{% endif %}> Participants</label>
+<label><input type="radio" name="spoiler_policy" value="public"{% if room.spoiler_policy == puna_core::model::room::SpoilerPolicy::Public +%} checked{% endif %}> Anyone</label>
+<p class="hint" data-for="never">Nobody at all, <strong>including you</strong>. The room answers as
+though the seed had no spoiler, so nobody can tell the difference between a room withholding one and
+a room that never had one. The safe setting for a race, and the one to remember you chose if you
+later need the file to settle an argument.</p>
+<p class="hint" data-for="admin_only">This room's staff. The default for a new room, and the
+tightest setting that still leaves somebody able to read it.</p>
+<p class="hint" data-for="players">Staff, and anyone holding a slot in this room. Reasonable once
+everybody has finished &mdash; and a decision to make once, since <strong>anyone who reads it cannot
+un-read it</strong>.</p>
+<p class="hint" data-for="public">Everybody, including anyone who was given the room's link.
+<strong>Applies to people already on the page</strong>: the next request they make serves the whole
+spoiler.</p>
+</div>
+</div>
+
+<div class="actions">
+<button type="submit">Save</button>
+<button type="reset" class="secondary">Undo changes</button>
+<span class="unsaved" data-unsaved hidden>Unsaved changes</span>
+</div>
+</form>
+</section>
+
+<section class="panel create-room">
+<h2>Restarts the room</h2>
+{# The cost is stated once, here, rather than under each control -- and it is stated in the terms
+   somebody feels: a minute of downtime and everybody reconnecting, not "the pod is recreated".
+   Which of the two sentences applies depends on whether the room is up, because "it restarts now"
+   is simply false for a stopped room and would make an organizer wait for something that is not
+   going to happen. #}
+<p class="hint">The room reads these once, when it starts, so changing them takes it down and brings
+it back.
+{% if restart_would_land %}
+<strong>The room is up, so saving here restarts it now</strong> &mdash; about a minute, and every
+player reconnects. Nothing is lost: the save is flushed on the way down.
+{% else %}
+<strong>The room is not up</strong>, so nothing happens until somebody starts it. It will come back
+with these settings.
+{% endif %}
+</p>
+
+<form method="post" action="/room/{{ room.id }}/options/restart" data-options-form>
+<div class="field" data-hints="slot_auth">
+<span class="label">Passwords</span>
+<div class="choices">
+<label><input type="radio" name="slot_auth" value="none"{% if room.slot_auth == puna_core::model::room::SlotAuth::None +%} checked{% endif %}> None</label>
+<label><input type="radio" name="slot_auth" value="room"{% if room.slot_auth == puna_core::model::room::SlotAuth::Room +%} checked{% endif %}> Room-wide</label>
+<label><input type="radio" name="slot_auth" value="per_slot"{% if room.slot_auth == puna_core::model::room::SlotAuth::PerSlot +%} checked{% endif %}> Per-slot</label>
+<p class="hint" data-for="none">Anyone holding the address can connect as any slot. Turning
+passwords off opens the room to everybody who has ever been given its address.</p>
+<p class="hint" data-for="room">One password for the whole room, shown to participants and staff on
+the room page. Switching to this generates a new one; the old one, if there was one, stops
+working.</p>
+<p class="hint" data-for="per_slot">Each slot gets its own password, so a player can only connect
+with their own. Switching to this generates one per slot, and every player has to be given
+theirs.</p>
+</div>
+</div>
+
+{# The warning that belongs to a TRANSITION rather than to a value, so it is rendered on the
+   current state rather than under one of the options: leaving per-slot mode destroys passwords
+   that cannot be recovered, and the person who needs to read that is the one who is in per-slot
+   mode right now. #}
+{% if room.slot_auth == puna_core::model::room::SlotAuth::PerSlot %}
+<p class="warning">This room uses per-slot passwords. Switching away <strong>discards every one of
+them permanently</strong> &mdash; they are not recoverable, and switching back generates a fresh set
+that nobody has been given.</p>
+{% endif %}
+
+<div class="field">
+<span class="label">Remote admin</span>
+<div class="choices">
+<label><input type="checkbox" name="server_password" value="1"{% if has_server_password +%} checked{% endif %}> This room has a remote admin password</label>
+<p class="hint">Only for the room server's <code>!admin login</code>. This site's own console drives
+the room over an authenticated API and needs none of it. Ticking this generates a password and shows
+it on the room page; unticking it turns <code>!admin</code> off entirely.</p>
+</div>
+</div>
+
+<div class="actions">
+<button type="submit">Save and restart</button>
+<button type="reset" class="secondary">Undo changes</button>
+<span class="unsaved" data-unsaved hidden>Unsaved changes</span>
+</div>
+</form>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/options-form.js?v={{ base.static_version }}" defer></script>
+{% endblock %}
