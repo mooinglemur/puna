@@ -1,7 +1,14 @@
 {% extends "base.html" %}
 {% block title %}{{ room.name +}} &mdash; feed{% endblock %}
-{# A feed of fixed-width lines, not prose. The same opt-out the tracker and the admin tables take. #}
-{% block layout %}wide{% endblock %}
+{# `wide`: a feed of fixed-width lines, not prose. The same opt-out the tracker and the admin tables
+   take.
+
+   `feed-page`: this one also opts out of being a DOCUMENT. It is a frame onto a stream, so the
+   stylesheet sizes the feed to whatever the window has left rather than to a guess, and the page
+   itself never scrolls. **Losing this class is silent** -- the feed would simply grow with its
+   records until the page did nothing but scroll -- so `tests/templates.rs` holds the two files
+   together. #}
+{% block layout %}wide feed-page{% endblock %}
 {% block content %}
 
 {# **NOTHING here links to the room**, exactly as the tracker page does not. This URL carries the

@@ -878,6 +878,90 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
     );
 }
 
+/// **The feed's height comes from the page, and both halves of that are silent when broken.**
+///
+/// `.journal` deliberately carries no height of its own: `.feed-page` makes the body a column and
+/// hands the feed whatever the window has left, so the frame ends where the window does and the
+/// document around it never scrolls. Two files have to agree for that, and neither failure looks
+/// like a failure:
+///
+/// - **The template loses the class** and `.journal` has no height at all, so it grows with its
+///   records. On a room with a long history that is a page which is nothing but scrollbar — the
+///   exact state this replaced, arrived at from the other direction.
+/// - **The stylesheet loses the rule** and the class is inert markup.
+///
+/// Neither errors, neither logs, and both render a page that looks broadly right until somebody
+/// scrolls. So the two are pinned against each other rather than left to be noticed.
+#[test]
+fn the_feed_page_is_sized_to_the_window() {
+    let markup = std::fs::read_to_string(source("templates/rooms/journal.html")).expect("template");
+    let css = code_only_css(&std::fs::read_to_string(source("static/css/puna.css")).expect("css"));
+
+    // **Anchored on the block itself, not on the file.** The first version of this asked whether
+    // `feed-page` appeared anywhere in the template -- and the comment above the block names the
+    // class in order to explain it, so the lint passed with the class deleted. Fourth time a lint
+    // in this file has matched its own prose, and the second caught by mutating it first.
+    let layout = markup
+        .split("{% block layout %}")
+        .nth(1)
+        .and_then(|rest| rest.split("{% endblock %}").next())
+        .expect("a `layout` block");
+    assert!(
+        layout.contains("feed-page"),
+        "the journal template no longer opts into `feed-page`, so `.journal` has no height and the \
+         feed grows with its records until the page is nothing but scrollbar: {layout:?}"
+    );
+
+    for rule in [".feed-page {", ".feed-page main {", ".feed-page .journal {"] {
+        assert!(
+            css.contains(rule),
+            "puna.css has no `{rule}` rule, so the feed page's class is inert markup"
+        );
+    }
+
+    // **The floor lives on `.journal` and nowhere else.** A fixed height here is what caused the
+    // original defect: 70vh is a guess about how tall the heading, the download line, the status
+    // line and the backfill control happen to be, and the guess was wrong by a scrollbar.
+    let journal = css
+        .split(".journal {")
+        .nth(1)
+        .and_then(|rest| rest.split('}').next())
+        .expect("a `.journal` rule");
+    assert!(
+        !journal.contains("height: min(") && !journal.contains("\n  height:"),
+        "`.journal` sets its own height again. The page supplies it -- a fixed value here is a \
+         guess about what sits above the feed, and everything above it can change: {journal}"
+    );
+
+    // Without this a flex item refuses to shrink past its content, so the feed's floor pushes
+    // `main` off the bottom and the outer scrollbar comes straight back.
+    let main = css
+        .split(".feed-page main {")
+        .nth(1)
+        .and_then(|rest| rest.split('}').next())
+        .expect("a `.feed-page main` rule");
+    assert!(
+        main.contains("min-height: 0"),
+        "`.feed-page main` no longer allows itself to shrink, so the page scrolls again: {main}"
+    );
+
+    // `dvh` is the one that matters on a phone, where `100vh` is the viewport at its tallest and
+    // sizing to it hides the foot of the feed behind the browser's own toolbar. The `vh` line is
+    // the fallback, so both have to be here and in that order.
+    let page = css
+        .split(".feed-page {")
+        .nth(1)
+        .and_then(|rest| rest.split('}').next())
+        .expect("a `.feed-page` rule");
+    let vh = page.find("100vh");
+    let dvh = page.find("100dvh");
+    assert!(
+        matches!((vh, dvh), (Some(v), Some(d)) if v < d),
+        "`.feed-page` must set `100vh` and then `100dvh`: the second is the real value and the \
+         first is the fallback for anything that does not know it: {page}"
+    );
+}
+
 /// Whether the stylesheet has a rule for this class *as a whole word*.
 ///
 /// A plain `contains` is not enough and the difference is not pedantic: renaming `.journal .daybreak`

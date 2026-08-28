@@ -1419,10 +1419,19 @@ h1 .scope {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   font-size: 0.9rem;
   line-height: 1.55;
-  /* Tall enough to be the page's subject and bounded so the reader keeps the controls above it.
+  /* **The height comes from the page, not from here** -- see `.feed-page` below, which makes this
+     the one growing element between the header and the footer so the feed ends exactly where the
+     window does. It used to be `min(70vh, 42rem)`, which is a guess about how tall everything above
+     it happens to be: 70vh plus a heading, a download line, a status line and the backfill control
+     is more than a viewport, so the page acquired a scrollbar of its own and the reader got two
+     nested ones.
+
+     The floor is what a short window gets instead of a sliver -- there the page does scroll, which
+     is the right trade at that size.
+
      `overflow-y` is named explicitly beside `overflow-x` for the reason the lint enforces: setting
      one axis silently forces the other away from `visible`. */
-  height: min(70vh, 42rem);
+  min-height: 12rem;
   overflow-y: auto;
   overflow-x: auto;
   padding: 0.6rem 0.8rem;
@@ -1515,6 +1524,62 @@ h1 .scope {
   flex-wrap: wrap;
   margin: 0 0 0.5rem;
 }
+
+/* --- the feed page is sized to the window -------------------------------------------------------
+ *
+ * **The feed is the page, so the feed is what gets the leftover room.** Every other page here is a
+ * document that ends somewhere and scrolls if it is long; this one is a fixed frame onto a stream
+ * that never ends, and a second scrollbar on the document around it is purely in the way -- the
+ * outer one moves the frame off the screen while the inner one is where the records actually are.
+ *
+ * So the body becomes the column: topbar, banner, main, footer, with `main` taking the slack and
+ * passing it down to `.journal`. `min-height` rather than `height`, so a window too short for the
+ * feed's own floor still scrolls rather than clipping the footer.
+ *
+ * `100dvh` is the point of the pair: on a phone `100vh` is the tallest the viewport ever gets, so
+ * sizing to it puts the foot of the feed under the browser's own toolbar. The `100vh` line is the
+ * fallback for anything that does not know `dvh`, and is overridden wherever it does. */
+.feed-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* `width` and `box-sizing` are NOT tidiness here -- they are what keeps the measure. `main` centers
+ * itself with `margin: 0 auto`, and an auto cross-axis margin on a flex item overrides the default
+ * stretch: the element would size to fit its content instead of to the measure, so the feed would
+ * be as wide as its longest line and the page would reflow every time a long location scrolled by.
+ * Same for the footer, which would otherwise center its version line instead of sitting under the
+ * content. Border-box because this file has no global reset and `main` carries side padding. */
+.feed-page main,
+.feed-page footer {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.feed-page main {
+  flex: 1;
+  /* Without this, a flex item refuses to shrink below its content -- so the feed's own floor would
+     push `main` past the window and put back the scrollbar this exists to remove. */
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  /* The 4rem tail is for a page that ends in prose. This one ends in a frame whose bottom edge is
+     the point, and the gap under it would read as the feed being cut short. */
+  padding-bottom: 1rem;
+}
+
+/* **Flex items do not collapse their margins**, so leaving these alone would silently DOUBLE the
+   space between every pair of lines above the feed -- and take it out of the feed, which is the one
+   element paying for it. One uniform gap instead, from the container. */
+.feed-page main > * {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.feed-page .journal { flex: 1; }
 
 /* ---- the room-creation panel ------------------------------------------------
  *
