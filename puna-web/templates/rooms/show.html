@@ -97,6 +97,38 @@
 <span class="hint">&mdash; every item found here, live. Shareable without sharing this page.</span></p>
 {% endif %}
 
+{# **The lobby import's leftovers, to staff, as soon as the room opens.**
+
+   An import claims what it can match and reports what it cannot, rather than refusing outright over
+   a couple of edge cases — nobody wants to send a hundred claim links because two names diverged.
+   So the leftovers have to be said somewhere the organizer will actually be, and that is here: they
+   land on this page the moment the room is created.
+
+   `unclaimed_after_import` is `None` for a room nobody associated with a lobby, and `None` rather
+   than zero when the import named everybody, so this appears only when there is something to do.
+   It is DERIVED (see the route) and carries no dismiss flag: it goes away when those slots are
+   claimed rather than when somebody clicks it away and forgets. #}
+{# `is_staff` as well as the count, and the second gate is not redundant. The route already decides
+   this -- it passes `None` to anybody who is not staff -- but the field is an ordinary count rather
+   than a type that carries its own audience, so a later caller filling it in for everybody would
+   publish how many of this room's slots are unowned on a page anybody can open. Two cheap gates on
+   one fact, where one of them is a template that cannot prove what it did not render. #}
+{% if is_staff %}
+{% if let Some(unclaimed) = unclaimed_after_import %}
+<div class="warning">
+<p><strong>{{ unclaimed +}} slot(s) here have no owner.</strong> This room was opened from a lobby
+room, and the lobby named an account for every YAML it could match &mdash; these are the ones it
+could not. They still have their claim links in the table below, so sending those is all that is
+left.</p>
+{% if is_organizer %}
+<p class="hint">If that number looks wrong for this room, the
+<a href="/room/{{ room.id }}/options">options page</a> can re-run the import, which is also how to
+fix an association pointed at the wrong lobby room.</p>
+{% endif %}
+</div>
+{% endif %}
+{% endif %}
+
 <h2>Slots</h2>
 {# Filter and sort come from `table.js`, which reorders the rows the server already sent rather than
    rendering any. Without scripting the arrows are absent, because script draws them -- and the box

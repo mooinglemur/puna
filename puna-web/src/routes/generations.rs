@@ -57,6 +57,11 @@ pub struct ShowTemplate {
     /// preselected and the value written on submit cannot disagree — a form recommending one thing
     /// while creation did another would be worse than either.
     primary_port_default: puna_core::model::room::PrimaryPort,
+    /// Whether this deployment has a lobby to import slot owners from.
+    ///
+    /// Decided in the route from configuration, so a deployment standing alone renders no field at
+    /// all rather than one whose only possible answer is "no lobby is configured".
+    has_lobby: bool,
 }
 
 #[derive(Template, WebTemplate)]
@@ -105,6 +110,7 @@ async fn show(
     dedup: Option<bool>,
     session: LoggedInSession,
     pool: &State<puna_core::db::Pool>,
+    lobby: &State<crate::LobbyConfig>,
 ) -> Result<ShowTemplate> {
     let id = id
         .parse()
@@ -125,6 +131,7 @@ async fn show(
         slots,
         deduplicated: dedup.unwrap_or(false),
         primary_port_default,
+        has_lobby: lobby.0.is_some(),
         default_room_name: format!(
             "{}'s multiworld {}",
             session.session().username.as_deref().unwrap_or("a"),
@@ -691,6 +698,7 @@ mod tests {
             generation: a_generation(),
             slots: Vec::new(),
             deduplicated: false,
+            has_lobby: true,
             primary_port_default: puna_core::model::room::PrimaryPort::Full,
             default_room_name: "troy's multiworld 2026-08-29".into(),
         }
@@ -766,6 +774,7 @@ mod tests {
                 deduplicated: false,
                 primary_port_default: puna_core::model::room::PrimaryPort::for_slots(slots),
                 default_room_name: "n".into(),
+                has_lobby: true,
             }
             .render()
             .expect("renders");

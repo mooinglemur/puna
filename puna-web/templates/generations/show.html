@@ -146,19 +146,26 @@ administer the room from inside an AP client.</p>
 </div>
 </div>
 
-{# Disabled rather than absent: the field is part of the shape this form is growing into, and an
-   organizer who expects it should see that it is coming rather than wonder where it went. A
-   disabled input submits nothing at all, so the route cannot receive it by accident. #}
+{# Rendered only where a lobby is configured, decided in the route from the environment rather than
+   here: a deployment with no lobby beside it would otherwise show a field whose only possible
+   answer is "no lobby is configured".
+
+   `type="text"`, not `url`: a bare room id is as valid an answer as a pasted link, and `url` would
+   have the browser refuse the id with a message about a missing scheme — a validation failure on
+   input the route accepts. #}
+{% if has_lobby %}
 <div class="field">
 <label for="lobby_url">Lobby room</label>
 <div class="choices">
-<input type="url" id="lobby_url" name="lobby_url" disabled
-       placeholder="not available yet">
-<p class="hint">Optional. It will claim each slot for the
-Discord account that owns the matching YAML in the lobby, so nobody has to be sent a claim
-link. (Not built yet)</p>
+<input type="text" id="lobby_url" name="lobby_url"
+       placeholder="paste the lobby room's link">
+<p class="hint">Optional. Each slot is claimed for the Discord account that owns the matching YAML
+in the lobby, so nobody has to be sent a claim link. Anything it cannot match keeps its claim link
+and is listed on the room page &mdash; and if you skip this now, the room's options page can do it
+later.</p>
 </div>
 </div>
+{% endif %}
 
 {# **Last, deliberately.** It is the only choice here about how the room PRESENTS itself rather
    than about who may do what, and it is the one with a recommendation already made for you --

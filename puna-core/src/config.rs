@@ -320,6 +320,39 @@ fn optional(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
 }
 
+/// The lobby this deployment imports slot owners from, if it has one.
+///
+/// **One lobby, and it is deployment configuration rather than request input.** An organizer pastes
+/// a lobby room link and Puna reads the id out of it; the host is discarded and the fetch goes here.
+/// A host taken from a request would make this tier a confused deputy holding somebody else's
+/// credential — the same rule `PUNA_ADVERTISE_HOST` and the room route already follow.
+///
+/// **Both values or neither.** Half-configured is the state that fails at the moment somebody is
+/// using it rather than at startup: a URL with no token gets a `403` from the lobby that reads as
+/// the lobby being broken, and a token with no URL is a secret mounted for nothing. Refusing at
+/// startup makes the mistake arrive during a deploy, where it belongs.
+pub fn lobby_from_env() -> anyhow::Result<Option<(String, String)>> {
+    let url = std::env::var("PUNA_LOBBY_URL")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let token = std::env::var("PUNA_LOBBY_OUTBOUND_TOKEN")
+        .ok()
+        .filter(|s| !s.is_empty());
+
+    match (url, token) {
+        (Some(url), Some(token)) => Ok(Some((url, token))),
+        (None, None) => Ok(None),
+        (Some(_), None) => anyhow::bail!(
+            "PUNA_LOBBY_URL is set but PUNA_LOBBY_OUTBOUND_TOKEN is not; the lobby would refuse \
+             every request and the failure would look like the lobby being down"
+        ),
+        (None, Some(_)) => anyhow::bail!(
+            "PUNA_LOBBY_OUTBOUND_TOKEN is set but PUNA_LOBBY_URL is not; a credential is mounted \
+             with nowhere to send it"
+        ),
+    }
+}
+
 fn parse_env<T: FromStr<Err = String>>(key: &str) -> anyhow::Result<T> {
     let raw = require(key)?;
     T::from_str(&raw).map_err(|e| anyhow::anyhow!("{e}"))

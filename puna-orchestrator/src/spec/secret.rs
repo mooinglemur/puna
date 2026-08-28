@@ -158,6 +158,7 @@ mod tests {
             created_by: None,
             created_at: chrono::Utc::now(),
             cloned_from: None,
+            lobby_room_id: None,
             desired_state: "stopped".into(),
             slot_auth,
             password: password.map(str::to_string),

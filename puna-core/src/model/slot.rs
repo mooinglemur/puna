@@ -525,6 +525,41 @@ pub async fn passwords(
         .collect())
 }
 
+/// Claim slots on behalf of the accounts a lobby room named.
+///
+/// **Guarded on `owner_id IS NULL`, per row, inside the statement** — not filtered by the caller.
+/// The caller's plan is computed from a roster it read a moment ago and from a lobby answer that is
+/// older still, so a player who used their claim link in between must win. Deciding it here means
+/// the check and the write are one operation rather than two with a race between them.
+///
+/// The claim token is cleared as [`claim`] clears it: the link has done its job, and leaving it live
+/// would let whoever it was sent to take a slot that now belongs to somebody.
+///
+/// Returns how many slots were actually claimed, which is **not** necessarily `assignments.len()` —
+/// the difference is exactly the slots somebody else took first, and the caller reports it.
+pub async fn claim_for_owners(
+    conn: &mut AsyncPgConnection,
+    room: RoomId,
+    assignments: &[(i32, i64)],
+) -> Result<usize, diesel::result::Error> {
+    let mut claimed = 0;
+
+    for (slot_number, owner_id) in assignments {
+        claimed += diesel::sql_query(
+            "UPDATE room_slots
+                SET owner_id = $3, claim_token = NULL, claimed_at = now()
+              WHERE room_id = $1 AND slot_number = $2 AND owner_id IS NULL",
+        )
+        .bind::<SqlUuid, _>(room)
+        .bind::<Integer, _>(*slot_number)
+        .bind::<BigInt, _>(*owner_id)
+        .execute(conn)
+        .await?;
+    }
+
+    Ok(claimed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

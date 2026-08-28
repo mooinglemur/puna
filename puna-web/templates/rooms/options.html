@@ -124,6 +124,54 @@ spoiler.</p>
 </form>
 </section>
 
+{# **Its own panel, because it is neither of the other two.** It changes no option: it reads the
+   lobby and claims slots, which is a one-shot action rather than a setting — and it disconnects
+   nobody, so grouping it under "Restarts the room" would be a lie about what pressing it costs.
+
+   Rendered only where a lobby is configured. Shown even when the room already has one associated,
+   because that is the retry: a lobby that was down at creation, an association pointed at the wrong
+   room, or simply somebody who has since claimed their YAML in the lobby. #}
+{% if has_lobby %}
+<section class="panel create-room">
+<h2>Slot owners from the lobby</h2>
+<p class="hint">Claims each slot for the Discord account that owns the matching YAML in the lobby
+room this seed was rolled in, so nobody has to be sent a claim link. Nothing is disconnected and the
+room is not restarted.</p>
+
+<form method="post" action="/room/{{ room.id }}/options/lobby">
+<div class="field">
+<label for="lobby_url">Lobby room</label>
+<div class="choices">
+{# The current association is prefilled so re-running is one click, and so that an organizer can
+   SEE which lobby room this points at -- which is the only way to notice it points at the wrong
+   one. A bare id rather than a link, because the id is what Puna stores; pasting a full URL over
+   it works just as well. #}
+<input type="text" id="lobby_url" name="lobby_url"
+       {%+ if let Some(lobby_room) = room.lobby_room_id +%}value="{{ lobby_room }}"{% endif %}
+       placeholder="paste the lobby room's link">
+<p class="hint">A link to the lobby room, or just its id.
+{%+ if room.lobby_room_id.is_some() %}
+This room is already associated; saving again re-runs the import.
+{% endif %}
+</p>
+</div>
+</div>
+
+{# **Says what it will not do, because that is the surprising half.** The obvious fear about a
+   button that assigns owners is that it will take a slot off somebody -- so the sentence names the
+   two things it never touches, and they are enforced in `lobby::plan` and in the SQL rather than
+   promised here. #}
+<p class="hint"><strong>Only slots that nobody owns are touched.</strong> A slot somebody has
+already claimed is left exactly as it is, and a name the lobby cannot match keeps its claim link.
+Safe to run more than once.</p>
+
+<div class="actions">
+<button type="submit">Import slot owners</button>
+</div>
+</form>
+</section>
+{% endif %}
+
 <section class="panel create-room">
 <h2>Restarts the room</h2>
 {# The cost is stated once, here, rather than under each control -- and it is stated in the terms

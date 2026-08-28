@@ -25,13 +25,13 @@ use rocket::{FromForm, State, get, post, routes};
 use askama::Template;
 use askama_web::WebTemplate;
 
-use crate::DataDir;
 use crate::auth::{LoggedInSession, Session};
 use crate::error::{Error, Result, not_found};
 use crate::gate::{CanCreateRoom, Direct};
 use crate::guards::{Helper, Navigation, Organizer, RoomAccess, SlotAccess};
 use crate::params::RoomParam;
 use crate::tpl::TplContext;
+use crate::{DataDir, LobbyConfig};
 
 type Pool = puna_core::db::Pool;
 
@@ -180,6 +180,16 @@ pub struct RoomTemplate {
     room_password: Option<String>,
     /// Same field and same reason as [`PanelTemplate`]'s. `is_organizer` is already above.
     needs_password: bool,
+    /// How many player slots the lobby import could not name, for the staff notice.
+    ///
+    /// **Derived, with no `dismissed` column behind it.** The condition is "this room is associated
+    /// with a lobby room *and* somebody still holds no slot", so it goes away when the problem does
+    /// rather than when somebody clicks it — and a dismiss flag would be a second source of truth
+    /// that outlives the thing it describes. `None` when there is nothing to say, which is every
+    /// room that was never associated.
+    ///
+    /// Zero is not `Some(0)`: a room where the import named everybody says nothing at all.
+    unclaimed_after_import: Option<usize>,
 }
 
 /// One row of the room page's slot table.
@@ -574,12 +584,11 @@ struct CreateRoomForm {
     /// sends nothing at all for an unticked box, and a `bool` field would make the whole submission
     /// fail to parse rather than reading as `false`.
     server_password: Option<String>,
-    /// The lobby room this was handed over from. **Accepted and deliberately unread**: the field
-    /// is rendered `disabled`, so a browser submits nothing for it and anything arriving here today
-    /// came from somebody editing the markup rather than from the form. It is declared so that the
-    /// route does not start rejecting submissions the day the control is enabled, and named here so
-    /// that whoever enables it finds the place to read it.
-    #[allow(dead_code)]
+    /// The lobby room this seed was rolled in. Optional, and blank when the organizer skipped it.
+    ///
+    /// A URL or a bare id: both are things somebody has in hand, and only the id is used — see
+    /// [`crate::lobby::Lobby::room_id_from`], which discards the host so a link to a lobby this
+    /// deployment does not know about cannot redirect the fetch.
     lobby_url: Option<String>,
 }
 
@@ -595,7 +604,8 @@ async fn create(
     pool: &State<Pool>,
     data_dir: &State<DataDir>,
     environment: &State<puna_core::Environment>,
-) -> Result<Redirect> {
+    lobby: &State<LobbyConfig>,
+) -> Result<Flash<Redirect>> {
     let generation_id = form
         .generation_id
         .parse()
@@ -650,7 +660,66 @@ async fn create(
         slot_auth = slot_auth.as_sql(),
         "room created"
     );
-    Ok(Redirect::to(format!("/room/{id}")))
+
+    let to_room = Redirect::to(format!("/room/{id}"));
+
+    // **The import runs after the room exists, and cannot un-create it.**
+    //
+    // Everything below is best-effort by construction: the room is committed, the redirect is
+    // built, and the worst outcome here is a message saying the import did not happen. That is the
+    // whole reason creation-time import is the backfill path run once — a lobby that is down at
+    // this moment costs an organizer one button press on a page that already works, rather than a
+    // failed room creation they have to understand.
+    let pasted = form
+        .lobby_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    let (Some(pasted), Some(configured)) = (pasted, lobby.0.as_ref()) else {
+        return Ok(Flash::success(to_room, "Room created."));
+    };
+
+    let lobby_room = match crate::lobby::Lobby::room_id_from(pasted) {
+        Ok(lobby_room) => lobby_room,
+        Err(e) => {
+            return Ok(Flash::warning(
+                to_room,
+                format!("Room created, but {e}. You can add the lobby room from the options page."),
+            ));
+        }
+    };
+
+    room::set_lobby_room(&mut conn, id, lobby_room).await?;
+
+    match crate::lobby::import(&mut conn, configured, id, lobby_room).await {
+        Ok(outcome) => {
+            tracing::info!(
+                room = %id,
+                lobby_room = %lobby_room,
+                claimed = outcome.claimed,
+                unmatched = outcome.unmatched.len(),
+                unused = outcome.unused,
+                "imported slot owners from the lobby"
+            );
+            let message = format!("Room created. {}", outcome.message());
+            Ok(if outcome.unmatched.is_empty() && outcome.unused == 0 {
+                Flash::success(to_room, message)
+            } else {
+                Flash::warning(to_room, message)
+            })
+        }
+        Err(e) => {
+            tracing::warn!(room = %id, lobby_room = %lobby_room, error = %e, "lobby import failed");
+            Ok(Flash::warning(
+                to_room,
+                format!(
+                    "Room created, but the owners could not be imported: {e}. \
+                     The room's options page can retry it."
+                ),
+            ))
+        }
+    }
 }
 
 /// Your rooms, by either route into them.
@@ -780,6 +849,28 @@ async fn show(
         format!("This room's filter: {listed}")
     });
 
+    // **Counted before the roster is consumed**, not after: `slot_views` takes ownership, and the
+    // view it produces has deliberately dropped `owner_id` — see `SlotView`. Asking the question
+    // here keeps it asked of the model rather than of the rendering.
+    //
+    // Staff only, and derived rather than remembered. A room nobody associated with a lobby has
+    // nothing to say; one that was associated and still has unclaimed players is telling its
+    // organizer that a few people need claim links after all. It stops being true the moment those
+    // slots are claimed, with no flag to clear.
+    //
+    // Spectators are excluded because they are never imported (see `lobby::plan`), so counting one
+    // would report a miss that is not one.
+    let unclaimed_after_import = (role.is_some() && room.lobby_room_id.is_some())
+        .then(|| {
+            room_slots
+                .iter()
+                .filter(|s| {
+                    s.owner_id.is_none() && s.kind != puna_core::artifact::SlotKind::Spectator
+                })
+                .count()
+        })
+        .filter(|count| *count > 0);
+
     let slots = slot_views(
         room_slots,
         session.user_id,
@@ -800,6 +891,7 @@ async fn show(
     let is_closed = room.desired_state == DesiredState::Closed.as_sql();
     Ok(RoomTemplate {
         base: TplContext::new(&session),
+        unclaimed_after_import,
         // Both from `may_start`, so the page and the route cannot disagree about who gets a door.
         is_closed,
         may_start: may_start(&room, role),
@@ -1630,6 +1722,9 @@ pub struct OptionsTemplate {
     /// Whether a change to the restart form would actually bounce the room now, or wait for
     /// somebody to start it. The same question the password rotation asks, and the same function.
     restart_would_land: bool,
+    /// Whether this deployment has a lobby at all. Decided in the route from configuration, so the
+    /// template cannot offer a control that could only ever refuse.
+    has_lobby: bool,
 }
 
 #[derive(FromForm)]
@@ -1648,12 +1743,19 @@ struct RestartOptionsForm {
     server_password: Option<String>,
 }
 
+#[derive(FromForm)]
+struct LobbyRoomForm {
+    /// Whatever the organizer pasted: a lobby room URL, or the bare id out of one.
+    lobby_url: String,
+}
+
 /// The options page.
 #[get("/room/<id>/options")]
 async fn options_page(
     id: RoomParam,
     access: RoomAccess<Organizer>,
     pool: &State<Pool>,
+    lobby: &State<LobbyConfig>,
 ) -> Result<OptionsTemplate> {
     let mut conn = pool.get().await?;
     let has_server_password = room::has_server_password(&mut conn, id.0).await?;
@@ -1662,7 +1764,75 @@ async fn options_page(
         restart_would_land: a_restart_would_land(&access.room.state),
         room: access.room.clone(),
         has_server_password,
+        // Hidden entirely where no lobby is configured. A control that can only ever answer "no
+        // lobby is configured for this deployment" is a control that reads as broken.
+        has_lobby: lobby.0.is_some(),
     })
+}
+
+/// Associate a lobby room and claim every slot it can name.
+///
+/// **The door for "I forgot at creation"**, and the reason it is an association rather than a bare
+/// button: a room that was never associated has nothing to backfill *from*, so the control has to
+/// carry the field. Re-submitting it for an already-associated room is an ordinary re-run, which is
+/// what makes this the fix for a lobby that was down at creation as well.
+///
+/// Organizer-tier, on M20's line: this decides who holds a slot, which is the room's roster rather
+/// than its day-to-day running.
+#[post("/room/<id>/options/lobby", data = "<form>")]
+async fn import_lobby_owners(
+    id: RoomParam,
+    access: RoomAccess<Organizer>,
+    form: Form<LobbyRoomForm>,
+    pool: &State<Pool>,
+    lobby: &State<LobbyConfig>,
+) -> Result<Flash<Redirect>> {
+    let back = Redirect::to(format!("/room/{id}/options"));
+
+    let Some(configured) = lobby.0.as_ref() else {
+        return Ok(Flash::error(
+            back,
+            crate::lobby::LobbyError::NotConfigured.to_string(),
+        ));
+    };
+
+    let lobby_room = match crate::lobby::Lobby::room_id_from(&form.lobby_url) {
+        Ok(id) => id,
+        Err(e) => return Ok(Flash::error(back, e.to_string())),
+    };
+
+    let mut conn = pool.get().await?;
+
+    // **Associated before the fetch, so a failed import still leaves the room pointed at the right
+    // lobby room.** The alternative loses what the organizer typed on every transient failure, and
+    // makes them re-paste a link to retry something that was never their mistake.
+    room::set_lobby_room(&mut conn, id.0, lobby_room).await?;
+
+    match crate::lobby::import(&mut conn, configured, id.0, lobby_room).await {
+        Ok(outcome) => {
+            tracing::info!(
+                room = %id,
+                by = access.user_id(),
+                lobby_room = %lobby_room,
+                claimed = outcome.claimed,
+                unmatched = outcome.unmatched.len(),
+                unused = outcome.unused,
+                "imported slot owners from the lobby"
+            );
+            // **A warning when anything was left over, not an error.** Nothing failed: the slots it
+            // could not name still have their claim links, which is where they already were.
+            let message = outcome.message();
+            Ok(if outcome.unmatched.is_empty() && outcome.unused == 0 {
+                Flash::success(back, message)
+            } else {
+                Flash::warning(back, message)
+            })
+        }
+        Err(e) => {
+            tracing::warn!(room = %id, lobby_room = %lobby_room, error = %e, "lobby import failed");
+            Ok(Flash::error(back, e.to_string()))
+        }
+    }
 }
 
 /// Everything that takes effect on the next request.
@@ -1933,6 +2103,7 @@ pub fn routes() -> Vec<rocket::Route> {
         options_page,
         set_live_options,
         set_restart_options,
+        import_lobby_owners,
         rotate_room_password,
         rename_room,
     ]
@@ -2409,6 +2580,7 @@ pub(crate) mod tests {
             created_by: Some(7),
             created_at: chrono::Utc::now(),
             cloned_from: None,
+            lobby_room_id: None,
             desired_state: "running".into(),
             slot_auth: puna_core::model::room::SlotAuth::None,
             password: None,
@@ -2533,6 +2705,9 @@ pub(crate) mod tests {
             owns_a_slot: false,
             room_password: None,
             needs_password: false,
+            // The ordinary room: never associated with a lobby, so it says nothing about one.
+            // The notice's own test sets this.
+            unclaimed_after_import: None,
         }
     }
 
@@ -2553,6 +2728,51 @@ pub(crate) mod tests {
                 "the room page offers no way to reach {what}"
             );
         }
+    }
+
+    /// **The import's leftovers are told to staff, and to nobody else.**
+    ///
+    /// A partial import is the design — refusing outright over two diverged names would send an
+    /// organizer back to a hundred claim links — so the leftovers have to surface somewhere they
+    /// will be seen, and that is the page they land on the moment the room is created.
+    ///
+    /// Three things this pins, each silent if it goes:
+    ///
+    /// * **Only when a lobby room was associated.** Every room has unclaimed slots the minute it
+    ///   opens; saying so is noise unless the lobby was supposed to have named them.
+    /// * **Only when there is something left.** The route passes `None` rather than zero for a clean
+    ///   import, so a room where everybody matched says nothing at all.
+    /// * **Staff only**, like the roster it is about. A player reading "12 slots have no owner"
+    ///   learns something about other people's claim state from a public page.
+    #[test]
+    fn the_lobby_imports_leftovers_are_a_staff_notice_and_only_when_there_are_any() {
+        use askama::Template;
+
+        let with = |is_staff: bool, unclaimed: Option<usize>| {
+            let mut page = page_as(is_staff, is_staff);
+            page.unclaimed_after_import = unclaimed;
+            page.render().expect("renders")
+        };
+
+        assert!(
+            with(true, Some(3)).contains("3 slot(s) here have no owner"),
+            "staff are not told which slots the lobby could not name"
+        );
+        assert!(
+            !with(true, None).contains("have no owner"),
+            "a room with nothing left over still says something"
+        );
+        assert!(
+            !with(false, Some(3)).contains("have no owner"),
+            "a player is told about other people's unclaimed slots"
+        );
+
+        // The claim links are the whole answer to the notice, so it must not read as an error that
+        // needs somebody's help.
+        assert!(
+            with(true, Some(3)).contains("claim links"),
+            "the notice names a problem and not the thing that fixes it"
+        );
     }
 
     /// **The helper boundary, as the page draws it.**
@@ -2849,6 +3069,7 @@ pub(crate) mod tests {
                 base: crate::tpl::TplContext::new(&Session::default()),
                 room: a_room(),
                 has_server_password: false,
+                has_lobby: true,
                 restart_would_land,
             }
             .render()
@@ -2934,6 +3155,7 @@ pub(crate) mod tests {
                 base: crate::tpl::TplContext::new(&Session::default()),
                 room,
                 has_server_password: false,
+                has_lobby: true,
                 restart_would_land: true,
             }
             .render()

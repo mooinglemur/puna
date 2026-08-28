@@ -542,6 +542,12 @@ pub struct Room {
     pub created_by: Option<i64>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub cloned_from: Option<RoomId>,
+    /// The lobby room this room's seed was rolled in, when an organizer said so.
+    ///
+    /// Provenance, and the switch for the unclaimed-slots warning: with this set, a slot nobody owns
+    /// is a slot the lobby could not name, which is worth telling staff about. Without it, an
+    /// unclaimed slot is just a slot waiting for its claim link.
+    pub lobby_room_id: Option<uuid::Uuid>,
 
     pub desired_state: String,
     pub slot_auth: SlotAuth,
@@ -599,6 +605,8 @@ struct RoomRow {
     created_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Nullable<SqlUuid>)]
     cloned_from: Option<RoomId>,
+    #[diesel(sql_type = Nullable<SqlUuid>)]
+    lobby_room_id: Option<uuid::Uuid>,
     #[diesel(sql_type = Text)]
     desired_state: String,
     #[diesel(sql_type = Text)]
@@ -654,6 +662,7 @@ impl From<RoomRow> for Room {
             created_by: row.created_by,
             created_at: row.created_at,
             cloned_from: row.cloned_from,
+            lobby_room_id: row.lobby_room_id,
             desired_state: row.desired_state,
             slot_auth: SlotAuth::parse(&row.slot_auth).unwrap_or(SlotAuth::None),
             password: row.password,
@@ -688,6 +697,7 @@ impl From<RoomRow> for Room {
 
 const ROOM_COLUMNS: &str = "id, name, environment::text AS environment, generation_id, \
                             source::text AS source, created_by, created_at, cloned_from, \
+                            lobby_room_id, \
                             desired_state::text AS desired_state, slot_auth::text AS slot_auth, \
                             password, spoiler_policy::text AS spoiler_policy, tracker_id, journal_id, \
                             tracker_policy::text AS tracker_policy, \
@@ -1192,6 +1202,28 @@ pub async fn rename(
     diesel::sql_query("UPDATE rooms SET name = $2 WHERE id = $1")
         .bind::<SqlUuid, _>(id)
         .bind::<Text, _>(name)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+/// Associate a room with the lobby room its seed was rolled in.
+///
+/// Provenance **and** the switch that turns on the unclaimed-slots warning: the room page asks
+/// "does this room come from a lobby room, and are there still slots nobody owns?" — so this column
+/// being set is what makes an unmatched slot worth mentioning rather than an ordinary unclaimed one.
+///
+/// Deliberately does **not** move `rooms.source`. That column says how the GENERATION arrived, and
+/// for a room opened from an uploaded zip the answer stays `direct` however many owners were later
+/// read out of the lobby.
+pub async fn set_lobby_room(
+    conn: &mut AsyncPgConnection,
+    id: RoomId,
+    lobby_room_id: uuid::Uuid,
+) -> Result<(), diesel::result::Error> {
+    diesel::sql_query("UPDATE rooms SET lobby_room_id = $2 WHERE id = $1")
+        .bind::<SqlUuid, _>(id)
+        .bind::<SqlUuid, _>(lobby_room_id)
         .execute(conn)
         .await?;
     Ok(())

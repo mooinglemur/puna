@@ -16,6 +16,7 @@ mod flash;
 mod gate;
 mod guards;
 mod journal;
+mod lobby;
 mod metrics_listener;
 mod params;
 mod routes;
@@ -68,6 +69,12 @@ pub struct AdvertiseHost(pub String);
 /// of the pair, or an oversized upload is refused with Rocket's generic 413 instead of this
 /// module's message naming the actual limit.
 pub struct UploadLimit(pub u64);
+
+/// The lobby this deployment can import slot owners from, if any.
+///
+/// A newtype so `&State<LobbyConfig>` is unambiguous — an `Option<Lobby>` in state would be a type
+/// somebody else could plausibly manage too.
+pub struct LobbyConfig(pub Option<lobby::Lobby>);
 
 #[derive(Template, WebTemplate)]
 #[template(path = "index.html")]
@@ -190,6 +197,11 @@ pub struct Settings {
     pub advertise_host: String,
     pub upstream: upstream::Upstream,
     pub tracker_cache_max: usize,
+    /// The lobby to import slot owners from, when one is configured.
+    ///
+    /// `None` is an ordinary deployment rather than a misconfiguration — a Puna with no lobby beside
+    /// it is the standalone case — so the controls that use it are hidden rather than broken.
+    pub lobby: Option<lobby::Lobby>,
 }
 
 fn build(
@@ -221,6 +233,11 @@ fn build(
         .manage(routes::tracker::Memo::default())
         .manage(routes::tracker::NameCache::default())
         .manage(routes::tracker::TrackerCacheMax(settings.tracker_cache_max))
+        // **An `Option` in state rather than a conditional `.manage`.** Managing it only when
+        // configured would make the guard fail with "no lobby in Rocket state", which is a 500 and
+        // reads as a bug; an `Option` lets the routes say "this deployment has no lobby" and the
+        // templates hide the control.
+        .manage(LobbyConfig(settings.lobby))
         .manage(UploadLimit(wire_limit))
         .manage(waiters)
         .register(
@@ -360,6 +377,22 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|raw| raw.trim().parse::<usize>().ok())
         .unwrap_or(2 * 1024 * 1024);
 
+    // **Web role only.** The tracker tier serves no room controls and must not hold a credential for
+    // a system it has no reason to reach — the same rule that keeps Discord's secrets off it.
+    let lobby = (role == Role::Web)
+        .then(puna_core::config::lobby_from_env)
+        .transpose()?
+        .flatten()
+        .map(|(base, token)| lobby::Lobby {
+            base,
+            token,
+            // An organizer is watching this one: it runs inside the request that creates a room or
+            // saves the options page. A lobby that is slow enough to notice is a lobby the import
+            // should give up on, because the button can be pressed again and the room opens either
+            // way.
+            timeout: std::time::Duration::from_secs(10),
+        });
+
     // One `LISTEN` for the whole process, feeding every console request waiting on a result.
     // **Only the web role**: the tracker tier mounts no console, so a connection held there would
     // be a Postgres session per replica for notifications nothing consumes.
@@ -382,6 +415,7 @@ async fn main() -> anyhow::Result<()> {
             advertise_host,
             upstream,
             tracker_cache_max,
+            lobby,
         },
     )
     .launch()

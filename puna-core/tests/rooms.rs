@@ -1269,3 +1269,67 @@ async fn locking_a_slot_withholds_it_without_disturbing_its_password() {
     })
     .await;
 }
+
+/// **The lobby import never takes a slot off somebody who already holds it.**
+///
+/// The guard is `owner_id IS NULL` **inside the UPDATE**, not a filter the caller applies, and the
+/// difference is a real window rather than a style preference: the plan is computed from a roster
+/// read a moment earlier and from a lobby answer that is older still, so a player who used their
+/// claim link in between must win. Deciding it in the statement makes the check and the write one
+/// operation.
+///
+/// Nothing above this layer can see the difference — a caller-side filter passes every unit test in
+/// `lobby::plan` and loses the race only under load, where the symptom is a player who claimed a
+/// slot and then did not have it.
+#[tokio::test]
+async fn importing_owners_never_overwrites_a_slot_somebody_already_claimed() {
+    with_db(|pool| async move {
+        let mut conn = pool.get().await.expect("connection");
+        users(&mut conn).await;
+        let generation = seed_generation(&mut conn, false).await;
+        let id = room::create(
+            &mut conn,
+            &NewRoom::direct(Environment::Dev, "Friday async", generation, OWNER),
+        )
+        .await
+        .expect("create");
+
+        let slots = slot::list(&mut conn, id).await.expect("slots");
+        assert!(slots.len() >= 2, "this fixture needs two slots");
+
+        // The player got there first, through their claim link.
+        let token = slots[0].claim_token.clone().expect("token");
+        slot::claim(&mut conn, &token, PLAYER).await.expect("claim");
+
+        // The import runs anyway, naming somebody else for that same slot.
+        let claimed = slot::claim_for_owners(
+            &mut conn,
+            id,
+            &[(slots[0].slot_number, OWNER), (slots[1].slot_number, OWNER)],
+        )
+        .await
+        .expect("import");
+
+        assert_eq!(claimed, 1, "only the unowned slot is claimed");
+
+        let after = slot::list(&mut conn, id).await.expect("slots");
+        assert_eq!(
+            after[0].owner_id,
+            Some(PLAYER),
+            "the player who claimed it keeps it"
+        );
+        assert_eq!(after[1].owner_id, Some(OWNER), "the free slot was imported");
+
+        // And the imported slot's link is spent, exactly as an ordinary claim spends it: leaving it
+        // live would let whoever it was sent to take a slot that now belongs to somebody.
+        assert!(
+            after[1].claim_token.is_none(),
+            "an imported slot keeps a working claim link"
+        );
+        assert!(
+            after[1].claimed_at.is_some(),
+            "an imported slot has no claim time"
+        );
+    })
+    .await;
+}
