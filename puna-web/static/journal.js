@@ -5,7 +5,7 @@
 //
 // WHY THE SCHEME IS DERIVED RATHER THAN WRITTEN
 // TLS is terminated at the gateway, so the page is `https` in the cluster and `http` in front of a
-// local `cargo run` -- and the socket has to match, or it is blocked as mixed content in one
+// local `cargo run`. and the socket has to match, or it is blocked as mixed content in one
 // environment and refused as a bad scheme in the other. Hardcoding either would work exactly where
 // it was written and nowhere else.
 (function () {
@@ -28,7 +28,7 @@
 
   // How many lines stay in the document.
   //
-  // A busy room produces thousands a minute -- a mass release is one per location -- and a page left
+  // A busy room produces thousands a minute. A mass release is one per location, and a page left
   // open overnight would otherwise hold a DOM node for every check since it was opened. The trim is
   // from the top, because this feed reads downward and the oldest line is the one nobody is looking
   // at.
@@ -37,7 +37,7 @@
   // Reconnect backoff, in ms. Doubling, jittered, capped.
   //
   // Jittered for the reason the load tool's is: a room that drops one viewer usually drops all of
-  // them -- a redeploy, a reap, a gateway restart -- and a fixed delay would bring every open page
+  // them: a redeploy, a reap, a gateway restart, and a fixed delay would bring every open page
   // back in the same instant.
   var RETRY_MIN = 500;
   var RETRY_MAX = 30000;
@@ -61,7 +61,7 @@
   // --- THE DEAD-LINK WATCHDOG ---------------------------------------------------------------------
   // **A WebSocket does not tell you it has stopped working.** Blocking the site with iptables drops
   // packets rather than resetting the connection, so TCP retransmits into the void with exponential
-  // backoff — up to about fifteen minutes on Linux before it gives up — and until then the socket is
+  // backoff. up to about fifteen minutes on Linux before it gives up, and until then the socket is
   // open, `close` never fires and `readyState` is still `OPEN`. Measured: five minutes on a green
   // dot, then a silent recovery when the block lifted, which was the same connection catching up
   // rather than a reconnect.
@@ -71,6 +71,10 @@
   // by itself and tells the page nothing. So liveness has to be an ordinary message the page can
   // see, and a timer that gives up when one stops arriving.
   var aliveTimer = null;
+  // Bumped on every dial and on every abandonment. Each socket's handlers capture the value they
+  // were opened under and do nothing once it has moved, so a `close` or a stray frame arriving
+  // late from a socket the watchdog gave up on cannot reach in and reset the live one's state.
+  var epoch = 0;
   // Filled from the opening frame's `heartbeat_ms`, so there is one authority for the cadence.
   // The multiplier absorbs a missed beat and a slow network; a background tab throttles timers, but
   // throttling makes them fire LATE rather than early, which is the safe direction for a watchdog.
@@ -83,7 +87,7 @@
   var backfilling = false;
   // How many earlier records the walk has pulled in, for the progress note. A whole-feed load on a
   // busy room is dozens of round trips over tens of seconds, and a note that says only "loading"
-  // for all of them is indistinguishable from one that has stopped — which is precisely the
+  // for all of them is indistinguishable from one that has stopped, which is precisely the
   // confusion the silent-stop bug above produced, and the reason a bare spinner would not do.
   var backfilled = 0;
   // Set once the reader asks for the whole feed. It turns the DOM trim off: the trim exists so a
@@ -108,7 +112,7 @@
 
   // **Who the room says it was.** Every record carrying a person carries `player` off the
   // authenticated connection, and the slot number as a fallback for a record written before a name
-  // was known. This is the only thing that ever fills the identity cell — never `source`, which is
+  // was known. This is the only thing that ever fills the identity cell, never `source`, which is
   // the sending client's own claim.
   function who(row, event) {
     cell(row, event.player || "slot " + event.slot, "who");
@@ -118,13 +122,13 @@
   //
   // `source` is copied straight out of the bounce payload and nothing in the protocol validates it,
   // so it must never stand in for the authenticated identity. It is not noise either: one slot can
-  // be a whole group of people, which is exactly what Archipelago's Minecraft world does — several
+  // be a whole group of people, which is exactly what Archipelago's Minecraft world does. Several
   // accounts play through a single server that holds the slot, and `source` is the only thing in
   // the record that says which of them died. Withholding it would drop the one fact the room
   // cannot otherwise report.
   //
   // So it renders BESIDE the room's answer rather than instead of it, and only when the two
-  // disagree — the case the reader is being told about. Identical values say nothing, and on a busy
+  // disagree, the case the reader is being told about. Identical values say nothing, and on a busy
   // feed a parenthetical after every link would train the eye to skip exactly the one that matters.
   //
   // `title` says where the value came from, because a name in parentheses reads as authority and
@@ -188,19 +192,19 @@
   // dirty, which on a room off a CI image means something was built outside the pipeline.
   function build(event) {
     if (!event.version) return "";
-    return " — pahoa " + event.version + (event.build_rev ? " (" + event.build_rev + ")" : "");
+    return " - pahoa " + event.version + (event.build_rev ? " (" + event.build_rev + ")" : "");
   }
 
   // An admin command's arguments. Rendered as JSON on purpose: the shape is per verb and open, so
   // any prettier rendering would be a table to keep in step with sixteen handlers in another
-  // repository — and would quietly render the next verb as nothing.
+  // repository, and would quietly render the next verb as nothing.
   function detail(value) {
     if (!value || typeof value !== "object") return "";
     var parts = Object.keys(value).map(function (key) {
       var v = value[key];
       return key + ": " + (typeof v === "object" ? JSON.stringify(v) : String(v));
     });
-    return parts.length ? " — " + parts.join(", ") : "";
+    return parts.length ? " - " + parts.join(", ") : "";
   }
 
   function at(seconds) {
@@ -226,11 +230,11 @@
     var stamp = cell(row, "", "when");
     if (when) {
       // The trailing space is inside the cell rather than between cells: `white-space: pre` keeps
-      // it, and the alternative -- markup whitespace -- is exactly what askama would strip.
+      // it, and the alternative. markup whitespace, is exactly what askama would strip.
       stamp.textContent = "[" + when.toTimeString().slice(0, 8) + "] ";
       // The absolute instant, in the reader's own zone, through the one thing that decides how an
       // instant is spelled here. A bare `toLocaleString` would render a different order per reader
-      // and no zone at all -- see localtime.js.
+      // and no zone at all. See localtime.js.
       if (window.PunaTime) stamp.title = window.PunaTime.absolute(when.getTime());
     } else {
       stamp.textContent = "[--:--:--] ";
@@ -241,9 +245,9 @@
       //
       // `json_format_send_event` in `MultiServer.py` branches on whether the finder is also the
       // receiver: "X found their Y (location)" when it is, "X sent Y to Z (location)" when it is
-      // not. Every Archipelago client has always rendered it that way, so a feed that said "Troy
-      // sent Sword to Troy" would be describing the most ordinary event in a multiworld — a player
-      // finding something of their own — in words no player has ever seen it in.
+      // not. Every Archipelago client has always rendered it that way, so a feed that said "Lemur
+      // sent Sword to Lemur" would be describing the most ordinary event in a multiworld (a player
+      // finding something of their own) in words no player has ever seen it in.
       //
       // Compared on the slot NUMBERS rather than the names: the numbers are what the room means by
       // identity, and they are present on records whose names are not.
@@ -264,7 +268,7 @@
         break;
 
       // **The slot number is deliberately absent.** pahoa journals chat "as the room broadcast
-      // it", which already begins with the speaker's name — so prefixing the slot rendered
+      // it", which already begins with the speaker's name. so prefixing the slot rendered
       // `slot 1: MooingYacht1: meow`, saying the same thing twice and in the less useful order.
       case "chat":
         cell(row, event.text || "", "chat-text");
@@ -273,8 +277,8 @@
       // The three link conventions, and the one rule that matters is whose name is shown.
       //
       // **`player` is the room's answer; `source` is the sending client's claim.** They are
-      // recorded separately precisely because they can disagree — nothing in the protocol stops a
-      // client putting somebody else's name in the payload — so a page rendering `source` as "who
+      // recorded separately precisely because they can disagree. Nothing in the protocol stops a
+      // client putting somebody else's name in the payload, so a page rendering `source` as "who
       // killed you" would be rendering an assertion an attacker picks. Every one of these reads
       // `player`, which comes off the authenticated connection the packet arrived on. `source` is
       // never displayed at all; `RingLink` does not even carry a usable one.
@@ -283,7 +287,7 @@
         claimed(row, event);
         cell(row, " died", "verb");
         if (event.cause) {
-          cell(row, " — ", "verb");
+          cell(row, " - ", "verb");
           cell(row, event.cause, "where");
         }
         recipients(row, event);
@@ -297,15 +301,15 @@
         recipients(row, event);
         break;
 
-      // `amount` is a number and keeps its own type, so it is legitimately negative — a ring link
+      // `amount` is a number and keeps its own type, so it is legitimately negative. A ring link
       // relays a loss as readily as a gain. **The sign is the whole event**, so it is rendered as
       // the word rather than as a signed number: "sent -25 rings" describes half of these
       // backwards, and a bare `-25` beside a name is exactly the sort of thing a reader rounds off
       // to "sent".
       case "ringlink":
         who(row, event);
-        // RingLink has no usable `source` -- that convention puts a client instance id where the
-        // others put a name -- so pahoa records null rather than something wrong. `claimed` is
+        // RingLink has no usable `source`. That convention puts a client instance id where the
+        // others put a name, so pahoa records null rather than something wrong. `claimed` is
         // called anyway: the guard belongs in one place, and a convention that starts sending a
         // real name should surface without a change here.
         claimed(row, event);
@@ -320,7 +324,7 @@
 
       // **The incarnation markers.** A file spans every run of a room, so without these a jump in
       // the timestamps could be a quiet night or a crash and there is no way to tell. A `started`
-      // with no `stopped` before it is an unclean stop — that absence IS the signal, so the pair is
+      // with no `stopped` before it is an unclean stop. That absence IS the signal, so the pair is
       // worth drawing plainly rather than interpreting here.
       case "started":
         cell(row, "▶ room started", "kind");
@@ -338,7 +342,7 @@
 
       // One record per CONNECTION, not per player: a slot running a game client, a text client and
       // a tracker produces three. **The reference's sentence, minus the team**: `on_client_joined`
-      // announces "X (Team #1) playing Balatro has joined. Client(0.6.8), {'AP'}." — the verb comes
+      // announces "X (Team #1) playing Balatro has joined. Client(0.6.8), {'AP'}."  The verb comes
       // from the tags, so a tracker attaching reads as tracking rather than as an array to parse.
       //
       // `(Team #1)` is dropped deliberately: one team exists and nothing can generate a second, so
@@ -348,7 +352,7 @@
         cell(row, " " + clientVerb(event.tags), "verb");
         cell(row, event.game ? " " + event.game : "", "where");
         cell(row, " has joined", "verb");
-        cell(row, event.version ? " — client " + event.version : "", "hint");
+        cell(row, event.version ? " - client " + event.version : "", "hint");
         cell(row, " " + tags(event.tags), "hint");
         break;
 
@@ -356,8 +360,8 @@
       // slot going dark is the thing somebody asks about later. Deriving it would mean replaying
       // every join and part from the top of the file.
       // The reference's counterpart, `on_client_left`: "has left the game" for a game client, and
-      // "has stopped tracking the game" for one of the others. `slot_empty` is Puna's own addition
-      // — the reference has no equivalent, and it is the half somebody actually asks about later,
+      // "has stopped tracking the game" for one of the others. `slot_empty` is Puna's own addition.
+      // The reference has no equivalent, and it is the half somebody actually asks about later,
       // since closing one of three clients is ordinary and the slot going dark is not.
       case "disconnected":
         who(row, event);
@@ -367,7 +371,7 @@
           verb === "playing" ? " has left the game" : " has stopped " + verb + " the game",
           "verb"
         );
-        cell(row, event.slot_empty ? " — slot is now empty" : "", "hint");
+        cell(row, event.slot_empty ? " - slot is now empty" : "", "hint");
         break;
 
       case "tags_changed":
@@ -383,10 +387,10 @@
       case "goal":
         who(row, event);
         cell(row, " has completed their goal", "verb");
-        cell(row, event.game ? " — " + event.game : "", "where");
+        cell(row, event.game ? " - " + event.game : "", "where");
         break;
 
-      // Every mutating admin verb, recorded at the dispatch point as it was ASKED FOR -- so a
+      // Every mutating admin verb, recorded at the dispatch point as it was ASKED FOR, so a
       // refused command still appears, which is equally interesting to somebody reconstructing a
       // dispute. What came of it is in the reply the operator got, not here.
       case "admin":
@@ -406,8 +410,8 @@
 
       // **Both balances, not just the cost.** Hint price is a percentage of a slot's own location
       // count and can be changed mid-room, so a cost in isolation cannot be checked against
-      // anything afterwards. Equal balances mean a free hint -- an item at an already-checked
-      // location -- which is usually the thing being adjudicated.
+      // anything afterwards. Equal balances mean a free hint, an item at an already-checked
+      // location, which is usually the thing being adjudicated.
       case "hints":
         who(row, event);
         var granted = Array.isArray(event.granted) ? event.granted : [];
@@ -430,7 +434,7 @@
         cell(row, String(event.value), "where");
         break;
 
-      // The VALUE is never in this record, by pahoa's design -- only whether one now exists.
+      // The VALUE is never in this record, by pahoa's design, only whether one now exists.
       case "slot_password_changed":
         cell(row, "slot " + event.slot + " password ", "kind");
         cell(row, event.set ? "set" : "cleared", "where");
@@ -507,7 +511,7 @@
   //
   // **Local, not UTC**, and that is the whole point: a feed spanning midnight in Tokyo has broken a
   // day even though UTC has not. Built from the local getters for the same reason `PunaTime` builds
-  // its own — a key derived from `toISOString` would be a UTC day wearing a local label.
+  // its own. A key derived from `toISOString` would be a UTC day wearing a local label.
   function dayKey(date) {
     return date.getFullYear() + "-" + date.getMonth() + "-" + date.getDate();
   }
@@ -529,7 +533,7 @@
 
     var batch = document.createDocumentFragment();
     events.forEach(function (event) {
-      // A heading whenever the calendar day moves, including before the first line — the feed shows
+      // A heading whenever the calendar day moves, including before the first line. The feed shows
       // times of day, so without it a reader has no idea which day they are looking at, and a
       // journal that spans a week looks like one where the clock runs backwards.
       var when = at(event.at);
@@ -558,7 +562,7 @@
   //
   // **The reader's position is held by pixel offset, not by scroll top.** Prepending shifts
   // everything down by exactly the height of what was added, so a naive prepend teleports the view
-  // and the reader loses the line they were on — which is the whole reason to backfill in place
+  // and the reader loses the line they were on, which is the whole reason to backfill in place
   // rather than clear and reload. Measuring the scroll height on both sides and adding the
   // difference back keeps the same record under the same pixel.
   function prepend(events) {
@@ -595,15 +599,34 @@
   function say(text, className) {
     // The MESSAGE span, not the whole paragraph: the dot is a sibling and `textContent` on the
     // parent would delete it. The first version of this wrote to `status` and the indicator
-    // vanished on the first status change — which is to say, immediately and always.
+    // vanished on the first status change, which is to say, immediately and always.
     message.textContent = text;
     status.className = className || "notice";
   }
 
-  // Green when the feed is attached, red when it is not. Purely decorative — `say` above carries
-  // the same state in words, and this element is `aria-hidden` for that reason.
+  // Green when the feed is attached, red when it is not. Purely decorative. The sentence beside it
+  // carries the same state in words, and this element is `aria-hidden` for that reason.
   function setLink(up) {
     if (link) link.className = up ? "link-state up" : "link-state down";
+  }
+
+  // --- THE DOT AND THE SENTENCE ARE ONE FACT ------------------------------------------------------
+  // Every connection-state change goes through these two, never through `say` alone. The watchdog
+  // originally announced "Lost contact…" with a plain `say`, which left a GREEN dot beside it until
+  // the close event eventually arrived, the indicator contradicting the words it was put there to
+  // reinforce, which is worse than having neither.
+  //
+  // Routing both through one call makes that unspellable rather than merely fixed.
+  function linkUp(text) {
+    live = true;
+    setLink(true);
+    say(text, "notice");
+  }
+
+  function linkDown(text) {
+    live = false;
+    setLink(false);
+    say(text, "warning");
   }
 
   // Called on EVERY frame, whatever it carries. Any traffic at all proves the link, so a busy room
@@ -613,11 +636,26 @@
     if (!aliveAfter) return;
     aliveTimer = setTimeout(function () {
       aliveTimer = null;
-      // **Close it ourselves.** Nothing else will: the socket believes it is open, so waiting for
-      // `close` means waiting out TCP's own retransmission budget. Closing fires our `close`
-      // handler, which paints the dot red and schedules the redial through the ordinary path.
-      say("Lost contact with the room's feed — reconnecting…", "warning");
-      if (socket) socket.close();
+      // **Abandon it, do not merely close it.** `close()` starts a CLOSING HANDSHAKE. It sends a
+      // Close frame and waits for the peer's reply, and on the black hole that got us here that
+      // reply never comes, so the browser waits out its own timeout before firing `close`. Handing
+      // the redial to that event is how "Lost contact…" sat on screen for a long moment before
+      // anything else happened.
+      //
+      // So the socket is disowned here: `epoch` moves, which makes every event still to come from
+      // it inert, and the redial is scheduled directly. `close()` is still called so the browser
+      // tears down what it can, and whatever it does afterwards is no longer this page's business.
+      var dead = socket;
+      epoch++;
+      socket = null;
+      if (dead) {
+        try {
+          dead.close();
+        } catch (e) {
+          // A socket that was already failing is allowed to fail again; it is being discarded.
+        }
+      }
+      scheduleReconnect("Lost contact with the room's feed. Reconnecting…");
     }, aliveAfter);
   }
 
@@ -631,25 +669,24 @@
   // **The fact that a feed is filtered belongs in the status line, once, not in the feed.**
   //
   // The server reports a `withheld` count per frame, and rendering it as a row put a timestamp-less
-  // line into a stream where every other line is an event at an instant — so it read as something
+  // line into a stream where every other line is an event at an instant, so it read as something
   // having happened, scattered through the history once per batch, saying "1 record" each time.
   // That is metadata about a delivery, and a delivery is a network artifact the reader should never
   // see the seams of.
   //
   // It is still said, because a reader is owed the knowledge that they are looking at part of a
-  // history rather than all of it — and it is said as **what this feed is** rather than as what is
-  // missing from it. "(items only)" is the same phrase the room's own setting offers, so a reader
-  // who goes looking for why sees the words they were shown; a count would describe whatever
-  // happened to be fetched rather than anything about the room.
+  // history rather than all of it, and it is said as **what this feed is** rather than as what is
+  // missing from it. "(items and links only)" has similar phrasing as the room's own setting,
+  // so a reader who goes looking for why sees the words they were shown; a count would describe
+  // whatever happened to be fetched rather than anything about the room.
   var live = false;
   var filtered = false;
 
   function sayLive() {
-    say(
+    linkUp(
       filtered
-        ? "Live — following this room's feed (items only)."
-        : "Live — following this room's feed.",
-      "notice"
+        ? "Live: following this room's feed (items and links only)."
+        : "Live: following this room's feed."
     );
   }
 
@@ -661,7 +698,7 @@
 
   // Ask for the page of records immediately before what is on screen.
   //
-  // One request in flight at a time. The alternative — firing every page at once — would put a
+  // One request in flight at a time. The alternative, firing every page at once, would put a
   // thousand backwards seeks on a 250 MB file at a server that is also following it, to fill a DOM
   // the reader cannot scroll through anyway.
   function askForEarlier() {
@@ -692,10 +729,19 @@
   }
 
   function open() {
+    // Captured by every handler below. Once it has moved on, this socket is somebody else's
+    // history. See the watchdog.
+    var mine = ++epoch;
     var scheme = location.protocol === "https:" ? "wss:" : "ws:";
-    socket = new WebSocket(scheme + "//" + location.host + "/journal/" + feed + "/feed");
+    // Held locally as well as on the module, so a handler acts on ITS OWN socket rather than on
+    // whatever happens to be current when it runs.
+    var sock = new WebSocket(
+      scheme + "//" + location.host + "/journal/" + feed + "/feed"
+    );
+    socket = sock;
 
-    socket.addEventListener("open", function () {
+    sock.addEventListener("open", function () {
+      if (mine !== epoch) return;
       // The server waits for this before replaying, so it decides where the page starts.
       //
       // **A reconnect resumes at the cursor; a first connect asks for a tail.** Sending the tail
@@ -716,7 +762,8 @@
       );
     });
 
-    socket.addEventListener("message", function (message) {
+    sock.addEventListener("message", function (message) {
+      if (mine !== epoch) return;
       // **Before the parse, and before any `kind` is looked at.** A frame arriving is the proof
       // the link is alive whatever it says, and a frame this build cannot read is still a frame
       // that crossed the wire. Restarting the watchdog only for messages we understood would let a
@@ -738,7 +785,7 @@
       }
       if (typeof frame.cursor === "number") cursor = frame.cursor;
       // The cadence comes from the server, on the opening frame. Until it arrives the watchdog is
-      // disarmed rather than guessing — a guess shorter than the real interval would tear down a
+      // disarmed rather than guessing. A guess shorter than the real interval would tear down a
       // healthy connection on a timer, which is worse than the gap it was meant to close.
       if (typeof frame.heartbeat_ms === "number" && frame.heartbeat_ms > 0) {
         aliveAfter = frame.heartbeat_ms * HEARTBEAT_MISSES;
@@ -752,7 +799,7 @@
         oldest = typeof frame.start === "number" ? frame.start : 0;
         backfilled += (frame.events || []).length;
         // **Cleared before the next ask, not in the arm that ends the walk.** This request is
-        // finished — its page is on the screen — so `askForEarlier`'s in-flight guard is about the
+        // finished. Its page is on the screen, so `askForEarlier`'s in-flight guard is about the
         // *next* one. Leaving the flag set until the walk ended made that guard reject every
         // continuation, so the whole-feed button loaded one page and stopped: button disabled,
         // note frozen mid-sentence, nothing thrown, 5,000 records of 160,000 on the page. A silent
@@ -763,20 +810,21 @@
           // than queueing a thousand requests at a server reading a 250 MB file.
           askForEarlier();
         } else {
-          setEarlier(false, "Showing the whole feed — " + backfilled + " earlier records.");
+          setEarlier(false, "Showing the whole feed, " + backfilled + " earlier records.");
         }
         return;
       }
 
-      // **A resume the server could not stitch.** It answers a fresh tail instead — the file was
-      // reset under us, or the gap was larger than one frame may carry — and says so by reporting a
+      // **A resume the server could not stitch.** It answers a fresh tail instead. The file was
+      // reset under us, or the gap was larger than one frame may carry, and says so by reporting a
       // `start` other than the offset asked for. Appending that onto what is already here would put
       // a hole in the middle of the feed with nothing marking it, so the page starts over.
+      var restarted = false;
       if (frame.kind === "replay" && resumed && frame.start !== cursorAsked) {
         log.replaceChildren();
         lastDay = null;
         backfilled = 0;
-        say("Reconnected, but too much happened to join on — showing the latest records.", "notice");
+        restarted = true;
         resumed = false;
       }
 
@@ -787,9 +835,16 @@
         // opened: a server that accepts and drops immediately should not be redialled twice a
         // second.
         retry = RETRY_MIN;
-        live = true;
-        setLink(true);
-        sayLive();
+
+        // **Said here rather than where the page was cleared**, because the branch below announces
+        // the connection unconditionally and would have overwritten it in the same tick. The note
+        // was set and then replaced before a frame was ever painted, so nobody could have read it.
+        // One place decides what this line says once the socket is up.
+        if (restarted) {
+          linkUp("Reconnected. Tail restarted.");
+        } else {
+          sayLive();
+        }
 
         // **A resume leaves the page's anchors alone**, because it leaves the page alone: its
         // oldest line is still whatever it was, and `append` has already decided whether to follow
@@ -803,7 +858,7 @@
 
         log.scrollTop = log.scrollHeight;
 
-        // **Re-anchored on every replay that REPLACES the page** — a first connect, or a resume the
+        // **Re-anchored on every replay that REPLACES the page**: a first connect, or a resume the
         // server could not stitch, both of which start from a tail. The page's oldest line is
         // whatever that replay began with, and carrying the previous `start` across would ask for a
         // region the page no longer joins on to, leaving a hole in the middle of the feed.
@@ -817,21 +872,27 @@
       }
     });
 
-    socket.addEventListener("close", function () {
-      live = false;
-      setLink(false);
+    sock.addEventListener("close", function () {
+      if (mine !== epoch) return;
       // Or it fires against a socket that is already gone and closes the next one.
       stopWatchdog();
       scheduleReconnect();
     });
 
     // `close` fires after `error`, so the reconnect is scheduled there and not twice.
-    socket.addEventListener("error", function () {
-      if (socket && socket.readyState === WebSocket.OPEN) socket.close();
+    //
+    // **Closes `mine`, never the module's `socket`.** Written against the shared variable, an error
+    // arriving late from a socket the watchdog had already disowned would have closed whatever is
+    // connected NOW, a healthy feed torn down by the failure of its predecessor, and a redial loop
+    // if the pattern repeated. The epoch guard makes it moot and the local reference makes it
+    // impossible; both, because this is the arm nobody watches.
+    sock.addEventListener("error", function () {
+      if (mine !== epoch) return;
+      if (sock && sock.readyState === WebSocket.OPEN) sock.close();
     });
   }
 
-  // Whether a socket is up or on its way up. Guards every path that might open a second one — the
+  // Whether a socket is up or on its way up. Guards every path that might open a second one. The
   // visibility handler and the close handler can both decide to redial, and two sockets would both
   // replay and both follow.
   function attached() {
@@ -842,7 +903,7 @@
     );
   }
 
-  // The **Page Visibility API** — `document.visibilityState`, which is `"visible"` or `"hidden"`,
+  // The **Page Visibility API**: `document.visibilityState`, which is `"visible"` or `"hidden"`,
   // with `visibilitychange` fired on every transition. It is the right question rather than
   // `window.onfocus`: a tab sitting in view beside another window is `visible` and unfocused, and
   // that reader is watching the feed.
@@ -857,13 +918,13 @@
   // An OPEN socket in a hidden tab is left alone, which is the older rule and still right: the
   // server pings, the traffic is a trickle, and dropping it would cost a reconnect every time
   // somebody switched tabs.
-  function scheduleReconnect() {
+  function scheduleReconnect(reason) {
     if (reconnectTimer !== null || attached()) return;
     if (!showing()) {
-      say("Not connected — will reconnect when you come back to this tab.", "warning");
+      linkDown("Not connected. Will reconnect when you come back to this tab.");
       return;
     }
-    say("Reconnecting to the room's feed…", "warning");
+    linkDown(reason || "Reconnecting to the room's feed…");
     var wait = retry / 2 + Math.random() * (retry / 2);
     retry = Math.min(retry * 2, RETRY_MAX);
     reconnectTimer = setTimeout(function () {
@@ -875,12 +936,14 @@
   document.addEventListener("visibilitychange", function () {
     if (!showing()) {
       // Cancel a redial that has not fired. Without this a tab hidden mid-backoff still reconnects
-      // once, which is the case the rule exists for — a browser waking a hundred background tabs.
+      // once, which is the case the rule exists for: a browser waking a hundred background tabs.
       if (reconnectTimer !== null) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
       }
-      if (!attached()) say("Not connected — will reconnect when you come back to this tab.", "warning");
+      if (!attached()) {
+        linkDown("Not connected. Will reconnect when you come back to this tab.");
+      }
       return;
     }
     if (attached()) return;
@@ -892,6 +955,8 @@
     open();
   });
 
-  setLink(false);
+  // Deliberately NOT painted red here. The stylesheet's bare `.link-state` is muted, which is the
+  // honest third state: the page has not tried yet, and the server-rendered sentence beside it says
+  // "Connecting…". Opening on red would report a failure that has not happened.
   open();
 })();

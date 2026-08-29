@@ -917,8 +917,11 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
     // say that.** The first version of this lint checked only that `visibilityState` appeared
     // somewhere in the file — which it still does, in the listener — so deleting the early return
     // from `scheduleReconnect` passed it. Caught by mutating exactly that.
+    // Anchored on the name and the open paren, not on a full signature: it grew a `reason`
+    // parameter and this assertion failed on the argument list rather than on anything it checks.
+    // Loud, so cheap to fix — but a lint that breaks on an unrelated edit is a lint people delete.
     let scheduler = code
-        .split_once("function scheduleReconnect()")
+        .split_once("function scheduleReconnect(")
         .map(|(_, rest)| {
             rest.split_once("\n  }")
                 .map(|(body, _)| body)
@@ -959,6 +962,72 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
         heard < parse,
         "the watchdog is restarted only for frames that parsed, so a frame this build cannot read \
          is indistinguishable from silence"
+    );
+
+    // --- THE DOT AND THE SENTENCE CANNOT DISAGREE --------------------------------------------------
+    // Reported from the browser: the watchdog announced "Lost contact…" beside a GREEN dot, because
+    // it said its piece with a bare `say` and left the painting to a `close` event that had not
+    // arrived yet. An indicator contradicting the words it exists to reinforce is worse than having
+    // neither, so `setLink` and the `live` flag are reachable ONLY through `linkUp`/`linkDown`.
+    //
+    // Counted rather than merely present: the point is that there are no OTHER call sites.
+    assert_eq!(
+        code.matches("setLink(").count(),
+        3,
+        "setLink is called somewhere other than its definition and the two link* helpers, so the \
+         dot can be painted without the sentence agreeing"
+    );
+    assert_eq!(
+        code.matches("live = ").count(),
+        3,
+        "the live flag is assigned outside linkUp/linkDown, so it can drift from the dot"
+    );
+    // --- A DISOWNED SOCKET STAYS DISOWNED ----------------------------------------------------------
+    // The watchdog abandons a socket rather than waiting on `close`, because `close()` starts a
+    // handshake that a black-holed link never completes. That leaves a socket whose events are still
+    // coming, and every one of its four handlers has to ignore them — the `error` arm most of all,
+    // which used to close whatever was current rather than its own and would have torn down the
+    // healthy replacement.
+    assert_eq!(
+        code.matches("if (mine !== epoch) return;").count(),
+        4,
+        "not every socket handler is guarded by its epoch, so a disowned socket can still act on \
+         the page after the watchdog gave up on it"
+    );
+    // Line-anchored, not a bare `contains`. The first spelling of this forbade the substring
+    // `socket.addEventListener(` — which the CORRECT form `sock.addEventListener(` also contains,
+    // so the assertion failed on the fix. A negative assertion has to forbid the shape rather than
+    // a spelling that something legitimate ends with.
+    assert!(
+        !code
+            .lines()
+            .any(|l| l.trim_start().starts_with("socket.addEventListener(")),
+        "a handler is bound to the shared `socket` rather than to the one it belongs to, so a late \
+         event from a disowned socket acts on whatever is connected now"
+    );
+
+    for helper in ["function linkUp(", "function linkDown("] {
+        assert!(
+            code.contains(helper),
+            "journal.js no longer has `{helper}`, which is what makes the two inseparable"
+        );
+    }
+    // A disconnection announced without painting is exactly the shipped bug — and this is anchored
+    // on the CLASS rather than on the words, deliberately.
+    //
+    // The first version forbade `say("Reconnecting` and `say("Lost contact`, which keyed the whole
+    // guard to the opening words of two sentences. Reword either and the assertion keeps passing
+    // while guarding nothing: it decays into vacuity through ordinary copy editing, which is the
+    // worst way for a lint to fail because nothing ever reports it.
+    //
+    // `"warning"` is the down state's own signature and is not editorial: every disconnection
+    // message is one, no other message is, and `linkDown` is the only thing entitled to raise it.
+    assert_eq!(
+        code.matches(r#""warning""#).count(),
+        1,
+        "the warning class is applied somewhere other than linkDown, so a disconnection can be \
+         announced without the dot agreeing — the bug that put a green circle beside \"Lost \
+         contact\". Reword the sentences freely; route them through linkDown."
     );
     // The backoff, and the one thing that must reset it. Coming back to a tab is information about
     // the reader rather than about the server, so the wait that had built up does not apply.
