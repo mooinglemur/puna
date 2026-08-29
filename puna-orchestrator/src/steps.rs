@@ -748,6 +748,23 @@ impl DeploymentRecorder for RowRecorder<'_> {
 
 async fn recreate(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
     let mut conn = ctx.pool.get().await?;
+    // **Asked, exactly as a stop is, and for a reason that is not politeness.** A redeploy used to
+    // be the one teardown that let SIGTERM do the talking, which put `(SIGTERM)` in the journal for
+    // the single most operator-driven action in the system while a reap — which nobody performs —
+    // read as an admin request.
+    //
+    // It costs no downtime, which is the whole reason it is here: this is the room's start pistol
+    // for the same quiesce the signal would have triggered, fired at an in-cluster round trip
+    // instead of after a delete has reached a kubelet. The pod finishes draining no later than it
+    // would have, and foreground deletion means the new one starts as soon as it does.
+    ask_to_stop(
+        ctx,
+        &mut conn,
+        action.room,
+        "an operator redeployed this room",
+    )
+    .await;
+
     // Not a rolling update: the port is in the args and the Service, and pahoa holds an exclusive
     // flock on the save directory, so two pods cannot overlap. Dropping to `idle` lets the next tick
     // take the ordinary Start path -- one code path for creating a room's objects.
@@ -1060,42 +1077,65 @@ async fn mark_idle(
     Ok(Outcome::Done)
 }
 
+/// Ask a room to stop, before its Deployment is deleted.
+///
+/// **Ask first, then delete anyway.** `POST /admin/v1/shutdown` lets the room quiesce, flush a final
+/// save and release its `flock` on its own schedule rather than inside a 45-second grace period —
+/// but it is a nicety on top of the delete, never a replacement for it. Deleting the Deployment is
+/// what actually stops a room, and a room that cannot be asked (an old image, a missing Secret, a
+/// wedged process) must still stop. So this returns nothing and never fails the caller.
+///
+/// The answer is `202` = **accepted, not finished**: quiescing closes every connection including the
+/// one that asked, so a room that only answered when it was done could not answer at all. Nothing
+/// here waits on completion; the planner watches for the Deployment to go away.
+///
+/// **It is not slower than letting SIGTERM do it, which is why every teardown path uses it.** pahoa
+/// notifies its waiters and answers `202` before quiescing (`http/mod.rs`'s `shutdown`), and every
+/// way out of a running room converges on the same quiesce and the same final save (`serve.rs`). So
+/// the work is identical and this only starts it EARLIER — at the moment of an in-cluster round trip
+/// rather than after a delete has propagated to a kubelet and become a signal.
+///
+/// `reason` reaches pahoa's log and nothing else: the journal's `stopped` record carries the literal
+/// `"admin request"` for any admin-API shutdown, chosen on pahoa's side. Which is the point of
+/// calling this from a redeploy — the alternative reads as `SIGTERM`, and a redeploy is the most
+/// operator-driven thing in the system.
+async fn ask_to_stop(
+    ctx: &Context<'_>,
+    conn: &mut diesel_async::AsyncPgConnection,
+    room: RoomId,
+    reason: &str,
+) {
+    if !ctx.probe.capabilities().graceful_shutdown {
+        return;
+    }
+    let Ok(Some(base_port)) = port::reserved_pair(conn, room).await else {
+        return;
+    };
+    let Ok(Some(secrets)) = room::secrets(conn, room).await else {
+        return;
+    };
+
+    let endpoint = ctx.endpoint(room, base_port);
+    match ctx
+        .probe
+        .request_shutdown(&endpoint, &secrets.admin_token, reason)
+        .await
+    {
+        Ok(()) => tracing::info!(room = %room, reason, "the room accepted a graceful shutdown"),
+        // Logged at debug: the delete that follows is the real mechanism, and a room that will not
+        // answer is the ordinary case this degrades for rather than an incident.
+        Err(e) => tracing::debug!(
+            room = %room,
+            error = %e,
+            "the room did not accept a graceful shutdown; deleting its Deployment"
+        ),
+    }
+}
+
 async fn stop(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
     let mut conn = ctx.pool.get().await?;
 
-    // **Ask first, then delete anyway.** `POST /admin/v1/shutdown` lets the room quiesce, flush a
-    // final save and release its `flock` on its own schedule rather than inside a 45-second grace
-    // period -- but it is a nicety on top of the delete, never a replacement for it. Deleting the
-    // Deployment is what actually stops a room, and a room that cannot be asked (an old image, a
-    // missing Secret, a wedged process) must still stop.
-    //
-    // The answer is `202` = **accepted, not finished**: quiescing closes every connection including
-    // the one that asked, so a room that only answered when it was done could not answer at all.
-    // Nothing here waits on completion; the planner watches for the Deployment to go away.
-    if ctx.probe.capabilities().graceful_shutdown
-        && let Some(base_port) = port::reserved_pair(&mut conn, action.room).await?
-        && let Ok(Some(secrets)) = room::secrets(&mut conn, action.room).await
-    {
-        let endpoint = ctx.endpoint(action.room, base_port);
-        match ctx
-            .probe
-            .request_shutdown(
-                &endpoint,
-                &secrets.admin_token,
-                "an operator stopped this room",
-            )
-            .await
-        {
-            Ok(()) => tracing::info!(room = %action.room, "the room accepted a graceful shutdown"),
-            // Logged at debug: the delete below is the real mechanism, and a room that will not
-            // answer is the ordinary case this path degrades for rather than an incident.
-            Err(e) => tracing::debug!(
-                room = %action.room,
-                error = %e,
-                "the room did not accept a graceful shutdown; deleting its Deployment"
-            ),
-        }
-    }
+    ask_to_stop(ctx, &mut conn, action.room, "an operator stopped this room").await;
 
     ctx.cluster
         .delete_deployment(&object_name(action.room))
@@ -1454,6 +1494,49 @@ async fn event(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **Every path that tears a room down asks it to stop first, and asks BEFORE deleting.**
+    ///
+    /// A source lint because nothing observable would change: the steps tests run against
+    /// `TcpProbe`, whose `graceful_shutdown` is false precisely so they never dial, so deleting
+    /// either call leaves the whole suite green. The room still stops — the delete is the real
+    /// mechanism — and the only symptom is a word in a file: the `stopped` record says `SIGTERM`
+    /// where it should say `admin request`.
+    ///
+    /// That word is the reason this exists. A redeploy was the one teardown that skipped the ask,
+    /// so the most operator-driven action in the system read as an anonymous signal while an idle
+    /// reap — which nobody performs — read as an admin request. Exactly backwards, and invisible
+    /// from anywhere but the journal.
+    ///
+    /// The ordering is asserted too. Asking after the delete would be a request racing a SIGTERM
+    /// for a process that is already going, which is not the head start the ask exists to give.
+    #[test]
+    fn every_teardown_asks_the_room_to_stop_before_deleting_it() {
+        let source = include_str!("steps.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("the file has a non-test half");
+
+        for step in ["async fn stop(", "async fn recreate("] {
+            let body = source
+                .split_once(step)
+                .unwrap_or_else(|| panic!("{step} was renamed; re-point this lint"))
+                .1;
+            let body = body.split_once("\n}").expect("a terminated function").0;
+
+            let ask = body.find("ask_to_stop(").unwrap_or_else(|| {
+                panic!("{step} no longer asks the room to stop, so its teardown reads as SIGTERM")
+            });
+            let delete = body
+                .find(".delete_deployment(")
+                .unwrap_or_else(|| panic!("{step} no longer deletes the Deployment"));
+
+            assert!(
+                ask < delete,
+                "{step} asks after deleting, which races the SIGTERM it exists to pre-empt"
+            );
+        }
+    }
 
     /// The backoff's shape: fifteen seconds doubling to a ten-minute ceiling.
     #[test]
