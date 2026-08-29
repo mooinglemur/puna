@@ -149,8 +149,26 @@ impl Lobby {
         // text. `room` has already been through `Uuid::parse_str`, so it cannot carry a path.
         let url = format!("{}/api/room/{room}", self.base.trim_end_matches('/'));
 
+        // --- REDIRECTS ARE NOT FOLLOWED, AND THAT IS A CREDENTIAL DECISION ------------------------
+        //
+        // reqwest follows up to ten by default, and it strips only the headers it knows are
+        // sensitive -- `Authorization`, `Cookie`, `Proxy-Authorization`, `WWW-Authenticate`. A
+        // custom `X-Api-Key` is not on that list, so it is re-sent to whatever host the chain
+        // reaches. This token is the lobby's own ADMIN_TOKEN, which grants full admin there.
+        //
+        // Not hypothetical, and not specific to one environment -- **both lobbies do this, and a
+        // WRONG key is treated exactly like no key at all.** Verified 2026-08-28 against both:
+        // `/api/room/<id>` answers `303` to `/auth/login`, which answers `303` to
+        // `https://discord.com/oauth2/authorize`. So an unsynced token walked our lobby admin token
+        // out to discord.com, which the web tier's NetworkPolicy already permits it to reach for
+        // OAuth -- there was not even a connection refusal to stop it.
+        //
+        // Following also destroyed the diagnosis, which is the half that was already observed: the
+        // lobby never gets to say "refused", Discord answers `200` with HTML, `.json()` fails, and
+        // the organizer is told the lobby returned something unreadable.
         let client = reqwest::Client::builder()
             .timeout(self.timeout)
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| LobbyError::Unreachable(e.to_string()))?;
 
@@ -163,7 +181,11 @@ impl Lobby {
 
         match response.status().as_u16() {
             200 => {}
-            401 | 403 => return Err(LobbyError::Unauthorized),
+            // A redirect on this endpoint is the lobby sending an unauthenticated caller to log in,
+            // so it means the same thing a `401` means and is reported as such. Reading it as a
+            // transport fault would point an organizer at the lobby being down when the answer is
+            // that PUNA_LOBBY_OUTBOUND_TOKEN does not match the lobby's ADMIN_TOKEN.
+            401 | 403 | 301..=308 => return Err(LobbyError::Unauthorized),
             404 => return Err(LobbyError::NoSuchRoom),
             other => {
                 return Err(LobbyError::Unreachable(format!(
@@ -571,5 +593,74 @@ mod tests {
         assert!(plan.claims.is_empty());
         assert_eq!(plan.unmatched, vec!["Troy".to_string()]);
         assert_eq!(plan.unused, 2);
+    }
+
+    /// **A redirect is a refusal, and it must not be followed.**
+    ///
+    /// Both lobbies answer `/api/room/<id>` with `303` to `/auth/login` when the `X-Api-Key` is
+    /// wrong or absent — a bad key is treated exactly like no key — and that login redirects on to
+    /// `https://discord.com/oauth2/authorize`. reqwest follows redirects by default and strips only
+    /// the headers it knows are sensitive, which does not include a custom `X-Api-Key`, so the
+    /// lobby's own ADMIN_TOKEN was being re-sent along the chain.
+    ///
+    /// Asserted at the transport rather than as a source lint, because both halves of the failure
+    /// are reachable here: without `Policy::none()` the client follows to the second endpoint,
+    /// parses its HTML as JSON, and reports `Unreadable` — so an unsynced credential presented as
+    /// the lobby returning something broken.
+    ///
+    /// `std::net` on a thread rather than `tokio::net`, deliberately: the workspace's tokio does not
+    /// declare the `net` feature, and depending on another crate enabling it is the same
+    /// feature-unification trap the rustls provider already cost this project once.
+    #[tokio::test]
+    async fn a_redirect_is_reported_as_a_refusal_and_never_followed() {
+        use std::io::{Read, Write};
+
+        // What startup does by way of the database pool. Already-installed is success, since the
+        // whole binary's tests share a process.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a port");
+        let base = format!("http://{}", listener.local_addr().expect("local addr"));
+
+        // Two responses: the refusal, then what a follower would land on. The second exists so the
+        // test fails LOUDLY rather than by timing out when the policy is removed.
+        let server = std::thread::spawn(move || {
+            for body in ["303 See Other", "200 OK"] {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let response = if body.starts_with("303") {
+                    "HTTP/1.1 303 See Other\r\nLocation: /auth/login\r\nContent-Length: 0\r\n\r\n"
+                        .to_string()
+                } else {
+                    let html = "<!doctype html><html>sign in</html>";
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{html}",
+                        html.len()
+                    )
+                };
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let lobby = Lobby {
+            base,
+            token: "not-the-lobbys-admin-token".into(),
+            timeout: Duration::from_secs(5),
+        };
+
+        let error = lobby
+            .room(uuid::Uuid::nil())
+            .await
+            .expect_err("a 303 is not a room");
+
+        assert!(
+            matches!(error, LobbyError::Unauthorized),
+            "a redirect must read as a refused credential, got {error:?}"
+        );
+
+        drop(server);
     }
 }

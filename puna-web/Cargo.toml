@@ -61,5 +61,13 @@ walkdir = "2"
 # test links a library, and there is none here -- the same reason puna-orchestrator has its own.
 [dev-dependencies]
 futures-util.workspace = true
+# Tests only, to install the process-wide crypto provider before building a reqwest client.
+#
+# `main` never needs this: the database pool is built at startup and puna-core installs ring on the
+# way through, so every client built afterwards finds one. A unit test has no pool, and reqwest's
+# `rustls-no-provider` feature PANICS rather than auto-installing -- so a test that builds a client
+# must do explicitly what startup does implicitly. Workspace-pinned, so it cannot select a second
+# provider and reintroduce the ambiguity that pin exists to remove.
+rustls.workspace = true
 tempfile = "3.27.0"
 tokio-postgres.workspace = true
