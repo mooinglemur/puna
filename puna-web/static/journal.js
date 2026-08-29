@@ -685,7 +685,7 @@
   function sayLive() {
     linkUp(
       filtered
-        ? "Live: following this room's feed (items and links only)."
+        ? "Live: following this room's feed (gameplay only)."
         : "Live: following this room's feed."
     );
   }

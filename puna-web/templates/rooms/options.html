@@ -51,13 +51,14 @@ is.</p>
 <span class="label">Feed</span>
 <div class="choices">
 <label><input type="radio" name="journal_policy" value="full"{% if room.journal_policy == puna_core::model::room::JournalPolicy::Full +%} checked{% endif %}> Open</label>
-<label><input type="radio" name="journal_policy" value="feed"{% if room.journal_policy == puna_core::model::room::JournalPolicy::Feed +%} checked{% endif %}> Items only</label>
+<label><input type="radio" name="journal_policy" value="feed"{% if room.journal_policy == puna_core::model::room::JournalPolicy::Feed +%} checked{% endif %}> Gameplay only</label>
 <label><input type="radio" name="journal_policy" value="disabled"{% if room.journal_policy == puna_core::model::room::JournalPolicy::Disabled +%} checked{% endif %}> Closed</label>
 <p class="hint" data-for="full">Anyone who can open the feed reads the whole history &mdash; chat,
 hints, admin actions, joins and parts &mdash; and can download the raw file. <strong>This applies
 to everything already written</strong>, not only to what happens next.</p>
-<p class="hint" data-for="feed">The feed shows item movements and Link events only. Organizers can always see
-everything and download the raw file.</p>
+<p class="hint" data-for="feed">The feed shows what happened in the games: item movements, Link
+events, and goals. Chat, hints and everything else stays with the organizers, who can always see it
+all and download the raw file.</p>
 <p class="hint" data-for="disabled">The feed is staff-only. Anyone holding a feed link gets the same
 answer as somebody holding a made-up one.</p>
 </div>

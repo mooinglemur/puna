@@ -9,13 +9,16 @@
 //!    per-room policy the tracker uses. A race room's feed is behind a login exactly as its
 //!    tracker is.
 //! 2. **How much do they get?** [`room::JournalPolicy`], per room. `disabled` is staff-only,
-//!    `feed` is `check` and `gap` with everything else withheld and counted, `full` is the file as
-//!    written plus the download.
+//!    `feed` is what happened in the *games* with everything else withheld and counted, `full` is
+//!    the file as written plus the download.
 //!
 //! An organizer reads everything under all three, so the column names what the tier below them
-//! gets. The `feed` records are exactly the wall of *"X sent Y to Z (location)"* the room already
-//! broadcasts to every unfiltered client; the rest — `chat` above all, every line anybody typed —
-//! is the part a room may reasonably want to keep among its participants, or may not.
+//! gets. **The line `feed` draws is gameplay against the room's operation**: item movements, the
+//! Link conventions, and goals — the wall of *"X sent Y to Z (location)"* the room already
+//! broadcasts to every unfiltered client, plus the line that explains why a world suddenly emptied
+//! into it. The rest — `chat` above all, every line anybody typed, and the moderation and
+//! configuration beside it — is the part a room may reasonably want to keep among its participants,
+//! or may not.
 //!
 //! **Why this is a room's decision rather than a constant.** The feed link is rendered on the room
 //! page wherever the tracker link is, so the people holding it are the people holding the room
@@ -96,22 +99,56 @@ const PING: std::time::Duration = std::time::Duration::from_secs(30);
 ///     and treating them differently here would be an editorial guess rather than a property of
 ///     the protocol.
 ///
+///   * `goal` — a slot finished. pahoa writes it **before** the auto-release and auto-collect it
+///     triggers, deliberately, so the flood of `check` records those produce sits underneath the
+///     line that explains them. Withholding it left a public feed where a world empties out for no
+///     stated reason, which is the one thing a reader most wants explained.
+///
 /// Everything else is withheld from a `feed` viewer and counted. That is the whole list of what a
 /// room's participants said and did to each other rather than to each other's *games*: `chat`,
-/// `admin`, `cheat`, `hints`, `goal`, `connected`, `disconnected`, `tags_changed`, `started`,
-/// `stopped`, `options`, `option_changed`, `slot_password_changed`.
+/// `admin`, `cheat`, `hints`, `connected`, `disconnected`, `tags_changed`, `started`, `stopped`,
+/// `options`, `option_changed`, `slot_password_changed`.
 ///
-/// **pahoa proposed a wider set** — `started`, `stopped`, `goal` and `disconnected`, on the grounds
-/// that none is player-authored text and `started`/`stopped` let a page draw a restart boundary
-/// rather than an unexplained jump in timestamps. Not taken: they are true statements about the
-/// room's operation rather than about play, and a room that wants them public has `full` to say so.
-/// The narrower set needs no argument about which non-text records happen to be harmless.
-pub const PUBLIC_KINDS: [&str; 5] = ["check", "gap", "deathlink", "traplink", "ringlink"];
+/// **pahoa proposed a wider set** — `started`, `stopped`, `goal` and `disconnected`. `goal` is now
+/// taken, on its own merits above. The other three are not: they are true statements about the
+/// room's *operation* rather than about play, and a room that wants them public has `full` to say
+/// so.
+///
+/// --- WHAT A RELEASE LOOKS LIKE HERE, because the obvious answer is wrong twice over -------------
+///
+/// There is **no `release` record and no `collect` record**, and the announcement everybody knows —
+/// *"X (Team #1) has released all remaining items from their world."* — is **not journaled at all**.
+/// `room.rs`'s `release_player` broadcasts it as a `PrintJSON` and writes nothing; `chat` is
+/// player-typed `Say` only (`commands.rs`'s `broadcast_chat`), so it is not hiding there either.
+///
+/// So a release reaches this feed the only way it can: as the flood of `check` records it produces,
+/// with the `goal` above it saying why. That is most of what the announcement was for — and adding
+/// `"release"` to the list above would match nothing, which is a change that reads as a feature and
+/// does nothing.
+///
+/// An explicitly-run `!release` does leave an `admin` record, and `admin` stays withheld: the same
+/// type carries `say`, `hint`, `alias`, `option`, `kick` and `lock`, which is precisely the
+/// moderation and configuration a `feed` viewer is kept out of. Publishing one verb of it would
+/// mean reading the `command` field, and that is not worth building for a line the room never
+/// wrote down.
+pub const PUBLIC_KINDS: [&str; 6] = ["check", "gap", "deathlink", "traplink", "ringlink", "goal"];
+
+/// Whether one record may be shown to a viewer at the `feed` tier.
+///
+/// Fails closed: a record with no `type`, or a `type` this build has never heard of, is withheld. A
+/// `feed` built today must not start publishing whatever pahoa adds tomorrow.
+pub fn is_public(event: &serde_json::Value) -> bool {
+    event
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|kind| PUBLIC_KINDS.contains(&kind))
+}
 
 /// How much of the history this viewer gets.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Visibility {
-    /// `check` and `gap`. Anyone the room's `tracker_policy` admits.
+    /// What happened in the games: items, Links, and goals. Anyone the room's `tracker_policy`
+    /// admits. See [`PUBLIC_KINDS`].
     Feed,
     /// The file as written. Organizers.
     Everything,
@@ -652,10 +689,7 @@ fn batch(
     for line in lines {
         let parsed = serde_json::from_str::<serde_json::Value>(line)
             .unwrap_or_else(|_| serde_json::json!({ "type": "unreadable", "raw": line }));
-        let public = parsed
-            .get("type")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|t| PUBLIC_KINDS.contains(&t));
+        let public = is_public(&parsed);
 
         match visibility {
             Visibility::Everything => events.push(parsed),
@@ -706,12 +740,13 @@ mod tests {
         //
         // The three link types are deliberately absent — they are a *feed* event, the same kind of
         // cross-game effect a check is, and they are asserted as public in the test below.
+        // `goal` moved out of this list, for the reason given on PUBLIC_KINDS. `admin` stays in it:
+        // an explicitly-run release leaves one, and it is withheld along with every other verb.
         let private = [
             "chat",
             "admin",
             "cheat",
             "hints",
-            "goal",
             "connected",
             "disconnected",
             "tags_changed",
@@ -739,6 +774,15 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&frame).expect("valid JSON");
         assert_eq!(parsed["withheld"], private.len());
         assert!(parsed["events"].as_array().expect("events").is_empty());
+    }
+
+    /// A goal is public, and it is the line that explains the flood underneath it.
+    #[test]
+    fn a_goal_reaches_a_public_viewer() {
+        let frame = batch("replay", &[line("goal")], 1, None, Visibility::Feed);
+        let parsed: serde_json::Value = serde_json::from_str(&frame).expect("valid JSON");
+        assert_eq!(parsed["events"].as_array().expect("events").len(), 1);
+        assert!(parsed.get("withheld").is_none());
     }
 
     /// The feed itself — the screenshot — is `check`, the three link conventions, and `gap`.
