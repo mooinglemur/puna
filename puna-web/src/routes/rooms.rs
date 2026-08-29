@@ -2813,8 +2813,14 @@ pub(crate) mod tests {
         };
 
         assert!(
-            with(true, Some(3)).contains("3 slot(s) here have no owner"),
+            with(true, Some(3)).contains("3 slots here have no owner"),
             "staff are not told which slots the lobby could not name"
+        );
+        // The singular, which is the case an import now leaves most often: the lobby names almost
+        // everybody, so what is left over is usually one slot.
+        assert!(
+            with(true, Some(1)).contains("1 slot here has no owner"),
+            "one leftover slot is described in the plural"
         );
         assert!(
             !with(true, None).contains("have no owner"),

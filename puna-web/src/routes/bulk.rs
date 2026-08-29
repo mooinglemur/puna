@@ -327,13 +327,21 @@ async fn apply(
         let skipped = form.slots.len() - released;
         return Ok(Flash::success(
             Redirect::to(back),
+            // Both sentences written out rather than stitched from four `plural` calls. Past about
+            // two agreements the interpolated form stops being readable as a sentence, which is the
+            // thing being got right here.
             if skipped == 0 {
-                format!(
-                    "Released {released} claim(s). Those slots are unclaimed and have fresh claim links."
-                )
+                match released {
+                    1 => "Released 1 claim. That slot is unclaimed and has a fresh claim link."
+                        .to_string(),
+                    n => format!(
+                        "Released {n} claims. Those slots are unclaimed and have fresh claim links."
+                    ),
+                }
             } else {
                 format!(
-                    "Released {released} claim(s); {skipped} of the staged slots were already unclaimed."
+                    "Released {}; {skipped} of the staged slots were already unclaimed.",
+                    puna_core::text::count(released, "claim"),
                 )
             },
         ));
@@ -375,7 +383,11 @@ async fn apply(
         // **What was done, not which button was pressed.** One button now covers three outcomes,
         // and "Set the filter applied to 12 slots" would leave the reader to remember what was in
         // the table -- which is the thing they were about to check.
-        let did = format!("{} {} slot(s)", describe_state(&state), form.slots.len());
+        let did = format!(
+            "{} {}",
+            describe_state(&state),
+            puna_core::text::count(form.slots.len(), "slot")
+        );
 
         // Nothing to tell a room that is not running: `reapply_filters` asserts everything at the
         // next start, and queueing would only produce rows saying the room is down.
@@ -494,10 +506,10 @@ async fn apply(
         return Ok(Flash::success(
             Redirect::to(back),
             format!(
-                "{} applied to {} slot(s) and stored. This room is not running, so there was \
+                "{} applied to {} and stored. This room is not running, so there was \
                  nothing to tell — it takes effect the next time it starts.",
                 label_for(&form.action),
-                commands.len()
+                puna_core::text::count(commands.len(), "slot")
             ),
         ));
     }
@@ -517,9 +529,9 @@ async fn apply(
         Some(batch) => Ok(Flash::success(
             Redirect::to(format!("/room/{room_id}/bulk/{batch}")),
             format!(
-                "{} queued for {} slot(s).",
+                "{} queued for {}.",
                 label_for(&form.action),
-                commands.len()
+                puna_core::text::count(commands.len(), "slot")
             ),
         )),
         None => Ok(Flash::warning(

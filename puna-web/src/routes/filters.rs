@@ -571,7 +571,7 @@ async fn edit_room(
     let saved = if next.is_empty() {
         "Saved. This room has no filter now.".to_string()
     } else {
-        format!("Saved {} rule(s).", next.len())
+        format!("Saved {}.", puna_core::text::count(next.len(), "rule"))
     };
     let reach = if missed == 0 {
         if told {
@@ -581,8 +581,9 @@ async fn edit_room(
         }
     } else {
         format!(
-            " It does not reach {missed} slot(s) that have a filter of their own — they are listed \
-             below."
+            " It does not reach {} that {} a filter of their own — they are listed below.",
+            puna_core::text::count(missed, "slot"),
+            puna_core::text::plural(missed, "has", "have"),
         )
     };
     Ok(Flash::success(

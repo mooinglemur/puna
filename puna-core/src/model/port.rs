@@ -493,11 +493,11 @@ pub async fn assert_environment_matches(
         .unwrap_or(0);
     anyhow::ensure!(
         foreign == 0,
-        "configured environment is {} but this database has {} port reservation(s) bound in the \
-         other environment. Refusing to start: allocating from the wrong half of a shared port \
-         space produces rooms that are unreachable rather than an error.",
+        "configured environment is {} but this database has {} bound in the other environment. \
+         Refusing to start: allocating from the wrong half of a shared port space produces rooms \
+         that are unreachable rather than an error.",
         environment.as_str(),
-        foreign,
+        crate::text::count(foreign, "port reservation"),
     );
     Ok(())
 }

@@ -42,7 +42,6 @@
 
 use std::time::Duration;
 
-use puna_core::artifact::SlotKind;
 use puna_core::ids::RoomId;
 use puna_core::model::slot::Slot;
 
@@ -225,50 +224,74 @@ pub struct Plan {
     /// **Player names, not slot numbers**, because this is what an organizer is shown and a name is
     /// what they will look for in the lobby.
     pub unmatched: Vec<String>,
+    /// Slots the lobby named that already had an owner, so there was nothing to do.
+    ///
+    /// **Its own bucket, because folding it into `unused` said something untrue.** A yaml whose slot
+    /// is already claimed matched perfectly; reporting it as "matched no slot here" told an organizer
+    /// to go looking for a mismatch that does not exist — and in the ordinary case, a room where
+    /// people have been claiming their own slots, it described *most* of the roster that way.
+    pub already_claimed: usize,
     /// Lobby YAMLs that named no slot in this room.
     ///
     /// Usually the sign that the wrong lobby room was associated, which is the one mistake here that
-    /// looks like success — every slot unmatched and every yaml unused.
+    /// looks like success — every slot unmatched and every yaml unused. That signal only works if
+    /// this bucket means what it says, which is why `already_claimed` is separate.
     pub unused: usize,
 }
 
 /// Work out the assignment. **Pure**, so every rule below is testable without a lobby.
 ///
-/// Three things it will not do:
+/// Two things it will not do:
 ///
 /// * **Touch a slot that already has an owner.** Backfill is re-runnable and must never take a slot
 ///   off somebody who claimed it in the meantime — including on the first run, where a player may
 ///   have used their claim link between the room opening and the organizer pressing the button.
-/// * **Claim a spectator.** They are connectable slots and they can be claimed, but the lobby's
-///   yamls are players; a spectator matching a yaml name would be a coincidence of naming.
+///   That slot is counted under `already_claimed`, not treated as if the lobby had never named it.
 /// * **Match case-insensitively.** Archipelago's own uniqueness rule is case-insensitive, so two
 ///   slots cannot differ by case alone — but the generator's output is the authority on the exact
 ///   string, and loosening the comparison would only ever paper over a divergence worth seeing.
+///
+/// **Spectators are claimed like anybody else**, which reverses an earlier rule here. The argument
+/// for skipping them was that the lobby's yamls are players, so a spectator matching one would be a
+/// coincidence of naming — and that is simply not how the two systems work. A spectator slot exists
+/// because somebody submitted a yaml for it, the lobby names that account, and everything downstream
+/// already treats a spectator as an ordinary connectable slot: it takes an owner, a claim link, a
+/// per-slot password and a tracker id like any other. Skipping it left the one slot the organizer
+/// most wanted filled as the only one still holding a claim link.
+///
+/// **A yaml is `used` if it matched a slot at all**, claimed or already owned. Marking only the
+/// claimed ones is what made a fully-claimed room report every yaml as matching nothing.
 pub fn plan(roster: &[Slot], yamls: &[LobbyYaml]) -> Plan {
     let mut claims = Vec::new();
     let mut unmatched = Vec::new();
+    let mut already_claimed = 0;
     let mut used = std::collections::HashSet::new();
 
     for slot in roster {
-        if slot.kind == SlotKind::Spectator {
-            continue;
-        }
-        if slot.owner_id.is_some() {
-            continue;
-        }
-
         match yamls.iter().find(|y| y.player_name == slot.player_name) {
             Some(yaml) => {
-                claims.push((slot.slot_number, yaml.discord_id));
+                // Marked used before the ownership branch, deliberately: the question this answers
+                // is "did the lobby name a slot in this room", and it did either way.
                 used.insert(yaml.player_name.as_str());
+
+                if slot.owner_id.is_some() {
+                    already_claimed += 1;
+                } else {
+                    claims.push((slot.slot_number, yaml.discord_id));
+                }
             }
-            None => unmatched.push(slot.player_name.clone()),
+            // A slot nobody has claimed and the lobby cannot name. A slot that is already owned and
+            // matches nothing is not reported at all — there is nothing for an organizer to do about
+            // a slot that is already where it needs to be.
+            None if slot.owner_id.is_none() => unmatched.push(slot.player_name.clone()),
+            None => {}
         }
     }
 
     Plan {
         claims,
         unmatched,
+        already_claimed,
         unused: yamls
             .iter()
             .filter(|y| !used.contains(y.player_name.as_str()))
@@ -315,6 +338,8 @@ pub struct Imported {
     /// the second is not a problem to investigate.
     pub taken_first: usize,
     pub unmatched: Vec<String>,
+    /// Slots the lobby named that already had an owner before this ran. See [`Plan`].
+    pub already_claimed: usize,
     pub unused: usize,
 }
 
@@ -368,19 +393,34 @@ pub async fn import(
         claimed,
         taken_first: plan.claims.len() - claimed,
         unmatched: plan.unmatched,
+        already_claimed: plan.already_claimed,
         unused: plan.unused,
     })
 }
 
 impl Imported {
     /// The sentence an organizer reads. Plain counts, and it names the leftovers.
+    ///
+    /// **Every clause has to be true of the room, not just of this run.** The first version read
+    /// "No slots were claimed from the lobby; 4 lobby YAML(s) matched no slot here" about a room
+    /// where all four matched and three were already claimed — so the two facts it stated were the
+    /// two an organizer would act on, and both were wrong. The clauses below are ordered by what
+    /// somebody wants to know: what changed, what was already fine, and what still needs a person.
     pub fn message(&self) -> String {
         let mut parts = vec![match self.claimed {
             0 => "No slots were claimed from the lobby".to_string(),
-            1 => "Claimed 1 slot from the lobby".to_string(),
-            n => format!("Claimed {n} slots from the lobby"),
+            1 => "1 slot was claimed from the lobby".to_string(),
+            n => format!("{n} slots were claimed from the lobby"),
         }];
 
+        // Not a problem, and said plainly so it does not read as one. On a re-run, or on a room
+        // where people have been using their claim links, this is most of the roster.
+        if self.already_claimed > 0 {
+            parts.push(match self.already_claimed {
+                1 => "1 matching slot already had a claim".to_string(),
+                n => format!("{n} matching slots already had claims"),
+            });
+        }
         if self.taken_first > 0 {
             parts.push(format!(
                 "{} had already been claimed by their player",
@@ -398,10 +438,10 @@ impl Imported {
             });
         }
         if self.unused > 0 {
-            parts.push(format!(
-                "{} lobby YAML(s) matched no slot here",
-                self.unused
-            ));
+            parts.push(match self.unused {
+                1 => "1 lobby YAML matched no slot here".to_string(),
+                n => format!("{n} lobby YAMLs matched no slot here"),
+            });
         }
 
         format!("{}.", parts.join("; "))
@@ -411,6 +451,9 @@ impl Imported {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // `SlotKind` is a fixture concern now, not a rule: `plan` stopped branching on it when
+    // spectators became claimable, and the tests are the only thing that still needs to build one.
+    use puna_core::artifact::SlotKind;
     use puna_core::ids::{RoomId, TrackerId};
 
     fn slot(number: i32, name: &str, owner: Option<i64>, kind: SlotKind) -> Slot {
@@ -563,9 +606,10 @@ mod tests {
         );
     }
 
-    /// A spectator is claimable but is not a lobby yaml, so a name collision must not claim it.
+    /// A spectator is an ordinary connectable slot everywhere else in Puna, and the lobby knows who
+    /// submitted its yaml, so there is nothing to withhold.
     #[test]
-    fn a_spectator_is_not_claimed_from_the_lobby() {
+    fn a_spectator_is_claimed_like_anybody_else() {
         let roster = [
             slot(1, "Troy", None, SlotKind::Player),
             slot(2, "Watcher", None, SlotKind::Spectator),
@@ -574,10 +618,75 @@ mod tests {
 
         let plan = plan(&roster, &yamls);
 
-        assert_eq!(plan.claims, vec![(1, 7)]);
+        assert_eq!(
+            plan.claims,
+            vec![(1, 7), (2, 8)],
+            "a spectator slot exists because somebody submitted a yaml for it, and the lobby names \
+             the account that did"
+        );
+        assert!(plan.unmatched.is_empty());
+        assert_eq!(plan.unused, 0);
+    }
+
+    /// The reported case, end to end: four slots, all four named by the lobby, three already
+    /// claimed, and the fourth a spectator.
+    ///
+    /// It produced *"No slots were claimed from the lobby; 4 lobby YAML(s) matched no slot here"* —
+    /// both clauses false, and the one slot that needed claiming was the one deliberately skipped.
+    #[test]
+    fn a_mostly_claimed_room_claims_the_rest_and_says_so_truthfully() {
+        let roster = [
+            slot(1, "Troy", Some(7), SlotKind::Player),
+            slot(2, "Ray", Some(8), SlotKind::Player),
+            slot(3, "Mira", Some(9), SlotKind::Player),
+            slot(4, "Watcher", None, SlotKind::Spectator),
+        ];
+        let yamls = [
+            yaml("Troy", 7),
+            yaml("Ray", 8),
+            yaml("Mira", 9),
+            yaml("Watcher", 10),
+        ];
+
+        let plan = plan(&roster, &yamls);
+
+        assert_eq!(plan.claims, vec![(4, 10)]);
+        assert_eq!(plan.already_claimed, 3);
+        assert_eq!(
+            plan.unused, 0,
+            "every yaml named a slot here; none of them matched nothing"
+        );
+        assert!(plan.unmatched.is_empty());
+
+        let imported = Imported {
+            claimed: 1,
+            taken_first: 0,
+            unmatched: plan.unmatched,
+            already_claimed: plan.already_claimed,
+            unused: plan.unused,
+        };
+        assert_eq!(
+            imported.message(),
+            "1 slot was claimed from the lobby; 3 matching slots already had claims."
+        );
+    }
+
+    /// The signal `unused` exists for, still intact: a genuinely unrelated lobby room reports every
+    /// yaml as matching nothing. It only means that if an already-claimed slot does NOT land here.
+    #[test]
+    fn an_already_claimed_slot_is_never_reported_as_matching_nothing() {
+        let roster = [slot(1, "Troy", Some(7), SlotKind::Player)];
+
+        let claimed_elsewhere = plan(&roster, &[yaml("Troy", 7)]);
+        assert_eq!(claimed_elsewhere.unused, 0);
+        assert_eq!(claimed_elsewhere.already_claimed, 1);
+
+        let wrong_room = plan(&roster, &[yaml("Somebody", 7)]);
+        assert_eq!(wrong_room.unused, 1);
+        assert_eq!(wrong_room.already_claimed, 0);
         assert!(
-            plan.unmatched.is_empty(),
-            "a spectator is neither claimed nor reported as a miss"
+            wrong_room.unmatched.is_empty(),
+            "an owned slot the lobby cannot name needs nothing from an organizer"
         );
     }
 

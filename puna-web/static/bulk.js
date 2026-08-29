@@ -29,6 +29,13 @@
   var options = document.getElementById("selector-options");
   var count = document.getElementById("selection-count");
 
+  // `1 slot`, `3 slots`. The server side has puna_core::text::count for the same job; this is the
+  // one page that counts things in the browser, so it carries its own three lines rather than
+  // earning a shared file.
+  function slots(n) {
+    return n + (n === 1 ? " slot" : " slots");
+  }
+
   // Which suggestion list feeds the value box, per selector. `unclaimed` takes no value at all.
   var SOURCES = { game: "games", claimant: "claimants", unclaimed: null };
 
@@ -87,7 +94,7 @@
     report(
       total === 0
         ? "Nothing matched — nothing is selected."
-        : total + " slot(s) selected across both lists."
+        : slots(total) + " selected across both lists."
     );
   }
 
@@ -106,7 +113,7 @@
     report(
       total === 0
         ? "Everything was selected — nothing is now."
-        : total + " slot(s) selected across both lists."
+        : slots(total) + " selected across both lists."
     );
   }
 
@@ -165,7 +172,10 @@
       // The count belongs in the sentence: a control whose reach is "everything staged" should say
       // how many that is at the moment it is clicked.
       var message =
-        confirmation + "\n\n" + staged.options.length + " slot(s) are staged.";
+        confirmation +
+        "\n\n" +
+        slots(staged.options.length) +
+        (staged.options.length === 1 ? " is staged." : " are staged.");
       if (!window.confirm(message)) {
         event.preventDefault();
         return;

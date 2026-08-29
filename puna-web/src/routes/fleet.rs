@@ -528,6 +528,18 @@ mod tests {
             "the bulk control appears when something has drifted"
         );
 
+        // One drifted room, so the singular branch. Asserted as a whole sentence because the two
+        // branches differ in more than inflection: the plural one explains the per-tick pacing,
+        // which describes a schedule of one when there is only one room to bounce.
+        assert!(
+            html.contains("1 room is not running the configured spec."),
+            "one drifted room is described in the plural"
+        );
+        assert!(
+            !html.contains("one per tick"),
+            "the pacing explanation is offered for a single room, where it explains nothing"
+        );
+
         // **"Redeploy" is Puna's action; "Restarted" is the column reporting that Kubernetes
         // replaced the pod without being asked.** They are one word apart and they mean different
         // things, so the page must not use the first word for the second event -- which it did,

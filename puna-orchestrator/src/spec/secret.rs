@@ -36,8 +36,10 @@ pub enum SecretError {
     /// Under pahoa's fail-closed rule this would be a player who cannot connect, with an
     /// `InvalidPassword` that is accurate and useless. Caught here instead.
     #[error(
-        "room is in per-slot password mode but {count} slot(s) have no password ({slots:?}); \
-         refusing to build a Secret that would lock them out"
+        "room is in per-slot password mode but {} {} no password ({slots:?}); \
+         refusing to build a Secret that would lock them out",
+        puna_core::text::count(*count, "slot"),
+        puna_core::text::plural(*count, "has", "have"),
     )]
     IncompleteSlotPasswords { count: usize, slots: Vec<i32> },
 

@@ -123,10 +123,13 @@
 {% if is_staff %}
 {% if let Some(unclaimed) = unclaimed_after_import %}
 <div class="warning">
-<p><strong>{{ unclaimed +}} slot(s) here have no owner.</strong> This room was opened from a lobby
-room, and the lobby named an account for every YAML it could match &mdash; these are the ones it
-could not. They still have their claim links in the table below, so sending those is all that is
-left.</p>
+{# Every `+` here is load-bearing: `askama.toml` sets `whitespace = "suppress"`, so a space beside a
+   tag vanishes unless it is asked for. Without them this reads "3slotshere haveno owner". #}
+<p><strong>{{ unclaimed +}} slot{{ unclaimed|pluralize +}} here {{+ unclaimed|pluralize("has", "have") +}} no owner.</strong>
+This room was opened from a lobby room, and the lobby named an account for every YAML it could
+match &mdash; {{+ unclaimed|pluralize("this is the one", "these are the ones") +}} it could not.
+{{ unclaimed|pluralize("It still has its", "They still have their") +}} claim link{{ unclaimed|pluralize +}}
+in the table below, so sending {{+ unclaimed|pluralize("that", "those") +}} is all that is left.</p>
 {% if is_organizer %}
 <p class="hint">If that number looks wrong for this room, the
 <a href="/room/{{ room.id }}/options">options page</a> can re-run the import, which is also how to

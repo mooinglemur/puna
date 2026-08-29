@@ -29,9 +29,18 @@ computed until it completes a tick.</p>
 {# The count and the pace are both in the sentence you click: a control whose blast radius is the
    whole environment should say what it will do before it does it. #}
 <form method="post" action="/admin/rooms/redeploy-drifted" class="inline">
-<p class="warning">{{ drifted +}} room(s) are not running the configured spec. Redeploying them
+{# Two sentences rather than one stitched from four `pluralize` calls, because the second half is
+   not merely inflected: the pacing IS the warning when several rooms will bounce in sequence, and
+   for a single room it explains a schedule of one. Every `+` is load-bearing here regardless --
+   `askama.toml` sets `whitespace = "suppress"`, so a space beside a tag is gone unless asked for. #}
+{% if drifted == 1 %}
+<p class="warning">1 room is not running the configured spec. Redeploying it disconnects everybody
+currently in that room.
+{% else %}
+<p class="warning">{{ drifted +}} rooms are not running the configured spec. Redeploying them
 queues each one; the orchestrator redeploys one per tick, oldest request first, so players are
 disconnected a room at a time rather than all at once.
+{% endif %}
 <button type="submit" class="with-icon">
 <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
 <path d="M2.6 8a5.4 5.4 0 0 1 9.2-3.8" fill="none" stroke="currentColor" stroke-linecap="round"/>

@@ -318,13 +318,14 @@ async fn assert_room_label_resolves(
     let rooms = puna_core::model::room::count(&mut conn).await?;
     anyhow::ensure!(
         rooms == 0,
-        "none of the {} room Deployment(s) in the cluster carry a room id under the configured \
-         label key, but this database has {} room(s). Refusing to start: every one of them would \
-         be treated as an orphan and deleted. If the room label key was just changed, change it \
-         back -- it is the Deployment's immutable selector, so moving it needs every room recreated \
-         deliberately rather than by restarting with a new value.",
-        deployments.len(),
-        rooms,
+        "none of the {} in the cluster {} a room id under the configured label key, but this \
+         database has {}. Refusing to start: every one of them would be treated as an orphan and \
+         deleted. If the room label key was just changed, change it back -- it is the Deployment's \
+         immutable selector, so moving it needs every room recreated deliberately rather than by \
+         restarting with a new value.",
+        puna_core::text::count(deployments.len(), "room Deployment"),
+        puna_core::text::plural(deployments.len(), "carries", "carry"),
+        puna_core::text::count(rooms, "room"),
     );
     Ok(())
 }

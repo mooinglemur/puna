@@ -395,9 +395,10 @@ mod tests {
             "the lint found no requests, so it proves nothing"
         );
         assert_eq!(
-            requests, authenticated,
-            "a request to a room was built without an admin token: {requests} request(s), \
-             {authenticated} authenticated"
+            requests,
+            authenticated,
+            "a request to a room was built without an admin token: {}, {authenticated} authenticated",
+            crate::text::count(requests, "request")
         );
     }
 

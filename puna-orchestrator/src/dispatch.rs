@@ -208,7 +208,10 @@ impl Dispatcher {
                 let what = match (slot, &rules) {
                     (None, None) => "The room's filter was removed.".to_string(),
                     (None, Some(rules)) => {
-                        format!("The room's filter is now {} rule(s).", rules.len())
+                        format!(
+                            "The room's filter is now {}.",
+                            puna_core::text::count(rules.len(), "rule")
+                        )
                     }
                     (Some(n), None) => {
                         format!("Slot {n} now follows the room's filter.")
@@ -217,8 +220,8 @@ impl Dispatcher {
                         format!("Slot {n} is now exempt from every filter.")
                     }
                     (Some(n), Some(rules)) => format!(
-                        "Slot {n} now has {} rule(s) of its own, instead of the room's.",
-                        rules.len()
+                        "Slot {n} now has {} of its own, instead of the room's.",
+                        puna_core::text::count(rules.len(), "rule")
                     ),
                 };
                 (

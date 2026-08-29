@@ -391,19 +391,23 @@ async fn rebuild_all_names(
 
     let back = Redirect::to(uri!(admin_generations));
     // A partial rebuild is reported as a warning rather than as a success, because "Rebuilt 39
-    // generation(s); 1 failed" in the color of a success is the sentence somebody skims past.
+    // generations; 1 failed" in the color of a success is the sentence somebody skims past.
     Ok(if pending.is_empty() {
         Flash::success(
             back,
             "Every generation already has cached names; nothing to do.",
         )
     } else if failed == 0 {
-        Flash::success(back, format!("Rebuilt {rebuilt} generation(s)."))
+        Flash::success(
+            back,
+            format!("Rebuilt {}.", puna_core::text::count(rebuilt, "generation")),
+        )
     } else {
         Flash::warning(
             back,
             format!(
-                "Rebuilt {rebuilt} generation(s); {failed} failed — see the log for which and why."
+                "Rebuilt {}; {failed} failed — see the log for which and why.",
+                puna_core::text::count(rebuilt, "generation")
             ),
         )
     })
@@ -515,7 +519,7 @@ mod tests {
             generations: vec![none.clone(), partial.clone(), complete.clone()],
             result: Some(Notice {
                 class: "notice",
-                message: "Rebuilt 1 generation(s).".into(),
+                message: "Rebuilt 1 generation.".into(),
             }),
         };
 
@@ -552,10 +556,7 @@ mod tests {
         // between two expressions in the template vanishes. The template separates values with
         // entities and punctuation for that reason, and this asserts the form it actually renders.
         assert!(html.contains("1/2"), "partial does not say how much");
-        assert!(
-            html.contains("Rebuilt 1 generation(s)."),
-            "the result notice"
-        );
+        assert!(html.contains("Rebuilt 1 generation."), "the result notice");
 
         // Every row offers its own rebuild, and the backfill is separate from them.
         for row in [none, partial, complete] {
