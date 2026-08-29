@@ -14,11 +14,14 @@
 //!
 //! An organizer reads everything under all three, so the column names what the tier below them
 //! gets. **The line `feed` draws is gameplay against the room's operation**: item movements, the
-//! Link conventions, and goals — the wall of *"X sent Y to Z (location)"* the room already
-//! broadcasts to every unfiltered client, plus the line that explains why a world suddenly emptied
-//! into it. The rest — `chat` above all, every line anybody typed, and the moderation and
-//! configuration beside it — is the part a room may reasonably want to keep among its participants,
-//! or may not.
+//! Link conventions, goals, and a world released or collected in bulk — the wall of *"X sent Y to Z
+//! (location)"* the room already broadcasts to every unfiltered client, plus the lines that explain
+//! why one suddenly emptied into it. The rest — `chat` above all, every line anybody typed, and the
+//! moderation and configuration beside it — is the part a room may reasonably want to keep among its
+//! participants, or may not.
+//!
+//! One field crosses that line inside a record it is otherwise on the right side of, and is the only
+//! place this module narrows rather than withholds: see [`PUBLIC_BULK_FIELDS`].
 //!
 //! **Why this is a room's decision rather than a constant.** The feed link is rendered on the room
 //! page wherever the tracker link is, so the people holding it are the people holding the room
@@ -104,6 +107,17 @@ const PING: std::time::Duration = std::time::Duration::from_secs(30);
 ///     line that explains them. Withholding it left a public feed where a world empties out for no
 ///     stated reason, which is the one thing a reader most wants explained.
 ///
+///   * `release`, `collect` — a world's items sent out, or pulled in, in bulk. Each is written
+///     **before** the checks it produces, the same ordering `goal` follows, so the flood sits under
+///     the line that explains it.
+///
+///     These did not exist until pahoa added them at Puna's request. Before that a release reached
+///     this feed only as its checks, and the announcement everybody knows — *"X has released all
+///     remaining items from their world."* — was broadcast as a `PrintJSON` and never journaled at
+///     all. Worth keeping because the obvious place to look for it was `chat`, and `chat` is
+///     player-typed `Say` only: an in-game `!release` recorded what somebody TYPED, identically
+///     whether the room carried it out or refused it.
+///
 /// Everything else is withheld from a `feed` viewer and counted. That is the whole list of what a
 /// room's participants said and did to each other rather than to each other's *games*: `chat`,
 /// `admin`, `cheat`, `hints`, `connected`, `disconnected`, `tags_changed`, `started`, `stopped`,
@@ -113,25 +127,69 @@ const PING: std::time::Duration = std::time::Duration::from_secs(30);
 /// taken, on its own merits above. The other three are not: they are true statements about the
 /// room's *operation* rather than about play, and a room that wants them public has `full` to say
 /// so.
+pub const PUBLIC_KINDS: [&str; 8] = [
+    "check",
+    "gap",
+    "deathlink",
+    "traplink",
+    "ringlink",
+    "goal",
+    "release",
+    "collect",
+];
+
+/// Fields of a `release` or `collect` that a `feed` viewer may see.
 ///
-/// --- WHAT A RELEASE LOOKS LIKE HERE, because the obvious answer is wrong twice over -------------
+/// **`trigger` is deliberately absent**, and this is a decision against pahoa's own recommendation
+/// rather than an oversight. Their letter argued for rendering it: `goal`, `admin`, `player` and
+/// `group` carry no operator text, and *"gave up on their world"* reads differently from *"an
+/// organizer cleared it"*. Both true — and that is exactly why it is withheld at this tier. The
+/// distinction is about the ROOM'S OPERATION, which is the line `feed` draws everywhere else: a
+/// public feed says a world was released; who decided to release it is the organizers' business.
 ///
-/// There is **no `release` record and no `collect` record**, and the announcement everybody knows —
-/// *"X (Team #1) has released all remaining items from their world."* — is **not journaled at all**.
-/// `room.rs`'s `release_player` broadcasts it as a `PrintJSON` and writes nothing; `chat` is
-/// player-typed `Say` only (`commands.rs`'s `broadcast_chat`), so it is not hiding there either.
+/// **An organizer keeps it**, because discriminating costs one parameter here and the record is
+/// already in front of us — so the narrowing applies where the argument for it applies, rather than
+/// to everyone because that was simpler to write.
 ///
-/// So a release reaches this feed the only way it can: as the flood of `check` records it produces,
-/// with the `goal` above it saying why. That is most of what the announcement was for — and adding
-/// `"release"` to the list above would match nothing, which is a change that reads as a feature and
-/// does nothing.
+/// **An allowlist, not a blocklist**, so the omission survives pahoa adding a field. A blocklist
+/// naming `trigger` would pass through whatever arrives next — an operator's reason, say — which is
+/// the direction this module refuses everywhere else. The cost is that a genuinely useful new field
+/// is invisible to the public tier until somebody adds it here, which is a change that gets
+/// noticed; the other failure is silent.
+const PUBLIC_BULK_FIELDS: [&str; 6] = ["type", "at", "team", "slot", "player", "items"];
+
+/// One record as this viewer may see it.
 ///
-/// An explicitly-run `!release` does leave an `admin` record, and `admin` stays withheld: the same
-/// type carries `say`, `hint`, `alias`, `option`, `kick` and `lock`, which is precisely the
-/// moderation and configuration a `feed` viewer is kept out of. Publishing one verb of it would
-/// mean reading the `command` field, and that is not worth building for a line the room never
-/// wrote down.
-pub const PUBLIC_KINDS: [&str; 6] = ["check", "gap", "deathlink", "traplink", "ringlink", "goal"];
+/// Almost always the record unchanged — visibility is a whole-record decision for every type but
+/// two. `release` and `collect` are the exception: public to a `feed` viewer, and narrowed to
+/// [`PUBLIC_BULK_FIELDS`] for them alone.
+///
+/// Takes the record by value and returns it, so a caller cannot go on holding the unnarrowed one by
+/// accident.
+fn as_seen(event: serde_json::Value, visibility: Visibility) -> serde_json::Value {
+    if visibility == Visibility::Everything {
+        return event;
+    }
+    let bulk = event
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|kind| kind == "release" || kind == "collect");
+    if !bulk {
+        return event;
+    }
+
+    let serde_json::Value::Object(fields) = event else {
+        // A record claiming one of those types and not being an object is a shape this build does
+        // not understand, so nothing of it is forwarded.
+        return serde_json::json!({});
+    };
+    serde_json::Value::Object(
+        fields
+            .into_iter()
+            .filter(|(name, _)| PUBLIC_BULK_FIELDS.contains(&name.as_str()))
+            .collect(),
+    )
+}
 
 /// Whether one record may be shown to a viewer at the `feed` tier.
 ///
@@ -147,8 +205,9 @@ pub fn is_public(event: &serde_json::Value) -> bool {
 /// How much of the history this viewer gets.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Visibility {
-    /// What happened in the games: items, Links, and goals. Anyone the room's `tracker_policy`
-    /// admits. See [`PUBLIC_KINDS`].
+    /// What happened in the games: items, Links, goals, and bulk releases and collects — the last
+    /// two without their `trigger`. Anyone the room's `tracker_policy` admits. See [`PUBLIC_KINDS`]
+    /// and [`PUBLIC_BULK_FIELDS`].
     Feed,
     /// The file as written. Organizers.
     Everything,
@@ -692,8 +751,8 @@ fn batch(
         let public = is_public(&parsed);
 
         match visibility {
-            Visibility::Everything => events.push(parsed),
-            Visibility::Feed if public => events.push(parsed),
+            Visibility::Everything => events.push(as_seen(parsed, visibility)),
+            Visibility::Feed if public => events.push(as_seen(parsed, visibility)),
             Visibility::Feed => withheld += 1,
         }
     }
@@ -774,6 +833,90 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&frame).expect("valid JSON");
         assert_eq!(parsed["withheld"], private.len());
         assert!(parsed["events"].as_array().expect("events").is_empty());
+    }
+
+    fn bulk(kind: &str) -> String {
+        format!(
+            r#"{{"type":"{kind}","at":1.0,"team":0,"slot":1,"player":"Troy","trigger":"admin","items":131}}"#
+        )
+    }
+
+    /// **A bulk release or collect reaches a public viewer, and its `trigger` does not.**
+    ///
+    /// The record exists at all because pahoa added it at Puna's request: before that the
+    /// announcement was broadcast and never written down, so a world emptied with nothing above it
+    /// saying why. Publishing the line is the whole point, so it is asserted rather than assumed.
+    ///
+    /// `trigger` is the deliberate exception, and it is a decision against pahoa's own
+    /// recommendation — see `PUBLIC_BULK_FIELDS`. Everything else on the record is what lets the
+    /// line read: who, and how many.
+    #[test]
+    fn a_release_reaches_a_public_viewer_without_saying_who_ordered_it() {
+        for kind in ["release", "collect"] {
+            let frame = batch("replay", &[bulk(kind)], 1, None, Visibility::Feed);
+            let parsed: serde_json::Value = serde_json::from_str(&frame).expect("valid JSON");
+            let events = parsed["events"].as_array().expect("events");
+
+            assert_eq!(events.len(), 1, "a `{kind}` was withheld from the feed");
+            assert!(parsed.get("withheld").is_none());
+            assert!(
+                !frame.contains("trigger") && !frame.contains("admin"),
+                "a feed viewer was told what set off a `{kind}`"
+            );
+            // The line still has to be renderable, or withholding one field has cost the record.
+            assert_eq!(events[0]["player"], "Troy");
+            assert_eq!(events[0]["items"], 131);
+        }
+    }
+
+    /// An organizer keeps `trigger`, which is the half that makes this a tier decision rather than
+    /// a blanket removal. Discriminating costs one parameter, so the narrowing applies exactly
+    /// where the argument for it applies.
+    #[test]
+    fn an_organizer_is_told_what_set_off_a_release() {
+        let frame = batch(
+            "replay",
+            &[bulk("release")],
+            1,
+            None,
+            Visibility::Everything,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&frame).expect("valid JSON");
+        assert_eq!(parsed["events"][0]["trigger"], "admin");
+    }
+
+    /// **The narrowing is an allowlist, so a field pahoa adds later is withheld by default.**
+    ///
+    /// A blocklist naming `trigger` would pass through whatever arrives next — an operator's
+    /// reason, a note, anything — and it would do it silently, on the tier that is meant to be
+    /// shareable with an audience the organizers did not choose. The cost of the allowlist is a
+    /// useful new field going unseen until somebody adds it, which is a change that gets noticed.
+    #[test]
+    fn a_field_this_build_does_not_know_never_reaches_a_public_viewer() {
+        let record = r#"{"type":"release","at":1.0,"slot":1,"player":"Troy","items":3,
+                         "reason":"griefing, see #mod-log","ordered_by":"an organizer"}"#;
+        let frame = batch("replay", &[record.to_string()], 1, None, Visibility::Feed);
+
+        assert!(
+            !frame.contains("griefing"),
+            "an operator's note reached the public feed"
+        );
+        assert!(!frame.contains("ordered_by"));
+        assert!(
+            frame.contains("Troy"),
+            "and the record itself was lost with it"
+        );
+
+        // The organizer's view is untouched: this narrows what is rendered, it does not decide
+        // what is fit to exist.
+        let frame = batch(
+            "replay",
+            &[record.to_string()],
+            1,
+            None,
+            Visibility::Everything,
+        );
+        assert!(frame.contains("griefing"));
     }
 
     /// A goal is public, and it is the line that explains the flood underneath it.

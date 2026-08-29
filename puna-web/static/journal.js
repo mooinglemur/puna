@@ -207,6 +207,38 @@
     return parts.length ? " - " + parts.join(", ") : "";
   }
 
+  // What set off a bulk release or collect, in words rather than as a bare tag.
+  //
+  // Absent for anybody at the feed tier, which is the common case and must read as a complete
+  // sentence rather than as a line with something missing off the end. Present for an organizer,
+  // where the four values are pahoa's: goal, admin, player, group.
+  //
+  // An unrecognized value falls through to nothing rather than being printed raw: a future pahoa
+  // trigger is a word this build cannot phrase, and "(quorum)" in the middle of a sentence reads
+  // as a bug rather than as news.
+  function trigger(value) {
+    switch (value) {
+      // **Phrased to fit BOTH records**, which the first version did not. "an organizer cleared it"
+      // and "they gave up on it" describe releasing a world; on a collect they are not merely
+      // clumsy but false, since a collect is the opposite motion: pulling your own items in. And
+      // `trigger` is withheld from the feed tier, so the only people who would ever have read those
+      // lines are the ones who would know they were wrong.
+      case "goal":
+        return " - on reaching their goal";
+      case "admin":
+        return " - at an organizer's request";
+      case "player":
+        return " - at their own request";
+      // A group slot sweeping up because its last member finished. Deliberately not "player":
+      // pahoa gave it its own value rather than attributing a group's sweep to whoever happened
+      // to finish last.
+      case "group":
+        return " - when the group finished";
+      default:
+        return "";
+    }
+  }
+
   function at(seconds) {
     var d = new Date(seconds * 1000);
     return isNaN(d.getTime()) ? "" : d;
@@ -388,6 +420,25 @@
         who(row, event);
         cell(row, " has completed their goal", "verb");
         cell(row, event.game ? " - " + event.game : "", "where");
+        break;
+
+      // A world emptied in one go, written by the room BEFORE the checks it produces, so this line
+      // sits above its own flood and explains it.
+      //
+      // `trigger` is rendered only when it is there. An organizer gets it; a viewer at the feed
+      // tier does not, because who decided to clear a world is the room's operation rather than
+      // its play - see PUBLIC_BULK_FIELDS in routes/journal.rs. So this arm must read correctly
+      // with the field absent, which is the ordinary case for most people looking at it.
+      case "release":
+      case "collect":
+        who(row, event);
+        // **Both phrased as "verb from where", so the count cell completes the sentence.**
+        //
+        cell(row, event.type === "release"
+          ? " released from their world"
+          : " collected from other worlds", "verb");
+        cell(row, typeof event.items === "number" ? " - " + event.items + " item" + (event.items === 1 ? "" : "s") : "", "item");
+        cell(row, trigger(event.trigger), "hint");
         break;
 
       // Every mutating admin verb, recorded at the dispatch point as it was ASKED FOR, so a
