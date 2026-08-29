@@ -58,6 +58,24 @@
   var cursorAsked = null;
   // The pending redial, so it can be cancelled when the tab goes away. `null` means none is armed.
   var reconnectTimer = null;
+  // --- THE DEAD-LINK WATCHDOG ---------------------------------------------------------------------
+  // **A WebSocket does not tell you it has stopped working.** Blocking the site with iptables drops
+  // packets rather than resetting the connection, so TCP retransmits into the void with exponential
+  // backoff — up to about fifteen minutes on Linux before it gives up — and until then the socket is
+  // open, `close` never fires and `readyState` is still `OPEN`. Measured: five minutes on a green
+  // dot, then a silent recovery when the block lifted, which was the same connection catching up
+  // rather than a reconnect.
+  //
+  // The protocol's own ping cannot help, and this is the part worth knowing: **the browser
+  // WebSocket API exposes no ping or pong to JavaScript**. The browser answers the server's pings
+  // by itself and tells the page nothing. So liveness has to be an ordinary message the page can
+  // see, and a timer that gives up when one stops arriving.
+  var aliveTimer = null;
+  // Filled from the opening frame's `heartbeat_ms`, so there is one authority for the cadence.
+  // The multiplier absorbs a missed beat and a slow network; a background tab throttles timers, but
+  // throttling makes them fire LATE rather than early, which is the safe direction for a watchdog.
+  var HEARTBEAT_MISSES = 2.5;
+  var aliveAfter = 0;
   var stuckToBottom = true;
   // The offset the oldest line on the page begins at. `null` until the first replay lands, `0` once
   // the walk has reached the beginning of the file and there is nothing earlier to ask for.
@@ -588,6 +606,28 @@
     if (link) link.className = up ? "link-state up" : "link-state down";
   }
 
+  // Called on EVERY frame, whatever it carries. Any traffic at all proves the link, so a busy room
+  // never runs this timer down and a silent one is carried by the heartbeat alone.
+  function heard() {
+    if (aliveTimer !== null) clearTimeout(aliveTimer);
+    if (!aliveAfter) return;
+    aliveTimer = setTimeout(function () {
+      aliveTimer = null;
+      // **Close it ourselves.** Nothing else will: the socket believes it is open, so waiting for
+      // `close` means waiting out TCP's own retransmission budget. Closing fires our `close`
+      // handler, which paints the dot red and schedules the redial through the ordinary path.
+      say("Lost contact with the room's feed — reconnecting…", "warning");
+      if (socket) socket.close();
+    }, aliveAfter);
+  }
+
+  function stopWatchdog() {
+    if (aliveTimer !== null) {
+      clearTimeout(aliveTimer);
+      aliveTimer = null;
+    }
+  }
+
   // **The fact that a feed is filtered belongs in the status line, once, not in the feed.**
   //
   // The server reports a `withheld` count per frame, and rendering it as a row put a timestamp-less
@@ -677,17 +717,33 @@
     });
 
     socket.addEventListener("message", function (message) {
+      // **Before the parse, and before any `kind` is looked at.** A frame arriving is the proof
+      // the link is alive whatever it says, and a frame this build cannot read is still a frame
+      // that crossed the wire. Restarting the watchdog only for messages we understood would let a
+      // newer server's unfamiliar frame look exactly like silence.
+      heard();
+
       var frame;
       try {
         frame = JSON.parse(message.data);
       } catch (e) {
         return;
       }
+      // Carries nothing and is not meant to: its whole job is to arrive, so `heard` above has
+      // something to hear on a room where nobody is playing.
+      if (frame.kind === "heartbeat") return;
       if (frame.kind === "empty") {
         say("This room has no feed history yet. It is written while the room runs.", "notice");
         return;
       }
       if (typeof frame.cursor === "number") cursor = frame.cursor;
+      // The cadence comes from the server, on the opening frame. Until it arrives the watchdog is
+      // disarmed rather than guessing — a guess shorter than the real interval would tear down a
+      // healthy connection on a timer, which is worse than the gap it was meant to close.
+      if (typeof frame.heartbeat_ms === "number" && frame.heartbeat_ms > 0) {
+        aliveAfter = frame.heartbeat_ms * HEARTBEAT_MISSES;
+        heard();
+      }
 
       // A backfill page goes on the front and never touches the follow cursor.
       if (frame.kind === "earlier") {
@@ -764,6 +820,8 @@
     socket.addEventListener("close", function () {
       live = false;
       setLink(false);
+      // Or it fires against a socket that is already gone and closes the next one.
+      stopWatchdog();
       scheduleReconnect();
     });
 

@@ -471,6 +471,13 @@ async fn feed(
                     ))
                     .unwrap_or_default();
                     frame["start"] = replay.start.into();
+                    // **How often the page may expect to hear something, from the side that
+                    // decides it.** The client's watchdog is a multiple of this. Hardcoding the
+                    // number there instead would be two constants in two files that must agree,
+                    // and the failure of that agreement is silent in the worse direction: a
+                    // watchdog shorter than the heartbeat tears down a healthy connection on a
+                    // timer.
+                    frame["heartbeat_ms"] = (PING.as_millis() as u64).into();
                     if stream
                         .send(ws::Message::Text(frame.to_string()))
                         .await
@@ -545,8 +552,31 @@ async fn feed(
                         }
                     }
                     _ = ping.tick() => {
-                        // Envoy closes an idle stream, and a quiet room is idle by nature.
+                        // **Two frames, doing two different jobs, and the second is the one the
+                        // page can act on.**
+                        //
+                        // The protocol Ping keeps the connection alive through Envoy, which closes
+                        // an idle stream and a quiet room is idle by nature. A browser answers it
+                        // itself, with no script running — which is exactly what makes it useless
+                        // for detecting a dead link: **the WebSocket API exposes no ping or pong to
+                        // JavaScript at all**, so a page cannot send one, cannot see one, and
+                        // cannot tell a silent room from a black hole.
+                        //
+                        // Found by blocking the site with iptables: nothing was RESET, so TCP kept
+                        // retransmitting into the void, the socket stayed open, `close` never
+                        // fired, and the page sat on a green dot for five minutes. It recovered
+                        // when the block lifted and a retransmission finally landed — the same
+                        // connection catching up, never a reconnect.
+                        //
+                        // So the heartbeat is an ordinary text frame. It is the ONLY thing that
+                        // reaches the page on a quiet room, which is what lets a watchdog there
+                        // conclude anything.
                         if stream.send(ws::Message::Ping(Vec::new())).await.is_err() {
+                            return Ok(());
+                        }
+                        if stream.send(ws::Message::Text(
+                            r#"{"kind":"heartbeat"}"#.to_string()
+                        )).await.is_err() {
                             return Ok(());
                         }
                     }

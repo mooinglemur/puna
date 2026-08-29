@@ -933,6 +933,33 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
         scheduler.contains("attached()"),
         "scheduleReconnect no longer checks for an existing socket, so two can be opened at once"
     );
+
+    // --- THE DEAD-LINK WATCHDOG ------------------------------------------------------------------
+    // A dropped-not-reset link leaves the socket `OPEN` for as long as TCP keeps retransmitting —
+    // minutes — and the protocol's own ping is invisible to JavaScript, so the page has nothing to
+    // go on but an ordinary frame arriving. Every piece of this is silent when removed: the page
+    // keeps working perfectly and simply never notices a black hole again, which is the state it
+    // was in when a five-minute outage left the dot green.
+    assert!(
+        code.contains("heartbeat_ms"),
+        "journal.js no longer takes the heartbeat cadence from the server, so its watchdog is \
+         either guessing or disarmed"
+    );
+    let handler = code
+        .split_once("addEventListener(\"message\"")
+        .map(|(_, rest)| rest)
+        .expect("journal.js no longer handles messages");
+    let heard = handler
+        .find("heard()")
+        .expect("the message handler no longer restarts the watchdog");
+    let parse = handler
+        .find("JSON.parse")
+        .expect("the message handler no longer parses");
+    assert!(
+        heard < parse,
+        "the watchdog is restarted only for frames that parsed, so a frame this build cannot read \
+         is indistinguishable from silence"
+    );
     // The backoff, and the one thing that must reset it. Coming back to a tab is information about
     // the reader rather than about the server, so the wait that had built up does not apply.
     assert!(
@@ -983,6 +1010,41 @@ fn the_journal_feed_closes_itself_when_the_server_is_shutting_down() {
     assert!(
         source.contains("CloseCode::Away"),
         "the feed closes with a code that does not invite a reconnect"
+    );
+}
+
+/// **The feed sends a heartbeat the PAGE can see, not only a protocol ping it cannot.**
+///
+/// The browser WebSocket API exposes no ping or pong to JavaScript: the browser answers the server
+/// by itself and tells the page nothing. So on a quiet room a protocol ping proves liveness to
+/// every layer except the one that has to draw the indicator — which is how a five-minute blackhole
+/// left the dot green.
+///
+/// Both frames are asserted, because they do different jobs and dropping either is invisible:
+/// without the Ping, Envoy reaps a quiet stream; without the text frame, nothing reaches the page.
+#[test]
+fn the_journal_feed_sends_a_heartbeat_the_page_can_observe() {
+    let source = std::fs::read_to_string(source("src/routes/journal.rs")).expect("journal.rs");
+
+    assert!(
+        source.contains(r#"{"kind":"heartbeat"}"#),
+        "the feed no longer sends an application heartbeat, so a page cannot tell a quiet room from \
+         a dead link"
+    );
+    assert!(
+        source.contains("ws::Message::Ping"),
+        "the feed no longer pings, so Envoy closes a quiet stream out from under it"
+    );
+    // The cadence goes out on the opening frame so the client's watchdog derives from it. Two
+    // constants in two files would drift, and the drift is dangerous in one direction: a watchdog
+    // shorter than the heartbeat tears down healthy connections on a timer.
+    assert!(
+        source.contains("heartbeat_ms"),
+        "the opening frame no longer advertises the heartbeat cadence"
+    );
+    assert!(
+        source.contains("PING.as_millis()"),
+        "the advertised cadence is a literal rather than the interval actually used"
     );
 }
 
