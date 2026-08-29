@@ -13,6 +13,8 @@
 
   var log = document.getElementById("journal");
   var status = document.getElementById("journal-status");
+  var message = document.getElementById("journal-message");
+  var link = document.getElementById("journal-link");
   if (!log || !status) return;
 
   // The FEED's id, which is not the room's and is not derivable from it. Everything this script
@@ -45,7 +47,17 @@
   var progress = document.getElementById("journal-progress");
 
   var socket = null;
+  // The follow position, in bytes into the room's history file. Advanced by every frame the server
+  // sends, and sent back on a RECONNECT so the feed resumes exactly where it stopped rather than
+  // replaying a tail the page already shows.
   var cursor = null;
+  // Whether the connection now opening asked to resume, and the offset it asked from. Kept because
+  // the server's answer is only interpretable against the question: a `start` equal to what was
+  // asked is a clean join, and anything else means it served a tail instead.
+  var resumed = false;
+  var cursorAsked = null;
+  // The pending redial, so it can be cancelled when the tab goes away. `null` means none is armed.
+  var reconnectTimer = null;
   var stuckToBottom = true;
   // The offset the oldest line on the page begins at. `null` until the first replay lands, `0` once
   // the walk has reached the beginning of the file and there is nothing earlier to ask for.
@@ -563,8 +575,17 @@
   }
 
   function say(text, className) {
-    status.textContent = text;
+    // The MESSAGE span, not the whole paragraph: the dot is a sibling and `textContent` on the
+    // parent would delete it. The first version of this wrote to `status` and the indicator
+    // vanished on the first status change — which is to say, immediately and always.
+    message.textContent = text;
     status.className = className || "notice";
+  }
+
+  // Green when the feed is attached, red when it is not. Purely decorative — `say` above carries
+  // the same state in words, and this element is `aria-hidden` for that reason.
+  function setLink(up) {
+    if (link) link.className = up ? "link-state up" : "link-state down";
   }
 
   // **The fact that a feed is filtered belongs in the status line, once, not in the feed.**
@@ -635,9 +656,24 @@
     socket = new WebSocket(scheme + "//" + location.host + "/journal/" + feed + "/feed");
 
     socket.addEventListener("open", function () {
-      // The server waits for this before replaying, so it decides where the page starts. `at` is
-      // accepted here too, for the day this page offers a time to scroll back to.
-      socket.send(JSON.stringify({ from: { lines: REPLAY_LINES } }));
+      // The server waits for this before replaying, so it decides where the page starts.
+      //
+      // **A reconnect resumes at the cursor; a first connect asks for a tail.** Sending the tail
+      // both times is what duplicated the feed across a rollout: the page keeps its lines, the
+      // server replayed the last hundred records, and `append` has no reason to think it has seen
+      // them. Confirmed happening on a re-rollout, and it reads as a busy room rather than as a
+      // fault, which is why it survived.
+      //
+      // `at` is accepted here too, for the day this page offers a time to scroll back to. It is
+      // deliberately not what a resume uses: several records routinely share a timestamp and
+      // `since` is inclusive, so it would re-send the ties.
+      resumed = cursor !== null;
+      cursorAsked = cursor;
+      socket.send(
+        JSON.stringify(
+          resumed ? { from: { after: cursor } } : { from: { lines: REPLAY_LINES } }
+        )
+      );
     });
 
     socket.addEventListener("message", function (message) {
@@ -676,6 +712,18 @@
         return;
       }
 
+      // **A resume the server could not stitch.** It answers a fresh tail instead — the file was
+      // reset under us, or the gap was larger than one frame may carry — and says so by reporting a
+      // `start` other than the offset asked for. Appending that onto what is already here would put
+      // a hole in the middle of the feed with nothing marking it, so the page starts over.
+      if (frame.kind === "replay" && resumed && frame.start !== cursorAsked) {
+        log.replaceChildren();
+        lastDay = null;
+        backfilled = 0;
+        say("Reconnected, but too much happened to join on — showing the latest records.", "notice");
+        resumed = false;
+      }
+
       append(frame.events || []);
       noteFiltering(frame.withheld);
       if (frame.kind === "replay") {
@@ -684,13 +732,25 @@
         // second.
         retry = RETRY_MIN;
         live = true;
+        setLink(true);
         sayLive();
+
+        // **A resume leaves the page's anchors alone**, because it leaves the page alone: its
+        // oldest line is still whatever it was, and `append` has already decided whether to follow
+        // the bottom by whether the reader was sitting there. Re-anchoring here would point the
+        // backfill walk at the middle of what is on screen, and scrolling would yank a reader who
+        // came back to find their place.
+        if (resumed) {
+          resumed = false;
+          return;
+        }
+
         log.scrollTop = log.scrollHeight;
 
-        // **Re-anchored on every replay, including after a reconnect.** A socket that dropped and
-        // came back replays the tail, so the page's oldest line is whatever that replay began with
-        // — carrying the previous `start` across would ask for a region the page no longer joins on
-        // to, leaving a hole in the middle of the feed.
+        // **Re-anchored on every replay that REPLACES the page** — a first connect, or a resume the
+        // server could not stitch, both of which start from a tail. The page's oldest line is
+        // whatever that replay began with, and carrying the previous `start` across would ask for a
+        // region the page no longer joins on to, leaving a hole in the middle of the feed.
         oldest = typeof frame.start === "number" ? frame.start : null;
         backfilling = false;
         if (keepEverything && oldest > 0) {
@@ -702,10 +762,9 @@
     });
 
     socket.addEventListener("close", function () {
-      say("Reconnecting to the room's feed…", "warning");
-      var wait = retry / 2 + Math.random() * (retry / 2);
-      retry = Math.min(retry * 2, RETRY_MAX);
-      setTimeout(open, wait);
+      live = false;
+      setLink(false);
+      scheduleReconnect();
     });
 
     // `close` fires after `error`, so the reconnect is scheduled there and not twice.
@@ -714,8 +773,67 @@
     });
   }
 
-  // A page in a background tab keeps its socket: the server pings, the traffic is a trickle, and
-  // dropping it would mean a reconnect and a re-replay every time somebody switches tabs. The
-  // tracker polls and therefore has to care about visibility; this does not.
+  // Whether a socket is up or on its way up. Guards every path that might open a second one — the
+  // visibility handler and the close handler can both decide to redial, and two sockets would both
+  // replay and both follow.
+  function attached() {
+    return (
+      socket &&
+      (socket.readyState === WebSocket.OPEN ||
+        socket.readyState === WebSocket.CONNECTING)
+    );
+  }
+
+  // The **Page Visibility API** — `document.visibilityState`, which is `"visible"` or `"hidden"`,
+  // with `visibilitychange` fired on every transition. It is the right question rather than
+  // `window.onfocus`: a tab sitting in view beside another window is `visible` and unfocused, and
+  // that reader is watching the feed.
+  function showing() {
+    return document.visibilityState === "visible";
+  }
+
+  // **A hidden tab does not redial.** Nobody is reading it, a room can be down for an hour, and a
+  // laptop that slept with twenty of these open should not wake into twenty reconnect storms. The
+  // dial resumes the moment the tab is looked at.
+  //
+  // An OPEN socket in a hidden tab is left alone, which is the older rule and still right: the
+  // server pings, the traffic is a trickle, and dropping it would cost a reconnect every time
+  // somebody switched tabs.
+  function scheduleReconnect() {
+    if (reconnectTimer !== null || attached()) return;
+    if (!showing()) {
+      say("Not connected — will reconnect when you come back to this tab.", "warning");
+      return;
+    }
+    say("Reconnecting to the room's feed…", "warning");
+    var wait = retry / 2 + Math.random() * (retry / 2);
+    retry = Math.min(retry * 2, RETRY_MAX);
+    reconnectTimer = setTimeout(function () {
+      reconnectTimer = null;
+      open();
+    }, wait);
+  }
+
+  document.addEventListener("visibilitychange", function () {
+    if (!showing()) {
+      // Cancel a redial that has not fired. Without this a tab hidden mid-backoff still reconnects
+      // once, which is the case the rule exists for — a browser waking a hundred background tabs.
+      if (reconnectTimer !== null) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      if (!attached()) say("Not connected — will reconnect when you come back to this tab.", "warning");
+      return;
+    }
+    if (attached()) return;
+    // **Immediately, and from a clean backoff.** The wait that had built up was measuring a server
+    // that would not answer; coming back to the tab is new information about this reader rather
+    // than about the server, and making somebody stare at a red dot for the remains of a 30-second
+    // timer is the thing they came back to avoid.
+    retry = RETRY_MIN;
+    open();
+  });
+
+  setLink(false);
   open();
 })();

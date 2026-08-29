@@ -46,8 +46,15 @@ runs.</span>
 {# The FEED's id, not the room's. `journal.js` builds its socket URL from this, so putting the room
    id here would leak it into the page's markup for every viewer -- the exact thing the separate id
    exists to prevent, arriving through a data attribute instead of an href. #}
-<p id="journal-status" class="notice" data-feed="{{ room.journal_id }}">Connecting to the room's
-feed&hellip;</p>
+{# The dot is a SECOND signal, never the only one: the message beside it always says the same thing
+   in words. A state carried by hue alone is unreadable to a color-blind reader and invisible to a
+   screen reader, which is the rule `.notice`/`.warning`/`.error` already follow by carrying a left
+   border as well as a color. `aria-hidden`, because the text it decorates is the accessible copy
+   and announcing both would say everything twice. #}
+<p id="journal-status" class="notice" data-feed="{{ room.journal_id }}">
+<span id="journal-link" class="link-state" aria-hidden="true"></span>
+<span id="journal-message">Connecting to the room's feed&hellip;</span>
+</p>
 
 <noscript>
 <p class="warning">This feed needs JavaScript: it is a live connection to the room rather than a

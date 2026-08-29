@@ -40,6 +40,12 @@
   --warn-bg: light-dark(#fdf3dd, #33280f);
   --err-fg: light-dark(#a01b1b, #f29090);
   --err-bg: light-dark(#fdeaea, #3a1d1d);
+  /* The journal feed's connection dot. Its own pair rather than reusing --accent and --err-fg,
+     because those are TEXT colors picked to read on a tinted background, and a filled 0.6rem circle
+     wants more saturation than a paragraph does to register at that size. Both are darkened in the
+     light theme and lifted in the dark one for the same reason. */
+  --link-up: light-dark(#1a7f37, #4cc264);
+  --link-down: light-dark(#c02626, #f2696e);
 
   /* The one thing on this page that floats above the rest, so the one shadow. Heavier in dark mode
      because a shadow is separation from the surface behind it, and there is less contrast to
@@ -649,6 +655,31 @@ code.stale {
 .notice p,
 .warning p,
 .error p { margin: 0.25rem 0; }
+
+/* --- the journal feed's connection dot ----------------------------------------------------------
+   Green attached, red not. **A second signal, never the only one**: the sentence beside it says the
+   same thing in words, which is what makes it readable to somebody who cannot tell the two hues
+   apart — the same rule the three blocks above follow by carrying a left border as well as a color.
+   It is `aria-hidden` in the markup for that reason: the text is the accessible copy.
+
+   `flex-shrink: 0` because the message next to it wraps on a phone, and a dot that squashed into an
+   ellipse as the text reflowed would read as a rendering fault. */
+.link-state {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  margin-right: 0.4rem;
+  /* Sits on the text's own baseline rather than riding above it. */
+  vertical-align: baseline;
+  /* Until the script says otherwise. A page whose script failed shows a muted dot and the
+     server-rendered "Connecting…" beside it, which is exactly the true state. */
+  background: var(--muted);
+}
+
+.link-state.up { background: var(--link-up); }
+.link-state.down { background: var(--link-down); }
 
 .warning {
   border-left-color: var(--warn-fg);

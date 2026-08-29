@@ -331,7 +331,19 @@ async fn main() -> anyhow::Result<()> {
 
     // Rocket's own figment, which picks up Rocket.toml via ROCKET_CONFIG. The Discord credentials
     // live in that file and NOT in environment variables -- see the note on `auth::discord_config`.
-    let figment = rocket::Config::figment();
+    //
+    // --- THE SHUTDOWN GRACE, MERGED IN RATHER THAN SET THROUGH ROCKET'S OWN ENV ------------------
+    // Rocket's default is TWO SECONDS, which is the whole budget an in-flight response gets after
+    // SIGTERM: `CancellableIo` keeps doing ordinary I/O for `grace`, then spends `mercy` closing.
+    // So a patch or a journal download that has not finished in two seconds is cut mid-stream on
+    // every rollout, and the reader sees a truncated file rather than an error.
+    //
+    // **Not `ROCKET_SHUTDOWN_GRACE`, which does nothing.** Rocket merges `Env::prefixed("ROCKET_")`
+    // with no key splitting, so that name arrives as a flat `shutdown_grace` key, matches no field,
+    // and is ignored in silence -- the same shape as a `2Mi` that parses as a default. Reading our
+    // own variable and merging the nested key means a typo is a startup error instead.
+    let grace = puna_core::config::shutdown_grace_from_env()?;
+    let figment = rocket::Config::figment().merge(("shutdown.grace", grace));
 
     if role == Role::Web {
         // Fail at startup rather than at the first login attempt. A missing Rocket.toml is a

@@ -331,6 +331,46 @@ fn optional(key: &str, default: &str) -> String {
 /// using it rather than at startup: a URL with no token gets a `403` from the lobby that reads as
 /// the lobby being broken, and a token with no URL is a secret mounted for nothing. Refusing at
 /// startup makes the mistake arrive during a deploy, where it belongs.
+/// Seconds an in-flight response gets to finish after SIGTERM, from `PUNA_SHUTDOWN_GRACE`.
+///
+/// **This is the download budget, and Rocket's own default of 2 is far too short for one.** During
+/// `grace` a connection keeps doing ordinary I/O; `mercy` after it is for closing, not for more
+/// streaming. So a patch or a journal download still in flight when the period ends is cut, and
+/// what the reader has is a short file rather than a failure.
+///
+/// **It must fit inside `terminationGracePeriodSeconds`, and nothing here can check that.** Rocket
+/// gives up at `grace + mercy + 1`; the kubelet SIGKILLs at the pod's own deadline, counting from
+/// before `preStop` runs. Overrun and the process dies mid-response anyway, which is the failure
+/// this exists to prevent, arriving from the other side. The manifest carries the arithmetic.
+///
+/// Long is cheap here **only because the feed socket closes itself on shutdown**. An open WebSocket
+/// keeps a connection alive through the whole grace, and hyper waits for open connections, so
+/// without that arm every rollout would hold every pod for the full period on behalf of readers
+/// rather than downloaders.
+pub fn shutdown_grace_from_env() -> anyhow::Result<u32> {
+    const DEFAULT: u32 = 20;
+    // A ceiling well under any plausible pod deadline, because the failure is invisible until a
+    // rollout: too large and the kubelet kills the process mid-response, which looks exactly like
+    // the truncation a grace period exists to remove.
+    const MAX: u32 = 120;
+
+    match std::env::var("PUNA_SHUTDOWN_GRACE") {
+        Err(_) => Ok(DEFAULT),
+        Ok(raw) => {
+            let secs: u32 = raw.trim().parse().map_err(|_| {
+                anyhow::anyhow!(
+                    "PUNA_SHUTDOWN_GRACE must be a whole number of seconds, got {raw:?}"
+                )
+            })?;
+            anyhow::ensure!(
+                (1..=MAX).contains(&secs),
+                "PUNA_SHUTDOWN_GRACE must be between 1 and {MAX} seconds, got {secs}"
+            );
+            Ok(secs)
+        }
+    }
+}
+
 pub fn lobby_from_env() -> anyhow::Result<Option<(String, String)>> {
     let url = std::env::var("PUNA_LOBBY_URL")
         .ok()
@@ -412,6 +452,58 @@ mod tests {
         let (low, high) = parse("40000-44999").expect("a whole number of pairs");
         assert_eq!((low, high), (40000, 44998), "2500 pairs, top base is 44998");
         assert_eq!(high + 1, 44999, "the pair's upper half is still inside");
+    }
+
+    /// **A grace nobody set is not the same as one set wrong**, and both have to be distinguishable
+    /// from a value that quietly did nothing.
+    ///
+    /// This exists because the obvious spelling — `ROCKET_SHUTDOWN_GRACE` — is silently inert:
+    /// Rocket merges `ROCKET_`-prefixed variables with no key splitting, so it lands as a flat key,
+    /// matches no field, and leaves the two-second default in force while looking configured. Puna
+    /// reads its own variable so a typo stops a pod instead.
+    #[test]
+    fn a_shutdown_grace_is_defaulted_or_refused_but_never_silently_ignored() {
+        // SAFETY: single-threaded test, and the variable is read immediately after each set.
+        let with = |value: Option<&str>| {
+            unsafe {
+                match value {
+                    Some(v) => std::env::set_var("PUNA_SHUTDOWN_GRACE", v),
+                    None => std::env::remove_var("PUNA_SHUTDOWN_GRACE"),
+                }
+            }
+            shutdown_grace_from_env()
+        };
+
+        assert_eq!(
+            with(None).expect("unset is a default, not an error"),
+            20,
+            "an unset grace must be long enough for a download rather than Rocket's own 2"
+        );
+        assert_eq!(with(Some("45")).expect("a plain number"), 45);
+        assert_eq!(
+            with(Some(" 45 ")).expect("padded"),
+            45,
+            "whitespace is trimmed"
+        );
+
+        // Zero would mean "cut every response the instant SIGTERM lands", which is the behavior a
+        // grace exists to remove, reachable by typing one character.
+        assert!(with(Some("0")).is_err(), "zero is refused");
+        assert!(
+            with(Some("600")).is_err(),
+            "a grace beyond any plausible pod deadline is refused rather than accepted and then \
+             cut short by a SIGKILL mid-response"
+        );
+        assert!(
+            with(Some("20s")).is_err(),
+            "a unit suffix is not silently dropped"
+        );
+        assert!(
+            with(Some("")).is_err(),
+            "an empty value is a mistake, not a default"
+        );
+
+        unsafe { std::env::remove_var("PUNA_SHUTDOWN_GRACE") };
     }
 
     /// Both ends are checked rather than rounded. Quietly repairing a typo would hand back a range

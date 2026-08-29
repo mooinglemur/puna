@@ -360,6 +360,14 @@ struct Anchor {
     lines: Option<usize>,
     /// Or everything at or after this instant, in unix seconds.
     at: Option<f64>,
+    /// Or everything after this byte offset — **what a RECONNECT sends**, being the `cursor` the
+    /// page already has.
+    ///
+    /// A byte offset rather than the `at` beside it, because this one has to join exactly: `since`
+    /// is inclusive and several records routinely share a timestamp, so resuming by instant would
+    /// re-send whatever tied with the last line on the page. The offset is the position `read_from`
+    /// already follows with, so a resume is the same read the follow loop makes, once.
+    after: Option<journal::Cursor>,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -378,6 +386,36 @@ struct FeedRequest {
 ///
 /// The client speaks first, naming where to start; a client that says nothing within a moment gets
 /// the default tail, so a viewer whose script failed to send still sees a page with history on it.
+/// The first read a feed makes, from whatever the client anchored on.
+///
+/// **A resume can decline to be one, and `start` is how it says so.** `read_from` is uncapped — the
+/// follow loop calls it every poll, so its increments are a handful of lines — but a resume's gap is
+/// however long the viewer was away, and a laptop that slept through a mass release would ask for
+/// six figures of records in one frame. Past the cap this serves a fresh tail instead.
+///
+/// So the contract with the page is: **`start == after` means the resume joined**, and anything else
+/// means it got a tail and must replace what it is showing rather than extend it. The other fallback
+/// rides the same signal for free — `read_from` already answers a truncated file (a room whose save
+/// was reset) with a tail, and that tail's `start` is not the offset asked for either.
+///
+/// Falling back *silently* is the shape being avoided. Either fallback appended to a page that kept
+/// its lines is a hole in the middle of the feed with nothing marking it, which is the failure this
+/// module's own history is about: an incomplete record that does not announce itself.
+fn opening_replay(path: &std::path::Path, from: &Anchor) -> std::io::Result<journal::Replay> {
+    match (from.after, from.at) {
+        (Some(after), _) => {
+            let replay = journal::read_from(path, after)?;
+            if replay.lines.len() > journal::MAX_REPLAY_LINES {
+                journal::tail(path, journal::DEFAULT_REPLAY_LINES)
+            } else {
+                Ok(replay)
+            }
+        }
+        (None, Some(at)) => journal::since(path, at),
+        (None, None) => journal::tail(path, from.lines.unwrap_or(journal::DEFAULT_REPLAY_LINES)),
+    }
+}
+
 #[get("/journal/<id>/feed")]
 async fn feed(
     id: JournalParam,
@@ -385,6 +423,7 @@ async fn feed(
     session: Session,
     pool: &State<Pool>,
     data_dir: &State<DataDir>,
+    shutdown: rocket::Shutdown,
 ) -> Result<ws::Channel<'static>> {
     let mut conn = pool.get().await?;
     // **Authorized before the upgrade**, so a refused viewer gets an ordinary 404 rather than an
@@ -413,13 +452,7 @@ async fn feed(
             let from = request.from.unwrap_or_default();
             let opening = {
                 let path = path.clone();
-                tokio::task::spawn_blocking(move || match from.at {
-                    Some(at) => journal::since(&path, at),
-                    None => {
-                        journal::tail(&path, from.lines.unwrap_or(journal::DEFAULT_REPLAY_LINES))
-                    }
-                })
-                .await
+                tokio::task::spawn_blocking(move || opening_replay(&path, &from)).await
             };
 
             let mut cursor = match opening {
@@ -463,8 +496,40 @@ async fn feed(
             let mut ping = tokio::time::interval(PING);
             ping.reset();
 
+            // Cloned per connection, and a `Future` as well as a request guard: it resolves the
+            // moment Rocket is asked to shut down, whether by SIGTERM or by anything else.
+            let mut shutdown = shutdown;
+
             loop {
                 tokio::select! {
+                    biased;
+
+                    // **The room's feed gets out of the way of a rollout, first.**
+                    //
+                    // `biased`, so this arm is checked before the others: a poll or a ping that ran
+                    // first would spend a syscall on a connection that is about to close, and on a
+                    // busy room the poll arm is ready every tick.
+                    //
+                    // Without this, an open feed holds a pod for the WHOLE grace period. Rocket's
+                    // `CancellableIo` keeps doing ordinary I/O until `grace` expires and hyper's
+                    // graceful shutdown waits for open connections -- and a feed socket never
+                    // completes on its own, that being the point of it. So a grace long enough for
+                    // a download would be paid on every rollout by every reader, for nothing.
+                    //
+                    // Closing cleanly is also better for the page than being cut: the browser fires
+                    // `close` at once rather than after a TCP timeout, so it redials in a few
+                    // hundred milliseconds and resumes at its cursor. A reader sees the dot blink
+                    // rather than a gap.
+                    _ = &mut shutdown => {
+                        let _ = stream.send(ws::Message::Close(Some(ws::frame::CloseFrame {
+                            // 1001 "going away", which is what this is: the endpoint is shutting
+                            // down and the client should reconnect. Not 1000, which reads as "we
+                            // are done here" and invites a client to stay closed.
+                            code: ws::frame::CloseCode::Away,
+                            reason: "the server is restarting".into(),
+                        }))).await;
+                        return Ok(());
+                    }
                     _ = poll.tick() => {
                         let path = path.clone();
                         let at = cursor;
@@ -907,5 +972,129 @@ mod tests {
         assert_eq!(anchored.from.unwrap().at, Some(1787729723.5));
         let lines: FeedRequest = serde_json::from_str(r#"{"from":{"lines":50}}"#).expect("lines");
         assert_eq!(lines.from.unwrap().lines, Some(50));
+
+        // What a reconnect sends. The page has this offset already; the wire has to carry it.
+        let after: FeedRequest = serde_json::from_str(r#"{"from":{"after":4096}}"#).expect("after");
+        assert_eq!(after.from.unwrap().after, Some(4096));
+    }
+
+    /// Write `lines` to a journal and hand back the directory holding it.
+    fn journal_file(lines: &[String]) -> (tempfile::TempDir, std::path::PathBuf) {
+        use std::io::Write;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("history.jsonl");
+        let mut file = std::fs::File::create(&path).expect("create");
+        for line in lines {
+            writeln!(file, "{line}").expect("write");
+        }
+        (dir, path)
+    }
+
+    fn anchor(after: Option<journal::Cursor>, lines: Option<usize>) -> Anchor {
+        Anchor {
+            lines,
+            at: None,
+            after,
+        }
+    }
+
+    /// **The rollout bug, at the level it happens.**
+    ///
+    /// A reconnect used to ask for a tail, so a page that already showed the last hundred records
+    /// got them again and rendered them twice. Confirmed happening on a re-rollout of the web tier,
+    /// where it reads as a busy room rather than as a fault — which is why it survived.
+    ///
+    /// Resuming at the cursor returns **only what arrived while the socket was down**, and `start`
+    /// equal to the offset asked for is what tells the page it may keep what it is showing.
+    #[test]
+    fn a_resume_returns_only_what_arrived_while_the_socket_was_down() {
+        let mut lines: Vec<String> = (0..10).map(|n| line(&format!("check{n}"))).collect();
+        let (_dir, path) = journal_file(&lines);
+
+        // Where a follower would have been when the pod went away.
+        let before = opening_replay(&path, &anchor(None, Some(100))).expect("tail");
+        assert_eq!(before.lines.len(), 10);
+        let cursor = before.cursor;
+
+        // Three records land during the rollout.
+        {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .expect("reopen");
+            for n in 10..13 {
+                lines.push(line(&format!("check{n}")));
+                writeln!(file, "{}", lines[n]).expect("append");
+            }
+        }
+
+        let resumed = opening_replay(&path, &anchor(Some(cursor), None)).expect("resume");
+        assert_eq!(
+            resumed.lines.len(),
+            3,
+            "a resume re-sent records the page already had"
+        );
+        assert_eq!(
+            resumed.start, cursor,
+            "start must equal the offset asked for, or the page throws its content away"
+        );
+    }
+
+    /// Nothing happened while the socket was down: an empty frame that still joins.
+    ///
+    /// Worth its own case because it is the common one on a fast rollout, and because an empty
+    /// replay must not read as a failed join — `start` still has to come back equal to the ask.
+    #[test]
+    fn a_resume_with_nothing_new_still_joins() {
+        let lines: Vec<String> = (0..5).map(|n| line(&format!("check{n}"))).collect();
+        let (_dir, path) = journal_file(&lines);
+
+        let cursor = opening_replay(&path, &anchor(None, Some(100)))
+            .expect("tail")
+            .cursor;
+        let resumed = opening_replay(&path, &anchor(Some(cursor), None)).expect("resume");
+
+        assert!(resumed.lines.is_empty());
+        assert_eq!(resumed.start, cursor);
+    }
+
+    /// **Both fallbacks report themselves the same way**, which is what lets the page carry one rule
+    /// instead of two.
+    ///
+    /// A gap too large to send in one frame, and a file that was reset under the viewer, are
+    /// different causes with the same correct answer: serve the latest records and let the page
+    /// replace what it has. Appending either onto a page that kept its lines would leave a hole in
+    /// the middle of the feed with nothing marking it.
+    #[test]
+    fn a_gap_too_large_and_a_reset_file_both_refuse_to_join() {
+        // Too large: more than one frame may carry, asked for from the very beginning.
+        let many: Vec<String> = (0..journal::MAX_REPLAY_LINES + 50)
+            .map(|n| line(&format!("check{n}")))
+            .collect();
+        let (_dir, path) = journal_file(&many);
+
+        let huge = opening_replay(&path, &anchor(Some(0), None)).expect("oversized resume");
+        assert_eq!(
+            huge.lines.len(),
+            journal::DEFAULT_REPLAY_LINES,
+            "an oversized resume serves a tail rather than everything"
+        );
+        assert_ne!(
+            huge.start, 0,
+            "and says so by reporting a start other than the offset asked for"
+        );
+
+        // Reset: the cursor is past the end of a file that is now shorter. `read_from` already
+        // answers this with a tail; what is asserted here is that it is DISTINGUISHABLE.
+        let short: Vec<String> = (0..3).map(|n| line(&format!("check{n}"))).collect();
+        let (_dir2, short_path) = journal_file(&short);
+        let stale = 900_000;
+        let reset = opening_replay(&short_path, &anchor(Some(stale), None)).expect("reset");
+        assert_eq!(reset.lines.len(), 3);
+        assert_ne!(
+            reset.start, stale,
+            "a reset file must not look like a clean join"
+        );
     }
 }

@@ -810,6 +810,11 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
     for id in [
         "journal",
         "journal-status",
+        // The status paragraph is now a container: a dot and a message, as two spans. `say` writes
+        // to the MESSAGE, so if it ever went back to writing the paragraph's `textContent` the dot
+        // would be deleted on the first status change — which is to say immediately and forever.
+        "journal-message",
+        "journal-link",
         "journal-earlier",
         "journal-progress",
     ] {
@@ -875,6 +880,109 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
     assert!(
         code.contains("location.protocol") && code.contains("wss:") && code.contains("ws:"),
         "journal.js no longer derives its scheme from the page's"
+    );
+
+    // --- THE CONNECTION DOT, WHOSE EVERY HALF FAILS WITHOUT A SYMPTOM ----------------------------
+    // The script sets `link-state up` / `link-state down`; the stylesheet colors them. Break either
+    // side and the page still works perfectly — the feed streams, the message says the right thing —
+    // and the indicator is simply always the same color. Nothing throws and nothing logs.
+    for class in ["link-state", "up", "down"] {
+        assert!(
+            code.contains(class),
+            "journal.js no longer sets `{class}` on the connection dot"
+        );
+    }
+    for rule in [".link-state", ".link-state.up", ".link-state.down"] {
+        assert!(
+            css.contains(rule),
+            "puna.css has no `{rule}` rule, so the connection dot cannot show that state"
+        );
+    }
+
+    // --- RECONNECTION IS GATED ON VISIBILITY -----------------------------------------------------
+    // The Page Visibility API, and both halves are needed: `visibilityState` to decide, and the
+    // `visibilitychange` listener to notice. With the listener gone a tab that dropped while hidden
+    // stays disconnected FOREVER — the redial is never scheduled and nothing else would ever
+    // schedule it, so the page sits on a red dot until somebody reloads it.
+    assert!(
+        code.contains("document.visibilityState"),
+        "journal.js no longer asks whether the tab is showing"
+    );
+    assert!(
+        code.contains("\"visibilitychange\""),
+        "journal.js no longer listens for the tab coming back, so a hidden tab that dropped never \
+         reconnects at all"
+    );
+    // **The gate has to be inside the scheduler, and asserting the API is merely PRESENT does not
+    // say that.** The first version of this lint checked only that `visibilityState` appeared
+    // somewhere in the file — which it still does, in the listener — so deleting the early return
+    // from `scheduleReconnect` passed it. Caught by mutating exactly that.
+    let scheduler = code
+        .split_once("function scheduleReconnect()")
+        .map(|(_, rest)| {
+            rest.split_once("\n  }")
+                .map(|(body, _)| body)
+                .unwrap_or(rest)
+        })
+        .expect("journal.js no longer has a scheduleReconnect");
+    assert!(
+        scheduler.contains("showing()"),
+        "scheduleReconnect no longer checks whether the tab is showing, so a background tab redials"
+    );
+    assert!(
+        scheduler.contains("attached()"),
+        "scheduleReconnect no longer checks for an existing socket, so two can be opened at once"
+    );
+    // The backoff, and the one thing that must reset it. Coming back to a tab is information about
+    // the reader rather than about the server, so the wait that had built up does not apply.
+    assert!(
+        code.contains("RETRY_MIN") && code.contains("RETRY_MAX"),
+        "journal.js no longer bounds its reconnect backoff"
+    );
+}
+
+/// **The feed lets go of its socket when the server is shutting down.**
+///
+/// Without this arm an open feed holds its pod for the whole shutdown grace — Rocket keeps doing
+/// ordinary I/O until the period expires and hyper waits for open connections, while a feed socket
+/// by design never completes. So the grace that exists for downloads would be paid on every rollout
+/// by every reader, and the symptom is only ever "rollouts got slower".
+///
+/// A source lint because there is nothing to observe: deleting the arm leaves every test green, the
+/// feed working, and the page reconnecting exactly as it does now — just later, after the socket is
+/// cut rather than closed.
+#[test]
+fn the_journal_feed_closes_itself_when_the_server_is_shutting_down() {
+    let source = std::fs::read_to_string(source("src/routes/journal.rs")).expect("journal.rs");
+
+    assert!(
+        source.contains("shutdown: rocket::Shutdown"),
+        "the feed route no longer takes Rocket's shutdown signal"
+    );
+    assert!(
+        source.contains("_ = &mut shutdown =>"),
+        "the feed's select! no longer has a shutdown arm, so a rollout waits out the grace on it"
+    );
+    // Ordering matters and is invisible: on a busy room the poll arm is ready every tick, so an
+    // unbiased select! would keep choosing it and spend the grace period sending records down a
+    // connection that is about to close.
+    let biased = source
+        .find("biased;")
+        .expect("the feed's select! is biased");
+    let arm = source
+        .find("_ = &mut shutdown =>")
+        .expect("the shutdown arm");
+    let poll = source.find("_ = poll.tick() =>").expect("the poll arm");
+    assert!(
+        biased < arm && arm < poll,
+        "the shutdown arm must come first in a biased select!, before the arm that is ready every \
+         tick on a busy room"
+    );
+    // 1001, not 1000. "Going away" tells a client to come back; "normal closure" reads as the
+    // server being finished with it.
+    assert!(
+        source.contains("CloseCode::Away"),
+        "the feed closes with a code that does not invite a reconnect"
     );
 }
 
