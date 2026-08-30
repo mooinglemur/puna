@@ -42,6 +42,37 @@
 
   const dash = { text: "—", class: "hint" };
 
+  // Whether this page carries the enhanced tracker's columns. **Read from the server-rendered flag,
+  // never inferred from the data**, because the `<th>` is rendered from the same flag and the two
+  // have to agree about how many columns the table has.
+  const annotations = root.dataset.annotations === "1";
+
+  // Who holds a slot, and how they want to be reached.
+  //
+  // Three different absences, deliberately told apart rather than collapsed:
+  //
+  //   * no `owner` at all — nobody holds the slot;
+  //   * an owner with no `contact` — somebody holds it and this viewer may not know who, because
+  //     they chose "no pings" and this viewer is not staff. The chip still says so, which is the
+  //     useful half: you learn not to go looking for another way to reach them.
+  //   * a `contact` whose `handle` is null — they hold a slot and have never signed in, so there is
+  //     no handle to show. The mention still works, being built from the snowflake.
+  function ownerCell(r) {
+    if (!r.owner) return dash;
+    const contact = r.owner.contact;
+    if (!contact) return { text: "—", class: "hint", tag: r.owner.ping };
+    return {
+      text: contact.handle || "never logged in",
+      class: contact.handle ? null : "hint",
+      // A Discord mention rather than the handle: `<@id>` is what actually pings, and typing a
+      // handle into Discord does not reliably reach anybody. Copied through the shared `.copy`
+      // control, so it is revealed only where the clipboard is actually reachable -- on plain HTTP
+      // there is no clipboard and a button that silently did nothing would be worse than none.
+      copy: { value: contact.mention, label: `Copy a mention for ${contact.handle || "this player"}` },
+      tag: r.owner.ping,
+    };
+  }
+
   const VIEWS = {
     slots: {
       rows: (d) => d.slots,
@@ -52,8 +83,22 @@
         // entirely unless the reader is the room's staff or holds a slot in it -- so `r.claimed ?`
         // would read `undefined` as "not claimed" and tag every slot `unclaimed` for exactly the
         // anonymous audience the server just declined to tell.
-        r.claimed === false ? { text: r.name, tag: "unclaimed" } : r.name,
-        r.spectator ? { text: r.game, tag: "spectator" } : r.game,
+        {
+          text: r.name,
+          tag: r.claimed === false ? "unclaimed" : null,
+          annotation: r.note,
+        },
+        // **Built only where the header exists.** `annotations` comes from the same server-rendered
+        // flag the `<th>` does, rather than from whether `r.owner` happens to be present -- a row
+        // for an unclaimed slot carries no owner either, so inferring the column from the field
+        // would drop a cell on those rows and shift every column after it.
+        ...(annotations ? [ownerCell(r)] : []),
+        {
+          text: r.game,
+          // Two independent chips, and a slot can carry both: a spectator that somebody has
+          // annotated. `tag` takes an array for that reason.
+          tag: [r.spectator ? "spectator" : null, r.progression],
+        },
         r.spectator
           ? dash
           : `${r.checks_done} / ${r.checks_total}${percent(r)}`,
@@ -469,13 +514,119 @@
       note.textContent = value.note;
       td.append(" ", note);
     }
-    if (value.tag) {
+    // **A note before the chips**, so the icon sits against the name it belongs to rather than
+    // beyond a chip that belongs to the row. Its text rides on the button and is read back by the
+    // delegated handler below, so nothing has to be looked up when it is opened.
+    if (value.annotation) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "note-icon";
+      button.dataset.note = value.annotation;
+      button.title = value.annotation;
+      button.setAttribute("aria-label", "Show this slot's note");
+      button.textContent = "🗒";
+      td.append(" ", button);
+    }
+    // Handled by `copy.js`, which binds by delegation and so covers cells built after load, and
+    // which reveals `.copy` only once it has proved the clipboard is reachable.
+    if (value.copy) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "copy";
+      button.dataset.copy = value.copy.value;
+      button.title = value.copy.label;
+      button.setAttribute("aria-label", value.copy.label);
+      button.textContent = "⧉";
+      td.append(" ", button);
+    }
+    // An array, because a row can carry two: a spectator who has also said where they are up to.
+    // `[].concat` takes either shape, and the filter is what lets a caller pass a null for "no chip
+    // here" without writing a conditional at every call site.
+    for (const label of [].concat(value.tag || []).filter(Boolean)) {
       const tag = document.createElement("span");
       tag.className = "tag";
-      tag.textContent = value.tag;
+      tag.textContent = label;
       td.append(" ", tag);
     }
   }
+
+  // --- the note panel ---------------------------------------------------------------------------
+  //
+  // Hover to read, click to keep it open so the text can be selected and copied, click away to
+  // dismiss. One floating element reused by every icon rather than one panel per row: a 200-slot
+  // room would otherwise carry 200 hidden panels for the one that gets opened.
+  //
+  // `position: fixed` off the icon's rect, which is the same choice the room page's copy
+  // confirmation makes and for the same two reasons: the tables here are `overflow-x: auto`, so an
+  // absolutely positioned descendant would be **clipped** by its own scroll container, and a fixed
+  // element sidesteps every question about which ancestor is a containing block.
+  let panel = null;
+  let pinned = false;
+
+  function notePanel() {
+    if (!panel) {
+      panel = document.createElement("div");
+      panel.className = "note-pop";
+      panel.hidden = true;
+      document.body.appendChild(panel);
+    }
+    return panel;
+  }
+
+  function showNote(button, keep) {
+    const pop = notePanel();
+    // `textContent`: a note is free text somebody typed into a form.
+    pop.textContent = button.dataset.note || "";
+    pop.hidden = false;
+    pinned = keep;
+    // Selectable only when pinned. Unpinned it must not eat the pointer, or moving onto the panel
+    // would count as leaving the icon and it would flicker itself shut.
+    pop.style.pointerEvents = keep ? "auto" : "none";
+    pop.classList.toggle("pinned", keep);
+
+    const rect = button.getBoundingClientRect();
+    pop.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - pop.offsetWidth - 8))}px`;
+    // Below the icon, flipping above when there is no room -- a panel rendered off-screen is the
+    // same as no panel.
+    const below = rect.bottom + 6;
+    pop.style.top =
+      below + pop.offsetHeight > window.innerHeight && rect.top > pop.offsetHeight
+        ? `${rect.top - pop.offsetHeight - 6}px`
+        : `${below}px`;
+  }
+
+  function hideNote(force) {
+    if (panel && (force || !pinned)) {
+      panel.hidden = true;
+      pinned = false;
+    }
+  }
+
+  document.addEventListener("mouseover", (event) => {
+    const button = event.target.closest?.(".note-icon");
+    if (button && !pinned) showNote(button, false);
+  });
+  document.addEventListener("mouseout", (event) => {
+    if (event.target.closest?.(".note-icon")) hideNote(false);
+  });
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest?.(".note-icon");
+    if (button) {
+      // Toggle, so a second click on the same icon puts it away rather than leaving somebody
+      // hunting for where to click to close it.
+      if (pinned && panel && !panel.hidden) hideNote(true);
+      else showNote(button, true);
+      return;
+    }
+    // Anywhere else dismisses -- except inside the panel itself, where a click is somebody starting
+    // to select the text they opened it to copy.
+    if (!panel || !event.target.closest?.(".note-pop")) hideNote(true);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") hideNote(true);
+  });
+  // Positioned once rather than tracked, so a scroll would leave it pointing at nothing.
+  window.addEventListener("scroll", () => hideNote(true), { passive: true });
 
   // One row per `key`, keeping the row with the highest `recency` and counting how many there were.
   //
@@ -506,7 +657,14 @@
     const value = typeof cell === "string" ? { text: cell } : cell;
     // Every rendered piece, in render order -- filtering matches what is on screen, so a count the
     // reader can see has to be searchable and one they cannot must not be.
-    return `${value.text || ""} ${value.note || ""} ${value.tag || ""}`;
+    //
+    // **A note is deliberately absent**, and it is the one judgment call here. Its text is behind a
+    // hover, so searching it would match rows for a reason the reader cannot see on the page in
+    // front of them -- which is exactly the rule this function follows everywhere else. The handle
+    // and the ping chip *are* rendered, so they are searchable, which is what makes "show me
+    // everybody who is happy to be pinged" work.
+    const tags = [].concat(value.tag || []).filter(Boolean).join(" ");
+    return `${value.text || ""} ${value.note || ""} ${tags}`;
   }
 
   function compare(a, b, type) {

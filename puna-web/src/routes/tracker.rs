@@ -32,7 +32,7 @@ use chrono::{DateTime, Utc};
 use puna_core::artifact::names::GameNames;
 use puna_core::ids::{GenerationId, RoomId, TrackerId};
 use puna_core::model::room::{self, Room, TrackerPolicy};
-use puna_core::model::{member, names, slot, tracker};
+use puna_core::model::{annotation, member, names, slot, tracker};
 use rocket::http::{Header, Status};
 use rocket::{Responder, State, get, routes};
 
@@ -223,13 +223,29 @@ enum Json {
 struct Access {
     room: Room,
     target: tracker::Target,
-    /// Whether this viewer is one of the room's own people: staff, or the holder of a slot in it.
+    /// Staff of this room: an organizer, a helper, or a site admin.
     ///
-    /// Computed for the `members` policy check and **kept rather than discarded**, because one
-    /// thing on the tracker is not about the multiworld's progress — whether a slot has been taken.
-    /// Same tier the roster applies to who holds a slot, and the same one `may_see_spoiler` calls
-    /// `players`.
-    is_participant: bool,
+    /// **Kept apart from `owns_a_slot` rather than folded into one flag**, because the enhanced
+    /// tracker needs the difference: a ping preference of `no` withholds somebody's handle from
+    /// other players and never from staff, who are exactly who "organizers and helpers may still
+    /// choose to ping you" is about.
+    is_staff: bool,
+    owns_a_slot: bool,
+}
+
+impl Access {
+    /// One of the room's own people. The tier the roster applies to who holds a slot, and the one
+    /// `may_see_spoiler` calls `players`.
+    fn is_participant(&self) -> bool {
+        self.is_staff || self.owns_a_slot
+    }
+
+    /// Whether this viewer gets the annotation columns at all: the room has to have opted in **and**
+    /// the viewer has to be one of its people. Everybody else sees the tracker exactly as it was
+    /// before the feature existed.
+    fn sees_annotations(&self) -> bool {
+        self.room.enhanced_tracker && self.is_participant()
+    }
 }
 
 /// Resolve the id, then decide whether this viewer may see it.
@@ -282,7 +298,8 @@ async fn access(
     Ok(Access {
         room,
         target,
-        is_participant: is_staff || owns_a_slot,
+        is_staff,
+        owns_a_slot,
     })
 }
 
@@ -462,9 +479,24 @@ struct Digestible {
     room: Room,
     roster: Vec<slot::Slot>,
     scope: Option<i32>,
-    /// Carried from [`Access`], because the roster below holds `owner_id` for every slot and the
-    /// digest is what decides whether that reaches the wire.
+    /// Carried from [`Access`], because the roster below holds `owner_id`, a note and a progression
+    /// for every slot, and the digest is what decides which of those reach the wire.
+    is_staff: bool,
     is_participant: bool,
+    /// The room's handles and ping preferences, loaded **only** where they will be rendered: the
+    /// room has the enhanced tracker on and this viewer is one of its people. `None` is what makes
+    /// an ordinary tracker cost exactly the queries it always did.
+    people: Option<digest::People>,
+}
+
+impl Digestible {
+    fn viewer(&self) -> digest::Viewer<'_> {
+        digest::Viewer {
+            participant: self.is_participant,
+            staff: self.is_staff,
+            people: self.people.as_ref(),
+        }
+    }
 }
 
 async fn digestible(
@@ -476,9 +508,24 @@ async fn digestible(
     let access = access(conn, session, id).await?;
     let scope = scope_of(&access, requested)?;
     let roster = slot::list(conn, access.room.id).await?;
+    let people = if access.sees_annotations() {
+        Some(digest::People {
+            handles: slot::owner_names(conn, access.room.id).await?,
+            preferences: annotation::preferences(conn, access.room.id)
+                .await?
+                .into_iter()
+                .map(|p| (p.user_id, p.preference))
+                .collect(),
+        })
+    } else {
+        None
+    };
+
     Ok(Digestible {
         scope,
-        is_participant: access.is_participant,
+        is_staff: access.is_staff,
+        is_participant: access.is_participant(),
+        people,
         room: access.room,
         roster,
     })
@@ -526,7 +573,7 @@ async fn view_slots(
         freshness(&[live.stale_since, statics.stale_since], Utc::now()),
         it.scope,
         Utc::now(),
-        it.is_participant,
+        &it.viewer(),
     );
 
     json(&view, &conditional)
@@ -675,6 +722,13 @@ pub struct TrackerTemplate {
     /// in different shapes, and a client parsing `location.pathname` would have to know which. The
     /// id here is the one the visitor already holds, so this discloses nothing.
     api_base: String,
+    /// Whether this page renders the enhanced tracker's columns: the room has opted in **and** this
+    /// viewer is one of its people.
+    ///
+    /// The table skeleton is server-rendered and the bodies are the client's, so the column has to
+    /// exist here for `tracker.js` to fill — and its absence is what makes an outsider's page
+    /// byte-identical to the one it was before the feature existed.
+    annotations: bool,
     /// The slot this page is about, if it is about one.
     slot: Option<i32>,
 }
@@ -743,14 +797,14 @@ async fn summary_text(
         &parsed(&statics.body),
         target.slot_number(),
         Utc::now(),
-        // **`false`, and it has to be**: this response is deliberately identical for every reader
-        // -- that is what lets it be `public`-cacheable and what makes it answerable to a bot with
-        // no session at all. A viewer-dependent field here would be a shared cache handing one
-        // reader another's document, which is the exact trade the comment below is buying.
+        // **The outsider's view, and it has to be**: this response is deliberately identical for
+        // every reader -- that is what lets it be `public`-cacheable and what makes it answerable to
+        // a bot with no session at all. A viewer-dependent field here would be a shared cache
+        // handing one reader another's document, which is the exact trade the comment below buys.
         //
-        // `summary` renders no claim state today, so this changes nothing now and is what stops it
-        // becoming a leak the day somebody adds a column to that function.
-        false,
+        // `summary` renders no claim state and no annotation today, so this changes nothing now and
+        // is what stops it becoming a leak the day somebody adds a column to that function.
+        &digest::Viewer::outsider(),
     );
 
     Ok(PlainText {
@@ -821,6 +875,7 @@ async fn render(
         room_name: access.room.name.clone(),
         slot_name,
         api_base: format!("/api/puna/tracker/{id}"),
+        annotations: access.sees_annotations(),
         slot: scope,
     })
 }
@@ -1257,6 +1312,7 @@ mod tests {
             room_name: "Friday async".into(),
             slot_name: Some("Troy".into()),
             api_base: format!("/api/puna/tracker/{tracker_id}"),
+            annotations: false,
             slot: Some(1),
         };
 
@@ -1298,6 +1354,65 @@ mod tests {
         assert!(html.contains("data-view=\"items\""));
     }
 
+    /// **The Owner column and the header count move together, or the table shifts.**
+    ///
+    /// The skeleton is server-rendered and the bodies are the client's, so the `<th>` and
+    /// `tracker.js`'s cell array have to agree about how many columns there are. They agree because
+    /// both read one flag — the `<th>` from `{% if annotations %}` and the script from
+    /// `data-annotations` — and this asserts the two appear and disappear together.
+    ///
+    /// Getting it wrong does not fail: every cell after the missing one renders under the heading to
+    /// its left, so checks appear under Game and the page looks like data rather than like a bug.
+    #[test]
+    fn the_owner_column_and_the_flag_the_client_reads_appear_together() {
+        use askama::Template;
+
+        let render = |annotations| {
+            let mut page = tracker_page(None);
+            page.annotations = annotations;
+            page.render().expect("renders")
+        };
+
+        let off = render(false);
+        assert!(
+            !off.contains(r#"data-key="owner""#),
+            "an outsider's tracker grew an Owner column"
+        );
+        assert!(
+            !off.contains("data-annotations"),
+            "the client would build a cell the header has no column for"
+        );
+
+        let on = render(true);
+        assert!(on.contains(r#"<th data-key="owner">Owner</th>"#));
+        assert!(on.contains(r#"data-annotations="1""#));
+
+        // The summary spans the table it sits under. Counted the way the standing lint counts it,
+        // so the two cannot disagree about what "one column" means.
+        for html in [&off, &on] {
+            let slots = html
+                .split_once(r#"data-view="slots""#)
+                .expect("the slots table")
+                .1
+                .split_once("</section>")
+                .expect("unterminated")
+                .0;
+            let headings = slots.matches("<th data-key=").count();
+            let foot = slots
+                .split_once("<tfoot")
+                .expect("the summary")
+                .1
+                .split_once("</tfoot>")
+                .expect("unterminated")
+                .0;
+            let spanned = foot.matches("<td").count() + foot.matches(r#"colspan="2""#).count();
+            assert_eq!(
+                spanned, headings,
+                "the summary spans {spanned} columns and the table declares {headings}"
+            );
+        }
+    }
+
     /// The multiworld page carries the slot table and the hints, and **not** the per-slot tables.
     #[test]
     fn the_multiworld_page_has_no_per_slot_tables() {
@@ -1314,6 +1429,7 @@ mod tests {
             room_name: "Friday async".into(),
             slot_name: None,
             api_base: "/api/puna/tracker/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into(),
+            annotations: false,
             slot: None,
         };
 
@@ -1371,6 +1487,7 @@ mod tests {
             room_name: "Friday async".into(),
             slot_name: slot.map(|_| "Troy".into()),
             api_base: "/api/puna/tracker/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into(),
+            annotations: false,
             slot,
         }
     }
@@ -1558,14 +1675,20 @@ mod tests {
             body.contains("digest::slot_rows("),
             "this lint is no longer looking at the call it exists to pin"
         );
+        // Every way this response could become viewer-dependent, named. The tier lives on `Access`
+        // and reaches the digest through `Digestible::viewer`, so a path that reads any of these is
+        // a path that has started answering differently for different readers.
+        for viewer_shaped in ["is_participant", "is_staff", "it.viewer()", "people"] {
+            assert!(
+                !body.contains(viewer_shaped),
+                "summary.txt reads {viewer_shaped:?} while still being served `public`-cacheable, \
+                 so a shared cache can hand one reader another's document"
+            );
+        }
         assert!(
-            !body.contains("is_participant"),
-            "summary.txt has become viewer-dependent while still being served `public`-cacheable, \
-             so a shared cache can hand one reader another's document"
-        );
-        assert!(
-            body.contains("\n        false,\n"),
-            "summary.txt no longer passes `sees_claims: false`"
+            body.contains("Viewer::outsider()"),
+            "summary.txt no longer builds the outsider's view, so whatever it does build is worth \
+             checking against the `public` cache-control below it"
         );
     }
 }

@@ -1416,6 +1416,52 @@ h1 .scope {
 
 .form-actions .cancel { color: var(--muted); }
 
+/* --- the enhanced tracker's note ------------------------------------------------------------------
+   An icon beside a player's name, and a panel that follows the pointer's arrival: hover to read,
+   click to keep it open so the text can be selected, click away to dismiss.
+
+   The button is deliberately small and quiet. It sits inside a table cell next to a name, and a note
+   is context rather than a warning -- a control that drew the eye would make every annotated row
+   look like it needed attention. */
+.note-icon {
+  padding: 0 0.15rem;
+  font-size: 0.85rem;
+  line-height: 1;
+  color: var(--muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.note-icon:hover { color: var(--text); }
+
+/* **`fixed`, and it has to be.** Every table on this page is inside `.scroll-x`, which makes it a
+   scroll container -- an absolutely positioned descendant would be clipped by it, which is the trap
+   M18's copy confirmation already hit. Fixed also sidesteps every question about which ancestor
+   happens to be a containing block.
+
+   `pointer-events` is set by the script rather than here: unpinned the panel must not take the
+   pointer, or moving toward it would count as leaving the icon and it would flicker shut. */
+.note-pop {
+  position: fixed;
+  z-index: 40;
+  max-width: 28rem;
+  padding: 0.5rem 0.7rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--float-shadow);
+  /* A note is somebody's prose and may be a paragraph: it wraps, and it keeps its own line breaks,
+     unlike the `nowrap` every cell on this page inherits. */
+  white-space: pre-wrap;
+  font-size: 0.9rem;
+}
+
+/* Pinned, which is the state where the text is meant to be selected. The accent border is what says
+   "this one is staying" against the hover panel that is not. */
+.note-pop.pinned { border-color: var(--accent); user-select: text; }
+
 /* --- the console ---------------------------------------------------------------------------------
    Fifteen forms stacked down the page, one per command. Each is a card so that its fields and its
    button are visibly ITS OWN: the failure this layout replaced was a single form where nothing said

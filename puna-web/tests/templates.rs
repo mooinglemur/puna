@@ -2113,6 +2113,45 @@ fn a_checkbox_posts_something_its_rust_type_can_parse() {
     );
 }
 
+/// **The Owner cell is built from the server's flag, never from whether the row has an owner.**
+///
+/// The `<th>` is server-rendered from `{% if annotations %}` and the body is the client's, so the
+/// two agree only because both read one flag. Building the cell from `r.owner` instead is the
+/// obvious simplification and is wrong in a way that is invisible on a healthy room: **an unclaimed
+/// slot carries no owner**, so those rows would get one fewer cell than the header declares and
+/// every column after it would slide left — checks under Game, status under Checks — on some rows
+/// and not others.
+///
+/// It reads as data rather than as a bug, which is why this forbids the shape rather than trusting
+/// the comment beside it. Nothing in the Rust build parses this file, and the mutation compiles.
+#[test]
+fn the_owner_cell_is_gated_on_the_flag_rather_than_on_the_data() {
+    let script = std::fs::read_to_string(source("static/tracker.js")).expect("tracker.js");
+    let code: String = script
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        code.contains("annotations ? [ownerCell(r)] : []"),
+        "the owner cell is no longer built from the server-rendered flag"
+    );
+    // The two spellings a rewrite reaches for, both of which drop the cell on unclaimed rows.
+    for wrong in ["r.owner ? [ownerCell", "r.owner && [ownerCell"] {
+        assert!(
+            !code.contains(wrong),
+            "`{wrong}` builds the Owner cell only for claimed slots, so every column after it \
+             shifts left on the rows that have no owner"
+        );
+    }
+    // And the flag itself comes from the DOM rather than from a row.
+    assert!(
+        code.contains(r#"root.dataset.annotations === "1""#),
+        "the client no longer reads the same flag the <th> is rendered from"
+    );
+}
+
 /// **The unclaimed tag has to test for `false`, not for falsiness**, and an author cannot see the
 /// difference.
 ///

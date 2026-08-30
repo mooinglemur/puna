@@ -27,8 +27,12 @@ this page fetches, which is what keeps a large multiworld from sending you megab
 need to.</p>
 </noscript>
 
+{# `data-annotations` is how `tracker.js` knows whether to build the extra cell. It has to agree with
+   the `<th>` below or the body and the head disagree about how many columns there are, so both read
+   the one flag rather than the client inferring it from a field that happens to be present. #}
 <div id="tracker"
      data-api="{{ api_base }}"
+     {% if annotations %}data-annotations="1"{% endif %}
      {% if let Some(n) = slot %}data-slot="{{ n }}"{% endif %}>
 
   {# --- the slot table. On a slot's page this is one row: the same columns, the same code. --- #}
@@ -47,6 +51,14 @@ need to.</p>
         <thead><tr>
           <th data-key="slot" data-type="number">#</th>
           <th data-key="name">Player</th>
+          {# **Only for this room's own people, and only where the room asked for it.** The column
+             carries a Discord handle, which is the widest thing on the widest-shared page Puna has,
+             so its absence here is what keeps an outsider's tracker the page it always was.
+
+             Sorted on the handle rather than on the ping chip beside it: the chip is a property of a
+             person and the column is a list of people, and `PingPreference`'s values are not a scale
+             — ordering by them would invent a ranking nobody expressed. #}
+          {% if annotations %}<th data-key="owner">Owner</th>{% endif %}
           <th data-key="game">Game</th>
           <th data-key="checks_done" data-type="number">Checks</th>
           <th data-key="status">Status</th>
@@ -66,6 +78,11 @@ need to.</p>
         <tfoot hidden>
           <tr>
             <td colspan="2" class="label">Total</td>
+            {# Nothing to total: the column is a list of people. Present so the cells below it stay
+               under their own headings — `the_tracker_summary_fills_every_cell_it_declares` counts
+               this against the `<th>`s, and both sit inside the same condition so the two move
+               together whatever the flag says. #}
+            {% if annotations %}<td></td>{% endif %}
             <td>All games</td>
             <td class="checks"></td>
             <td class="goals"></td>
@@ -195,5 +212,11 @@ need to.</p>
    `defer`, so they execute in document order and the helper exists by then. #}
 <script src="/static/toggles.js?v={{ base.static_version }}" defer></script>
 <script src="/static/localtime.js?v={{ base.static_version }}" defer></script>
+{# The owner column's mention control is an ordinary `.copy` button, and `copy.js` binds by
+   delegation -- so it covers cells `tracker.js` builds after load, and it is what reveals them only
+   once the clipboard has been proved reachable. Loaded unconditionally: it costs a cached file on a
+   page that has no owner column, and making it conditional would mean the one page where the button
+   exists is the one page that could forget to load it. #}
+<script src="/static/copy.js?v={{ base.static_version }}" defer></script>
 <script src="/static/tracker.js?v={{ base.static_version }}" defer></script>
 {% endblock %}

@@ -34,6 +34,7 @@ use std::collections::{BTreeMap, HashSet};
 use chrono::{DateTime, Utc};
 use puna_core::artifact::SlotKind;
 use puna_core::artifact::names::GameNames;
+use puna_core::model::annotation::{PingPreference, ProgressionStatus};
 use puna_core::model::slot::Slot;
 use serde::Serialize;
 
@@ -92,6 +93,90 @@ pub struct SlotRow {
     /// falsy-check away.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claimed: Option<bool>,
+    /// Who holds the slot and on what terms, for a room running the enhanced tracker.
+    ///
+    /// Absent for everybody else, which covers three different situations that all mean the same
+    /// thing on the wire: the room has the feature off, the viewer is not one of its people, or the
+    /// slot is unclaimed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<SlotOwner>,
+    /// The player's own account of how far along they are, as a label. **Absent for `unknown`**
+    /// rather than sent as the word: a row saying "Unknown" beside four saying something real reads
+    /// as a fifth answer, and this way the client renders a chip if and only if there is one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progression: Option<&'static str>,
+    /// The slot's note, where there is one and this viewer may read it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Who holds a slot, as much of it as this viewer is entitled to.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SlotOwner {
+    /// The ping-preference chip, always present. **Shown even when the handle is not**, and
+    /// deliberately: "no pings" is something the person chose to publish, and a player who can see
+    /// it knows not to go looking for another way to reach them.
+    pub ping: &'static str,
+    /// Absent when this viewer may not know who this is — the owner said `no` and the viewer is not
+    /// staff. Its absence is what distinguishes "withheld" from "never signed in", which is
+    /// [`Contact::handle`] being null.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contact: Option<Contact>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Contact {
+    /// `None` for somebody who holds a slot and has never signed in, which is the lobby-push case:
+    /// the row exists because a push named their Discord id, and the stored username is a stand-in.
+    /// Rendered as "never logged in" rather than as a raw snowflake.
+    pub handle: Option<String>,
+    /// `<@id>`, ready to paste into Discord. **Present even with no handle**, because a mention is
+    /// built from the snowflake and pings whether or not that account has ever opened this site.
+    pub mention: String,
+}
+
+/// A room's people, for the columns only its own participants see.
+///
+/// Loaded once per request and looked up per row rather than joined, because the roster is already
+/// in hand and these are two small maps over the same room.
+#[derive(Debug, Default)]
+pub struct People {
+    /// Discord handles by id. A placeholder — the id as text, written by `ensure_exists` for
+    /// somebody who has never signed in — is **not** filtered out here; [`slot_rows`] turns it into
+    /// an absent handle, so the two are told apart in one place.
+    pub handles: std::collections::HashMap<i64, String>,
+    pub preferences: std::collections::HashMap<i64, PingPreference>,
+}
+
+/// What this viewer is entitled to see of a room's own people.
+///
+/// A struct rather than a run of `bool` parameters because the three are read together and the
+/// interesting mistakes are all confusions between them — `staff` where `participant` was meant
+/// admits everybody holding a slot to a handle its owner withheld.
+pub struct Viewer<'a> {
+    /// Staff, or somebody holding a slot in this room. Gates claim state.
+    pub participant: bool,
+    /// Staff specifically. Gets a handle **whatever the owner's ping preference says**, because
+    /// running the room is the reason `no` still says "organizers and helpers may still ping you".
+    pub staff: bool,
+    /// `Some` only when the room's enhanced tracker is on **and** this viewer is a participant.
+    /// `None` renders the page exactly as it was before the feature existed, which is what the
+    /// toggle's default and every anonymous view rely on.
+    pub people: Option<&'a People>,
+}
+
+impl Viewer<'_> {
+    /// The viewer a public response is built for: entitled to nothing beyond the multiworld itself.
+    ///
+    /// Used by `summary.txt`, which is `public`-cacheable precisely because it is identical for
+    /// every reader.
+    pub fn outsider() -> Self {
+        Self {
+            participant: false,
+            staff: false,
+            people: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -210,9 +295,9 @@ pub fn slots(
     freshness: Freshness,
     scope: Option<i32>,
     now: DateTime<Utc>,
-    sees_claims: bool,
+    viewer: &Viewer<'_>,
 ) -> SlotsView {
-    let rows = slot_rows(roster, live, statics, scope, now, sees_claims);
+    let rows = slot_rows(roster, live, statics, scope, now, viewer);
 
     SlotsView {
         freshness,
@@ -237,11 +322,10 @@ pub fn slot_rows(
     statics: &serde_json::Value,
     scope: Option<i32>,
     now: DateTime<Utc>,
-    // `sees_claims`: whether this viewer may know who has signed up -- the room's staff, or
-    // somebody holding a slot in it. **Decided by the caller from the session**, never here: this
-    // function is handed a roster carrying `owner_id` for every slot, and a client cannot prove it
-    // did not render something it was given.
-    sees_claims: bool,
+    // **Decided by the caller from the session**, never here: this function is handed a roster
+    // carrying `owner_id` and a note for every slot, and a client cannot prove it did not render
+    // something it was given. See `Viewer`.
+    viewer: &Viewer<'_>,
 ) -> Vec<SlotRow> {
     // **Puna's roster leads, not the document.** A spectator appears in neither per-player array --
     // pahoa mirrors the reference's `get_all_players()` split -- but it is still a slot somebody
@@ -274,10 +358,59 @@ pub fn slot_rows(
                 hints: entry(live, "hints", n)
                     .and_then(|e| e.get("hints")?.as_array())
                     .map_or(0, Vec::len),
-                claimed: sees_claims.then(|| slot.owner_id.is_some()),
+                claimed: viewer.participant.then(|| slot.owner_id.is_some()),
+                owner: viewer
+                    .people
+                    .and_then(|people| owner_of(slot, people, viewer.staff)),
+                // Both are the room's own participants' business, so they travel with `people`
+                // being present rather than being gated a second time.
+                progression: viewer
+                    .people
+                    .and(Some(slot.progression))
+                    .filter(|p| *p != ProgressionStatus::Unknown)
+                    .map(ProgressionStatus::label),
+                note: viewer.people.and_then(|_| slot.note.clone()),
             }
         })
         .collect()
+}
+
+/// Who holds a slot, reduced to what this viewer may have.
+///
+/// **Two independent facts, and only one of them is ever withheld.** The ping preference is
+/// something its owner published, so every participant gets it — a player who sees "no pings"
+/// knows not to go looking for another route. The *handle* is the route, so `no` withholds it from
+/// other players and never from staff, who are the ones the preference itself says may still ping.
+///
+/// The two `None`s below mean different things and must stay distinguishable, which is why one is a
+/// missing `contact` and the other is a null `handle` inside a present one:
+///
+/// * **no `contact`** — this viewer may not know who holds the slot;
+/// * **`contact` with no `handle`** — somebody holds it who has never signed in, so there is no
+///   handle to show. The mention still works, because it is built from the snowflake.
+///
+/// An unclaimed slot has no owner at all and gets `None` from the outer function, which is a third
+/// thing again and is fine to render the same way: there is nobody to name.
+fn owner_of(slot: &Slot, people: &People, staff: bool) -> Option<SlotOwner> {
+    let owner = slot.owner_id?;
+    let preference = people.preferences.get(&owner).copied().unwrap_or_default();
+
+    let entitled = staff || preference.shows_handle_to_players();
+    Some(SlotOwner {
+        ping: preference.label(),
+        contact: entitled.then(|| Contact {
+            // The placeholder is turned into an absent handle **here**, in the one place that knows
+            // both, rather than by a client comparing a username against a snowflake. `ensure_exists`
+            // writes the id as text for somebody a lobby push named, and rendering that would show a
+            // raw Discord id to people with no use for one and read as a bug.
+            handle: people
+                .handles
+                .get(&owner)
+                .filter(|name| !puna_core::model::user::is_placeholder(name))
+                .cloned(),
+            mention: format!("<@{owner}>"),
+        }),
+    })
 }
 
 /// Every hint in the multiworld, or the ones that concern one slot.
@@ -739,6 +872,175 @@ mod tests {
         Names { games }
     }
 
+    /// A viewer who is one of the room's people but not staff, and whose room has the enhanced
+    /// tracker off. The tier most of these tests are about.
+    fn participant() -> Viewer<'static> {
+        Viewer {
+            participant: true,
+            staff: false,
+            people: None,
+        }
+    }
+
+    /// Troy holds slot 1 and has said how he wants to be pinged; Ghost holds slot 2 and has never
+    /// signed in, which is the lobby-push case.
+    fn people(troy: PingPreference) -> People {
+        People {
+            handles: [
+                (7, "troyhandle".to_string()),
+                // What `ensure_exists` writes for somebody a lobby push named: the snowflake as
+                // text. Rendering it would show a raw Discord id to people with no use for one.
+                (8, puna_core::model::user::placeholder_username(8)),
+            ]
+            .into_iter()
+            .collect(),
+            preferences: [(7, troy)].into_iter().collect(),
+        }
+    }
+
+    fn annotated_roster() -> Vec<Slot> {
+        let mut roster = roster();
+        roster[0].progression = ProgressionStatus::Bk;
+        roster[0].note = Some("ping me before 9pm".into());
+        roster[1].owner_id = Some(8);
+        roster
+    }
+
+    /// **The room's own people get the annotations; nobody else learns the feature is on.**
+    ///
+    /// Three viewers, and the first two must produce byte-identical rows to a room with the toggle
+    /// off — which is the promise the option's own hint makes and the reason its default is safe.
+    #[test]
+    fn the_annotation_columns_reach_participants_and_nobody_else() {
+        let people = people(PingPreference::Yes);
+        let of = |viewer: &Viewer<'_>| {
+            slot_rows(
+                &annotated_roster(),
+                &live(),
+                &statics(),
+                None,
+                now(),
+                viewer,
+            )
+        };
+
+        for (who, viewer) in [
+            ("an anonymous viewer", Viewer::outsider()),
+            (
+                "a participant of a room with the feature off",
+                participant(),
+            ),
+        ] {
+            for row in of(&viewer) {
+                assert_eq!(
+                    row.owner, None,
+                    "{who} was told who holds slot {}",
+                    row.slot
+                );
+                assert_eq!(row.progression, None, "{who} got a progression chip");
+                assert_eq!(row.note, None, "{who} got somebody's note");
+            }
+        }
+
+        let rows = of(&Viewer {
+            participant: true,
+            staff: false,
+            people: Some(&people),
+        });
+        assert_eq!(rows[0].progression, Some("BK"));
+        assert_eq!(rows[0].note.as_deref(), Some("ping me before 9pm"));
+        assert_eq!(
+            rows[0].owner.as_ref().and_then(|o| o.contact.as_ref()),
+            Some(&Contact {
+                handle: Some("troyhandle".into()),
+                mention: "<@7>".into(),
+            })
+        );
+
+        // **A stand-in username is an absent handle, not a rendered snowflake**, and the mention
+        // still works — which is the whole reason the two are separate fields.
+        let ghost = rows[1].owner.as_ref().expect("slot 2 has an owner");
+        let contact = ghost
+            .contact
+            .as_ref()
+            .expect("a participant may contact them");
+        assert_eq!(contact.handle, None, "a raw Discord id reached the page");
+        assert_eq!(contact.mention, "<@8>");
+
+        // An unclaimed slot has nobody to name.
+        assert_eq!(rows[2].owner, None);
+    }
+
+    /// **`no` withholds the handle from other players and never from staff**, which is exactly what
+    /// that option promises: "organizers and helpers may still choose to ping you".
+    ///
+    /// The chip survives either way, and that is the half worth stating: "no pings" is something its
+    /// owner published, and a player who sees it stops looking for another way to reach them. Hiding
+    /// the chip along with the handle would make a slot whose owner said no indistinguishable from
+    /// one nobody holds, and somebody would go asking in chat.
+    #[test]
+    fn saying_no_hides_a_handle_from_players_and_never_from_staff() {
+        let refused = people(PingPreference::No);
+        let rows = |staff: bool| {
+            slot_rows(
+                &annotated_roster(),
+                &live(),
+                &statics(),
+                None,
+                now(),
+                &Viewer {
+                    participant: true,
+                    staff,
+                    people: Some(&refused),
+                },
+            )
+        };
+
+        let player_view = rows(false)[0].owner.clone().expect("an owner");
+        assert_eq!(player_view.ping, "no pings", "the chip is not the secret");
+        assert_eq!(
+            player_view.contact, None,
+            "a player was handed a handle its owner withheld"
+        );
+
+        let staff_view = rows(true)[0].owner.clone().expect("an owner");
+        assert_eq!(staff_view.ping, "no pings");
+        assert_eq!(
+            staff_view.contact.and_then(|c| c.handle).as_deref(),
+            Some("troyhandle"),
+            "staff cannot reach somebody they are told they may still ping"
+        );
+
+        // Every other value is a form of yes, so a player gets the handle under all of them.
+        for preference in PingPreference::ALL {
+            if preference == PingPreference::No {
+                continue;
+            }
+            let permissive = people(preference);
+            let rows = slot_rows(
+                &annotated_roster(),
+                &live(),
+                &statics(),
+                None,
+                now(),
+                &Viewer {
+                    participant: true,
+                    staff: false,
+                    people: Some(&permissive),
+                },
+            );
+            assert!(
+                rows[0]
+                    .owner
+                    .as_ref()
+                    .and_then(|o| o.contact.as_ref())
+                    .is_some(),
+                "{:?} withheld a handle, and only `no` may",
+                preference.as_sql()
+            );
+        }
+    }
+
     /// **Who has signed up is not part of a tracker link.**
     ///
     /// The tracker id is independent of the room id *precisely* so it can be handed to an audience
@@ -753,7 +1055,15 @@ mod tests {
     /// the struct.
     #[test]
     fn an_outsider_is_not_told_which_slots_are_unclaimed() {
-        let hidden = slots(&roster(), &live(), &statics(), fresh(), None, now(), false);
+        let hidden = slots(
+            &roster(),
+            &live(),
+            &statics(),
+            fresh(),
+            None,
+            now(),
+            &Viewer::outsider(),
+        );
         for row in &hidden.slots {
             assert_eq!(
                 row.claimed, None,
@@ -770,7 +1080,15 @@ mod tests {
 
         // And the room's own people still get it, or the gate has eaten the feature rather than
         // narrowing it.
-        let shown = slots(&roster(), &live(), &statics(), fresh(), None, now(), true);
+        let shown = slots(
+            &roster(),
+            &live(),
+            &statics(),
+            fresh(),
+            None,
+            now(),
+            &participant(),
+        );
         assert!(
             shown.slots.iter().all(|r| r.claimed.is_some()),
             "a participant is no longer told who has signed up"
@@ -784,7 +1102,15 @@ mod tests {
 
     #[test]
     fn the_slot_table_leads_with_punas_roster() {
-        let view = slots(&roster(), &live(), &statics(), fresh(), None, now(), true);
+        let view = slots(
+            &roster(),
+            &live(),
+            &statics(),
+            fresh(),
+            None,
+            now(),
+            &participant(),
+        );
 
         assert_eq!(
             view.slots.len(),
@@ -961,7 +1287,7 @@ mod tests {
                 fresh(),
                 None,
                 now(),
-                true,
+                &participant(),
             )),
             serde_json::to_string(&hints(&roster, &live(), &names_of(&games), fresh(), None)),
             serde_json::to_string(&locations(
@@ -991,7 +1317,7 @@ mod tests {
                 &statics(),
                 None,
                 now(),
-                false,
+                &Viewer::outsider(),
             ))))
             .collect();
 
@@ -1038,6 +1364,9 @@ mod tests {
             last_activity_ms_ago: None,
             hints: 0,
             claimed: Some(false),
+            owner: None,
+            progression: None,
+            note: None,
         }
     }
 
@@ -1055,7 +1384,7 @@ mod tests {
             &statics(),
             None,
             now(),
-            false,
+            &Viewer::outsider(),
         ));
 
         assert_eq!(text, "Troy: 66.6% | Alice: 50.0% (goal)\n");
