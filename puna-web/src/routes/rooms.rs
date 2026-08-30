@@ -3755,12 +3755,49 @@ pub(crate) mod tests {
             "send_item",
             "collect",
             "release",
+            "set_status",
+            // The three that were reachable only from the console. `alias` and both directions of
+            // `allow_release` are per-slot acts with no equivalent anywhere else, so the roster is
+            // where they belong -- a row is where somebody is already looking at the slot.
+            "alias",
+            "allow_release",
         ] {
             assert!(
                 staff_html.contains(&format!("data-command=\"{command}\"")),
                 "staff are not offered {command}"
             );
         }
+
+        // **Both directions of the exemption, and neither of them a denial.** The command is one
+        // verb pointing two ways, so the direction rides on the control the way a lock's does --
+        // and the pair has to be offered together, because the exemption lives in the room and this
+        // page cannot know which way a slot currently sits. Losing one leaves a control that can
+        // only be applied and never undone from here.
+        for allowed in ["true", "false"] {
+            assert!(
+                staff_html.contains(&format!(
+                    "data-command=\"allow_release\" data-allowed=\"{allowed}\""
+                )),
+                "the release exemption cannot be set to {allowed} from the roster"
+            );
+        }
+        // **The Copies field carries its default in the markup**, which is where `moderation.js`
+        // gets it: the dialog resets each field to its `defaultValue` between openings, so losing
+        // this attribute leaves an empty number box where the 1 should be. It would still send one
+        // copy -- `build()` reads a missing count as one -- so the only symptom is a blank field
+        // that looks like it is waiting for something.
+        assert!(
+            staff_html.contains(r#"name="amount" min="1" max="100" value="1""#),
+            "the copies field lost the default the dialog resets it to"
+        );
+
+        // Named rather than merely absent: `forbid` is the reference's word for clearing an
+        // exemption and it is a lie -- the slot returns to the room's mode, which may still permit
+        // releasing. If it ever appears in this column somebody has restated the misreading.
+        assert!(
+            !staff_html.to_lowercase().contains("forbid"),
+            "the roster describes clearing a release exemption as forbidding something"
+        );
         assert!(
             staff_html.contains("<body class=\"wide\">"),
             "the room page no longer opts out of the prose measure"

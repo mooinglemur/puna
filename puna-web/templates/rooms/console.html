@@ -1,12 +1,38 @@
 {% extends "base.html" %}
 {% block title %}{{ room_name +}} &mdash; console{% endblock %}
+{# `wide`: fifteen forms side by side with their descriptions. The 62rem prose measure is for
+   paragraphs and this page is a control panel, the same opt-out the admin tables take. #}
+{% block layout %}wide{% endblock %}
+
+{# --- the slot picker ---------------------------------------------------------------------------
+   A dropdown rather than a number field, in every form that needs one: a mistyped slot number is a
+   release into somebody else's game.
+
+   **A macro because it appears eleven times.** `slots` and `preselect_slot` are passed rather than
+   read off the template, which is what askama macros can see -- and passing them keeps the macro
+   honest about what it depends on. It sits out here rather than beside its callers because askama
+   allows a macro only at the top level, never inside a `{% raw %}{% block %}{% endraw %}`.
+
+   Every picker on the page preselects the same slot, which is right: somebody who arrived from a
+   row on the roster is here about that player, whichever command they end up running. #}
+{% macro slot_picker(slots, preselect_slot) %}
+<label>Slot
+<select name="slot" required>
+<option value="">&mdash;</option>
+{% for slot in slots %}
+<option value="{{ slot.0 }}"{% if preselect_slot == Some(*slot.0) +%} selected{% endif %}>{{ slot.0 +}} &mdash; {{+ slot.1 }}</option>
+{% endfor %}
+</select>
+</label>
+{% endmacro %}
+
 {% block content %}
 
 <h1>{{ room_name }}</h1>
 <p class="hint"><a href="/room/{{ room_id }}">Back to the room</a> &mdash; console</p>
 
 {% if room_state != "running" %}
-{# Stated rather than enforced by hiding the form: a command against a stopped room is REJECTED
+{# Stated rather than enforced by hiding the forms: a command against a stopped room is REJECTED
    with a readable reason, and that is a better answer than a form that does nothing. Deliberately
    no auto-start -- a hint that silently provisions a pod is surprising. #}
 <p class="warning">This room is {{+ room_state }}. Commands need a running room; start it from the
@@ -36,6 +62,11 @@ take.</p>
 takes effect the next time it starts.</p>
 {% endif %}
 
+{# **The answer stays at the top of the page rather than beside the form that produced it.** A run
+   redirects here and lands at the top, so this is where it is seen without scrolling -- and putting
+   it back beside its form would mean either a fragment on the redirect, which scrolls the answer
+   off, or fifteen copies of this block each testing `result.kind`. The history table below carries
+   the same rows for anything older. #}
 {% if let Some(result) = outcome %}
 <div class="{% if result.succeeded %}notice{% else %}warning{% endif %}">
 <p><strong>{{ result.kind }}</strong> &mdash; {{+ result.state }}</p>
@@ -45,156 +76,329 @@ takes effect the next time it starts.</p>
 </div>
 {% endif %}
 
-<form method="post" action="/room/{{ room_id }}/command" class="console">
-  <label>Command
-    <select name="kind" required>
-      <option value="status"{% if preselect_kind.as_deref() == Some("status") +%} selected{% endif %}>status &mdash; what the room reports</option>
-      <option value="say"{% if preselect_kind.as_deref() == Some("say") +%} selected{% endif %}>say &mdash; announce to everyone</option>
-      <option value="countdown"{% if preselect_kind.as_deref() == Some("countdown") +%} selected{% endif %}>countdown</option>
-      <option value="hint"{% if preselect_kind.as_deref() == Some("hint") +%} selected{% endif %}>hint &mdash; for a slot</option>
-      {# **All but one of these is a helper's**, so the menu is unconditional down to `option`,
-         which is gated below. The line is the room versus the game inside it: a helper runs the
-         multiworld, an organizer decides how it is configured. If another command changes tier,
-         `a_helper_runs_every_command_except_the_one_that_configures_the_room` in `model::command`
-         fails and the gate here has to move with it. #}
-      {# Its own verb rather than a mode of `hint`, because that is how the reference names it and
-         an operator who knows `/hint_location` looks for that word. Hints at what is IN a place,
-         where `hint` hints at where a THING is. #}
-      <option value="hint_location"{% if preselect_kind.as_deref() == Some("hint_location") +%} selected{% endif %}>hint location &mdash; what is in a place</option>
-      <option value="release"{% if preselect_kind.as_deref() == Some("release") +%} selected{% endif %}>release &mdash; send a slot's remaining items</option>
-      <option value="collect"{% if preselect_kind.as_deref() == Some("collect") +%} selected{% endif %}>collect &mdash; gather a slot's own items</option>
-      <option value="send_item"{% if preselect_kind.as_deref() == Some("send_item") +%} selected{% endif %}>send item &mdash; give a slot an item</option>
-      <option value="send_multiple"{% if preselect_kind.as_deref() == Some("send_multiple") +%} selected{% endif %}>send multiple &mdash; give a slot several of one item</option>
-      {# One step past hinting: this CHECKS the location and sends out whatever it holds. #}
-      <option value="send_location"{% if preselect_kind.as_deref() == Some("send_location") +%} selected{% endif %}>send location &mdash; check a place and send what is there</option>
-      {# **An exemption, not a permission level**, and the wording matters: clearing it returns the
-         slot to the room's `release_mode`, which may well still permit releasing. It does not
-         forbid anything. The reference calls the second half `/forbid_release` and that name is
-         exactly the misreading this avoids. #}
-      <option value="allow_release"{% if preselect_kind.as_deref() == Some("allow_release") +%} selected{% endif %}>allow release &mdash; exempt one slot from the room's release mode</option>
-      {# Sets somebody ELSE's alias, which `!alias` cannot. Empty clears it. #}
-      <option value="alias"{% if preselect_kind.as_deref() == Some("alias") +%} selected{% endif %}>alias &mdash; rename a player, or clear their alias</option>
-      {# **A disconnect, not a ban.** Every socket the slot holds closes, the reason is delivered as
-         chat, and the client may reconnect immediately -- most do, automatically, within seconds.
-         Measured: a kick here took the room from 4 connections to 5. The label says so because the
-         alternative is somebody pressing it twice and concluding the console is broken. #}
-      <option value="kick"{% if preselect_kind.as_deref() == Some("kick") +%} selected{% endif %}>kick &mdash; disconnect a slot (they can reconnect at once)</option>
-      {# **Offered in every password mode**, since pahoa's own `lock` verb replaced the trick of
-         withholding a slot from the per-slot password map -- which needed that mode to exist at
-         all. It bars the next login and disconnects nobody; `kick` is the other half. #}
-      <option value="lock"{% if preselect_kind.as_deref() == Some("lock") +%} selected{% endif %}>lock &mdash; bar one slot from connecting, or let it back in</option>
-      {# **Irreversible, including by the player**: upstream refuses any status change away from
-         goal, so declaring one is final. Still a helper's, because it acts on one slot's game and
-         because the auto rules make it a release by another name -- see `required_role`. #}
-      <option value="set_status"{% if preselect_kind.as_deref() == Some("set_status") +%} selected{% endif %}>set status &mdash; set a slot's Archipelago status, such as Goaled</option>
-      {% if is_organizer %}
-      {# **The one command a helper may not run**, and the only one that changes the room rather
-         than a game inside it -- see `RoomCommand::required_role`. Hidden rather than disabled: a
-         visible control that refuses teaches people the tool is broken. The route re-checks. #}
-      <option value="option"{% if preselect_kind.as_deref() == Some("option") +%} selected{% endif %}>option &mdash; change one of the room's rules</option>
-      {% endif %}
-    </select>
-  </label>
+{# --- one form per command ----------------------------------------------------------------------
+   **This was one form with a command dropdown and twelve fields**, of which a given command used
+   one or two. Nothing said which; the placeholders ("for send multiple", "for kick, optional") were
+   the whole of the guidance, and choosing a command changed nothing on screen. So every run was a
+   read of eleven irrelevant boxes to find the two that mattered.
 
-  <label>Slot
-    <select name="slot">
-      <option value="">&mdash;</option>
-      {% for slot in slots %}
-      <option value="{{ slot.0 }}"{% if preselect_slot == Some(*slot.0) +%} selected{% endif %}>{{ slot.0 +}} &mdash; {{+ slot.1 }}</option>
-      {% endfor %}
-    </select>
-  </label>
+   Now each command is its own form with its own fields and its own button. Three things follow, and
+   the second is the one worth stating:
 
-  <label>Text <input type="text" name="text" placeholder="for say"></label>
-  {# **Items and locations are separate boxes on purpose.** pahoa matches EXACTLY rather than
-     fuzzily -- the caller is a program, so a near miss should be a visible error rather than a
-     silent decision to act on something else -- and the two are looked up in different tables, so
-     one "name" box would offer the wrong suggestions half the time. #}
-  <label>Item <input type="text" name="item" placeholder="for hint, send item, send multiple"></label>
-  <label>Location <input type="text" name="location" placeholder="for hint location, send location"></label>
-  <label>Seconds <input type="number" name="seconds" placeholder="for countdown"></label>
-  {# No default, deliberately: every copy is queued on both of a slot's item streams and replayed
-     from index zero on each reconnect, so a `send_multiple` that quietly sent one would look like
-     it worked. pahoa caps it at 100 and so does the form. #}
-  <label>Copies <input type="number" name="amount" min="1" max="100" placeholder="for send multiple"></label>
-  <label>Alias <input type="text" name="alias" placeholder="for alias &mdash; leave empty to clear"></label>
-  <label>Reason <input type="text" name="reason" placeholder="for kick, optional"></label>
+   * **A field that is on screen applies.** There is no such thing here as filling in a box the
+     command ignores, so `build()`'s "which field is missing" errors are a backstop rather than the
+     normal way of finding out.
+   * **`required` can finally mean something.** On the old shared form every field had to be
+     optional, because every field was absent for most commands -- so the browser could never catch
+     an empty box and the round trip was the only validation. Per form, the browser refuses before
+     anything is queued. `alias` is the one deliberate exception: empty is how an alias is cleared.
+   * **The submit button says the verb.** Fifteen buttons all reading "Run" is fifteen identical
+     targets in a column where one of them releases somebody's world.
 
-  {# Both answers are spelled out rather than left to a checkbox, because `false` here does NOT
-     forbid releasing -- it returns the slot to whatever the room's mode says, which may still
-     permit it. An unchecked box would read as a denial. #}
-  <label>Release exemption
-    <select name="allowed">
-      <option value="">&mdash;</option>
-      <option value="true">grant &mdash; this slot may release whatever the room's mode says</option>
-      <option value="false">clear &mdash; return this slot to the room's mode</option>
-    </select>
-  </label>
+   The two groups are the division that matters: everything under "One slot" has a control on the
+   room's own roster, where the player is already in front of you and the slot needs no picking.
+   Nothing under "The room" has one anywhere else, which is what this page is still for. #}
 
-  <label>Lock
-    <select name="locked">
-      <option value="">&mdash;</option>
-      <option value="true">lock &mdash; bars the next login; disconnects nobody</option>
-      <option value="false">unlock &mdash; let this slot connect again</option>
-    </select>
-  </label>
+<h2>The room</h2>
 
-  {# **No blank-safe default**, unlike the selects above where a missing value is simply an error:
-     here a default would let a stray submit declare somebody's game finished, and goal cannot be
-     taken back by anyone. `unknown` and `connected` are offered because pahoa accepts them, with
-     the warning it gives — they are derived from the connection and the next connect overwrites
-     them, so setting one is nearly always a mistake worth naming rather than hiding. #}
-  <label>Status
-    <select name="status">
-      <option value="">&mdash;</option>
-      <option value="goal">goal &mdash; finished. Cannot be undone, and may auto-release their world</option>
-      <option value="playing">playing</option>
-      <option value="ready">ready</option>
-      <option value="connected">connected &mdash; overwritten by the next connect or disconnect</option>
-      <option value="unknown">unknown &mdash; overwritten by the next connect or disconnect</option>
-    </select>
-  </label>
+<form class="cmd{{ self.chosen("status") }}" id="cmd-status" method="post"
+      action="/room/{{ room_id }}/command">
+<input type="hidden" name="kind" value="status">
+<h3>Status</h3>
+<p class="hint">What the room reports about itself &mdash; connections, save state, its own idea of
+its options. Changes nothing.</p>
+<div class="run"><button type="submit">Ask</button></div>
+</form>
 
-  {% if is_organizer %}
-  {# The eight pahoa will set, transcribed from its `SETTABLE` table. A picker rather than a text
-     box because an unknown name is a refusal, and the value stays free text because the eight take
-     three different kinds -- a number, a mode word, a boolean. **The two passwords are absent**:
-     pahoa recognizes and refuses them by name, since the save carries no secret and a live change
-     would revert at the next restart. Where a room is configured is on the room page. #}
-  <label>Option
-    <select name="option_name">
-      <option value="">&mdash;</option>
-      <option value="hint_cost">hint_cost</option>
-      <option value="location_check_points">location_check_points</option>
-      <option value="release_mode">release_mode</option>
-      <option value="collect_mode">collect_mode</option>
-      <option value="remaining_mode">remaining_mode</option>
-      <option value="countdown_mode">countdown_mode</option>
-      <option value="item_cheat">item_cheat</option>
-      <option value="compatibility">compatibility</option>
-    </select>
-  </label>
-  <label>Value <input type="text" name="option_value" placeholder="a number, a mode word, or true/false"></label>
-  {% endif %}
+<form class="cmd{{ self.chosen("say") }}" id="cmd-say" method="post"
+      action="/room/{{ room_id }}/command">
+<input type="hidden" name="kind" value="say">
+<h3>Say</h3>
+<p class="hint">Announce a line to everybody connected, as the server rather than as a player.</p>
+<div class="fields">
+<label>Text <input type="text" name="text" required></label>
+</div>
+<div class="run"><button type="submit">Announce</button></div>
+</form>
 
-  {# `force` grants the hint outright and spends nothing. The default charges the slot's own points
-     as `!hint` would, and MAY GRANT FEWER THAN ASKED OR NONE -- so the answer below is the truth,
-     not this checkbox. Applies to `hint` and `hint location` alike. #}
-  <label class="inline"><input type="checkbox" name="force" value="true"> Force the hint (grant it
-  without spending the slot's points)</label>
-
-  <button type="submit">Run</button>
+<form class="cmd{{ self.chosen("countdown") }}" id="cmd-countdown" method="post"
+      action="/room/{{ room_id }}/command">
+<input type="hidden" name="kind" value="countdown">
+<h3>Countdown</h3>
+<p class="hint">Count down in chat, for starting everybody together.</p>
+<div class="fields">
+<label>Seconds <input type="number" name="seconds" min="1" value="10" required></label>
+</div>
+<div class="run"><button type="submit">Start the countdown</button></div>
 </form>
 
 {% if is_organizer %}
-{# Stated here rather than left to be discovered from a refusal. It is the one thing on this page
-   whose effect outlives the pod, and §7's "gameplay flags are only an initial value" rule is
-   exactly what makes that true: after the first save the room's own copy wins, so what is set here
-   survives a restart and what the manifest says does not. #}
-<p class="hint"><strong>An option change persists.</strong> The room's save is authoritative
-for its rules, so a restart restores what you set here rather than what the room was started
-with.</p>
+{# **The one command a helper may not run**, and the only one that changes the room rather than a
+   game inside it -- see `RoomCommand::required_role`. Hidden rather than disabled: a visible
+   control that refuses teaches people the tool is broken. The route re-checks regardless.
+
+   `the_console_offers_option_to_organizers_and_everything_else_to_helpers` pins both halves -- that
+   this is the only organizer-tier command, and that this gate is the one immediately above it. #}
+<form class="cmd{{ self.chosen("option") }}" id="cmd-option" method="post"
+      action="/room/{{ room_id }}/command">
+<input type="hidden" name="kind" value="option">
+<h3>Option</h3>
+{# Stated on the control rather than in a note under the page. It is the one thing here whose effect
+   outlives the pod, and §7's "gameplay flags are only an initial value" rule is exactly what makes
+   that true: after the first save the room's own copy wins, so what is set here survives a restart
+   and what the manifest says does not. #}
+<p class="hint">Change one of the room's gameplay rules on the running room.
+<strong>This persists</strong> &mdash; the room's save is authoritative for its rules, so a restart
+restores what you set here rather than what the room was started with.</p>
+<div class="fields">
+{# The eight pahoa will set, transcribed from its `SETTABLE` table. A picker rather than a text box
+   because an unknown name is a refusal, and the value stays free text because the eight take three
+   different kinds -- a number, a mode word, a boolean. **The two passwords are absent**: pahoa
+   recognizes and refuses them by name, since the save carries no secret and a live change would
+   revert at the next restart. Where a room is configured is on the room page. #}
+<label>Option
+<select name="option_name" required>
+<option value="">&mdash;</option>
+<option value="hint_cost">hint_cost</option>
+<option value="location_check_points">location_check_points</option>
+<option value="release_mode">release_mode</option>
+<option value="collect_mode">collect_mode</option>
+<option value="remaining_mode">remaining_mode</option>
+<option value="countdown_mode">countdown_mode</option>
+<option value="item_cheat">item_cheat</option>
+<option value="compatibility">compatibility</option>
+</select>
+</label>
+<label>Value <input type="text" name="option_value" required
+                   placeholder="a number, a mode word, or true/false"></label>
+</div>
+<div class="run"><button type="submit">Set it</button></div>
+</form>
 {% endif %}
+
+<h2>One slot</h2>
+{# Said once here rather than on each of the eleven: this is the page's own account of why it is
+   shorter than it was, and where somebody should be looking instead. #}
+<p class="hint">Every command below also has a control on the room's roster, on the slot's own row
+&mdash; which is usually the better place for it, because the player is already in front of you.
+These are the same commands with the slot picked by hand.</p>
+
+{# **Items and locations are separate boxes on purpose**, here and in the roster's dialog. pahoa
+   matches EXACTLY rather than fuzzily -- the caller is a program, so a near miss should be a
+   visible error rather than a silent decision to act on something else -- and the two are looked up
+   in different tables, so one "name" box would offer the wrong suggestions half the time. #}
+{# `force` grants the hint outright and spends nothing. The default charges the slot's own points as
+   `!hint` would, and MAY GRANT FEWER THAN ASKED OR NONE -- so the room's answer is the truth, not
+   this checkbox, which is why the result above is rendered verbatim. #}
+<form class="cmd{{ self.chosen("hint") }}" id="cmd-hint" method="post"
+      action="/room/{{ room_id }}/command">
+<input type="hidden" name="kind" value="hint">
+<h3>Hint an item</h3>
+<p class="hint">Tell this slot where one of their items is. Charges their own hint points unless you
+force it, and may grant fewer than asked or none.</p>
+<div class="fields">
+{% call slot_picker(slots, preselect_slot) %}{% endcall %}
+<label>Item <input type="text" name="item" required></label>
+<label class="inline"><input type="checkbox" name="force" value="true"> Force &mdash; grant it
+without spending their points</label>
+</div>
+<div class="run"><button type="submit">Hint</button></div>
+</form>
+
+{# Its own verb rather than a mode of `hint`, because that is how the reference names it and an
+   operator who knows `/hint_location` looks for that word. Hints at what is IN a place, where
+   `hint` hints at where a THING is. #}
+<form class="cmd{{ self.chosen("hint_location") }}" id="cmd-hint_location" method="post"
+      action="/room/{{ room_id }}/command">
+<input type="hidden" name="kind" value="hint_location">
+<h3>Hint a location</h3>
+<p class="hint">Tell this slot what is in one of their own locations. Same points and the same
+partial answer as hinting an item.</p>
+<div class="fields">
+{% call slot_picker(slots, preselect_slot) %}{% endcall %}
+<label>Location <input type="text" name="location" required></label>
+<label class="inline"><input type="checkbox" name="force" value="true"> Force &mdash; grant it
+without spending their points</label>
+</div>
+<div class="run"><button type="submit">Hint</button></div>
+</form>
+
+{# One step past hinting: this CHECKS the location and sends out whatever it holds. #}
+<form class="cmd{{ self.chosen("send_location") }}" id="cmd-send_location" method="post"
+      action="/room/{{ room_id }}/command">
+<input type="hidden" name="kind" value="send_location">
+<h3>Send a location</h3>
+<p class="hint">Check one of this slot's locations and send out what is there, as though they had
+found it. This cannot be undone.</p>
+<div class="fields">
+{% call slot_picker(slots, preselect_slot) %}{% endcall %}
+<label>Location <input type="text" name="location" required></label>
+</div>
+<div class="run"><button type="submit">Check it</button></div>
+</form>
+
+{# **`send_multiple` is not a command of its own**, and was: it is this one with a number beside it,
+   so it is the Copies field rather than a second form describing the same act. `build()` sends one
+   copy as `send_item` and several as `send_multiple`, which is the split pahoa draws -- the folding
+   is in the asking, not on the wire.
+
+   Copies **defaults to one**, which is the only default on this page that fills in a value rather
+   than leaving a choice open. Every copy is queued on both of a slot's item streams and replayed
+   from index zero on each reconnect, so pahoa caps it at 100 and so does the form -- but the
+   direction of a mistake is what makes the default safe here: one copy is the least this command
+   can do, so a lost field under-sends rather than flooding a game. #}
+<form class="cmd{{ self.chosen("send_item") }}" id="cmd-send_item" method="post"
+      action="/room/{{ room_id }}/command">
+<input type="hidden" name="kind" value="send_item">
+<h3>Send an item</h3>
+<p class="hint">Give this slot an item outright, once or several times over. This cannot be undone,
+and every copy is replayed to them on each reconnect.</p>
+<div class="fields">
+{% call slot_picker(slots, preselect_slot) %}{% endcall %}
+<label>Item <input type="text" name="item" required></label>
+<label>Copies <input type="number" name="amount" min="1" max="100" value="1" required></label>
+</div>
+<div class="run"><button type="submit">Send</button></div>
+</form>
+
+<form class="cmd{{ self.chosen("collect") }}" id="cmd-collect" method="post"
+      action="/room/{{ room_id }}/command">
+<input type="hidden" name="kind" value="collect">
+<h3>Collect</h3>
+<p class="hint">Gather every item belonging to this slot that is still out in the multiworld, as
+though they had finished. This cannot be undone.</p>
+<div class="fields">
+{% call slot_picker(slots, preselect_slot) %}{% endcall %}
+</div>
+<div class="run"><button type="submit">Collect</button></div>
+</form>
+
+<form class="cmd{{ self.chosen("release") }}" id="cmd-release" method="post"
+      action="/room/{{ room_id }}/command">
+<input type="hidden" name="kind" value="release">
+<h3>Release</h3>
+<p class="hint">Send this slot's remaining items to the players they belong to. Everybody else's
+game moves forward, and this cannot be undone.</p>
+<div class="fields">
+{% call slot_picker(slots, preselect_slot) %}{% endcall %}
+</div>
+<div class="run"><button type="submit">Release</button></div>
+</form>
+
+{# **Radios rather than a dropdown, and this is the one where it is not only about the toggle.**
+   Every choice here carries a warning, and in a `<select>` a warning is only readable once the list
+   is open -- so the two that pahoa accepts and nobody should want (`connected`, `unknown`) looked
+   exactly like the two that are ordinary, and `goal` looked like both.
+
+   **No default**, which radios express and a dropdown could only approximate with a blank first
+   entry: a stray submit must not be able to declare somebody's game finished, and goal cannot be
+   taken back by anyone including the player. `required` on the group is the browser's half of that;
+   `build()` refusing a missing `status` is the real one. #}
+<form class="cmd{{ self.chosen("set_status") }}" id="cmd-set_status" method="post"
+      action="/room/{{ room_id }}/command">
+<input type="hidden" name="kind" value="set_status">
+<h3>Set a status</h3>
+<p class="hint">Set this slot's Archipelago status, exactly as their own client would.</p>
+<div class="fields">
+{% call slot_picker(slots, preselect_slot) %}{% endcall %}
+</div>
+<fieldset>
+<legend>Which status?</legend>
+<label><input type="radio" name="status" value="goal" required> Goal &mdash; finished. Nobody can
+undo this afterwards, and the room may empty their world through its auto-release rule.</label>
+<label><input type="radio" name="status" value="playing"> Playing</label>
+<label><input type="radio" name="status" value="ready"> Ready</label>
+<label><input type="radio" name="status" value="connected"> Connected &mdash; derived from the
+connection, so the next connect or disconnect overwrites it.</label>
+<label><input type="radio" name="status" value="unknown"> Unknown &mdash; likewise overwritten by
+the next connect or disconnect.</label>
+</fieldset>
+<div class="run"><button type="submit">Set the status</button></div>
+</form>
+
+{# Sets somebody ELSE's alias, which `!alias` cannot. **Empty clears it**, which is why this is the
+   one text field on the page that is not `required` -- and why the label has to say so, since a
+   submit with nothing typed is otherwise indistinguishable from a slip. #}
+<form class="cmd{{ self.chosen("alias") }}" id="cmd-alias" method="post"
+      action="/room/{{ room_id }}/command">
+<input type="hidden" name="kind" value="alias">
+<h3>Set an alias</h3>
+<p class="hint">Rename this player in chat, as though they had set it themselves. pahoa cuts a long
+alias to 16 characters.</p>
+<div class="fields">
+{% call slot_picker(slots, preselect_slot) %}{% endcall %}
+<label>Alias <input type="text" name="alias" maxlength="16"
+                    placeholder="leave empty to clear it"></label>
+</div>
+<div class="run"><button type="submit">Set the alias</button></div>
+</form>
+
+{# **An exemption, not a permission level**, and the wording is the whole reason this is two labeled
+   radios and not a checkbox: clearing it returns the slot to the room's `release_mode`, which may
+   well still permit releasing. It forbids nothing. The reference calls that half `/forbid_release`
+   and that name is exactly the misreading being avoided, so neither label here says "deny" and the
+   second names what it restores.
+
+   An unchecked box would have read as a denial, which is the same error one control further on. #}
+<form class="cmd{{ self.chosen("allow_release") }}" id="cmd-allow_release" method="post"
+      action="/room/{{ room_id }}/command">
+<input type="hidden" name="kind" value="allow_release">
+<h3>Release exemption</h3>
+<p class="hint">Let one slot release its world whatever the room's release mode says, or put it back
+under the room's rule.</p>
+<div class="fields">
+{% call slot_picker(slots, preselect_slot) %}{% endcall %}
+</div>
+<fieldset>
+<legend>Which way?</legend>
+<label><input type="radio" name="allowed" value="true" required> Grant &mdash; this slot may release
+whatever the room's mode says. It changes nothing for anybody else.</label>
+<label><input type="radio" name="allowed" value="false"> Clear &mdash; return this slot to the
+room's mode, which may still permit releasing. This forbids nothing.</label>
+</fieldset>
+<div class="run"><button type="submit">Apply</button></div>
+</form>
+
+{# **Offered in every password mode**, since pahoa's own `lock` verb replaced the trick of
+   withholding a slot from the per-slot password map -- which needed that mode to exist at all.
+
+   It bars the next login and disconnects nobody, which is the opposite of what a lock sounds like.
+   An operator dealing with a griefer wants lock and THEN kick, in that order: kicking first leaves
+   a window in which they simply reconnect. #}
+<form class="cmd{{ self.chosen("lock") }}" id="cmd-lock" method="post"
+      action="/room/{{ room_id }}/command">
+<input type="hidden" name="kind" value="lock">
+<h3>Lock</h3>
+<p class="hint">Bar one slot from connecting, or let it back in.</p>
+<div class="fields">
+{% call slot_picker(slots, preselect_slot) %}{% endcall %}
+</div>
+<fieldset>
+<legend>Which way?</legend>
+<label><input type="radio" name="locked" value="true" required> Lock &mdash; bars the next login.
+Nobody is disconnected; kick does that, and lock first.</label>
+<label><input type="radio" name="locked" value="false"> Unlock &mdash; let this slot connect
+again. Their password is unchanged, so nobody has to be told anything.</label>
+</fieldset>
+<div class="run"><button type="submit">Apply</button></div>
+</form>
+
+{# **A disconnect, not a ban.** Every socket the slot holds closes, the reason is delivered as chat,
+   and the client may reconnect immediately -- most do, automatically, within seconds. Measured: a
+   kick here took the room from 4 connections to 5. The description says so because the alternative
+   is somebody pressing it twice and concluding the console is broken. #}
+<form class="cmd{{ self.chosen("kick") }}" id="cmd-kick" method="post"
+      action="/room/{{ room_id }}/command">
+<input type="hidden" name="kind" value="kick">
+<h3>Kick</h3>
+<p class="hint">Close this slot's connections. They can reconnect at once, and most clients do so
+automatically within seconds &mdash; lock first if that is not what you want.</p>
+<div class="fields">
+{% call slot_picker(slots, preselect_slot) %}{% endcall %}
+<label>Reason <input type="text" name="reason" placeholder="optional; delivered as chat"></label>
+</div>
+<div class="run"><button type="submit">Kick</button></div>
+</form>
 
 <h2>Recent commands</h2>
 {% if history.is_empty() %}

@@ -1416,6 +1416,93 @@ h1 .scope {
 
 .form-actions .cancel { color: var(--muted); }
 
+/* --- the console ---------------------------------------------------------------------------------
+   Fifteen forms stacked down the page, one per command. Each is a card so that its fields and its
+   button are visibly ITS OWN: the failure this layout replaced was a single form where nothing said
+   which of twelve boxes belonged to the command you had chosen, and a column of forms with no
+   boundary between them would reintroduce exactly that ambiguity at the scale of a whole page.
+
+   The card is a border and nothing heavier -- no shadow, no tinted ground. These are not floating
+   above anything and there are fifteen of them; a page of raised panels reads as fifteen alerts. */
+.cmd {
+  margin: 0 0 1rem;
+  padding: 0.8rem 1rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.cmd h3 { margin: 0 0 0.3rem; font-size: 1.05rem; }
+
+/* The measure is kept for the DESCRIPTION and dropped for the page, which is the split `wide` gets
+   wrong on its own: the controls want the width, the sentence above them does not. */
+.cmd > .hint { margin: 0 0 0.7rem; max-width: 62rem; }
+
+/* `flex-end` rather than `center`: a label sits above its control, so these are boxes of different
+   heights whose BOTTOMS are the line the eye follows -- a slot picker with a one-word label beside
+   an item box with a one-word label, and between them a checkbox with no label above it at all.
+   Centring them staircases the inputs, which is the same mistake M22b found in the users table. */
+.cmd .fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1rem;
+  align-items: flex-end;
+}
+
+/* Labels wrap their control here, so they are the flex items rather than loose text beside one.
+   That is also what keeps fifteen forms free of `id`/`for` pairs, which would otherwise have to be
+   unique across a document containing eleven copies of the same slot picker. */
+.cmd .fields > label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0;
+}
+
+/* Except the force checkbox, which is a word beside a box rather than a box under a word. */
+.cmd .fields > label.inline {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 28rem;
+}
+
+.cmd fieldset {
+  margin: 0.8rem 0 0;
+  padding: 0.5rem 0.9rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.cmd fieldset legend { padding: 0 0.3rem; color: var(--muted); font-size: 0.9rem; }
+
+/* One choice per line, and each carries its own consequence in words -- which is the whole reason
+   these are radios rather than a `<select>`, where a warning is only readable once the list is
+   open. Full-width text, so a two-line explanation stays under its own button. */
+.cmd fieldset label {
+  display: block;
+  margin: 0.35rem 0 0;
+  max-width: 58rem;
+  color: var(--text);
+  font-size: 1rem;
+}
+
+.cmd fieldset input[type="radio"] { margin-right: 0.35rem; }
+
+.cmd .run { margin: 0.8rem 0 0; }
+
+/* **The command the roster sent us to.** The link carries `#cmd-<kind>`, which scrolls, and
+   `?kind=<kind>`, which is what marks it -- so a browser that declines to scroll, or a link opened
+   without its fragment, still lands somewhere that says which form is the one.
+
+   An accent border on both sides rather than a tinted ground: `.notice` and `.warning` own tinted
+   grounds on this page and they mean "something happened", which this does not. */
+.cmd.chosen {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
 /* --- the room's feed ------------------------------------------------------------------------------
    A terminal, deliberately: this is Archipelago's own item feed and players read it in a client that
    looks like this. Fixed width, and the item colors are the protocol's `flags` rather than

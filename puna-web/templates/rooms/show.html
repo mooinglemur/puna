@@ -329,7 +329,7 @@ unclaimed
 
    The order is deliberate: the two that need no confirmation sit together at the left, then the
    four that send something into somebody's game, then the two that move items in bulk. #}
-{# **Who this row is, carried once for the whole cell rather than on each of the nine controls.**
+{# **Who this row is, carried once for the whole cell rather than on each of the twelve controls.**
    `moderation.js` reads it from the control's own `<td>` to name the target in the dialog: a
    confirmation that says only "Hint an item" is one a misclick sails straight through, and the two
    controls that do NOT confirm have nothing but this to show who they acted on.
@@ -344,7 +344,7 @@ unclaimed
 {# An OPEN padlock: this slot is shut out, and the control lets it back in. Drawn as the state's
    remedy rather than its description, like every other control in this column. #}
 <a class="act" data-command="lock" data-locked="false" data-slot="{{ slot.slot_number }}"
-   href="/room/{{ room.id }}/console?kind=lock&amp;slot={{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=lock&amp;slot={{ slot.slot_number }}#cmd-lock"
    title="Unlock: let this slot log in again."
    aria-label="Unlock slot {{+ slot.slot_number }}">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
@@ -360,7 +360,7 @@ unclaimed
    is that it ejects somebody, and it does not. An administrator dealing with a griefer wants lock
    THEN kick, in that order: kicking first leaves a window in which they simply reconnect. #}
 <a class="act" data-command="lock" data-locked="true" data-slot="{{ slot.slot_number }}"
-   href="/room/{{ room.id }}/console?kind=lock&amp;slot={{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=lock&amp;slot={{ slot.slot_number }}#cmd-lock"
    title="Lock: bar the next login. Nobody is disconnected -- kick does that, and lock first."
    aria-label="Lock slot {{+ slot.slot_number }}">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
@@ -374,7 +374,7 @@ unclaimed
    most do automatically within seconds, so the tooltip says so rather than letting somebody press
    it twice and conclude the console is broken. #}
 <a class="act" data-command="kick" data-slot="{{ slot.slot_number }}"
-   href="/room/{{ room.id }}/console?kind=kick&amp;slot={{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=kick&amp;slot={{ slot.slot_number }}#cmd-kick"
    title="Kick: close this slot's connections. They can reconnect immediately."
    aria-label="Kick slot {{+ slot.slot_number }}">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
@@ -386,7 +386,7 @@ unclaimed
 
 {# A lightbulb: where is this thing. #}
 <a class="act" data-command="hint" data-slot="{{ slot.slot_number }}"
-   href="/room/{{ room.id }}/console?kind=hint&amp;slot={{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=hint&amp;slot={{ slot.slot_number }}#cmd-hint"
    title="Hint: tell this slot where an item is. Charges their points unless forced."
    aria-label="Hint an item for slot {{+ slot.slot_number }}">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
@@ -399,7 +399,7 @@ unclaimed
 {# A map pin: what is in this place. The mirror of the lightbulb, and a separate verb rather than a
    mode of it because that is how the reference names it. #}
 <a class="act" data-command="hint_location" data-slot="{{ slot.slot_number }}"
-   href="/room/{{ room.id }}/console?kind=hint_location&amp;slot={{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=hint_location&amp;slot={{ slot.slot_number }}#cmd-hint_location"
    title="Hint location: tell this slot what is in one of their locations."
    aria-label="Hint a location for slot {{+ slot.slot_number }}">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
@@ -412,7 +412,7 @@ unclaimed
 {# The same pin with a check through it: this one CHECKS the location and sends out whatever it
    holds, rather than pointing at it. One step further than the hint, and irreversible. #}
 <a class="act" data-command="send_location" data-slot="{{ slot.slot_number }}"
-   href="/room/{{ room.id }}/console?kind=send_location&amp;slot={{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=send_location&amp;slot={{ slot.slot_number }}#cmd-send_location"
    title="Send location: check one of this slot's locations and send out what is there."
    aria-label="Check a location for slot {{+ slot.slot_number }}">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
@@ -425,7 +425,7 @@ unclaimed
 
 {# A parcel with an arrow into it: hand this slot an item outright. #}
 <a class="act" data-command="send_item" data-slot="{{ slot.slot_number }}"
-   href="/room/{{ room.id }}/console?kind=send_item&amp;slot={{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=send_item&amp;slot={{ slot.slot_number }}#cmd-send_item"
    title="Send item: give this slot an item directly."
    aria-label="Send an item to slot {{+ slot.slot_number }}">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
@@ -436,10 +436,11 @@ unclaimed
 </a>
 
 {# --- everything else, behind one control -------------------------------------------------------
-   **A menu rather than four more glyphs**, and the reason is what is coming rather than what is
-   here: this is where per-slot FILTERS will live -- blocking or scaling a slot's deathlinks, or
-   refusing traplinks from particular senders -- and those are configuration with values, not
-   one-click verbs. A row of icons has nowhere to put them, and eight glyphs is already two rows.
+   **A menu rather than more glyphs**, and it is now what makes the row extensible rather than
+   merely tidy: the per-slot filters live here, and so do the three actions that were reachable only
+   from the console -- the alias and both directions of the release exemption. Those are
+   configuration with values and words rather than one-click verbs, and a row of icons has nowhere
+   to put them. Seven glyphs outside is already two rows.
 
    Release and collect moved in here rather than staying outside. They are the two that move items
    in bulk, they are the two an operator reaches for least often, and neither is a snap decision --
@@ -451,7 +452,7 @@ unclaimed
    platform gives this one the top layer -- so it escapes `.scroll-x`'s clipping -- plus mutual
    exclusion, so two rows' menus cannot be open at once, with no script at all. #}
 <button type="button" class="act more" popovertarget="more-{{ slot.slot_number }}"
-        title="More actions: release, collect, declare finished"
+        title="More actions: release, collect, declare finished, alias, release exemption, filters"
         aria-label="More actions for slot {{+ slot.slot_number }}">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <circle cx="3.2" cy="8" r="1.3" fill="currentColor"/>
@@ -469,7 +470,7 @@ unclaimed
 
 {# A tray with an arrow coming IN: gather this slot's own items from everywhere else. #}
 <a class="act" data-command="collect" data-slot="{{ slot.slot_number }}"
-   href="/room/{{ room.id }}/console?kind=collect&amp;slot={{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=collect&amp;slot={{ slot.slot_number }}#cmd-collect"
    title="Collect: gather every item belonging to this slot that is still out in the multiworld.">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <path d="M1.8 9.6v3.6h12.4V9.6" fill="none" stroke="currentColor" stroke-linejoin="round"/>
@@ -482,7 +483,7 @@ unclaimed
 {# The same tray with the arrow going OUT: send this slot's remaining items to whoever they belong
    to. The mirror of collect, and the pairing is the point -- one gathers in, one sends out. #}
 <a class="act" data-command="release" data-slot="{{ slot.slot_number }}"
-   href="/room/{{ room.id }}/console?kind=release&amp;slot={{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=release&amp;slot={{ slot.slot_number }}#cmd-release"
    title="Release: send this slot's remaining items to the players they belong to.">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <path d="M1.8 9.6v3.6h12.4V9.6" fill="none" stroke="currentColor" stroke-linejoin="round"/>
@@ -499,13 +500,66 @@ unclaimed
    away from goal, so not even the player can take it back -- and it may empty their world through
    the room's auto-release rule. Both facts are in the confirmation rather than only here. #}
 <a class="act" data-command="set_status" data-status="goal" data-slot="{{ slot.slot_number }}"
-   href="/room/{{ room.id }}/console?kind=set_status&amp;slot={{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=set_status&amp;slot={{ slot.slot_number }}#cmd-set_status"
    title="Set as Goaled: mark this slot Goaled, exactly as their own client would. Cannot be undone.">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <path d="M4 14V2.6h7.6l-1.6 2.6 1.6 2.6H4" fill="none" stroke="currentColor"
       stroke-linejoin="round"/>
 </svg>
 <span>Set as Goaled</span>
+</a>
+
+{# A pencil, the same glyph the room's own rename carries, because it is the same act one level
+   down: this sets somebody ELSE's alias, which `!alias` only lets a player do for themselves.
+
+   **Empty clears it**, which is why this one confirms despite being the least consequential thing
+   in the menu -- the dialog is where that can be said, and a control that silently wiped a name
+   somebody chose would be a small mystery nobody could retrace. pahoa truncates to 16 characters
+   and so does the field. #}
+<a class="act" data-command="alias" data-slot="{{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=alias&amp;slot={{ slot.slot_number }}#cmd-alias"
+   title="Set alias: rename this player in chat, or clear the alias they have.">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<path d="M11.5 1.9 14.1 4.5 5.4 13.2 2 14l.8-3.4z" fill="none" stroke="currentColor"
+      stroke-linejoin="round"/>
+<path d="M10.2 3.2l2.6 2.6" fill="none" stroke="currentColor" stroke-linecap="round"/>
+</svg>
+<span>Set alias</span>
+</a>
+
+{# --- the release exemption, both directions -----------------------------------------------------
+   **Two entries for one command**, carrying the direction on the control the way the lock does --
+   and unlike the lock, both are offered at once, because the exemption lives in the room rather
+   than in Puna and this page cannot know which way a slot currently sits.
+
+   The wording is the whole reason this is not a checkbox. Clearing an exemption returns the slot to
+   the room's `release_mode`, which may still permit releasing; it forbids nothing. The reference
+   calls that half `/forbid_release`, which is exactly the misreading, so neither entry here says
+   "deny" and the second names what it actually restores. #}
+
+{# A check inside a ring: this slot may release whatever the room's mode says. #}
+<a class="act" data-command="allow_release" data-allowed="true" data-slot="{{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=allow_release&amp;slot={{ slot.slot_number }}#cmd-allow_release"
+   title="Allow releases: let this slot release its world whatever the room's release mode says.">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor"/>
+<path d="M5.2 8.2 7.2 10.2 10.9 6" fill="none" stroke="currentColor" stroke-linecap="round"
+      stroke-linejoin="round"/>
+</svg>
+<span>Allow releases</span>
+</a>
+
+{# An arrow curving back: this RETURNS the slot to the room's rule. Deliberately not a cross, which
+   would draw the denial this command is most often mistaken for. #}
+<a class="act" data-command="allow_release" data-allowed="false" data-slot="{{ slot.slot_number }}"
+   href="/room/{{ room.id }}/console?kind=allow_release&amp;slot={{ slot.slot_number }}#cmd-allow_release"
+   title="Clear the exemption: this slot goes back to the room's release mode, which may still allow it.">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<path d="M2.6 8a5.4 5.4 0 1 0 1.9-4.1" fill="none" stroke="currentColor" stroke-linecap="round"/>
+<path d="M2.2 1.9v3.2h3.2" fill="none" stroke="currentColor" stroke-linecap="round"
+      stroke-linejoin="round"/>
+</svg>
+<span>Back to the room's rule</span>
 </a>
 
 {# A funnel: what this slot's traffic is allowed through.
@@ -572,6 +626,12 @@ unclaimed
 <input type="hidden" name="slot" data-mod-slot value="">
 <input type="hidden" name="locked" data-mod-locked value="">
 <input type="hidden" name="status" data-mod-status value="">
+{# The third value that rides on the control rather than being asked for, and here the reason is
+   sharper than it is for the other two: `false` on `allow_release` does NOT forbid releasing, it
+   returns the slot to whatever the room's mode says. A select in this form would be a control whose
+   two answers read as yes and no, which is exactly the misreading. Two menu entries, each saying
+   what it does, and the direction comes down with the click. #}
+<input type="hidden" name="allowed" data-mod-allowed value="">
 
 {# The two name fields, and the reason they are separate rather than one box: an item and a
    location are looked up in different tables, and pahoa matches EXACTLY, so offering the wrong kind
@@ -588,6 +648,27 @@ unclaimed
        data-mod-suggest="location" placeholder="start typing; the game's own names appear">
 </p>
 <datalist id="mod-names"></datalist>
+
+{# **Copies is what `send_multiple` became.** It was its own command and its own console entry, and
+   it is one decision with a number in it rather than two acts -- so it sits beside the item, and
+   `build()` picks the verb from the count.
+
+   `value="1"` is the field's default in the HTML sense as well as the visible one, which is what
+   `moderation.js` restores between openings: it resets each field to its `defaultValue`, so this
+   one comes back as 1 where a text box comes back empty. #}
+<p data-mod-field="amount">
+<label for="mod-amount">Copies</label>
+<input type="number" id="mod-amount" name="amount" min="1" max="100" value="1">
+</p>
+
+{# **Empty clears the alias**, so this field is meaningful blank -- the one text box here that is.
+   `build()` does not filter it for blankness for that reason, and the placeholder says so, because
+   a submit with nothing typed is otherwise indistinguishable from a mistake. #}
+<p data-mod-field="alias">
+<label for="mod-alias">Alias</label>
+<input type="text" id="mod-alias" name="alias" maxlength="16" autocomplete="off"
+       placeholder="leave empty to clear it">
+</p>
 
 {# `force` grants outright and spends nothing. The default charges the slot's own points as `!hint`
    would and MAY GRANT FEWER THAN ASKED OR NONE, so the room's answer is the truth rather than this

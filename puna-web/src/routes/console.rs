@@ -65,11 +65,34 @@ pub struct ConsoleTemplate {
     /// A command and a slot chosen in advance, from the room page's moderation controls.
     ///
     /// **This is the whole of the no-JavaScript path for that column.** Those controls are links
-    /// here, so somebody who followed one arrives with the command and the player already picked
-    /// and only the value left to fill in. `kind` is checked against [`MENU`] before it is
-    /// rendered, because it comes out of a URL.
+    /// here, so somebody who followed one arrives with the command marked and the player already
+    /// picked, and only the value left to fill in. `kind` is checked against [`MENU`] before it is
+    /// used, because it comes out of a URL.
+    ///
+    /// The links also carry a `#cmd-<kind>` fragment, which is what actually *scrolls* to the form
+    /// on a page of fifteen. The two are not redundant: the fragment moves the viewport and never
+    /// reaches the server, and this marks which form is the one — so a link opened in a new tab, a
+    /// bookmark saved without the fragment, or a browser that declines to scroll all still arrive
+    /// somewhere legible.
     preselect_kind: Option<String>,
     preselect_slot: Option<i32>,
+}
+
+impl ConsoleTemplate {
+    /// `" chosen"` for the form the moderation column sent us to, empty for every other.
+    ///
+    /// **The leading space is inside the Rust string on purpose.** Written in the template as
+    /// `class="cmd {% if … %}chosen{% endif %}"` the separator sits next to a tag, and `askama.toml`
+    /// sets `whitespace = "suppress"` — so it would be eaten and the class would render as
+    /// `cmdchosen`, which matches no rule and fails silently. Returning the space with the word
+    /// keeps it out of the template's reach entirely.
+    fn chosen(&self, kind: &str) -> &'static str {
+        if self.preselect_kind.as_deref() == Some(kind) {
+            " chosen"
+        } else {
+            ""
+        }
+    }
 }
 
 /// One line of the console's history.
@@ -159,30 +182,43 @@ async fn show(
     })
 }
 
-/// Every `<option value>` the console's command menu offers, in the order it offers them.
+/// Every command the console offers, in the order the page lays them out.
 ///
-/// Read together they *are* the menu, and three things depend on that: the tests below assert each
-/// builds and that each is offered to the right tier, and [`show`] uses it to decide whether a
-/// `?kind=` in a URL names a real command before rendering it as selected. A command added to
-/// `console.html` and not here is one nobody checked either way, and one the moderation column
-/// cannot link to.
+/// Read together they *are* the console, and three things depend on that: the tests below assert
+/// each builds and that each is offered to the right tier, and [`show`] uses it to decide whether a
+/// `?kind=` in a URL names a real command before highlighting it. A command added to `console.html`
+/// and not here is one nobody checked either way, and one the moderation column cannot link to.
+/// [`the_console_and_the_template_offer_the_same_commands`] holds the two together, order included.
+///
+/// **The order is the page's two groups**, room-wide first and per-slot after. That division is the
+/// one an operator actually navigates by, and it is also the honest statement of what the console
+/// is still *for*: everything in the second group has a control on the room's own roster, where the
+/// slot is already in front of you, and nothing in the first group has one anywhere else.
+///
+/// **`send_multiple` is deliberately absent, and it is still reachable.** It is not a command an
+/// operator picks — it is `send_item` with a number beside it — so it is a field on that command
+/// rather than a second entry describing the same act. [`build`] chooses the verb from the count.
+///
+/// [`the_console_and_the_template_offer_the_same_commands`]:
+///     tests::the_console_and_the_template_offer_the_same_commands
 const MENU: &[&str] = &[
+    // The room itself.
     "status",
     "say",
     "countdown",
+    "option",
+    // One slot.
     "hint",
     "hint_location",
-    "release",
-    "collect",
-    "send_item",
-    "send_multiple",
     "send_location",
-    "allow_release",
-    "alias",
-    "kick",
-    "lock",
+    "send_item",
+    "collect",
+    "release",
     "set_status",
-    "option",
+    "alias",
+    "allow_release",
+    "lock",
+    "kick",
 ];
 
 /// The console form.
@@ -202,9 +238,15 @@ pub struct CommandForm {
     /// refusal rather than a near miss.
     location: Option<String>,
     seconds: Option<i64>,
-    /// For `send_multiple`. **Required, with no default**: pahoa caps it at 100 and every copy is
-    /// replayed from index zero on each reconnect, so a default of one would make a command that
-    /// did a fraction of its job look like it worked.
+    /// How many copies `send_item` sends. **One when absent**, which is the only default on this
+    /// form and is safe for the same reason the others are not: it is the smallest thing the
+    /// command can do, so a request that lost this field under-sends rather than over-sends.
+    ///
+    /// The old spelling was a `send_multiple` command with **no** default, on the grounds that a
+    /// command quietly sending one copy would look like it had worked. That reasoning was right
+    /// about a menu entry called "send multiple" and does not survive folding the two together:
+    /// here the field sits beside the item on the one control that sends items, so one copy is
+    /// what the operator asked for rather than a fraction of it.
     amount: Option<i64>,
     #[field(default = false)]
     force: bool,
@@ -263,24 +305,38 @@ fn build(form: &CommandForm) -> std::result::Result<RoomCommand, String> {
         },
         "release" => RoomCommand::Release { slot: slot()? },
         "collect" => RoomCommand::Collect { slot: slot()? },
-        "send_item" => RoomCommand::SendItem {
-            slot: slot()?,
-            item: item()?,
-        },
-        "send_multiple" => RoomCommand::SendMultiple {
-            slot: slot()?,
-            item: item()?,
+        // **One control, two verbs, and the count is what chooses.** pahoa keeps `send_item` and
+        // `send_multiple` apart and so does `RoomCommand`; what is folded here is the *asking*,
+        // because "send this item" and "send this item five times" are one decision with a number
+        // in it and were two menu entries describing the same act.
+        //
+        // One copy stays `SendItem` rather than becoming `SendMultiple { amount: 1 }`, so nothing
+        // about the wire moves for the command anybody actually runs -- `send_item` is the
+        // one-copy spelling, as `RoomCommand::SendMultiple`'s own doc says.
+        "send_item" => {
             // Bounded here as well as by pahoa, so the answer to a typo is a sentence rather than a
             // round trip -- and the limit is named, because "too many" without the number is the
             // kind of error that gets guessed at twice.
-            amount: match form.amount {
+            let amount = match form.amount {
                 Some(amount) if (1..=100).contains(&amount) => amount,
                 Some(amount) => {
                     return Err(format!("{amount} is not between 1 and 100 copies"));
                 }
-                None => return Err("how many copies?".to_string()),
-            },
-        },
+                None => 1,
+            };
+            if amount == 1 {
+                RoomCommand::SendItem {
+                    slot: slot()?,
+                    item: item()?,
+                }
+            } else {
+                RoomCommand::SendMultiple {
+                    slot: slot()?,
+                    item: item()?,
+                    amount,
+                }
+            }
+        }
         "hint" => RoomCommand::Hint {
             slot: slot()?,
             item: item()?,
@@ -967,11 +1023,14 @@ mod tests {
     ///   unscripted paths do **different things**, which is the worst of the three because both
     ///   work;
     /// * a command with no `COMMANDS` entry hits `if (!spec) return` and the glyph does nothing at
-    ///   all — no dialog, no navigation, no error.
+    ///   all — no dialog, no navigation, no error;
+    /// * a `#cmd-…` fragment naming no form leaves the no-script path at the top of a page of
+    ///   fifteen forms, with the right one somewhere below the fold and nothing having failed.
     #[test]
     fn the_moderation_column_agrees_with_the_command_set_and_the_script() {
         let page = include_str!("../../templates/rooms/show.html");
         let script = include_str!("../../static/moderation.js");
+        let console = include_str!("../../templates/rooms/console.html");
 
         let mut found = 0;
         for (at, _) in page.match_indices("data-command=\"") {
@@ -992,6 +1051,18 @@ mod tests {
                 "the {command:?} control links to a different command than it posts:\n{element}"
             );
 
+            // And the fragment, which is what actually moves the viewport once the console is a
+            // column of fifteen forms. A bad one is the quietest failure of the four: the browser
+            // simply does not scroll, so the page looks like it ignored the link.
+            assert!(
+                element.contains(&format!("#cmd-{command}\"")),
+                "the {command:?} control does not point at its own form on the console:\n{element}"
+            );
+            assert!(
+                console.contains(&format!("id=\"cmd-{command}\"")),
+                "the moderation column anchors at #cmd-{command}, which console.html does not render"
+            );
+
             // The script's table. `COMMANDS` is keyed by the bare command name.
             assert!(
                 script.contains(&format!("{command}: {{")),
@@ -1000,9 +1071,56 @@ mod tests {
         }
 
         assert!(
-            found >= 9,
+            found >= 12,
             "only {found} moderation controls found -- this lint is no longer looking at anything"
         );
+    }
+
+    /// **The console and [`MENU`] are one list written twice**, so they are checked against each
+    /// other rather than reviewed.
+    ///
+    /// Drift is silent in both directions and differently each way. A command in `MENU` with no
+    /// form is one the console cannot run, while `?kind=` still claims to mark it — so a moderation
+    /// link for it lands on a page where nothing is highlighted and nothing is wrong. A form
+    /// missing from `MENU` is worse: it still builds and still runs, so the console works, and the
+    /// only casualty is that `show` filters that `kind` out and the link's highlight vanishes.
+    ///
+    /// **Order is asserted, not just membership**, because the order *is* the page's two groups —
+    /// room-wide, then per-slot. A command that drifts into the wrong group renders under a heading
+    /// that says the opposite of what it does, and "these also live on the roster" becomes false
+    /// for something that has no control there.
+    ///
+    /// Written for the removal of `send_multiple`, which had to leave both lists together.
+    #[test]
+    fn the_console_and_the_template_offer_the_same_commands() {
+        let template = include_str!("../../templates/rooms/console.html");
+
+        // Each form declares its command in one hidden field, which is also what the browser posts
+        // -- so this reads the same string the route will act on rather than a label beside it.
+        let offered: Vec<&str> = template
+            .match_indices(r#"<input type="hidden" name="kind" value=""#)
+            .map(|(at, m)| {
+                template[at + m.len()..]
+                    .split('"')
+                    .next()
+                    .expect("a closing quote")
+            })
+            .collect();
+
+        assert_eq!(
+            offered, MENU,
+            "console.html's commands and MENU have parted company, in content or in order"
+        );
+
+        // Every form is anchorable, which is what the moderation column's `#cmd-…` fragments need.
+        // Asserted here as well as from the column's side, so a command nothing links to yet still
+        // gets its id rather than growing one the day somebody adds the link.
+        for kind in MENU {
+            assert!(
+                template.contains(&format!("id=\"cmd-{kind}\"")),
+                "the {kind:?} form has no id, so nothing can link to it"
+            );
+        }
     }
 
     /// The form covers the whole command set, and nothing else. An unknown `kind` is refused rather
@@ -1024,6 +1142,11 @@ mod tests {
             assert!(build(&filled(kind)).is_ok(), "{kind} does not build");
         }
 
+        // `send_multiple` is no longer a `kind` anybody can post -- it left the menu when it became
+        // a field on this command -- so the form refuses the old spelling outright rather than
+        // keeping a second door onto the same act.
+        assert!(build(&filled("send_multiple")).is_err());
+
         // Not on the menu -- the room page's password column has its own control for it -- but
         // buildable, because that control and the console share one route.
         assert!(build(&filled("rotate_password")).is_ok());
@@ -1031,10 +1154,158 @@ mod tests {
         assert!(build(&form("drop_database")).is_err());
     }
 
-    /// **The console's menu and the capability table have to agree**, and the one command that is
-    /// an organizer's has to be the one the template gates.
+    /// **The copies field chooses the verb**, which is the whole of what folding `send_multiple`
+    /// into `send_item` means.
     ///
-    /// Asserted through the form rather than against the enum, so the route's check and the menu's
+    /// Both directions are asserted because both fail quietly. One copy arriving as
+    /// `SendMultiple { amount: 1 }` would work — pahoa accepts it — and would move every ordinary
+    /// send onto the other verb, so the command history, the metrics and the journal would all stop
+    /// saying `send_item` with nothing visibly wrong. Several copies arriving as `SendItem` would
+    /// send **one** and report success, which is the failure the old no-default rule existed to
+    /// prevent and is the thing a default has to be checked against.
+    #[test]
+    fn the_number_of_copies_decides_which_send_command_this_is() {
+        let send = |amount: Option<i64>| {
+            let mut f = form("send_item");
+            f.slot = Some(3);
+            f.item = Some("Bow".into());
+            f.amount = amount;
+            build(&f)
+        };
+
+        let one = RoomCommand::SendItem {
+            slot: 3,
+            item: "Bow".into(),
+        };
+        // Absent and 1 are the same request. Absent is what the no-script console posts if the
+        // field is ever cleared, and what an old bookmarked link carries.
+        assert_eq!(send(None).unwrap(), one);
+        assert_eq!(send(Some(1)).unwrap(), one);
+
+        assert_eq!(
+            send(Some(5)).unwrap(),
+            RoomCommand::SendMultiple {
+                slot: 3,
+                item: "Bow".into(),
+                amount: 5
+            }
+        );
+
+        // pahoa's cap, answered here so a typo is a sentence rather than a round trip. Zero and
+        // negatives fall out of the same range: a request for no copies is not a send.
+        assert!(send(Some(101)).is_err());
+        assert!(send(Some(0)).is_err());
+        assert!(send(Some(-1)).is_err());
+    }
+
+    fn a_console(preselect_kind: Option<&str>, is_organizer: bool) -> ConsoleTemplate {
+        ConsoleTemplate {
+            base: TplContext::new(&crate::auth::Session::default()),
+            room_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into(),
+            room_name: "A room".into(),
+            room_state: "running".into(),
+            slots: vec![(1, "Alice".into()), (2, "Bob".into()), (3, "Carol".into())],
+            history: Vec::new(),
+            outcome: None,
+            still_running: false,
+            stored: false,
+            uncertain: false,
+            is_organizer,
+            preselect_kind: preselect_kind.map(str::to_string),
+            preselect_slot: Some(3),
+        }
+    }
+
+    /// **The page is fifteen forms, and every one of them has to be a whole form.**
+    ///
+    /// The lints above read the template as text, which is what catches a command that drifts out of
+    /// one list or the other. None of them renders it — and every failure this test covers survives
+    /// a text scan intact:
+    ///
+    /// * a `{% call slot_picker(…) %}` that silently produced nothing would leave a form posting no
+    ///   slot at all, which `build()` refuses with "choose a slot" for a command the operator plainly
+    ///   chose a slot for;
+    /// * `self.chosen()` losing its leading space renders `class="cmdchosen"`, which matches no rule,
+    ///   so the marked form is simply not marked — the exact failure the helper's doc comment
+    ///   describes, asserted rather than argued;
+    /// * the organizer gate is checked as source above; here it is checked as *output*, which is the
+    ///   thing that actually reaches a helper.
+    #[test]
+    fn the_console_renders_one_form_per_command_and_marks_the_chosen_one() {
+        let html = a_console(Some("alias"), true).render().expect("renders");
+
+        // One form per command, plus none besides. Counted through the hidden field rather than
+        // `<form`, because that is the thing that has to be one-per-command.
+        assert_eq!(
+            html.matches(r#"name="kind""#).count(),
+            MENU.len(),
+            "the page does not carry exactly one command field per command"
+        );
+        for kind in MENU {
+            assert!(
+                html.contains(&format!("id=\"cmd-{kind}\"")),
+                "{kind} did not render"
+            );
+        }
+
+        // The chosen form, with the space that separates the two classes intact.
+        assert!(
+            html.contains(r#"class="cmd chosen" id="cmd-alias""#),
+            "the command the roster linked to is not marked"
+        );
+        assert_eq!(
+            html.matches("cmd chosen").count(),
+            1,
+            "more than one form is marked as the one that was linked to"
+        );
+        assert!(
+            !html.contains("cmdchosen"),
+            "the chosen class lost the space before it, so it matches no rule"
+        );
+
+        // The slot picker rendered, once per per-slot command, with the linked slot preselected in
+        // each. Eleven of the fifteen commands take a slot.
+        let slot_pickers = html.matches(r#"<select name="slot""#).count();
+        assert_eq!(
+            slot_pickers, 11,
+            "the slot picker did not render everywhere"
+        );
+        assert_eq!(
+            html.matches(r#"<option value="3" selected>"#).count(),
+            slot_pickers,
+            "the slot the roster linked to is not preselected in every picker"
+        );
+
+        // The three choices that are radios rather than dropdowns, which is what makes each option's
+        // consequence readable without opening anything.
+        for group in ["allowed", "locked", "status"] {
+            assert!(
+                html.contains(&format!(r#"type="radio" name="{group}""#)),
+                "{group} is not a radio group"
+            );
+            assert!(
+                !html.contains(&format!(r#"<select name="{group}""#)),
+                "{group} is still a dropdown"
+            );
+        }
+
+        // A helper gets fourteen and never sees the fifteenth.
+        let helper = a_console(None, false).render().expect("renders");
+        assert!(
+            !helper.contains(r#"value="option""#),
+            "a helper is offered option"
+        );
+        assert_eq!(helper.matches(r#"name="kind""#).count(), MENU.len() - 1);
+        assert!(
+            !helper.contains("cmd chosen"),
+            "nothing was linked to, yet something is marked"
+        );
+    }
+
+    /// **The console's commands and the capability table have to agree**, and the one command that
+    /// is an organizer's has to be the one the template gates.
+    ///
+    /// Asserted through the form rather than against the enum, so the route's check and the page's
     /// contents are covered together. `option` is gated by `{% if is_organizer %}` in
     /// `console.html`; if another command moves tier, this fails and that gate has to move with it.
     #[test]
@@ -1048,21 +1319,23 @@ mod tests {
         assert_eq!(
             organizer_only,
             ["option"],
-            "the menu's tiering moved; console.html's `{{% if is_organizer %}}` has to match"
+            "the tiering moved; console.html's `{{% if is_organizer %}}` has to match"
         );
 
+        // The hidden field, not the heading: that is the string the browser posts, so a gate that
+        // stops covering it is a gate that stops mattering.
         let template = include_str!("../../templates/rooms/console.html");
+        let marker = r#"<input type="hidden" name="kind" value="option">"#;
         assert!(
-            template.contains(r#"<option value="option""#),
-            "the option command left the menu"
+            template.contains(marker),
+            "the option command left the page"
         );
-        // The gate, and that it is the one *immediately* above the command it gates -- searched
-        // backwards from the option rather than forwards from the top, because the template has
-        // three `is_organizer` blocks and the naive `rfind` matched the last one on the page,
-        // which sits below this and would have passed with the gate deleted.
-        let at = template
-            .find(r#"<option value="option""#)
-            .expect("checked above");
+
+        // The gate, and that it is the one *immediately* above the form it gates -- searched
+        // backwards from the marker rather than forwards from the top, because the template has
+        // several `is_organizer` blocks and a naive `rfind` matched the last one on the page, which
+        // sits below this and would have passed with the gate deleted.
+        let at = template.find(marker).expect("checked above");
         let gate = template[..at]
             .rfind("{% if is_organizer %}")
             .expect("the organizer gate is gone from console.html");

@@ -68,11 +68,17 @@
         "This cannot be undone.",
       working: "Checking",
     },
+    // **Copies is where `send_multiple` went.** It was a command of its own on the console and it
+    // is this command with a number beside it, so it is a field here rather than a second control
+    // that would have described the same act. The route sends one copy as `send_item` and more as
+    // `send_multiple`, which is the split pahoa draws.
     send_item: {
       confirm: true,
-      fields: ["item"],
+      fields: ["item", "amount"],
       title: "Send an item",
-      explain: "Gives this slot the item outright. This cannot be undone.",
+      explain:
+        "Gives this slot the item outright, once or as many times as you ask. This cannot be " +
+        "undone, and every copy is replayed to them on each reconnect.",
       working: "Sending",
     },
     collect: {
@@ -103,18 +109,59 @@
         "automatically on goal, their world empties out too.",
       working: "Setting",
     },
+    // Sets somebody ELSE's alias, which `!alias` cannot. Empty clears it — the one field in this
+    // dialog that means something blank, so the explain says so rather than leaving an empty
+    // submit to be read as a slip.
+    alias: {
+      confirm: true,
+      fields: ["alias"],
+      title: "Set an alias",
+      explain:
+        "Renames this player in chat, as though they had set it themselves. Leave it empty to " +
+        "clear the alias they have. Long names are cut to 16 characters.",
+      working: "Renaming",
+    },
+    // Filled in by `describe`, which is where both directions get their wording. Present here so
+    // the lint that pairs the column with this table finds it, and so `if (!spec) return` cannot
+    // silently swallow the control.
+    allow_release: { confirm: true, title: "Release exemption", working: "Applying" },
   };
 
-  // The lock control is one command pointing two ways, and the wording has to follow, or a page
-  // full of "Locking" while unlocking is the sort of thing nobody quite trusts afterwards.
+  // Two commands point two ways, and the wording has to follow — a page full of "Locking" while
+  // unlocking is the sort of thing nobody quite trusts afterwards. The direction rides on the
+  // control in both cases (`data-locked`, `data-allowed`), so this reads it back off the link.
+  var DIRECTED = {
+    lock: function (yes) {
+      return {
+        confirm: false,
+        title: yes ? "Lock" : "Unlock",
+        working: yes ? "Locking" : "Unlocking",
+      };
+    },
+    // **Neither wording says "deny", because clearing does not deny.** It returns the slot to the
+    // room's release mode, which may well still let it release — the reference calls this half
+    // `/forbid_release` and that name is the misreading being avoided. So the confirmation names
+    // what is restored rather than what is taken away.
+    allow_release: function (yes) {
+      return {
+        confirm: true,
+        title: yes ? "Allow releases" : "Back to the room's rule",
+        explain: yes
+          ? "Lets this slot release its world whatever the room's release mode says. It is an " +
+            "exemption for this slot alone and changes nothing for anybody else."
+          : "Clears this slot's exemption and returns it to the room's release mode. That mode " +
+            "may still permit releasing — this forbids nothing.",
+        working: "Applying",
+      };
+    },
+  };
+
   function describe(spec, link) {
-    if (link.dataset.command !== "lock") return spec;
-    var locking = link.dataset.locked === "true";
-    return {
-      confirm: false,
-      title: locking ? "Lock" : "Unlock",
-      working: locking ? "Locking" : "Unlocking",
-    };
+    var directed = DIRECTED[link.dataset.command];
+    if (!directed) return spec;
+    // `data-locked` for one, `data-allowed` for the other; both spelled "true" when set.
+    var value = link.dataset.locked || link.dataset.allowed;
+    return directed(value === "true");
   }
 
   function show(pane) {
@@ -131,6 +178,9 @@
     // Same shape for `set_status`: the control carries which status it means, so one verb serves
     // however many the menu grows to offer rather than becoming a command per status.
     form.querySelector("[data-mod-status]").value = link.dataset.status || "";
+    // And for `allow_release`, where the two menu entries are one command pointing two ways. Empty
+    // otherwise, which `build()` reads as absent and refuses by name rather than guessing.
+    form.querySelector("[data-mod-allowed]").value = link.dataset.allowed || "";
 
     var wanted = spec.fields || [];
     Array.prototype.forEach.call(form.querySelectorAll("[data-mod-field]"), function (row) {
@@ -139,10 +189,15 @@
       row.hidden = !applies;
       var input = row.querySelector("input");
       if (!input) return;
-      // **Cleared every time.** Left alone, an item typed for slot 3 would still be sitting there
+      // **Reset every time.** Left alone, an item typed for slot 3 would still be sitting there
       // when the dialog reopens for slot 9 — pre-filled, plausible, and about the wrong player.
+      //
+      // Back to `defaultValue`, not to empty: that is the markup's own `value` attribute, so a text
+      // box comes back blank and Copies comes back at 1. Clearing it instead would leave the number
+      // field empty, which submits nothing — and `build()` reads a missing count as one, so it
+      // would happen to work while showing an empty box where the default is supposed to be.
       if (input.type === "checkbox") input.checked = false;
-      else input.value = "";
+      else input.value = input.defaultValue;
       // Removed rather than merely hidden: a hidden field still submits, and a stray `location` on
       // a `send_item` is a field pahoa was not asked for.
       input.disabled = !applies;
