@@ -32,7 +32,7 @@ use chrono::{DateTime, Utc};
 use puna_core::artifact::names::GameNames;
 use puna_core::ids::{GenerationId, RoomId, TrackerId};
 use puna_core::model::room::{self, Room, TrackerPolicy};
-use puna_core::model::{annotation, member, names, slot, tracker};
+use puna_core::model::{annotation, event, member, names, slot, tracker};
 use rocket::http::{Header, Status};
 use rocket::{Responder, State, get, routes};
 
@@ -231,6 +231,9 @@ struct Access {
     /// choose to ping you" is about.
     is_staff: bool,
     owns_a_slot: bool,
+    /// Whoever is looking, when they are signed in. Compared against a slot's owner to decide who
+    /// may edit an annotation, and used as the subject of a ping preference.
+    viewer: Option<i64>,
 }
 
 impl Access {
@@ -300,6 +303,7 @@ async fn access(
         target,
         is_staff,
         owns_a_slot,
+        viewer: session.user_id,
     })
 }
 
@@ -483,6 +487,7 @@ struct Digestible {
     /// for every slot, and the digest is what decides which of those reach the wire.
     is_staff: bool,
     is_participant: bool,
+    viewer: Option<i64>,
     /// The room's handles and ping preferences, loaded **only** where they will be rendered: the
     /// room has the enhanced tracker on and this viewer is one of its people. `None` is what makes
     /// an ordinary tracker cost exactly the queries it always did.
@@ -492,6 +497,7 @@ struct Digestible {
 impl Digestible {
     fn viewer(&self) -> digest::Viewer<'_> {
         digest::Viewer {
+            id: self.viewer,
             participant: self.is_participant,
             staff: self.is_staff,
             people: self.people.as_ref(),
@@ -525,6 +531,7 @@ async fn digestible(
         scope,
         is_staff: access.is_staff,
         is_participant: access.is_participant(),
+        viewer: access.viewer,
         people,
         room: access.room,
         roster,
@@ -728,18 +735,49 @@ pub struct TrackerTemplate {
     /// The table skeleton is server-rendered and the bodies are the client's, so the column has to
     /// exist here for `tracker.js` to fill — and its absence is what makes an outsider's page
     /// byte-identical to the one it was before the feature existed.
+    /// Whatever the two write routes had to say. **The tracker page reads one now**, which it did
+    /// not before it could be written to: a save that redirects with no word for it is a page that
+    /// reloads and leaves somebody squinting at the table to work out whether it took.
+    notice: Option<crate::flash::Notice>,
     annotations: bool,
+    /// Where the two write forms post: `/tracker/<the id already in this URL>`.
+    ///
+    /// **Rendered rather than reconstructed in the browser**, for the reason `api_base` gives: the
+    /// two page URLs carry the id in different shapes — a slot's own, or the room's followed by
+    /// `/0/<n>` — and a client parsing `location.pathname` would have to know which. The id here is
+    /// the one the visitor already holds, so this discloses nothing, and it is emphatically **not**
+    /// the room's id, which this page must never carry.
+    write_base: String,
+    /// Whether to offer the preferences form: this viewer holds a slot here.
+    ///
+    /// **Not `is_staff`**, deliberately. A ping preference renders as a chip beside a slot's owner,
+    /// so somebody holding none has nothing to set — and offering the control anyway would be a
+    /// form whose effect is invisible. Staff who also play get it, because they are players.
+    owns_a_slot: bool,
+    /// What they have said so far, so the form opens on their own answer rather than on the default.
+    my_preference: &'static str,
+    /// Every choice, as `(value, label, explanation)`. Rendered from the enum rather than written
+    /// out in markup, so a value pahoa's vocabulary never sees cannot drift between the two.
+    ping_choices: Vec<(&'static str, &'static str, &'static str)>,
+    /// The progression values the dialog offers, as `(value, label)`.
+    progression_choices: Vec<(&'static str, &'static str)>,
+    note_limit: usize,
     /// The slot this page is about, if it is about one.
     slot: Option<i32>,
 }
 
 /// The multiworld's tracker, or one slot's.
 #[get("/tracker/<id>")]
-async fn page(id: TrackerParam, session: Session, pool: &State<Pool>) -> Result<TrackerTemplate> {
+async fn page(
+    id: TrackerParam,
+    session: Session,
+    flash: Option<rocket::request::FlashMessage<'_>>,
+    pool: &State<Pool>,
+) -> Result<TrackerTemplate> {
     let mut conn = pool.get().await?;
     let access = access(&mut conn, &session, id.0).await?;
     let scope = access.target.slot_number();
-    render(&mut conn, &session, id.0, access, scope).await
+    render(&mut conn, &session, id.0, access, scope, flash).await
 }
 
 /// **One line of plain text, for a chat bot.**
@@ -831,6 +869,7 @@ async fn slot_page(
     team: i32,
     player: i32,
     session: Session,
+    flash: Option<rocket::request::FlashMessage<'_>>,
     pool: &State<Pool>,
 ) -> Result<TrackerTemplate> {
     let mut conn = pool.get().await?;
@@ -843,7 +882,7 @@ async fn slot_page(
     }
     let scope = scope_of(&access, Some(player))?;
 
-    render(&mut conn, &session, id.0, access, scope).await
+    render(&mut conn, &session, id.0, access, scope, flash).await
 }
 
 /// The page is a **shell**, and that is the point of Stage C.
@@ -858,6 +897,7 @@ async fn render(
     id: TrackerId,
     access: Access,
     scope: Option<i32>,
+    flash: Option<rocket::request::FlashMessage<'_>>,
 ) -> Result<TrackerTemplate> {
     // Only to name the slot in the heading. The roster is Puna's, not the document's, which is why
     // a spectator -- absent from every per-player array -- still has a name here.
@@ -870,12 +910,36 @@ async fn render(
         None => None,
     };
 
+    // Their own answer, so the form opens on what they said rather than on the default. Absent is
+    // `unknown`, which is the default answer for somebody who has simply not been asked.
+    let mine = match (access.sees_annotations(), access.viewer) {
+        (true, Some(user)) => annotation::preferences(conn, access.room.id)
+            .await?
+            .into_iter()
+            .find(|p| p.user_id == user)
+            .map_or_else(annotation::PingPreference::default, |p| p.preference),
+        _ => annotation::PingPreference::default(),
+    };
+
     Ok(TrackerTemplate {
         base: TplContext::new(session),
+        notice: crate::flash::Notice::take(flash),
         room_name: access.room.name.clone(),
         slot_name,
         api_base: format!("/api/puna/tracker/{id}"),
         annotations: access.sees_annotations(),
+        write_base: format!("/tracker/{id}"),
+        owns_a_slot: access.owns_a_slot,
+        my_preference: mine.as_sql(),
+        ping_choices: annotation::PingPreference::ALL
+            .into_iter()
+            .map(|p| (p.as_sql(), p.label(), p.explanation()))
+            .collect(),
+        progression_choices: annotation::ProgressionStatus::ALL
+            .into_iter()
+            .map(|p| (p.as_sql(), p.label()))
+            .collect(),
+        note_limit: annotation::MAX_NOTE_CHARS,
         slot: scope,
     })
 }
@@ -1075,6 +1139,159 @@ impl<'r> rocket::request::FromRequest<'r> for IfNoneMatch {
     }
 }
 
+// --- the two writes ------------------------------------------------------------------------------
+//
+// **The first mutations this tier has ever accepted**, and the reason they live here rather than on
+// the web tier is the tracker page's own leak rule: it must never carry the room's id, so a write
+// route has to be keyed by the tracker id — and `/tracker/**` is routed to `puna-tracker`. Putting
+// them on the web tier would mean either publishing the room id onto this page or inventing a
+// web-tier path that carries a tracker id.
+//
+// What that costs is stated rather than hidden: this tier's character moves from "reads and caches"
+// to "reads, caches, and accepts authenticated per-slot edits". What it does *not* cost is any new
+// reach — it already holds a database connection and already writes `last_tracker_doc`, and its
+// NetworkPolicy needs no change. It still has no ServiceAccount token, no Discord credentials and no
+// artifact volume.
+//
+// CSRF is covered the way every other POST in this project is: the session is a Rocket private
+// cookie with `SameSite=Lax`, which a cross-site POST does not carry.
+
+/// One slot's annotations.
+#[derive(rocket::FromForm)]
+struct AnnotationForm {
+    progression: String,
+    /// **Not filtered for blankness by the form**: empty is how a note is deleted, and
+    /// `annotation::set_slot_annotation` is where that becomes an absent value.
+    note: String,
+}
+
+/// Set a slot's progression and note.
+///
+/// **The slot's holder, or the room's staff**, which is the rule the feature was asked for with:
+/// organizers and helpers may change anything a player can, because a note is the sort of thing an
+/// organizer occasionally has to correct or remove.
+#[rocket::post("/tracker/<id>/slot/<number>/annotation", data = "<form>")]
+async fn set_annotation(
+    id: TrackerParam,
+    number: i32,
+    session: Session,
+    form: rocket::form::Form<AnnotationForm>,
+    pool: &State<Pool>,
+) -> Result<rocket::response::Flash<rocket::response::Redirect>> {
+    let mut conn = pool.get().await?;
+    let access = access(&mut conn, &session, id.0).await?;
+
+    // The room has to have opted in. Without this the feature would be reachable by POST on a room
+    // that never turned it on -- a control nobody can see is still a route anybody can construct.
+    if !access.sees_annotations() {
+        return Err(not_found("this room does not use the enhanced tracker"));
+    }
+    let Some(actor) = access.viewer else {
+        return Err(unauthorized("sign in to annotate a slot"));
+    };
+
+    let slot = slot::list(&mut conn, access.room.id)
+        .await?
+        .into_iter()
+        .find(|s| s.slot_number == number)
+        .ok_or_else(|| not_found("no such slot"))?;
+
+    if !(access.is_staff || slot.owner_id == Some(actor)) {
+        return Err(forbidden("that is not your slot"));
+    }
+
+    let progression = annotation::ProgressionStatus::parse(&form.progression)
+        .ok_or_else(|| Error::new(Status::BadRequest, anyhow::anyhow!("unknown progression")))?;
+
+    // Bounded here as well as by the column, so an over-long note is a sentence rather than a
+    // database error. **Characters, not bytes**, so the limit does not depend on the alphabet.
+    if form.note.chars().count() > annotation::MAX_NOTE_CHARS {
+        return Err(Error::new(
+            Status::BadRequest,
+            anyhow::anyhow!(
+                "that note is longer than {} characters",
+                annotation::MAX_NOTE_CHARS
+            ),
+        ));
+    }
+
+    annotation::set_slot_annotation(
+        &mut conn,
+        access.room.id,
+        number,
+        progression,
+        Some(&form.note),
+        actor,
+    )
+    .await?;
+
+    // **Only when somebody edits a slot that is not theirs.** A player writing their own note is
+    // ordinary use and would bury the room's history; staff changing somebody else's is the case
+    // where "who did this" gets asked, and it is the one the column alone cannot answer after the
+    // next edit overwrites `annotated_by`.
+    if slot.owner_id != Some(actor) {
+        event::record(
+            &mut conn,
+            access.room.id,
+            event::Actor::User(actor),
+            "annotated_slot",
+            serde_json::json!({ "slot": number, "owner": slot.owner_id }),
+        )
+        .await?;
+    }
+
+    Ok(rocket::response::Flash::success(
+        rocket::response::Redirect::to(format!("/tracker/{}", id.0)),
+        "Saved.",
+    ))
+}
+
+#[derive(rocket::FromForm)]
+struct PreferenceForm {
+    preference: String,
+}
+
+/// Record how the viewer wants to be pinged about this room.
+///
+/// **Their own, and only their own.** Staff may edit any note and no ping preference: it is the one
+/// field here that records what a person agreed to rather than a fact about a world, and
+/// `annotation::set_preference` takes no actor for that reason — there is no caller who could set
+/// somebody else's.
+///
+/// Holding a slot is required, not merely being staff: the chip renders beside a slot's owner, so a
+/// preference from somebody who holds none would be a row nothing reads.
+#[rocket::post("/tracker/<id>/preference", data = "<form>")]
+async fn set_ping_preference(
+    id: TrackerParam,
+    session: Session,
+    form: rocket::form::Form<PreferenceForm>,
+    pool: &State<Pool>,
+) -> Result<rocket::response::Flash<rocket::response::Redirect>> {
+    let mut conn = pool.get().await?;
+    let access = access(&mut conn, &session, id.0).await?;
+
+    if !access.sees_annotations() {
+        return Err(not_found("this room does not use the enhanced tracker"));
+    }
+    let Some(actor) = access.viewer else {
+        return Err(unauthorized("sign in to set a preference"));
+    };
+    if !access.owns_a_slot {
+        return Err(forbidden(
+            "only somebody playing in this room has one to set",
+        ));
+    }
+
+    let preference = annotation::PingPreference::parse(&form.preference)
+        .ok_or_else(|| Error::new(Status::BadRequest, anyhow::anyhow!("unknown preference")))?;
+    annotation::set_preference(&mut conn, access.room.id, actor, preference).await?;
+
+    Ok(rocket::response::Flash::success(
+        rocket::response::Redirect::to(format!("/tracker/{}", id.0)),
+        "Saved. Every slot you hold in this room shows it.",
+    ))
+}
+
 pub fn routes() -> Vec<rocket::Route> {
     routes![
         page,
@@ -1085,7 +1302,9 @@ pub fn routes() -> Vec<rocket::Route> {
         view_slots,
         view_hints,
         view_locations,
-        view_items
+        view_items,
+        set_annotation,
+        set_ping_preference
     ]
 }
 
@@ -1312,7 +1531,14 @@ mod tests {
             room_name: "Friday async".into(),
             slot_name: Some("Troy".into()),
             api_base: format!("/api/puna/tracker/{tracker_id}"),
+            notice: None,
             annotations: false,
+            write_base: "/tracker/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into(),
+            owns_a_slot: false,
+            my_preference: "unknown",
+            ping_choices: Vec::new(),
+            progression_choices: Vec::new(),
+            note_limit: 1000,
             slot: Some(1),
         };
 
@@ -1429,7 +1655,14 @@ mod tests {
             room_name: "Friday async".into(),
             slot_name: None,
             api_base: "/api/puna/tracker/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into(),
+            notice: None,
             annotations: false,
+            write_base: "/tracker/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into(),
+            owns_a_slot: false,
+            my_preference: "unknown",
+            ping_choices: Vec::new(),
+            progression_choices: Vec::new(),
+            note_limit: 1000,
             slot: None,
         };
 
@@ -1487,7 +1720,14 @@ mod tests {
             room_name: "Friday async".into(),
             slot_name: slot.map(|_| "Troy".into()),
             api_base: "/api/puna/tracker/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into(),
+            notice: None,
             annotations: false,
+            write_base: "/tracker/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into(),
+            owns_a_slot: false,
+            my_preference: "unknown",
+            ping_choices: Vec::new(),
+            progression_choices: Vec::new(),
+            note_limit: 1000,
             slot,
         }
     }
@@ -1647,6 +1887,65 @@ mod tests {
                 "a tracker page is held to a measure meant for paragraphs"
             );
         }
+    }
+
+    /// **Both writes check the same four things, and each is a different way in.**
+    ///
+    /// These are the first mutations this tier has ever accepted, and every guard on them is a
+    /// separate refusal with no other symptom if it goes missing:
+    ///
+    /// * `sees_annotations()` — the room opted in, and the caller is one of its people. Without it
+    ///   the feature is reachable by POST on a room that never turned it on: a control nobody can
+    ///   see is still a route anybody can construct.
+    /// * a signed-in caller — there is no annotation without somebody to attribute it to.
+    /// * for a slot, `is_staff || slot.owner_id == Some(actor)` — otherwise any participant edits
+    ///   any slot, which is the quiet one, because the page would look correct to whoever did it.
+    /// * for a preference, `owns_a_slot` and **no actor parameter at all** — the writer takes only
+    ///   the caller's own id, so setting somebody else's is unspellable rather than merely refused.
+    ///
+    /// A source lint because there is no unit test that reaches a Rocket route's body, and the
+    /// alternative — a full router harness per guard — is what M21 built once and is far more than
+    /// this needs.
+    #[test]
+    fn both_writes_check_the_room_the_caller_and_the_slot() {
+        let source = include_str!("tracker.rs");
+        let body_of = |name: &str| {
+            let at = source
+                .find(name)
+                .unwrap_or_else(|| panic!("{name} is gone, so this lint checks nothing"));
+            let rest = &source[at..];
+            rest[..rest.find("\n}\n").expect("unterminated")].to_string()
+        };
+
+        let annotation = body_of("async fn set_annotation(");
+        for guard in [
+            "access.sees_annotations()",
+            "access.viewer",
+            "access.is_staff || slot.owner_id == Some(actor)",
+        ] {
+            assert!(
+                annotation.contains(guard),
+                "the annotation route no longer checks `{guard}`"
+            );
+        }
+
+        let preference = body_of("async fn set_ping_preference(");
+        for guard in [
+            "access.sees_annotations()",
+            "access.viewer",
+            "access.owns_a_slot",
+        ] {
+            assert!(
+                preference.contains(guard),
+                "the preference route no longer checks `{guard}`"
+            );
+        }
+        // The subject is the caller, always. Anything else appearing here would be this route
+        // learning how to write somebody else's answer.
+        assert!(
+            preference.contains("set_preference(&mut conn, access.room.id, actor, preference)"),
+            "the preference route writes something other than the caller's own answer"
+        );
     }
 
     /// **The one response here that a shared cache may hold must not depend on who asked.**

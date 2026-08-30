@@ -19,6 +19,12 @@
 <p class="hint">Showing {{+ slot }}'s progress.</p>
 {% endif %}
 
+{# Whatever a save had to say. See rooms/show.html: a flash written to a cookie and never read is
+   the failure this page would have had, since it never rendered one until it could be written to. #}
+{% if let Some(notice) = notice %}
+<p class="{{ notice.class }}">{{ notice.message }}</p>
+{% endif %}
+
 <p id="freshness" class="notice" hidden></p>
 
 <noscript>
@@ -32,8 +38,37 @@ need to.</p>
    the one flag rather than the client inferring it from a field that happens to be present. #}
 <div id="tracker"
      data-api="{{ api_base }}"
-     {% if annotations %}data-annotations="1"{% endif %}
+     {% if annotations %}data-annotations="1" data-write="{{ write_base }}"{% endif %}
      {% if let Some(n) = slot %}data-slot="{{ n }}"{% endif %}>
+
+{# --- the viewer's own preferences ---------------------------------------------------------------
+   **Server-rendered and an ordinary form**, unlike everything below it. The tables are built in the
+   browser because they are large and polled; this is one control with five choices, so building it
+   in script would buy nothing and would make the one thing on this page that works without
+   JavaScript stop working.
+
+   **Only for somebody holding a slot here.** A ping preference renders as a chip beside a slot's
+   owner, so a viewer holding none has nothing to set and the form would be a control with no
+   visible effect. Staff who also play get it, because they are players. #}
+{% if annotations && owns_a_slot %}
+<section class="panel preferences">
+<h2>Player preferences</h2>
+<form method="post" action="{{ write_base }}/preference">
+<fieldset>
+<legend>Ping preference</legend>
+{# Rendered from `PingPreference::ALL`, so the values here and the ones the route parses are the
+   same list rather than two lists that agree today. Each carries its own explanation, which is what
+   makes radios right rather than a dropdown: these are not degrees of one thing, and the difference
+   between "for hints" and "yes" is only legible in words. #}
+{% for choice in ping_choices %}
+<label><input type="radio" name="preference" value="{{ choice.0 }}"{% if my_preference == choice.0 +%} checked{% endif %}>
+<strong>{{ choice.1 }}</strong> &mdash; {{+ choice.2 }}</label>
+{% endfor %}
+</fieldset>
+<div class="run"><button type="submit">Save preference</button></div>
+</form>
+</section>
+{% endif %}
 
   {# --- the slot table. On a slot's page this is one row: the same columns, the same code. --- #}
   <section class="table-block" data-view="slots">
@@ -96,6 +131,46 @@ need to.</p>
     </div>
     <p class="empty hint" hidden>No slots to show.</p>
   </section>
+
+{# --- the annotation dialog -----------------------------------------------------------------------
+   **One dialog for the whole table**, filled per row by `tracker.js` — the same shape the room
+   page's moderation dialog takes, and for the same reason: a set per slot would be a form on every
+   row of a table that may have hundreds.
+
+   **The markup is here rather than built in script.** `tracker.js` chooses which slot it is about
+   and fills the fields in; it does not decide what the fields ARE. That question already has an
+   answer in `AnnotationForm`, and putting a second copy of it in the file with no type checking is
+   how the two drift.
+
+   A `<dialog>` rather than a `popover`: `showModal()` makes the page inert, and this is a form
+   somebody is part-way through typing into. A stray click light-dismissing a half-written note is
+   exactly the wrong behavior. #}
+{% if annotations %}
+<dialog id="annotate" class="sheet" aria-labelledby="annotate-title">
+<h2 id="annotate-title">Annotate</h2>
+<p class="target" data-annotate-target></p>
+<form method="post" data-annotate-form>
+<fieldset>
+<legend>Progression</legend>
+{% for choice in progression_choices %}
+<label><input type="radio" name="progression" value="{{ choice.0 }}" data-label="{{ choice.1 }}"> {{+ choice.1 }}</label>
+{% endfor %}
+</fieldset>
+<p>
+<label for="annotate-note">Note</label>
+{# **Emptying it deletes it**, which the placeholder says because a blank box and a deleted note are
+   otherwise the same gesture with no confirmation between them. Bounded to match both the column's
+   CHECK and the route's, so the browser refuses before a round trip does. #}
+<textarea id="annotate-note" name="note" rows="4" maxlength="{{ note_limit }}"
+          placeholder="Visible to this room's players and staff. Leave empty to remove it."></textarea>
+</p>
+<p class="buttons">
+<button type="submit">Save</button>
+<button type="button" data-annotate-cancel>Cancel</button>
+</p>
+</form>
+</dialog>
+{% endif %}
 
   {% if slot.is_some() %}
   {# --- one slot's locations, checked AND unchecked. The reference can only show the checked ones,

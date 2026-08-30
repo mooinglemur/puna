@@ -1416,6 +1416,42 @@ h1 .scope {
 
 .form-actions .cancel { color: var(--muted); }
 
+/* The pencil that opens the annotation dialog. Rendered only on rows the viewer may edit, so it is
+   allowed to be quiet: on a 200-slot room a player sees one of these and staff see all of them, and
+   a control that drew the eye would make an organizer's tracker a wall of pencils. */
+.annotate-icon {
+  padding: 0 0.15rem;
+  font-size: 0.85rem;
+  line-height: 1;
+  color: var(--muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.annotate-icon:hover { color: var(--accent); }
+
+/* The preferences form. A panel above the tables rather than a control inside one: it is about the
+   person reading the page, not about any row of it. */
+.preferences fieldset {
+  margin: 0 0 0.8rem;
+  padding: 0.5rem 0.9rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.preferences legend { padding: 0 0.3rem; color: var(--muted); font-size: 0.9rem; }
+
+/* One choice per line with its own sentence, which is the whole reason these are radios rather than
+   a dropdown: the difference between "for hints" and "yes" is only legible in words, and a `<select>`
+   hides every option's explanation until the list is open. */
+.preferences fieldset label {
+  display: block;
+  margin: 0.35rem 0 0;
+  max-width: 58rem;
+  color: var(--text);
+}
+
 /* --- the enhanced tracker's note ------------------------------------------------------------------
    An icon beside a player's name, and a panel that follows the pointer's arrival: hover to read,
    click to keep it open so the text can be selected, click away to dismiss.

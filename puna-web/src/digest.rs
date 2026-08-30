@@ -108,6 +108,21 @@ pub struct SlotRow {
     /// The slot's note, where there is one and this viewer may read it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Whether this viewer may change the two above: the slot's own holder, or the room's staff.
+    ///
+    /// **Decided here rather than by the client comparing ids**, which would mean sending every
+    /// viewer their own id and every row's owner id and trusting the comparison. The client renders
+    /// a control if and only if this says so, and the route re-checks regardless — a control is a
+    /// courtesy and the guard is the rule.
+    ///
+    /// Absent rather than `false` for everybody else, so a row for a viewer with no business
+    /// editing anything carries nothing about editing at all.
+    #[serde(skip_serializing_if = "is_false")]
+    pub editable: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 /// Who holds a slot, as much of it as this viewer is entitled to.
@@ -154,6 +169,9 @@ pub struct People {
 /// interesting mistakes are all confusions between them — `staff` where `participant` was meant
 /// admits everybody holding a slot to a handle its owner withheld.
 pub struct Viewer<'a> {
+    /// Whoever is looking, when they are signed in. Only ever compared against a slot's owner, to
+    /// decide whether they may edit their own annotations.
+    pub id: Option<i64>,
     /// Staff, or somebody holding a slot in this room. Gates claim state.
     pub participant: bool,
     /// Staff specifically. Gets a handle **whatever the owner's ping preference says**, because
@@ -172,10 +190,20 @@ impl Viewer<'_> {
     /// every reader.
     pub fn outsider() -> Self {
         Self {
+            id: None,
             participant: false,
             staff: false,
             people: None,
         }
+    }
+
+    /// Whether this viewer may change one slot's annotations: its holder, or the room's staff.
+    ///
+    /// **Staff may edit anybody's**, which is the room's own rule — an organizer needs to be able to
+    /// correct or remove a note. What they may *not* touch is somebody's ping preference, which is
+    /// why that lives on a different table with a writer that takes no actor.
+    fn may_edit(&self, slot: &Slot) -> bool {
+        self.people.is_some() && (self.staff || (self.id.is_some() && self.id == slot.owner_id))
     }
 }
 
@@ -370,6 +398,7 @@ pub fn slot_rows(
                     .filter(|p| *p != ProgressionStatus::Unknown)
                     .map(ProgressionStatus::label),
                 note: viewer.people.and_then(|_| slot.note.clone()),
+                editable: viewer.may_edit(slot),
             }
         })
         .collect()
@@ -876,6 +905,7 @@ mod tests {
     /// tracker off. The tier most of these tests are about.
     fn participant() -> Viewer<'static> {
         Viewer {
+            id: None,
             participant: true,
             staff: false,
             people: None,
@@ -943,6 +973,7 @@ mod tests {
         }
 
         let rows = of(&Viewer {
+            id: None,
             participant: true,
             staff: false,
             people: Some(&people),
@@ -971,6 +1002,72 @@ mod tests {
         assert_eq!(rows[2].owner, None);
     }
 
+    /// **Who gets the edit control: the slot's own holder, and the room's staff.**
+    ///
+    /// Decided here rather than by the client comparing ids, which would mean sending every viewer
+    /// their own id and every row's owner id and trusting the arithmetic. The route re-checks
+    /// regardless — this only decides whether a control is offered — but a control offered to the
+    /// wrong person is a refusal somebody has to be told about, which is its own small failure.
+    ///
+    /// **Staff may edit anybody's**, which is the room's rule: an organizer needs to be able to
+    /// correct or remove a note. What they may not touch is a ping preference, which lives on a
+    /// different table with a writer that takes no actor at all.
+    #[test]
+    fn the_edit_control_reaches_a_slots_holder_and_the_rooms_staff() {
+        let people = people(PingPreference::Yes);
+        let rows = |id: Option<i64>, staff: bool| {
+            slot_rows(
+                &annotated_roster(),
+                &live(),
+                &statics(),
+                None,
+                now(),
+                &Viewer {
+                    id,
+                    participant: true,
+                    staff,
+                    people: Some(&people),
+                },
+            )
+        };
+
+        // Troy holds slot 1 and nothing else. Ghost (8) holds slot 2; slot 4 is unclaimed.
+        let troy = rows(Some(7), false);
+        assert!(troy[0].editable, "a player cannot edit their own slot");
+        assert!(!troy[1].editable, "a player may edit somebody else's slot");
+        assert!(
+            !troy[2].editable,
+            "an unclaimed slot offered an edit control"
+        );
+
+        // Staff get every row, including the unclaimed one -- which is harmless and is what
+        // "organizers may change anything a player can" means when nobody holds it yet.
+        let organizer = rows(Some(99), true);
+        assert!(organizer.iter().all(|r| r.editable));
+
+        // A signed-out viewer of a room with the feature on is not a participant at all, and a
+        // participant of a room with it OFF has no `people` -- neither gets a control.
+        assert!(rows(None, false).iter().all(|r| !r.editable));
+        for row in slot_rows(
+            &annotated_roster(),
+            &live(),
+            &statics(),
+            None,
+            now(),
+            &Viewer {
+                id: Some(7),
+                participant: true,
+                staff: true,
+                people: None,
+            },
+        ) {
+            assert!(
+                !row.editable,
+                "the room has the feature off and still offered an edit control"
+            );
+        }
+    }
+
     /// **`no` withholds the handle from other players and never from staff**, which is exactly what
     /// that option promises: "organizers and helpers may still choose to ping you".
     ///
@@ -989,6 +1086,7 @@ mod tests {
                 None,
                 now(),
                 &Viewer {
+                    id: None,
                     participant: true,
                     staff,
                     people: Some(&refused),
@@ -1024,6 +1122,7 @@ mod tests {
                 None,
                 now(),
                 &Viewer {
+                    id: None,
                     participant: true,
                     staff: false,
                     people: Some(&permissive),
@@ -1364,6 +1463,7 @@ mod tests {
             last_activity_ms_ago: None,
             hints: 0,
             claimed: Some(false),
+            editable: false,
             owner: None,
             progression: None,
             note: None,

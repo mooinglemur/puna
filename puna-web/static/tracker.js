@@ -87,6 +87,10 @@
           text: r.name,
           tag: r.claimed === false ? "unclaimed" : null,
           annotation: r.note,
+          // **Decided by the server, never by comparing ids here.** `editable` is absent unless the
+          // viewer holds this slot or runs the room, so the client never learns whose slot is whose
+          // and the route re-checks regardless -- the control is a courtesy, the guard is the rule.
+          edit: r.editable ? { slot: r.slot, name: r.name, progression: r.progression, note: r.note } : null,
         },
         // **Built only where the header exists.** `annotations` comes from the same server-rendered
         // flag the `<th>` does, rather than from whether `r.owner` happens to be present -- a row
@@ -527,6 +531,18 @@
       button.textContent = "🗒";
       td.append(" ", button);
     }
+    // The pencil that opens the annotation dialog. Its whole payload rides on the element, so
+    // opening it needs no lookup back into the data the row came from.
+    if (value.edit) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "annotate-icon";
+      button.dataset.edit = JSON.stringify(value.edit);
+      button.title = "Set your progression and note for this slot";
+      button.setAttribute("aria-label", `Annotate slot ${value.edit.slot}`);
+      button.textContent = "✎";
+      td.append(" ", button);
+    }
     // Handled by `copy.js`, which binds by delegation and so covers cells built after load, and
     // which reveals `.copy` only once it has proved the clipboard is reachable.
     if (value.copy) {
@@ -548,6 +564,57 @@
       tag.textContent = label;
       td.append(" ", tag);
     }
+  }
+
+  // --- the annotation dialog --------------------------------------------------------------------
+  //
+  // **Renders no markup.** The dialog, its fields and its buttons are in `tracker/show.html`; this
+  // only chooses which slot it is about and fills the values in. Building the form here would put
+  // "what does an annotation consist of" in a second place, in the file with no type checking, when
+  // `AnnotationForm` in `routes/tracker.rs` is already the answer.
+  //
+  // It submits ordinarily rather than by fetch: the answer to saving is the page's own next poll,
+  // and a redirect back to the tracker is both the no-script behavior and the scripted one. There is
+  // nothing here worth a JSON round trip and a hand-written result pane.
+  const annotateDialog = document.getElementById("annotate");
+
+  if (annotateDialog && typeof annotateDialog.showModal === "function") {
+    const form = annotateDialog.querySelector("[data-annotate-form]");
+    const target = annotateDialog.querySelector("[data-annotate-target]");
+
+    document.addEventListener("click", (event) => {
+      const button = event.target.closest?.(".annotate-icon");
+      if (!button) return;
+      const edit = JSON.parse(button.dataset.edit);
+
+      // Posted per slot, so the URL carries which one and the form carries only its values.
+      form.action = `${root.dataset.write}/slot/${encodeURIComponent(edit.slot)}/annotation`;
+      // `textContent`: a player name is text out of an uploaded seed.
+      if (target) target.textContent = `Slot ${edit.slot} — ${edit.name}`;
+
+      // **Opened on what is stored, not on the defaults.** A dialog that came up blank would make
+      // "save" quietly clear a note somebody wrote, since an empty box IS the delete.
+      const chosen = edit.progression || "Unknown";
+      for (const radio of form.querySelectorAll('input[name="progression"]')) {
+        // Matched on the LABEL, because that is what a row carries — the wire value never reaches
+        // the client, deliberately, since the client has no use for a spelling only the database
+        // reads. Both sides come from `ProgressionStatus::label()`, so they cannot disagree.
+        //
+        // Read from `data-label` rather than from the label element's text: extracting it from the
+        // DOM would depend on the markup's whitespace and on the input being inside the label, and
+        // a mismatch is silent in the worst way — the dialog opens with nothing checked and saving
+        // then CLEARS a progression somebody had set.
+        radio.checked = radio.dataset.label === chosen;
+      }
+      form.querySelector('[name="note"]').value = edit.note || "";
+
+      annotateDialog.showModal();
+      form.querySelector('[name="note"]').focus();
+    });
+
+    annotateDialog.addEventListener("click", (event) => {
+      if (event.target.closest("[data-annotate-cancel]")) annotateDialog.close();
+    });
   }
 
   // --- the note panel ---------------------------------------------------------------------------

@@ -158,6 +158,29 @@ impl PingPreference {
         self != Self::No
     }
 
+    /// What choosing this means, in the words the form offers it in.
+    ///
+    /// Beside [`label`](Self::label) rather than instead of it, because they are two different
+    /// jobs: the label is a chip in a table cell and has to be two words, and this is the sentence
+    /// somebody reads once while deciding. Collapsing them would make the chip a paragraph or the
+    /// explanation a fragment.
+    pub fn explanation(self) -> &'static str {
+        match self {
+            Self::No => {
+                "Not by other players. Organizers and helpers may still choose to ping you."
+            }
+            Self::Unknown => {
+                "Your handle is shown in the tracker to other players, but you have not told \
+                 anyone when and if you would like to be pinged."
+            }
+            Self::SeeNotes => "Explain your ping preference in your per-slot notes.",
+            Self::ForHints => {
+                "If you have an item that another slot needs, they have implied consent to ping you."
+            }
+            Self::Yes => "You do not mind being pinged about this multiworld for any valid reason.",
+        }
+    }
+
     pub const ALL: [Self; 5] = [
         Self::No,
         Self::Unknown,
@@ -166,6 +189,13 @@ impl PingPreference {
         Self::Yes,
     ];
 }
+
+/// The longest a note may be, in **characters** rather than bytes, so the limit does not depend on
+/// the alphabet somebody writes in — the same rule `room::validate_name` follows.
+///
+/// Enforced by the column as well as by the route: this one is rendered into a panel on a page that
+/// polls, so the bound is worth having in the place that cannot be bypassed.
+pub const MAX_NOTE_CHARS: usize = 1000;
 
 /// Set or clear one slot's annotations.
 ///
