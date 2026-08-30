@@ -1,0 +1,44 @@
+{# The room's own gameplay rules, as the room last reported them.
+
+   **One include, two pages.** The console shows these beside the control that changes them and the
+   options page shows them beside a link to it, and those two disagreeing would be worse than either
+   being absent: an organizer would compare a value here against a value there and act on whichever
+   they read second. The heading and the lead sentence belong to each page, since they are saying
+   different things about the same table; everything below that is here.
+
+   **Never rendered from Puna's own configuration**, which is the rule §7 states and the reason this
+   file reads `gameplay_options` and nothing else. pahoa persists these into `room.save` and takes
+   them from the snapshot on restore, so once a room has saved once its copy outranks whatever Puna
+   passed at startup -- including an `!admin /option` change made an hour ago. A room up for a week
+   may legitimately disagree with its own pod spec, and that is correct rather than drift.
+
+   The caller supplies `gameplay_options` (already flattened by `room::gameplay_option_rows`) and
+   `gameplay_options_at`. #}
+{% if gameplay_options.is_empty() %}
+{# Absent is not empty, and the sentence has to carry that: a room with no rules is not a thing that
+   exists, so a blank table here would say something false. What this means is that nobody has
+   managed to ask -- a room that has never run, or one on an image too old to answer. #}
+<p class="hint">This room has not reported its rules yet. They arrive the first time it is running
+and this site can reach it.</p>
+{% else %}
+{% if let Some(at) = gameplay_options_at %}
+{# **Stated rather than implied, because a stopped room keeps its last reading** -- which is the
+   whole reason these are stored instead of asked for on each page load. An async room is down most
+   of its life and its rules are still worth knowing; what would not be honest is presenting a
+   week-old answer as the current one. #}
+<p class="hint">As the room reported them at {{+ at }}.</p>
+{% endif %}
+<div class="scroll-x">
+<table class="gameplay-options">
+<thead><tr><th>Rule</th><th>Value</th></tr></thead>
+<tbody>
+{# Both columns are `<code>`, and that is not decoration: the left is the exact name the option form
+   accepts and the right is the exact word it accepts as a value, so what is on screen is what gets
+   typed. pahoa matches these by name and refuses anything it does not recognize. #}
+{% for row in gameplay_options %}
+<tr><td><code>{{ row.0 }}</code></td><td><code>{{ row.1 }}</code></td></tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+{% endif %}

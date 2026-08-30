@@ -370,7 +370,19 @@ async fn record(
                 -- The reaper's own signal: when a slot last registered a genuinely NEW location
                 -- check. `last_activity_at` above moves on any packet and stays fresh in a room
                 -- where everybody is chatting and nobody is playing.
-                last_check_at = $6
+                last_check_at = $6,
+                -- The room's own rules, which after its first save are the ONLY honest source for
+                -- them: `Room::restore` takes them from the snapshot, so what Puna passed at
+                -- startup describes how a room began and not how it is. Written here and read by
+                -- the console and the options page.
+                --
+                -- **Straight through, `None` included**, like everything else on this row. A room
+                -- on an image too old to report its options is a room whose options Puna does not
+                -- know, and keeping the last reading would be the same lie in a quieter voice --
+                -- it would survive an image DOWNGRADE and describe rules that may since have
+                -- changed. `probed_at` above moves in the same statement, so a page can always say
+                -- how old this is.
+                gameplay_options = $7::jsonb
           WHERE id = $1",
     )
     .bind::<SqlUuid, _>(room)
@@ -389,6 +401,17 @@ async fn record(
     // else on this row -- cannot tell, never zero.
     .bind::<Nullable<Timestamptz>, _>(status.started_at)
     .bind::<Nullable<Timestamptz>, _>(status.activity.last_check_at)
+    // Serialized here and cast back in the statement rather than bound as `Jsonb`, so this crate
+    // needs no opinion about the document's shape -- which is the same reason the column is JSONB
+    // and not eight columns. A value that will not serialize is written as NULL rather than
+    // failing the probe pass: the rules are a diagnostic, and losing the whole reading over one
+    // unrenderable field would take the client count and the activity clock down with it.
+    .bind::<Nullable<Text>, _>(
+        status
+            .options
+            .as_ref()
+            .and_then(|v| serde_json::to_string(v).ok()),
+    )
     .execute(conn)
     .await?;
 
@@ -488,11 +511,16 @@ mod db_tests {
         probe_kind: Option<String>,
         #[diesel(sql_type = Nullable<Timestamptz>)]
         process_started_at: Option<DateTime<Utc>>,
+        // Read back as text rather than `Jsonb`, so this asserts what is actually IN the column
+        // rather than what a round trip through `serde_json::Value` makes of it.
+        #[diesel(sql_type = Nullable<Text>)]
+        gameplay_options: Option<String>,
     }
 
     async fn observed(conn: &mut AsyncPgConnection, room: RoomId) -> Observed {
         diesel::sql_query(
-            "SELECT clients_connected, last_activity_at, probed_at, probe_kind, process_started_at
+            "SELECT clients_connected, last_activity_at, probed_at, probe_kind, process_started_at,
+                    gameplay_options::text AS gameplay_options
                FROM rooms WHERE id = $1",
         )
         .bind::<SqlUuid, _>(room)
@@ -580,6 +608,82 @@ mod db_tests {
             assert!(
                 (recorded - serving_since).num_seconds().abs() < 1,
                 "the room's own start time, not the probe's clock: {recorded} vs {serving_since}"
+            );
+        })
+        .await;
+    }
+
+    /// **The room's rules land on the row, and a probe that cannot tell clears them.**
+    ///
+    /// The first half is the point of the column: after a room's first save its own copy of its
+    /// rules outranks whatever Puna passed, so this reading is the only honest source for them and
+    /// two pages render it.
+    ///
+    /// The second half is the decision worth pinning, because keeping the last reading is the
+    /// obvious alternative and reads as generous. It is not: a room reporting no options is a room
+    /// Puna cannot ask, and holding a previous answer would survive an image **downgrade** and
+    /// describe rules that may have changed since — silently, and on a page whose whole purpose is
+    /// to be believed. `probed_at` moves either way, so a page can always say how old a reading is;
+    /// nothing anywhere can say how old a kept one would be.
+    #[tokio::test]
+    async fn the_rooms_own_rules_are_written_and_a_probe_that_cannot_tell_clears_them() {
+        testdb::with_db(|pool| async move {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let layout = Layout::new(tmp.path());
+            let mut conn = pool.get().await.expect("connection");
+            let generation = testdb::insert_generation(&mut conn, &layout, 4).await;
+            let room = testdb::insert_room(
+                &mut conn,
+                generation,
+                NewRoom {
+                    state: "running",
+                    desired: "running",
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            record(
+                &mut conn,
+                room,
+                &RoomStatus {
+                    options: Some(serde_json::json!({
+                        "release_mode": "auto",
+                        "hint_cost": 10,
+                    })),
+                    ..Default::default()
+                },
+                "https",
+            )
+            .await
+            .expect("record");
+
+            // Compared as a parsed document rather than as a string: `jsonb` does not preserve key
+            // order or whitespace, so asserting the text would be asserting Postgres's formatting.
+            let stored: serde_json::Value = serde_json::from_str(
+                &observed(&mut conn, room)
+                    .await
+                    .gameplay_options
+                    .expect("the room's rules were not stored"),
+            )
+            .expect("valid json in the column");
+            assert_eq!(stored["release_mode"], "auto");
+            assert_eq!(stored["hint_cost"], 10);
+
+            // Now a probe that reached the room and learned nothing about its rules -- the TCP
+            // fallback, or a room on an image that predates the field.
+            record(&mut conn, room, &RoomStatus::default(), "tcp")
+                .await
+                .expect("record");
+
+            let row = observed(&mut conn, room).await;
+            assert_eq!(
+                row.gameplay_options, None,
+                "a room that cannot report its rules must not keep reporting the old ones"
+            );
+            assert!(
+                row.probed_at.is_some(),
+                "the attempt is still stamped, which is what lets a page date the reading"
             );
         })
         .await;

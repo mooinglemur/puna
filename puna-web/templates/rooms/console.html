@@ -105,8 +105,8 @@ takes effect the next time it starts.</p>
       action="/room/{{ room_id }}/command">
 <input type="hidden" name="kind" value="status">
 <h3>Status</h3>
-<p class="hint">What the room reports about itself &mdash; connections, save state, its own idea of
-its options. Changes nothing.</p>
+<p class="hint">What the room reports about itself: connections, save state, and how far each slot
+has got. Changes nothing.</p>
 <div class="run"><button type="submit">Ask</button></div>
 </form>
 
@@ -132,6 +132,23 @@ its options. Changes nothing.</p>
 <div class="run"><button type="submit">Start the countdown</button></div>
 </form>
 
+{# --- the room's current rules, above the control that changes them ------------------------------
+   **Outside the organizer gate below, deliberately.** Changing a rule is an organizer's; knowing
+   what the rules are is not. A helper fielding "why did my release do nothing" is answering a
+   question about `release_mode`, and sending them to find an organizer to read a value to them is
+   the tier being useless rather than being careful.
+
+   This is also the anchor the options page links to, rather than the form beneath it: a browser
+   scrolls a fragment to the top of the viewport, so anchoring at the form would put the values just
+   above the fold -- and the values are what somebody arriving from that link came to see. #}
+<section class="panel" id="room-options">
+<h3>The room's rules</h3>
+<p class="hint">These come from the room itself rather than from what this site started it with,
+which after the room's first save is the only honest source: the room's keeps its rules in the save and
+restores them over anything passed at startup.</p>
+{% include "rooms/_gameplay_options.html" %}
+</section>
+
 {% if is_organizer %}
 {# **The one command a helper may not run**, and the only one that changes the room rather than a
    game inside it -- see `RoomCommand::required_role`. Hidden rather than disabled: a visible
@@ -147,8 +164,8 @@ its options. Changes nothing.</p>
    outlives the pod, and §7's "gameplay flags are only an initial value" rule is exactly what makes
    that true: after the first save the room's own copy wins, so what is set here survives a restart
    and what the manifest says does not. #}
-<p class="hint">Change one of the room's gameplay rules on the running room.
-<strong>This persists</strong> &mdash; the room's save is authoritative for its rules, so a restart
+<p class="hint">Change one of the room's gameplay rules on the running room, from the values shown
+above. <strong>This persists.</strong> The room's save is authoritative for its rules, so a restart
 restores what you set here rather than what the room was started with.</p>
 <div class="fields">
 {# The eight pahoa will set, transcribed from its `SETTABLE` table. A picker rather than a text box
@@ -180,7 +197,7 @@ restores what you set here rather than what the room was started with.</p>
 {# Said once here rather than on each of the eleven: this is the page's own account of why it is
    shorter than it was, and where somebody should be looking instead. #}
 <p class="hint">Every command below also has a control on the room's roster, on the slot's own row
-&mdash; which is usually the better place for it, because the player is already in front of you.
+, which is usually the better place for it, because the player is already in front of you.
 These are the same commands with the slot picked by hand.</p>
 
 {# **Items and locations are separate boxes on purpose**, here and in the roster's dialog. pahoa
@@ -199,8 +216,8 @@ force it, and may grant fewer than asked or none.</p>
 <div class="fields">
 {% call slot_picker(slots, preselect_slot) %}{% endcall %}
 <label>Item <input type="text" name="item" required></label>
-<label class="inline"><input type="checkbox" name="force" value="true"> Force &mdash; grant it
-without spending their points</label>
+<label class="inline"><input type="checkbox" name="force" value="true"> Force: grant it without
+spending their points</label>
 </div>
 <div class="run"><button type="submit">Hint</button></div>
 </form>
@@ -217,8 +234,8 @@ partial answer as hinting an item.</p>
 <div class="fields">
 {% call slot_picker(slots, preselect_slot) %}{% endcall %}
 <label>Location <input type="text" name="location" required></label>
-<label class="inline"><input type="checkbox" name="force" value="true"> Force &mdash; grant it
-without spending their points</label>
+<label class="inline"><input type="checkbox" name="force" value="true"> Force: grant it without
+spending their points</label>
 </div>
 <div class="run"><button type="submit">Hint</button></div>
 </form>
@@ -304,14 +321,14 @@ game moves forward, and this cannot be undone.</p>
 </div>
 <fieldset>
 <legend>Which status?</legend>
-<label><input type="radio" name="status" value="goal" required> Goal &mdash; finished. Nobody can
-undo this afterwards, and the room may empty their world through its auto-release rule.</label>
+<label><input type="radio" name="status" value="goal" required> Goal: finished. Nobody can undo
+this afterwards, and the room may empty their world through its auto-release rule.</label>
 <label><input type="radio" name="status" value="playing"> Playing</label>
 <label><input type="radio" name="status" value="ready"> Ready</label>
-<label><input type="radio" name="status" value="connected"> Connected &mdash; derived from the
-connection, so the next connect or disconnect overwrites it.</label>
-<label><input type="radio" name="status" value="unknown"> Unknown &mdash; likewise overwritten by
-the next connect or disconnect.</label>
+<label><input type="radio" name="status" value="connected"> Connected: derived from the connection,
+so the next connect or disconnect overwrites it.</label>
+<label><input type="radio" name="status" value="unknown"> Unknown: likewise overwritten by the next
+connect or disconnect.</label>
 </fieldset>
 <div class="run"><button type="submit">Set the status</button></div>
 </form>
@@ -323,7 +340,7 @@ the next connect or disconnect.</label>
       action="/room/{{ room_id }}/command">
 <input type="hidden" name="kind" value="alias">
 <h3>Set an alias</h3>
-<p class="hint">Rename this player in chat, as though they had set it themselves. pahoa cuts a long
+<p class="hint">Rename this player in chat, as though they had set it themselves. The room cuts a long
 alias to 16 characters.</p>
 <div class="fields">
 {% call slot_picker(slots, preselect_slot) %}{% endcall %}
@@ -351,10 +368,10 @@ under the room's rule.</p>
 </div>
 <fieldset>
 <legend>Which way?</legend>
-<label><input type="radio" name="allowed" value="true" required> Grant &mdash; this slot may release
+<label><input type="radio" name="allowed" value="true" required> Grant: this slot may release
 whatever the room's mode says. It changes nothing for anybody else.</label>
-<label><input type="radio" name="allowed" value="false"> Clear &mdash; return this slot to the
-room's mode, which may still permit releasing. This forbids nothing.</label>
+<label><input type="radio" name="allowed" value="false"> Clear: return this slot to the room's mode,
+which may still permit releasing. This forbids nothing.</label>
 </fieldset>
 <div class="run"><button type="submit">Apply</button></div>
 </form>
@@ -375,10 +392,10 @@ room's mode, which may still permit releasing. This forbids nothing.</label>
 </div>
 <fieldset>
 <legend>Which way?</legend>
-<label><input type="radio" name="locked" value="true" required> Lock &mdash; bars the next login.
-Nobody is disconnected; kick does that, and lock first.</label>
-<label><input type="radio" name="locked" value="false"> Unlock &mdash; let this slot connect
-again. Their password is unchanged, so nobody has to be told anything.</label>
+<label><input type="radio" name="locked" value="true" required> Lock: bars the next login. Nobody is
+disconnected; kick does that, and lock first.</label>
+<label><input type="radio" name="locked" value="false"> Unlock: let this slot connect again. Their
+password is unchanged, so nobody has to be told anything.</label>
 </fieldset>
 <div class="run"><button type="submit">Apply</button></div>
 </form>
@@ -392,7 +409,7 @@ again. Their password is unchanged, so nobody has to be told anything.</label>
 <input type="hidden" name="kind" value="kick">
 <h3>Kick</h3>
 <p class="hint">Close this slot's connections. They can reconnect at once, and most clients do so
-automatically within seconds &mdash; lock first if that is not what you want.</p>
+automatically within seconds. Lock first if that is not what you want.</p>
 <div class="fields">
 {% call slot_picker(slots, preselect_slot) %}{% endcall %}
 <label>Reason <input type="text" name="reason" placeholder="optional; delivered as chat"></label>

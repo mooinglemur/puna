@@ -336,6 +336,7 @@ diesel::table! {
         patch_policy -> PatchPolicy,
         primary_port -> PrimaryPort,
         last_static_tracker_at -> Nullable<Timestamptz>,
+        gameplay_options -> Nullable<Jsonb>,
     }
 }
 

@@ -179,6 +179,11 @@ mod tests {
             advertised_port: None,
             advertised_filtered_port: None,
             last_error: None,
+            // Absent, and it must stay that way here: the Secret builder decides what a room is
+            // STARTED with, and the room's reported rules are what it is running with. A fixture
+            // that supplied them would invite a future reader to reach for them.
+            gameplay_options: None,
+            probed_at: None,
         }
     }
 

@@ -1492,6 +1492,16 @@ h1 .scope {
 
 .cmd .run { margin: 0.8rem 0 0; }
 
+/* The room's own rules, on the console and on the options page.
+ *
+ * `width: 100%` is the base rule for every table here and is wrong for this one: it is two short
+ * columns of identifiers, and stretched across a 96rem page the value ends up a screen away from
+ * the name it belongs to. Bounded and left-aligned instead, and the second column takes whatever is
+ * left so the names stay in one column no matter how long a mode word gets. */
+.gameplay-options { width: auto; min-width: 22rem; max-width: 40rem; }
+
+.gameplay-options td:first-child { white-space: nowrap; }
+
 /* **The command the roster sent us to.** The link carries `#cmd-<kind>`, which scrolls, and
    `?kind=<kind>`, which is what marks it -- so a browser that declines to scroll, or a link opened
    without its fragment, still lands somewhere that says which form is the one.

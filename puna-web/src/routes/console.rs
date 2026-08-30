@@ -76,6 +76,13 @@ pub struct ConsoleTemplate {
     /// somewhere legible.
     preselect_kind: Option<String>,
     preselect_slot: Option<i32>,
+    /// The room's own rules, flattened for `rooms/_gameplay_options.html`. **Read from the room's
+    /// last probe, never from Puna's configuration** — see [`room::gameplay_option_rows`].
+    ///
+    /// The field names here and on the options page have to match, because the include reads them
+    /// out of whichever context it is rendered in.
+    gameplay_options: Vec<(String, String)>,
+    gameplay_options_at: Option<String>,
 }
 
 impl ConsoleTemplate {
@@ -179,7 +186,26 @@ async fn show(
         preselect_kind: kind.filter(|k| MENU.contains(&k.as_str())),
         preselect_slot: slot,
         is_organizer: access.role() >= puna_core::model::member::RoomRole::Organizer,
+        gameplay_options: puna_core::model::room::gameplay_option_rows(
+            room.gameplay_options.as_ref(),
+        ),
+        gameplay_options_at: probe_stamp(room),
     })
+}
+
+/// When the room last answered a probe, spelled the way the console's history table spells a time.
+///
+/// **Paired with the rules rather than offered on its own**, and only where there are rules to
+/// date: it is the difference between "these are the room's rules" and "these were its rules the
+/// last time anybody managed to ask", which for a stopped room is the whole of what can honestly be
+/// said. `None` where the room has never answered, in which case there is nothing to stamp.
+///
+/// Plain UTC rather than the `data-at` shorthand `localtime.js` renders, because neither page that
+/// uses this loads that script and a duration is the wrong shape here anyway — "17 hours ago" reads
+/// as staleness where a room that has simply been stopped since yesterday is not stale, it is off.
+pub fn probe_stamp(room: &puna_core::model::room::Room) -> Option<String> {
+    room.probed_at
+        .map(|at| at.format("%Y-%m-%d %H:%M:%S UTC").to_string())
 }
 
 /// Every command the console offers, in the order the page lays them out.
@@ -1213,6 +1239,11 @@ mod tests {
             is_organizer,
             preselect_kind: preselect_kind.map(str::to_string),
             preselect_slot: Some(3),
+            gameplay_options: vec![
+                ("hint_cost".to_string(), "10".to_string()),
+                ("release_mode".to_string(), "auto".to_string()),
+            ],
+            gameplay_options_at: Some("2026-08-30 12:00:00 UTC".to_string()),
         }
     }
 
@@ -1299,6 +1330,62 @@ mod tests {
         assert!(
             !helper.contains("cmd chosen"),
             "nothing was linked to, yet something is marked"
+        );
+    }
+
+    /// **The room's rules are shown to everybody who can reach the console, not only to whoever may
+    /// change them.**
+    ///
+    /// The natural mistake is to render the values inside the organizer gate, beside the form —
+    /// they belong together on screen, and the form is organizer-only. But changing a rule is an
+    /// organizer's and *knowing what the rules are* is not: a helper fielding "why did my release
+    /// do nothing" is answering a question about `release_mode`, and making them find an organizer
+    /// to read a value aloud is the helper tier being useless rather than careful.
+    ///
+    /// Also that the reading is dated. The console keeps its last one for a stopped room, which is
+    /// the whole reason these are stored rather than fetched per page load, and an undated table
+    /// would present a week-old answer as the current one.
+    #[test]
+    fn the_rooms_rules_render_for_a_helper_as_well_as_an_organizer() {
+        for is_organizer in [true, false] {
+            let html = a_console(None, is_organizer).render().expect("renders");
+            assert!(
+                html.contains(r#"id="room-options""#),
+                "the rules section is missing for is_organizer={is_organizer}"
+            );
+            for fragment in ["hint_cost", "release_mode", "auto"] {
+                assert!(
+                    html.contains(fragment),
+                    "{fragment} is not shown for is_organizer={is_organizer}"
+                );
+            }
+            assert!(
+                html.contains("2026-08-30 12:00:00 UTC"),
+                "the reading is undated for is_organizer={is_organizer}"
+            );
+        }
+    }
+
+    /// A room that has never answered says so, rather than rendering an empty table.
+    ///
+    /// **Absent is not empty**, and the difference is the whole content of the sentence: a room with
+    /// no rules is not a thing that exists, so a blank table would state something false. What this
+    /// actually means is that nobody has managed to ask — a room that has never run, or one on an
+    /// image too old to answer.
+    #[test]
+    fn a_room_that_has_never_reported_its_rules_says_so() {
+        let mut page = a_console(None, true);
+        page.gameplay_options = Vec::new();
+        page.gameplay_options_at = None;
+        let html = page.render().expect("renders");
+
+        assert!(
+            html.contains("has not reported its rules yet"),
+            "an unreported room renders no explanation"
+        );
+        assert!(
+            !html.contains("<table class=\"gameplay-options\">"),
+            "an empty rules table rendered, which says a room has no rules"
         );
     }
 

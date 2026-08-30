@@ -585,6 +585,23 @@ pub struct Room {
     pub advertised_port: Option<i32>,
     pub advertised_filtered_port: Option<i32>,
     pub last_error: Option<String>,
+    /// The room's own effective gameplay rules, as the room last reported them.
+    ///
+    /// **Observed, never desired**, and the only honest source for these: after a room's first save
+    /// its own copy of the rules outranks whatever Puna passed at startup, so anything rendered
+    /// from Puna's configuration may simply be false. §7's rule, and this column is what finally
+    /// lets a page follow it.
+    ///
+    /// Opaque on purpose. Puna stores no gameplay options of its own, so giving this a Rust shape
+    /// would be Puna claiming a schema it does not own — and a rule pahoa adds later would be
+    /// invisible until Puna shipped for it. [`gameplay_option_rows`] renders whatever is there.
+    ///
+    /// `None` means nobody has managed to ask, which is not the same as a room with no rules.
+    pub gameplay_options: Option<serde_json::Value>,
+    /// When the probe pass last got an answer out of this room, and therefore how old
+    /// [`gameplay_options`](Self::gameplay_options) is. Written in the same statement, so the two
+    /// cannot disagree about the age of one reading.
+    pub probed_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl Room {
@@ -669,6 +686,10 @@ struct RoomRow {
     advertised_filtered_port: Option<i32>,
     #[diesel(sql_type = Nullable<Text>)]
     last_error: Option<String>,
+    #[diesel(sql_type = Nullable<diesel::sql_types::Jsonb>)]
+    gameplay_options: Option<serde_json::Value>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    probed_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl From<RoomRow> for Room {
@@ -717,8 +738,50 @@ impl From<RoomRow> for Room {
             advertised_port: row.advertised_port,
             advertised_filtered_port: row.advertised_filtered_port,
             last_error: row.last_error,
+            gameplay_options: row.gameplay_options,
+            probed_at: row.probed_at,
         }
     }
+}
+
+/// Flatten the room's reported rules into rows a page can render.
+///
+/// **An allowlist would defeat the point.** These keys are pahoa's vocabulary, not Puna's, and the
+/// reason the column is opaque JSON is that a rule pahoa adds should appear without Puna shipping
+/// for it. So everything in the document is rendered, whatever it is called.
+///
+/// Values are flattened rather than pretty-printed because pahoa already emits modes as words
+/// rather than bitmasks — `"release_mode": "auto"` — so a string wants its quotes stripped and a
+/// number wants nothing done to it. Anything with structure has none today and is rendered as
+/// compact JSON rather than dropped, on the same reasoning: an unfamiliar shape is still evidence,
+/// where a blank cell is a page quietly deciding not to say.
+///
+/// **Sorted by key**, so the order does not depend on `serde_json`'s feature flags — without
+/// `preserve_order` a `Map` is a `BTreeMap` and this is already true, which is exactly why it is
+/// worth stating rather than relying on. A page whose rows reshuffle between builds is one nobody
+/// can scan twice.
+pub fn gameplay_option_rows(options: Option<&serde_json::Value>) -> Vec<(String, String)> {
+    let Some(serde_json::Value::Object(map)) = options else {
+        return Vec::new();
+    };
+
+    let mut rows: Vec<(String, String)> = map
+        .iter()
+        .map(|(key, value)| {
+            let rendered = match value {
+                // Unquoted: the operator has to type this exact word into the option form, and
+                // `"auto"` with its quotes is not the word the form accepts.
+                serde_json::Value::String(s) => s.clone(),
+                // Spelled out rather than left blank. pahoa emits an explicit null for a rule that
+                // is off rather than omitting the key, so the key's presence is the fact.
+                serde_json::Value::Null => "none".to_string(),
+                other => other.to_string(),
+            };
+            (key.clone(), rendered)
+        })
+        .collect();
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    rows
 }
 
 const ROOM_COLUMNS: &str = "id, name, environment::text AS environment, generation_id, \
@@ -731,7 +794,8 @@ const ROOM_COLUMNS: &str = "id, name, environment::text AS environment, generati
                             patch_policy::text AS patch_policy, \
                             primary_port::text AS primary_port, wants_filtered, \
                             state::text AS state, state_changed_at, desired_at, advertised_host, \
-                            advertised_port, advertised_filtered_port, last_error";
+                            advertised_port, advertised_filtered_port, last_error, \
+                            gameplay_options, probed_at";
 
 /// Open a room from an already-indexed generation.
 ///
@@ -1691,6 +1755,64 @@ mod tests {
             may_see_tracker(TrackerPolicy::Members, false, false),
             may_see_tracker(TrackerPolicy::Members, false, false)
         );
+    }
+
+    /// **A rule pahoa adds appears without Puna shipping for it**, which is the whole reason the
+    /// column is opaque JSON rather than eight columns.
+    ///
+    /// Asserted with a key that does not exist today, because the failure this guards against is
+    /// the natural thing to write: an allowlist of the eight names the option form offers, which
+    /// would read correctly, pass every test, and silently hide the first rule pahoa ships next.
+    #[test]
+    fn a_rule_puna_has_never_heard_of_is_rendered_anyway() {
+        let rows = gameplay_option_rows(Some(&serde_json::json!({
+            "release_mode": "auto",
+            "some_future_rule": "enabled",
+        })));
+        assert_eq!(
+            rows,
+            [
+                ("release_mode".to_string(), "auto".to_string()),
+                ("some_future_rule".to_string(), "enabled".to_string()),
+            ]
+        );
+    }
+
+    /// Each kind of value is spelled the way the option form would accept it back.
+    ///
+    /// The string case is the one that matters and the one a `to_string()` over the whole `Value`
+    /// would get wrong: `"auto"` **with its quotes** is not the word pahoa matches, so an operator
+    /// copying what is on screen into the form would be refused by a room that is behaving
+    /// perfectly. Numbers and booleans have no such trap, which is exactly why the string needs its
+    /// own arm rather than a blanket rule that happens to work for three cases out of four.
+    #[test]
+    fn a_value_is_rendered_as_the_word_the_option_form_takes() {
+        let rows = gameplay_option_rows(Some(&serde_json::json!({
+            "a_word": "auto",
+            "b_number": 10,
+            "c_flag": true,
+            // pahoa emits an explicit null for a rule that is off rather than dropping the key, so
+            // the key's presence is a fact and a blank cell would be the page declining to say.
+            "d_absent": null,
+            // Nothing has structure today. Rendered rather than dropped, because an unfamiliar
+            // shape is still evidence about a room somebody is trying to understand.
+            "e_shaped": [1, 2],
+        })));
+
+        let rendered: Vec<&str> = rows.iter().map(|(_, v)| v.as_str()).collect();
+        assert_eq!(rendered, ["auto", "10", "true", "none", "[1,2]"]);
+    }
+
+    /// Nothing to say, said as nothing: a page renders its own sentence rather than an empty table.
+    ///
+    /// The three inputs are genuinely different situations — a room that has never run, a room on
+    /// an image too old to answer, and a document that is not the object shape — and all three mean
+    /// "nobody knows", so all three produce no rows rather than a partial or a panicking read.
+    #[test]
+    fn nothing_reported_is_no_rows_rather_than_a_guess() {
+        assert!(gameplay_option_rows(None).is_empty());
+        assert!(gameplay_option_rows(Some(&serde_json::Value::Null)).is_empty());
+        assert!(gameplay_option_rows(Some(&serde_json::json!("not an object"))).is_empty());
     }
 
     /// The states a port pair cannot be reclaimed from.

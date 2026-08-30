@@ -1767,6 +1767,12 @@ pub struct OptionsTemplate {
     /// Whether this deployment has a lobby at all. Decided in the route from configuration, so the
     /// template cannot offer a control that could only ever refuse.
     has_lobby: bool,
+    /// The room server's own rules, for `rooms/_gameplay_options.html`. **Named identically to the
+    /// console's two fields**, because the include reads them out of whichever context renders it —
+    /// and rendering the same table from two derivations is the one thing that must not happen
+    /// here, since an organizer would compare the two and act on whichever they read second.
+    gameplay_options: Vec<(String, String)>,
+    gameplay_options_at: Option<String>,
 }
 
 #[derive(FromForm)]
@@ -1811,6 +1817,8 @@ async fn options_page(
         // Hidden entirely where no lobby is configured. A control that can only ever answer "no
         // lobby is configured for this deployment" is a control that reads as broken.
         has_lobby: lobby.0.is_some(),
+        gameplay_options: room::gameplay_option_rows(access.room.gameplay_options.as_ref()),
+        gameplay_options_at: crate::routes::console::probe_stamp(&access.room),
     })
 }
 
@@ -2627,6 +2635,31 @@ pub(crate) mod tests {
         );
     }
 
+    /// **The room's own rules belong on the console and the options page, and NOWHERE here.**
+    ///
+    /// `GET /room/<id>` is public — the unguessable id is the whole authorization — and a room's
+    /// rules are staff-facing configuration rather than something a shared link should carry. It is
+    /// also the page that would be worst to put them on: it is what a player opens to find an
+    /// address and a patch, and eight rule names between those two is noise for every reader it is
+    /// not for.
+    ///
+    /// Asserted from the staff render, which is the one that could plausibly grow them.
+    #[test]
+    fn the_room_page_never_shows_the_rooms_own_rules() {
+        let mut staff = page_as(true, false);
+        staff.slots = vec![a_slot(false)];
+        let html = staff.render().expect("renders");
+
+        // Every key and every value in `a_room()`'s fixture, so this fails on a table, a summary
+        // line, or a single value smuggled into a sentence.
+        for fragment in ["release_mode", "hint_cost", "item_cheat"] {
+            assert!(
+                !html.contains(fragment),
+                "the room page renders {fragment}, which belongs on the console"
+            );
+        }
+    }
+
     pub(crate) fn a_room() -> Room {
         Room {
             id: puna_core::ids::RoomId::new(),
@@ -2659,6 +2692,20 @@ pub(crate) mod tests {
             advertised_port: Some(40000),
             advertised_filtered_port: Some(40001),
             last_error: None,
+            // A room that has answered a probe, so the pages that render its rules have something
+            // to render. `location_check_points` is deliberately a number and `release_mode` a
+            // word, because the flattener treats the two differently and a fixture of one kind
+            // would only prove half of it.
+            gameplay_options: Some(serde_json::json!({
+                "release_mode": "auto",
+                "hint_cost": 10,
+                "item_cheat": true,
+            })),
+            probed_at: Some(
+                chrono::DateTime::parse_from_rfc3339("2026-08-30T12:00:00Z")
+                    .expect("a fixed instant")
+                    .with_timezone(&chrono::Utc),
+            ),
         }
     }
 
@@ -3115,6 +3162,69 @@ pub(crate) mod tests {
         }
     }
 
+    /// **The options page shows the room server's rules and sends you elsewhere to change them.**
+    ///
+    /// The two halves fail differently and both quietly. Without the values, a settings page
+    /// silently omits half a room's settings and sends people to guess where the rest live. Without
+    /// a working link — or with one pointing at a page that has no such anchor — the values read as
+    /// something this page could change, which is the one thing they are not: pahoa keeps its rules
+    /// in the save, so a control here would write a value the next restart discards.
+    ///
+    /// The anchor is `#room-options` rather than `#cmd-option`, and deliberately: a browser scrolls
+    /// a fragment to the top of the viewport, so pointing at the form would put the values just
+    /// above the fold — and the values are what somebody following this link came to see, with the
+    /// control underneath them.
+    #[test]
+    fn the_options_page_shows_the_rooms_own_rules_and_links_to_where_they_change() {
+        use askama::Template;
+
+        // **One room, bound once.** `a_room()` mints a fresh `RoomId` per call, so building the
+        // page from one and asserting against another compares two different rooms' URLs -- which
+        // is how this test failed the first time it ran.
+        let room = a_room();
+        let html = OptionsTemplate {
+            notice: None,
+            base: crate::tpl::TplContext::new(&Session::default()),
+            gameplay_options: room::gameplay_option_rows(room.gameplay_options.as_ref()),
+            gameplay_options_at: crate::routes::console::probe_stamp(&room),
+            room: room.clone(),
+            has_server_password: false,
+            has_lobby: true,
+            restart_would_land: true,
+        }
+        .render()
+        .expect("renders");
+
+        for fragment in ["release_mode", "auto", "hint_cost", "item_cheat"] {
+            assert!(
+                html.contains(fragment),
+                "the rules do not render: {fragment}"
+            );
+        }
+
+        // Dated, because a stopped room keeps its last reading and presenting that as current is
+        // the one dishonest thing this section could do.
+        assert!(
+            html.contains("2026-08-30 12:00:00 UTC"),
+            "the reading is undated, so a week-old answer reads as the current one"
+        );
+
+        let link = format!(r#"href="/room/{}/console#room-options""#, room.id);
+        assert!(
+            html.contains(&link),
+            "the options page does not link to where these are changed"
+        );
+
+        // The other half of that link: the console has to render the id it points at. Checked from
+        // both sides, since a fragment naming nothing is the quietest failure available -- the
+        // browser simply does not scroll and the page looks like it ignored the click.
+        let console = include_str!("../../templates/rooms/console.html");
+        assert!(
+            console.contains(r#"id="room-options""#),
+            "the console has no anchor for the options page to link to"
+        );
+    }
+
     /// **The options page is split on one question: does saving disconnect anybody?**
     ///
     /// That division is invisible from the options themselves — a password mode and a feed policy
@@ -3136,6 +3246,8 @@ pub(crate) mod tests {
                 has_server_password: false,
                 has_lobby: true,
                 restart_would_land,
+                gameplay_options: room::gameplay_option_rows(a_room().gameplay_options.as_ref()),
+                gameplay_options_at: crate::routes::console::probe_stamp(&a_room()),
             }
             .render()
             .expect("renders")
@@ -3223,6 +3335,8 @@ pub(crate) mod tests {
                 has_server_password: false,
                 has_lobby: true,
                 restart_would_land: true,
+                gameplay_options: Vec::new(),
+                gameplay_options_at: None,
             }
             .render()
             .expect("renders");
