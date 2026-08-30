@@ -1446,3 +1446,221 @@ async fn siblings_are_only_rooms_the_reader_organizes() {
     })
     .await;
 }
+
+/// **A clone carries the person and not the playthrough.**
+///
+/// The split is what each thing is about. A ping preference is a standing statement about how
+/// somebody wants to be contacted, which a second room on the same seed does not change — so
+/// carrying it saves everybody re-answering a question they already answered. A progression status
+/// and a note describe a *playthrough*, and a clone is starting one over.
+///
+/// **The annotations need no code to be dropped, which is exactly why this exists.** `create`
+/// inserts fresh slots and the clone copies only owners over them, so "BK does not travel" holds
+/// today by omission — nothing would fail if somebody widened that UPDATE, and the symptom would be
+/// a brand-new room describing the old one's progress to everybody looking at its tracker.
+#[tokio::test]
+async fn a_clone_carries_ping_preferences_and_leaves_the_playthrough_behind() {
+    use puna_core::model::annotation::{self, PingPreference, ProgressionStatus};
+
+    with_db(|pool| async move {
+        let mut conn = pool.get().await.expect("connection");
+        users(&mut conn).await;
+        let generation = seed_generation(&mut conn, false).await;
+        let source = room::create(
+            &mut conn,
+            &NewRoom::direct(Environment::Dev, "the async", generation, OWNER),
+        )
+        .await
+        .expect("create");
+
+        // A played-in room: a slot with an owner, a progression and a note, and its owner has said
+        // how they want to be pinged.
+        let slots = slot::list(&mut conn, source).await.expect("slots");
+        let token = slots[0].claim_token.clone().expect("token");
+        slot::claim(&mut conn, &token, PLAYER).await.expect("claim");
+        annotation::set_slot_annotation(
+            &mut conn,
+            source,
+            slots[0].slot_number,
+            ProgressionStatus::Bk,
+            Some("waiting on a sword"),
+            PLAYER,
+        )
+        .await
+        .expect("annotate");
+        annotation::set_preference(&mut conn, source, PLAYER, PingPreference::ForHints)
+            .await
+            .expect("preference");
+
+        let clone = room::clone_room(&mut conn, source, "the async, again".into(), OWNER, true)
+            .await
+            .expect("clone");
+
+        let cloned = slot::list(&mut conn, clone).await.expect("slots");
+        let same = cloned
+            .iter()
+            .find(|s| s.slot_number == slots[0].slot_number)
+            .expect("the slot");
+
+        assert_eq!(
+            same.owner_id,
+            Some(PLAYER),
+            "the owner did not carry, so this is not testing what it claims to"
+        );
+        assert_eq!(
+            same.progression,
+            ProgressionStatus::Unknown,
+            "a fresh room is describing the old room's progress"
+        );
+        assert_eq!(
+            same.note, None,
+            "a note about a finished playthrough carried"
+        );
+        assert_eq!(same.annotated_by, None);
+
+        let carried = annotation::preferences(&mut conn, clone)
+            .await
+            .expect("preferences");
+        assert_eq!(
+            carried
+                .iter()
+                .find(|p| p.user_id == PLAYER)
+                .map(|p| p.preference),
+            Some(PingPreference::ForHints),
+            "the player has to say again how they want to be contacted"
+        );
+
+        // The source is untouched, as with everything else a clone copies.
+        let original = slot::list(&mut conn, source).await.expect("slots");
+        assert_eq!(original[0].progression, ProgressionStatus::Bk);
+        assert_eq!(original[0].note.as_deref(), Some("waiting on a sword"));
+    })
+    .await;
+}
+
+/// **Emptying the note deletes it, and the column is what enforces that.**
+///
+/// `''` and `NULL` would otherwise be two ways to say nothing, and every reader would have to know
+/// both — the page, the digest, and whatever asks "does this slot have a note". The CHECK makes the
+/// empty string unspellable, so absence is the only answer, and `set_slot_annotation` trims before
+/// it writes so a box containing three spaces is a deletion rather than a constraint violation
+/// surfacing as a database error.
+#[tokio::test]
+async fn clearing_a_note_removes_it_rather_than_storing_nothing() {
+    use puna_core::model::annotation::{self, ProgressionStatus};
+
+    with_db(|pool| async move {
+        let mut conn = pool.get().await.expect("connection");
+        users(&mut conn).await;
+        let generation = seed_generation(&mut conn, false).await;
+        let id = room::create(
+            &mut conn,
+            &NewRoom::direct(Environment::Dev, "notes", generation, OWNER),
+        )
+        .await
+        .expect("create");
+        let number = slot::list(&mut conn, id).await.expect("slots")[0].slot_number;
+
+        macro_rules! note {
+            () => {
+                slot::list(&mut conn, id)
+                    .await
+                    .expect("slots")
+                    .into_iter()
+                    .find(|s| s.slot_number == number)
+                    .expect("the slot")
+            };
+        }
+        macro_rules! write_note {
+            ($text:expr) => {
+                annotation::set_slot_annotation(
+                    &mut conn,
+                    id,
+                    number,
+                    ProgressionStatus::SoftBk,
+                    $text,
+                    OWNER,
+                )
+                .await
+                .expect("annotate")
+            };
+        }
+
+        write_note!(Some("  ping me on discord  "));
+        let row = note!();
+        assert_eq!(
+            row.note.as_deref(),
+            Some("ping me on discord"),
+            "stored untrimmed, so the same note typed twice is two different notes"
+        );
+        assert_eq!(row.progression, ProgressionStatus::SoftBk);
+        assert_eq!(row.annotated_by, Some(OWNER));
+        assert!(row.annotated_at.is_some());
+
+        // Whitespace is empty. This is the case that would otherwise reach the column's CHECK and
+        // come back as a database error on an ordinary deletion.
+        write_note!(Some("   "));
+        assert_eq!(note!().note, None);
+
+        write_note!(Some("back again"));
+        assert!(note!().note.is_some());
+
+        write_note!(None);
+        assert_eq!(note!().note, None);
+    })
+    .await;
+}
+
+/// **The toggle is off unless somebody asks for it, and it survives a clone.**
+///
+/// Off is how every room behaved before this existed, so the default is what makes the feature
+/// safe to ship: a room nobody opted in for cannot start showing handles and notes. And a clone is
+/// the same group on the same seed, so making them turn it back on would be asking them to
+/// re-answer a question the source room already answered.
+#[tokio::test]
+async fn the_enhanced_tracker_is_off_by_default_and_carries_to_a_clone() {
+    with_db(|pool| async move {
+        let mut conn = pool.get().await.expect("connection");
+        users(&mut conn).await;
+        let generation = seed_generation(&mut conn, false).await;
+
+        let plain = room::create(
+            &mut conn,
+            &NewRoom::direct(Environment::Dev, "plain", generation, OWNER),
+        )
+        .await
+        .expect("create");
+        assert!(
+            !room::get(&mut conn, plain)
+                .await
+                .expect("read")
+                .expect("the room")
+                .enhanced_tracker,
+            "a room nobody asked about has the feature on"
+        );
+
+        let mut new = NewRoom::direct(Environment::Dev, "annotated", generation, OWNER);
+        new.enhanced_tracker = true;
+        let opted_in = room::create(&mut conn, &new).await.expect("create");
+        assert!(
+            room::get(&mut conn, opted_in)
+                .await
+                .expect("read")
+                .expect("the room")
+                .enhanced_tracker
+        );
+
+        let clone = room::clone_room(&mut conn, opted_in, "again".into(), OWNER, true)
+            .await
+            .expect("clone");
+        assert!(
+            room::get(&mut conn, clone)
+                .await
+                .expect("read")
+                .expect("the room")
+                .enhanced_tracker,
+            "the clone lost the setting its source had"
+        );
+    })
+    .await;
+}

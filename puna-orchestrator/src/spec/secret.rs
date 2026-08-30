@@ -182,6 +182,7 @@ mod tests {
             // Absent, and it must stay that way here: the Secret builder decides what a room is
             // STARTED with, and the room's reported rules are what it is running with. A fixture
             // that supplied them would invite a future reader to reach for them.
+            enhanced_tracker: false,
             gameplay_options: None,
             probed_at: None,
         }
@@ -208,6 +209,10 @@ mod tests {
             tracker_id: TrackerId::new(),
             locked_at: None,
             locked_by: None,
+            progression: puna_core::model::annotation::ProgressionStatus::Unknown,
+            note: None,
+            annotated_at: None,
+            annotated_by: None,
         }
     }
 

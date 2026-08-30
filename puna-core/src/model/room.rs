@@ -28,7 +28,7 @@ use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use crate::Environment;
 use crate::ids::{GenerationId, JournalId, RoomId, TrackerId};
 use crate::model::member::{self, RoomRole};
-use crate::model::{RoomSource, slot};
+use crate::model::{RoomSource, annotation, slot};
 
 /// How a room authenticates the people connecting to it.
 ///
@@ -472,6 +472,10 @@ pub struct NewRoom {
     /// still make — but it is a poor thing to be given silently, because the person it locks out is
     /// the one who would need the file to settle a dispute.
     pub spoiler_policy: Option<SpoilerPolicy>,
+    /// Whether participants may annotate their slots on this room's tracker. **Off unless asked
+    /// for**: off is how every room behaved before the feature existed, so a room whose organizer
+    /// did not think about it behaves the way rooms always have.
+    pub enhanced_tracker: bool,
     /// `None` defaults from `race_mode` too: `members` for a race, `link` otherwise.
     pub tracker_policy: Option<TrackerPolicy>,
     /// `None` keeps the column default, `open`. The creation form sends `claimed`.
@@ -527,6 +531,7 @@ impl NewRoom {
             lobby_job_id: None,
             idempotency_key: None,
             cloned_from: None,
+            enhanced_tracker: false,
         }
     }
 }
@@ -597,6 +602,16 @@ pub struct Room {
     /// invisible until Puna shipped for it. [`gameplay_option_rows`] renders whatever is there.
     ///
     /// `None` means nobody has managed to ask, which is not the same as a room with no rules.
+    /// Whether participants may annotate their slots on this room's tracker.
+    ///
+    /// **Off means the tracker renders exactly as it did before the feature existed**, which is the
+    /// property that makes the default safe: a room nobody opted in for cannot start showing
+    /// handles, notes or progression to anybody.
+    ///
+    /// Orthogonal to `tracker_policy`, which answers who may look at all. Every annotation is
+    /// participant-only on top of this, so a `link`-policy tracker with the toggle on still shows an
+    /// anonymous viewer the same page it always did.
+    pub enhanced_tracker: bool,
     pub gameplay_options: Option<serde_json::Value>,
     /// When the probe pass last got an answer out of this room, and therefore how old
     /// [`gameplay_options`](Self::gameplay_options) is. Written in the same statement, so the two
@@ -686,6 +701,8 @@ struct RoomRow {
     advertised_filtered_port: Option<i32>,
     #[diesel(sql_type = Nullable<Text>)]
     last_error: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Bool)]
+    enhanced_tracker: bool,
     #[diesel(sql_type = Nullable<diesel::sql_types::Jsonb>)]
     gameplay_options: Option<serde_json::Value>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
@@ -738,6 +755,7 @@ impl From<RoomRow> for Room {
             advertised_port: row.advertised_port,
             advertised_filtered_port: row.advertised_filtered_port,
             last_error: row.last_error,
+            enhanced_tracker: row.enhanced_tracker,
             gameplay_options: row.gameplay_options,
             probed_at: row.probed_at,
         }
@@ -795,7 +813,7 @@ const ROOM_COLUMNS: &str = "id, name, environment::text AS environment, generati
                             primary_port::text AS primary_port, wants_filtered, \
                             state::text AS state, state_changed_at, desired_at, advertised_host, \
                             advertised_port, advertised_filtered_port, last_error, \
-                            gameplay_options, probed_at";
+                            gameplay_options, probed_at, enhanced_tracker";
 
 /// Open a room from an already-indexed generation.
 ///
@@ -891,11 +909,11 @@ pub async fn create(
                      idempotency_key, cloned_from, created_by, spoiler_policy, tracker_id,
                      tracker_policy, journal_policy, patch_policy, slot_auth, password,
                      server_password, wants_filtered, use_embedded_options, save_interval_secs,
-                     admin_token, primary_port, desired_state)
+                     admin_token, primary_port, enhanced_tracker, desired_state)
                  VALUES ($1, $2::puna_environment, $3, $4, $5::room_source, $6, $7, $8, $9, $10,
                          $11::spoiler_policy, $12, $13::tracker_policy, $14::journal_policy,
                          $15::patch_policy, $16::slot_auth_mode, $17, $18, $19, $20, $21, $22,
-                         $23::primary_port, 'running')",
+                         $23::primary_port, $24, 'running')",
             )
             .bind::<SqlUuid, _>(id)
             .bind::<Text, _>(new.environment.as_str())
@@ -920,6 +938,7 @@ pub async fn create(
             .bind::<Integer, _>(new.save_interval_secs)
             .bind::<Text, _>(crate::secret::admin_token())
             .bind::<Text, _>(primary_port.as_sql())
+            .bind::<Bool, _>(new.enhanced_tracker)
             .execute(conn)
             .await?;
 
@@ -1395,6 +1414,13 @@ pub struct LiveOptions {
     /// audience the moment it is saved — which is exactly why the creation form does not offer it
     /// and this page states the consequence next to each option.
     pub spoiler_policy: SpoilerPolicy,
+    /// Whether participants may annotate their slots on the tracker.
+    ///
+    /// Live with the rest, and it genuinely is: nothing about it reaches pahoa, so turning it on or
+    /// off changes what the next page render does and nothing else. Turning it **off** stops the
+    /// annotations being shown without deleting them, which is the right shape for a toggle
+    /// somebody may flip back.
+    pub enhanced_tracker: bool,
 }
 
 /// Apply every live option at once.
@@ -1414,7 +1440,8 @@ pub async fn set_live_options(
                 journal_policy = $3::journal_policy,
                 patch_policy   = $4::patch_policy,
                 primary_port   = $5::primary_port,
-                spoiler_policy = $6::spoiler_policy
+                spoiler_policy = $6::spoiler_policy,
+                enhanced_tracker = $7
           WHERE id = $1",
     )
     .bind::<SqlUuid, _>(id)
@@ -1423,6 +1450,7 @@ pub async fn set_live_options(
     .bind::<Text, _>(options.patch_policy.as_sql())
     .bind::<Text, _>(options.primary_port.as_sql())
     .bind::<Text, _>(options.spoiler_policy.as_sql())
+    .bind::<Bool, _>(options.enhanced_tracker)
     .execute(conn)
     .await?;
     Ok(())
@@ -1495,6 +1523,10 @@ pub async fn clone_room(
         generation_id: existing.generation_id,
         source: existing.source,
         created_by,
+        // The room's own setting, not the person's: a clone of an enhanced-tracker room is the same
+        // group playing the same seed again, and asking them to turn it back on is asking them to
+        // re-answer a question this room already answered.
+        enhanced_tracker: existing.enhanced_tracker,
         slot_auth: existing.slot_auth,
         spoiler_policy: Some(existing.spoiler_policy),
         tracker_policy: Some(existing.tracker_policy),
@@ -1549,6 +1581,24 @@ pub async fn clone_room(
         .bind::<SqlUuid, _>(source)
         .execute(conn)
         .await?;
+
+        // **Preferences travel with the owners; annotations do not travel at all.**
+        //
+        // The split is what each thing is about. A ping preference is a standing statement about a
+        // person -- how they want to be contacted about this multiworld -- and a clone is the same
+        // group playing the same seed again, so asking everybody to answer it a second time is a
+        // question they already answered. A progression and a note describe a *playthrough*, and
+        // the clone is starting one over; carrying BK status would have a fresh room describe the
+        // old room's progress.
+        //
+        // Annotations need no code to be left behind: `create` inserts fresh slots and the copy
+        // above takes only owners. That is exactly why there is a test pinning it -- nothing here
+        // would fail if somebody widened that UPDATE.
+        //
+        // Gated on `keep_owners` with the copy it belongs to: starting with unclaimed slots is
+        // resetting the roster, and a preference row for somebody who never joins is a statement
+        // about a person in a room they are not in.
+        annotation::copy_preferences(conn, source, id).await?;
     }
 
     Ok(id)

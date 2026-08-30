@@ -18,8 +18,16 @@ pub mod sql_types {
     pub struct PatchPolicy;
 
     #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
+    #[diesel(postgres_type(name = "ping_preference"))]
+    pub struct PingPreference;
+
+    #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "primary_port"))]
     pub struct PrimaryPort;
+
+    #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
+    #[diesel(postgres_type(name = "progression_status"))]
+    pub struct ProgressionStatus;
 
     #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "puna_environment"))]
@@ -234,6 +242,18 @@ diesel::table! {
 }
 
 diesel::table! {
+    use diesel::sql_types::*;
+    use super::sql_types::PingPreference;
+
+    room_ping_preferences (room_id, user_id) {
+        room_id -> Uuid,
+        user_id -> Int8,
+        preference -> PingPreference,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     room_slot_filters (room_id, slot_number) {
         room_id -> Uuid,
         slot_number -> Int4,
@@ -246,6 +266,7 @@ diesel::table! {
 diesel::table! {
     use diesel::sql_types::*;
     use super::sql_types::SlotKind;
+    use super::sql_types::ProgressionStatus;
 
     room_slots (room_id, slot_number) {
         room_id -> Uuid,
@@ -260,6 +281,10 @@ diesel::table! {
         tracker_id -> Uuid,
         locked_at -> Nullable<Timestamptz>,
         locked_by -> Nullable<Int8>,
+        progression -> ProgressionStatus,
+        note -> Nullable<Text>,
+        annotated_at -> Nullable<Timestamptz>,
+        annotated_by -> Nullable<Int8>,
     }
 }
 
@@ -337,6 +362,7 @@ diesel::table! {
         primary_port -> PrimaryPort,
         last_static_tracker_at -> Nullable<Timestamptz>,
         gameplay_options -> Nullable<Jsonb>,
+        enhanced_tracker -> Bool,
     }
 }
 
@@ -385,6 +411,8 @@ diesel::joinable!(room_filters -> users (set_by));
 diesel::joinable!(room_invites -> rooms (room_id));
 diesel::joinable!(room_invites -> users (created_by));
 diesel::joinable!(room_members -> rooms (room_id));
+diesel::joinable!(room_ping_preferences -> rooms (room_id));
+diesel::joinable!(room_ping_preferences -> users (user_id));
 diesel::joinable!(room_slot_filters -> users (set_by));
 diesel::joinable!(room_slots -> rooms (room_id));
 diesel::joinable!(rooms -> generations (generation_id));
@@ -405,6 +433,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     room_filters,
     room_invites,
     room_members,
+    room_ping_preferences,
     room_slot_filters,
     room_slots,
     rooms,

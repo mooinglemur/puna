@@ -2054,6 +2054,65 @@ fn every_column_has_a_heading() {
 
 /// **The tracker's summary row is filled by class, so the two files have to agree on the names.**
 ///
+/// **A checkbox bound to a Rust `bool` has to post a word Rocket can parse.**
+///
+/// Rocket's `FromFormField for bool` accepts `""`, `"on"`, `"yes"` and `"true"` and **rejects
+/// `"1"`** — so a checkbox written `value="1"` beside one that already says so fails the *whole*
+/// submission, not just its own field. Every other control on the form is discarded with it, and
+/// only when the box is ticked, so the form works until somebody uses the new option.
+///
+/// `server_password` is the exception and shows why the trap is inviting: its Rust field is an
+/// `Option<String>`, which takes any value at all, so `value="1"` is correct there and is the
+/// nearest example for anybody adding the next checkbox.
+#[test]
+fn a_checkbox_posts_something_its_rust_type_can_parse() {
+    // Rocket 0.5, `form/from_form_field.rs`: `v.is_empty() || v == "on" || v == "yes" || v ==
+    // "true"`. Transcribed rather than inferred, and the reason `"1"` is absent is that it is not
+    // in that list.
+    const ROCKET_TRUE: [&str; 3] = ["on", "yes", "true"];
+    // Fields whose Rust type is `Option<String>` rather than `bool`, which accept anything.
+    const NOT_A_BOOL: [&str; 1] = ["server_password"];
+
+    let mut checked = 0;
+    for entry in std::fs::read_dir(source("templates")).expect("templates") {
+        let dir = entry.expect("entry").path();
+        let files =
+            std::fs::read_dir(&dir).map_or_else(|_| Vec::new(), |it| it.flatten().collect());
+        for file in files {
+            let body = std::fs::read_to_string(file.path()).unwrap_or_default();
+            let mut rest = body.as_str();
+            while let Some(at) = rest.find(r#"type="checkbox""#) {
+                rest = &rest[at..];
+                let tag = rest.split('>').next().unwrap_or_default();
+                rest = &rest[r#"type="checkbox""#.len()..];
+
+                let field = |key: &str| {
+                    tag.find(key)
+                        .map(|i| tag[i + key.len()..].split('"').next().unwrap_or_default())
+                };
+                let (Some(name), Some(value)) = (field(r#"name=""#), field(r#"value=""#)) else {
+                    continue;
+                };
+                checked += 1;
+                if NOT_A_BOOL.contains(&name) {
+                    continue;
+                }
+                assert!(
+                    ROCKET_TRUE.contains(&value),
+                    "the {name:?} checkbox posts {value:?}, which Rocket's `bool` refuses -- \
+                     ticking it fails the entire form, and only then. Use one of {ROCKET_TRUE:?}, \
+                     or make the field an Option<String> as {NOT_A_BOOL:?} are."
+                );
+            }
+        }
+    }
+
+    assert!(
+        checked >= 8,
+        "only {checked} checkboxes found -- this lint is no longer looking at anything"
+    );
+}
+
 /// **The unclaimed tag has to test for `false`, not for falsiness**, and an author cannot see the
 /// difference.
 ///

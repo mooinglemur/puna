@@ -592,6 +592,16 @@ struct CreateRoomForm {
     /// sends nothing at all for an unticked box, and a `bool` field would make the whole submission
     /// fail to parse rather than reading as `false`.
     server_password: Option<String>,
+    /// Whether participants may annotate their slots on the tracker.
+    ///
+    /// **A checkbox, so absent must mean off** -- `#[field(default = false)]` is what expresses
+    /// that, and is why this is a plain `bool` where `server_password` above is an `Option<String>`.
+    ///
+    /// The template posts `value="true"`, which is deliberate and not decorative: Rocket's `bool`
+    /// accepts `""`, `"on"`, `"yes"` and `"true"` and **rejects `"1"`**, so the obvious value to
+    /// write next to `server_password`'s would fail the whole submission with a 422.
+    #[field(default = false)]
+    enhanced_tracker: bool,
     /// The lobby room this seed was rolled in. Optional, and blank when the organizer skipped it.
     ///
     /// A URL or a bare id: both are things somebody has in hand, and only the id is used — see
@@ -651,6 +661,7 @@ async fn create(
     new.primary_port = Some(primary_port);
     new.journal_policy = Some(journal_policy);
     new.tracker_policy = Some(tracker_policy);
+    new.enhanced_tracker = form.enhanced_tracker;
     // **Generated here, never typed.** The checkbox says whether the room has one at all; a field
     // asking somebody to invent a remote-admin password would collect a weak one, and the value is
     // rendered back to the organizer on the room page either way.
@@ -1782,6 +1793,11 @@ struct LiveOptionsForm {
     patch_policy: String,
     primary_port: String,
     spoiler_policy: String,
+    /// A checkbox, so **absent is off** -- unlike every field beside it, which is a radio group
+    /// whose value is always posted. `#[field(default = false)]` is what makes unticking it mean
+    /// something rather than leaving the previous value in place.
+    #[field(default = false)]
+    enhanced_tracker: bool,
 }
 
 #[derive(FromForm)]
@@ -1924,6 +1940,7 @@ async fn set_live_options(
             .ok_or_else(|| bad("unknown primary port"))?,
         spoiler_policy: room::SpoilerPolicy::parse(&form.spoiler_policy)
             .ok_or_else(|| bad("unknown spoiler policy"))?,
+        enhanced_tracker: form.enhanced_tracker,
     };
 
     let mut conn = pool.get().await?;
@@ -1937,6 +1954,7 @@ async fn set_live_options(
         patches = options.patch_policy.as_sql(),
         port = options.primary_port.as_sql(),
         spoiler = options.spoiler_policy.as_sql(),
+        enhanced_tracker = options.enhanced_tracker,
         "live room options changed"
     );
     Ok(Flash::success(
@@ -2192,6 +2210,10 @@ pub(crate) mod tests {
             tracker_id: puna_core::ids::TrackerId::new(),
             locked_at: None,
             locked_by: None,
+            progression: puna_core::model::annotation::ProgressionStatus::Unknown,
+            note: None,
+            annotated_at: None,
+            annotated_by: None,
         }
     }
 
@@ -2696,6 +2718,7 @@ pub(crate) mod tests {
             // to render. `location_check_points` is deliberately a number and `release_mode` a
             // word, because the flattener treats the two differently and a fixture of one kind
             // would only prove half of it.
+            enhanced_tracker: false,
             gameplay_options: Some(serde_json::json!({
                 "release_mode": "auto",
                 "hint_cost": 10,

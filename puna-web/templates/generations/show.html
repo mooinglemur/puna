@@ -137,6 +137,26 @@ required to view the tracker. The race default.</p>
 </div>
 </div>
 
+{# A checkbox rather than a radio pair, because this is the one control on this form with a real
+   default rather than a choice between peers: off is the behavior every room had before it existed,
+   and a room whose organizer did not think about it should be that one.
+
+   Sits under Tracker because it only means anything where there is a tracker to enhance. It is
+   deliberately NOT a fourth `tracker_policy` value: the policy answers who may look, this answers
+   what the page is for, and folding them together would make "public tracker, no annotations" and
+   "participant tracker, with them" two points on one line when they are independent. #}
+<div class="field">
+<span class="label">Enhanced tracker</span>
+<div class="choices">
+<label><input type="checkbox" name="enhanced_tracker" value="true"> Let participants annotate their
+slots</label>
+<p class="hint">Allow participants to annotate their slots on the tracker page to include their BK
+status, ping preference, and a short comment viewable to players and staff. Primarily intended for
+asyncs. Everything it adds is visible only to this room's staff and slot holders, whatever the
+tracker's own policy says.</p>
+</div>
+</div>
+
 <div class="field">
 <span class="label">Remote admin</span>
 <div class="choices">

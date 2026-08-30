@@ -124,6 +124,25 @@ spoiler.</p>
 </div>
 </div>
 
+{# **Live like everything else in this form, and genuinely so**: nothing about it reaches pahoa, so
+   flipping it changes what the next page render does and nothing at all about the running room.
+
+   Turning it OFF hides the annotations rather than deleting them, which is the right shape for a
+   toggle somebody may flip back — an organizer who turns it off for a race and on again afterwards
+   has not destroyed what their players wrote. Said in the hint, because "off" reading as "erase" is
+   the fear that would stop somebody using it. #}
+<div class="field">
+<span class="label">Enhanced tracker</span>
+<div class="choices">
+<label><input type="checkbox" name="enhanced_tracker" value="true"{% if room.enhanced_tracker +%} checked{% endif %}> Let participants annotate their slots</label>
+<p class="hint">Allow participants to annotate their slots on the tracker page to include their BK
+status, ping preference, and a short comment viewable to players and staff. Primarily intended for
+asyncs. Everything it adds is shown only to this room's staff and slot holders &mdash; an anonymous
+viewer sees the tracker exactly as it is now, whatever this says. Turning it off hides what people
+have written without deleting it.</p>
+</div>
+</div>
+
 <div class="actions">
 <button type="submit">Save</button>
 <button type="reset" class="secondary">Undo changes</button>

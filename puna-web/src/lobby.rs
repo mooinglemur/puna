@@ -470,6 +470,10 @@ mod tests {
             tracker_id: TrackerId::new(),
             locked_at: None,
             locked_by: None,
+            progression: puna_core::model::annotation::ProgressionStatus::Unknown,
+            note: None,
+            annotated_at: None,
+            annotated_by: None,
         }
     }
 

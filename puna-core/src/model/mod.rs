@@ -1,5 +1,6 @@
 //! Domain operations over the schema.
 
+pub mod annotation;
 pub mod command;
 pub mod event;
 pub mod filter;

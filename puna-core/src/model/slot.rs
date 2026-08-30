@@ -89,6 +89,19 @@ pub struct Slot {
     /// deliver. So a locked slot normally *has* a password and still cannot connect.
     pub locked_at: Option<chrono::DateTime<chrono::Utc>>,
     pub locked_by: Option<i64>,
+    /// How far along the slot's player says they are. **Self-reported and possibly stale** — the
+    /// server knows how many locations are checked and cannot know whether somebody is stuck, which
+    /// is the whole question this answers. Nothing derives from it.
+    pub progression: crate::model::annotation::ProgressionStatus,
+    /// A short line of context from the slot's owner, or from staff. **Untrusted text out of a form
+    /// and rendered on a polled page** — `textContent`, never `innerHTML`.
+    ///
+    /// `None`, never `Some("")`: the column refuses an empty string, so clearing the box is a
+    /// deletion rather than a second way to say nothing.
+    pub note: Option<String>,
+    pub annotated_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Who last set either of the two above — the owner, or a staff member correcting it.
+    pub annotated_by: Option<i64>,
 }
 
 impl Slot {
@@ -134,6 +147,14 @@ struct SlotRow {
     locked_at: Option<chrono::DateTime<chrono::Utc>>,
     #[diesel(sql_type = Nullable<BigInt>)]
     locked_by: Option<i64>,
+    #[diesel(sql_type = Text)]
+    progression: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    note: Option<String>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    annotated_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    annotated_by: Option<i64>,
 }
 
 impl From<SlotRow> for Slot {
@@ -156,13 +177,22 @@ impl From<SlotRow> for Slot {
             tracker_id: row.tracker_id,
             locked_at: row.locked_at,
             locked_by: row.locked_by,
+            // Unknown reads as `Unknown`, which renders as no chip at all. Nothing is withheld or
+            // granted by this value, so there is no safe direction to prefer -- unlike the ping
+            // preference beside it, where the fallback deliberately differs from the default.
+            progression: crate::model::annotation::ProgressionStatus::parse(&row.progression)
+                .unwrap_or_default(),
+            note: row.note,
+            annotated_at: row.annotated_at,
+            annotated_by: row.annotated_by,
         }
     }
 }
 
 const SLOT_COLUMNS: &str = "room_id, slot_number, player_name, game, kind::text AS kind, \
                             password, owner_id, claim_token, claimed_at, tracker_id, \
-                            locked_at, locked_by";
+                            locked_at, locked_by, progression::text AS progression, note, \
+                            annotated_at, annotated_by";
 
 /// Every slot of a room, in slot order.
 pub async fn list(
@@ -578,6 +608,10 @@ mod tests {
             tracker_id: TrackerId::new(),
             locked_at: None,
             locked_by: None,
+            progression: crate::model::annotation::ProgressionStatus::Unknown,
+            note: None,
+            annotated_at: None,
+            annotated_by: None,
         }
     }
 
