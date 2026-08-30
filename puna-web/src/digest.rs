@@ -75,8 +75,23 @@ pub struct SlotRow {
     /// make an untouched slot look like an abandoned one.
     pub last_activity_ms_ago: Option<i64>,
     pub hints: usize,
-    /// Something the reference cannot show, because it does not know who is playing.
-    pub claimed: bool,
+    /// Whether anybody has taken this slot, and **`None` for a viewer not entitled to know**.
+    ///
+    /// Something the reference cannot show, because it does not know who is playing — which is an
+    /// argument that Puna *can* and not that this audience *should*. It is the one column here that
+    /// is not about the multiworld: it answers "who signed up", which is Puna's own sign-up sheet
+    /// rather than anything about the game, on the page built to be handed to spectators.
+    ///
+    /// **The tracker id is independent of the room id precisely so it can go to people who should
+    /// not get the room**, so "the room page shows this too" is the wrong test — the room page's
+    /// audience is the one the organizers chose. Same tier as the roster's own identity column and
+    /// as `may_see_spoiler`'s `players`: the room's staff, or somebody who holds a slot in it.
+    ///
+    /// Omitted from the JSON entirely rather than sent as `false`, so a client cannot mistake
+    /// "withheld" for "unclaimed" — see the note in `tracker.js`, where that mistake is one
+    /// falsy-check away.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claimed: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -195,8 +210,9 @@ pub fn slots(
     freshness: Freshness,
     scope: Option<i32>,
     now: DateTime<Utc>,
+    sees_claims: bool,
 ) -> SlotsView {
-    let rows = slot_rows(roster, live, statics, scope, now);
+    let rows = slot_rows(roster, live, statics, scope, now, sees_claims);
 
     SlotsView {
         freshness,
@@ -221,6 +237,11 @@ pub fn slot_rows(
     statics: &serde_json::Value,
     scope: Option<i32>,
     now: DateTime<Utc>,
+    // `sees_claims`: whether this viewer may know who has signed up -- the room's staff, or
+    // somebody holding a slot in it. **Decided by the caller from the session**, never here: this
+    // function is handed a roster carrying `owner_id` for every slot, and a client cannot prove it
+    // did not render something it was given.
+    sees_claims: bool,
 ) -> Vec<SlotRow> {
     // **Puna's roster leads, not the document.** A spectator appears in neither per-player array --
     // pahoa mirrors the reference's `get_all_players()` split -- but it is still a slot somebody
@@ -253,7 +274,7 @@ pub fn slot_rows(
                 hints: entry(live, "hints", n)
                     .and_then(|e| e.get("hints")?.as_array())
                     .map_or(0, Vec::len),
-                claimed: slot.owner_id.is_some(),
+                claimed: sees_claims.then(|| slot.owner_id.is_some()),
             }
         })
         .collect()
@@ -714,9 +735,52 @@ mod tests {
         Names { games }
     }
 
+    /// **Who has signed up is not part of a tracker link.**
+    ///
+    /// The tracker id is independent of the room id *precisely* so it can be handed to an audience
+    /// the organizers did not choose — a stream chat, a spectator — so it is the widest-shared
+    /// surface Puna has. Claim state is the one column on it that says nothing about the multiworld
+    /// and everything about Puna's own sign-up sheet, so it goes to the room's own people and
+    /// nobody else: the same tier the roster applies to who holds a slot.
+    ///
+    /// **Absent, not `false`.** Serializing `false` for a viewer who may not know would leave the
+    /// client one falsy check away from tagging every slot `unclaimed` for exactly the audience the
+    /// server just declined to tell — so the withheld case is asserted on the wire and not only on
+    /// the struct.
+    #[test]
+    fn an_outsider_is_not_told_which_slots_are_unclaimed() {
+        let hidden = slots(&roster(), &live(), &statics(), fresh(), None, now(), false);
+        for row in &hidden.slots {
+            assert_eq!(
+                row.claimed, None,
+                "slot {} leaked its claim state",
+                row.slot
+            );
+        }
+
+        let body = serde_json::to_string(&hidden).expect("serializes");
+        assert!(
+            !body.contains("claimed"),
+            "the field reaches the wire at all, so a falsy check reads it as unclaimed: {body}"
+        );
+
+        // And the room's own people still get it, or the gate has eaten the feature rather than
+        // narrowing it.
+        let shown = slots(&roster(), &live(), &statics(), fresh(), None, now(), true);
+        assert!(
+            shown.slots.iter().all(|r| r.claimed.is_some()),
+            "a participant is no longer told who has signed up"
+        );
+        assert!(
+            serde_json::to_string(&shown)
+                .expect("serializes")
+                .contains("claimed"),
+        );
+    }
+
     #[test]
     fn the_slot_table_leads_with_punas_roster() {
-        let view = slots(&roster(), &live(), &statics(), fresh(), None, now());
+        let view = slots(&roster(), &live(), &statics(), fresh(), None, now(), true);
 
         assert_eq!(
             view.slots.len(),
@@ -731,7 +795,7 @@ mod tests {
         assert_eq!(troy.checks_total, 3);
         assert_eq!(troy.status, "playing");
         assert_eq!(troy.hints, 1);
-        assert!(troy.claimed);
+        assert_eq!(troy.claimed, Some(true));
         assert_eq!(troy.last_activity_ms_ago, Some(3_600_000), "one hour");
 
         // A spectator appears in neither per-player array, so it must not read as a player who has
@@ -886,7 +950,15 @@ mod tests {
         let games = game_names();
         let roster = roster();
         let rendered = [
-            serde_json::to_string(&slots(&roster, &live(), &statics(), fresh(), None, now())),
+            serde_json::to_string(&slots(
+                &roster,
+                &live(),
+                &statics(),
+                fresh(),
+                None,
+                now(),
+                true,
+            )),
             serde_json::to_string(&hints(&roster, &live(), &names_of(&games), fresh(), None)),
             serde_json::to_string(&locations(
                 &roster[0],
@@ -915,6 +987,7 @@ mod tests {
                 &statics(),
                 None,
                 now(),
+                false,
             ))))
             .collect();
 
@@ -960,7 +1033,7 @@ mod tests {
             status,
             last_activity_ms_ago: None,
             hints: 0,
-            claimed: false,
+            claimed: Some(false),
         }
     }
 
@@ -972,7 +1045,14 @@ mod tests {
     /// is a broken `!progress` command and nothing about the parts would say so.
     #[test]
     fn the_summary_is_one_line_a_bot_can_paste() {
-        let text = summary(&slot_rows(&roster(), &live(), &statics(), None, now()));
+        let text = summary(&slot_rows(
+            &roster(),
+            &live(),
+            &statics(),
+            None,
+            now(),
+            false,
+        ));
 
         assert_eq!(text, "Troy: 66.6% | Alice: 50.0% (goal)\n");
     }

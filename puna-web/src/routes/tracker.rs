@@ -223,6 +223,13 @@ enum Json {
 struct Access {
     room: Room,
     target: tracker::Target,
+    /// Whether this viewer is one of the room's own people: staff, or the holder of a slot in it.
+    ///
+    /// Computed for the `members` policy check and **kept rather than discarded**, because one
+    /// thing on the tracker is not about the multiworld's progress — whether a slot has been taken.
+    /// Same tier the roster applies to who holds a slot, and the same one `may_see_spoiler` calls
+    /// `players`.
+    is_participant: bool,
 }
 
 /// Resolve the id, then decide whether this viewer may see it.
@@ -272,7 +279,11 @@ async fn access(
         });
     }
 
-    Ok(Access { room, target })
+    Ok(Access {
+        room,
+        target,
+        is_participant: is_staff || owns_a_slot,
+    })
 }
 
 /// The live document.
@@ -451,6 +462,9 @@ struct Digestible {
     room: Room,
     roster: Vec<slot::Slot>,
     scope: Option<i32>,
+    /// Carried from [`Access`], because the roster below holds `owner_id` for every slot and the
+    /// digest is what decides whether that reaches the wire.
+    is_participant: bool,
 }
 
 async fn digestible(
@@ -464,6 +478,7 @@ async fn digestible(
     let roster = slot::list(conn, access.room.id).await?;
     Ok(Digestible {
         scope,
+        is_participant: access.is_participant,
         room: access.room,
         roster,
     })
@@ -511,6 +526,7 @@ async fn view_slots(
         freshness(&[live.stale_since, statics.stale_since], Utc::now()),
         it.scope,
         Utc::now(),
+        it.is_participant,
     );
 
     json(&view, &conditional)
@@ -727,6 +743,14 @@ async fn summary_text(
         &parsed(&statics.body),
         target.slot_number(),
         Utc::now(),
+        // **`false`, and it has to be**: this response is deliberately identical for every reader
+        // -- that is what lets it be `public`-cacheable and what makes it answerable to a bot with
+        // no session at all. A viewer-dependent field here would be a shared cache handing one
+        // reader another's document, which is the exact trade the comment below is buying.
+        //
+        // `summary` renders no claim state today, so this changes nothing now and is what stops it
+        // becoming a leak the day somebody adds a column to that function.
+        false,
     );
 
     Ok(PlainText {
@@ -1506,5 +1530,42 @@ mod tests {
                 "a tracker page is held to a measure meant for paragraphs"
             );
         }
+    }
+
+    /// **The one response here that a shared cache may hold must not depend on who asked.**
+    ///
+    /// `summary.txt` is served `public`-cacheable precisely because it is identical for every
+    /// reader — that is what lets a bot with no session ask for it and what makes a cache in front
+    /// of it free rate limiting rather than a way to hand one viewer another's document. Every JSON
+    /// view beside it is per-viewer and is not cacheable that way.
+    ///
+    /// So this path passes `sees_claims: false` unconditionally. `summary` renders no claim state
+    /// today, so flipping it would leak nothing *now* — which is exactly why it needs a lint rather
+    /// than a behavioral test: the mutation compiles, changes no output, and arms the leak for
+    /// whoever next adds a column to `digest::summary`. Two edits in different files, neither
+    /// wrong on its own.
+    #[test]
+    fn the_cacheable_summary_never_asks_for_a_viewer_dependent_field() {
+        let source = include_str!("tracker.rs");
+        let at = source
+            .find("async fn summary_text(")
+            .expect("the summary route is gone");
+        // Bounded to this function: the next line that starts a new item at column zero.
+        let body = &source[at..];
+        let body = &body[..body.find("\n}\n").expect("an unterminated function")];
+
+        assert!(
+            body.contains("digest::slot_rows("),
+            "this lint is no longer looking at the call it exists to pin"
+        );
+        assert!(
+            !body.contains("is_participant"),
+            "summary.txt has become viewer-dependent while still being served `public`-cacheable, \
+             so a shared cache can hand one reader another's document"
+        );
+        assert!(
+            body.contains("\n        false,\n"),
+            "summary.txt no longer passes `sees_claims: false`"
+        );
     }
 }

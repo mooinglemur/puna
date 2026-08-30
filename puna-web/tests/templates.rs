@@ -2054,6 +2054,46 @@ fn every_column_has_a_heading() {
 
 /// **The tracker's summary row is filled by class, so the two files have to agree on the names.**
 ///
+/// **The unclaimed tag has to test for `false`, not for falsiness**, and an author cannot see the
+/// difference.
+///
+/// `claimed` is omitted from the JSON entirely for a viewer who may not know — the room's staff and
+/// slot holders get it, nobody else does. So `r.claimed ? … : { tag: "unclaimed" }`, which is what
+/// this line was and what a tidy-up would restore, reads `undefined` as "not claimed" and tags
+/// **every slot** `unclaimed` for exactly the anonymous audience the server just declined to tell.
+///
+/// Nothing catches that in practice. The server-side gate is what withholds the data and it has its
+/// own test; this is about the rendering, and the rendering is only wrong when *logged out* — which
+/// is the one state somebody editing the tracker is least likely to be in. A page that reads
+/// correctly for its author and lies to everybody else is the exact shape this file exists for.
+///
+/// Anchored on the property rather than on one spelling: the field may be tested for `false`, and
+/// may not be tested for truthiness alone.
+#[test]
+fn the_unclaimed_tag_distinguishes_withheld_from_unclaimed() {
+    let script = std::fs::read_to_string(source("static/tracker.js")).expect("tracker.js");
+    let code: String = script
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        code.contains("r.claimed === false"),
+        "the unclaimed tag no longer distinguishes a withheld claim state from an unclaimed slot"
+    );
+    // The shape that would restore the bug, in the two spellings a rewrite reaches for. Checked
+    // against the comment-stripped copy, because the doc above names the broken form on purpose
+    // and a lint that matches its own prose fails on a correct file.
+    for wrong in ["r.claimed ?", "r.claimed?", "!r.claimed"] {
+        assert!(
+            !code.contains(wrong),
+            "`{wrong}` reads a withheld claim state as unclaimed and tags every slot for logged-out \
+             viewers"
+        );
+    }
+}
+
 /// `tracker.js` returns an object from `summary` and looks each key up as `tfoot .KEY`; the template
 /// renders the cells. Rename one on either side and the lookup answers `null`, which `renderSummary`
 /// steps over deliberately — so the row still appears, still spans the right columns, and one cell

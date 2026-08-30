@@ -361,7 +361,7 @@ unclaimed
    THEN kick, in that order: kicking first leaves a window in which they simply reconnect. #}
 <a class="act" data-command="lock" data-locked="true" data-slot="{{ slot.slot_number }}"
    href="/room/{{ room.id }}/console?kind=lock&amp;slot={{ slot.slot_number }}#cmd-lock"
-   title="Lock: bar the next login. Nobody is disconnected -- kick does that, and lock first."
+   title="Lock: bar the next login. Nobody is disconnected -- kick does that. Lock first, then kick."
    aria-label="Lock slot {{+ slot.slot_number }}">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <rect x="3.2" y="7" width="9.6" height="7" rx="1.4" fill="none" stroke="currentColor"/>

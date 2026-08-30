@@ -47,7 +47,12 @@
       rows: (d) => d.slots,
       cells: (r) => [
         String(r.slot),
-        r.claimed ? r.name : { text: r.name, tag: "unclaimed" },
+        // **`=== false`, not a falsy check**, and the difference is the whole point of the field
+        // being absent rather than `false` for a viewer who may not know. `claimed` is omitted
+        // entirely unless the reader is the room's staff or holds a slot in it -- so `r.claimed ?`
+        // would read `undefined` as "not claimed" and tag every slot `unclaimed` for exactly the
+        // anonymous audience the server just declined to tell.
+        r.claimed === false ? { text: r.name, tag: "unclaimed" } : r.name,
         r.spectator ? { text: r.game, tag: "spectator" } : r.game,
         r.spectator
           ? dash
