@@ -659,7 +659,7 @@ code.stale {
 /* --- the journal feed's connection dot ----------------------------------------------------------
    Green attached, red not. **A second signal, never the only one**: the sentence beside it says the
    same thing in words, which is what makes it readable to somebody who cannot tell the two hues
-   apart — the same rule the three blocks above follow by carrying a left border as well as a color.
+   apart: the same rule the three blocks above follow by carrying a left border as well as a color.
    It is `aria-hidden` in the markup for that reason: the text is the accessible copy.
 
    `flex-shrink: 0` because the message next to it wraps on a phone, and a dot that squashed into an
@@ -1422,7 +1422,7 @@ h1 .scope {
 
    **Every value is a different pair in light and dark**, and they are not one set lightened. A hue
    that reads vividly at 60% lightness on #16181c goes muddy rather than pale when it is simply
-   dulled for white, which is the finding `.journal`'s palette already records — so the light values
+   dulled for white, which is the finding `.journal`'s palette already records, so the light values
    are deeper and purer, and the dark ones lifted.
 
    Measured rather than judged, as that palette also claims: every one of the eight clears **4.5:1**

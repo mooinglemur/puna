@@ -19,11 +19,11 @@
    Empty on almost every page, and deliberately so: an unfurl is a summary rendered to everyone who
    can see the message, including people who never click, so a page opts IN to being summarized
    rather than describing itself by default. `/room/<id>` and `/tracker/<id>` say nothing here on
-   purpose — a room link pasted in a channel should not announce the room's name and state to it.
+   purpose: a room link pasted in a channel should not announce the room's name and state to it.
 
    The pages that do fill this in are the ones whose whole job is to be sent to somebody: a claim
    link and an invite. Without it, those unfurl as Discord's own login page, because that is where
-   the redirect ended up — see routes/rooms.rs.
+   the redirect ended up. See routes/rooms.rs.
 
    No `og:image`: Discord renders a compact card without one, which is the right shape for a line
    of text, and a decorative image on a link that grants something would be dressing. #}

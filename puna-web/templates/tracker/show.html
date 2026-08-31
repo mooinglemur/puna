@@ -95,13 +95,13 @@ need to.</p>
              so its absence here is what keeps an outsider's tracker the page it always was.
 
              Sorted on the handle rather than on the ping chip beside it: the chip is a property of a
-             person and the column is a list of people, and `PingPreference`'s values are not a scale
-             — ordering by them would invent a ranking nobody expressed. That takes a `sortValues`
+             person and the column is a list of people, and `PingPreference`'s values are not a
+             scale, so ordering by them would invent a ranking nobody expressed. That takes a `sortValues`
              entry in `tracker.js` and did not have one, so it sorted on the owner OBJECT and
              ordered nothing at all while drawing an arrow that said otherwise.
 
              **"Held by" to match the room page's roster**, which answers the same question about the
-             same slots — a reader moving between the two pages should not have to work out that two
+             same slots, and a reader moving between the two pages should not have to work out that two
              headings mean one thing. The key moved with the label: it is `held_by`, and it no longer
              names a field on the row, which is exactly why the sort has to be spelled out. #}
           {% if annotations %}<th data-key="held_by">Held by</th>{% endif %}
@@ -116,7 +116,7 @@ need to.</p>
            here, and a "Total" beneath a single row is noise.
 
            Rendered `hidden` and revealed by `tracker.js` once it has rows, so a table waiting on
-           its first fetch does not show a line of zeros — which reads as a finished multiworld
+           its first fetch does not show a line of zeros, which reads as a finished multiworld
            with nothing in it rather than as one that has not loaded. Cells are found by CLASS
            rather than by position, so inserting a column cannot silently shift the summary
            underneath the wrong heading. #}
@@ -125,7 +125,7 @@ need to.</p>
           <tr>
             <td colspan="2" class="label">Total</td>
             {# Nothing to total: the column is a list of people. Present so the cells below it stay
-               under their own headings — `the_tracker_summary_fills_every_cell_it_declares` counts
+               under their own headings: `the_tracker_summary_fills_every_cell_it_declares` counts
                this against the `<th>`s, and both sit inside the same condition so the two move
                together whatever the flag says. #}
             {% if annotations %}<td></td>{% endif %}
@@ -144,7 +144,7 @@ need to.</p>
   </section>
 
 {# --- the annotation dialog -----------------------------------------------------------------------
-   **One dialog for the whole table**, filled per row by `tracker.js` — the same shape the room
+   **One dialog for the whole table**, filled per row by `tracker.js`: the same shape the room
    page's moderation dialog takes, and for the same reason: a set per slot would be a form on every
    row of a table that may have hundreds.
 

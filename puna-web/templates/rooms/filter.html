@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{# The prose measure is wrong for six columns of controls — it cut the direction picker off mid-word,
+{# The prose measure is wrong for six columns of controls: it cut the direction picker off mid-word,
    where the word is the whole point of carrying pahoa's `from_slot` / `to_slot` with their gloss
    attached. Same opt-out the bulk panel and the admin tables take. #}
 {% block layout %}wide{% endblock %}
@@ -11,8 +11,8 @@
 {% block content %}
 
 {# **The scope is the heading, not a footnote under it.** The room name is the bold thing on the
-   page and a reader's eye stops there, so a slot named only in dimmed text below it gets skipped —
-   reported after the first look at this page, where somebody read the whole thing and still did not
+   page and a reader's eye stops there, so a slot named only in dimmed text below it gets skipped.
+   Reported after the first look at this page, where somebody read the whole thing and still did not
    know which slot they were editing. It sits inside the `<h1>` rather than beside it so the page
    still has exactly one top-level heading and a screen reader announces both halves together. #}
 <h1>{{ room_name }}<span class="scope">{{ scope }}</span></h1>
@@ -66,7 +66,7 @@ makes these apply to this slot <strong>at once</strong>:</p>
       action="{% if let Some(n) = slot %}/room/{{ room_id }}/slot/{{ n }}/filter{% else %}/room/{{ room_id }}/filter{% endif %}">
 
 {# **The form's default button, claimed deliberately.** Enter in any field activates the first
-   submit button in tree order, and the first one below is a row's remove — so without this, Enter
+   submit button in tree order, and the first one below is a row's remove, so without this, Enter
    in the tag box would delete rule 1. It carries no name, so activating it is exactly Save, which
    is what Enter should do here. Never rendered and never focusable: it is the shape of a keystroke,
    not a control. #}

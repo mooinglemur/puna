@@ -29,8 +29,8 @@
    is dropping them. Staff-only, because it explains nothing to a player and a filter is not part of
    what a room advertises.
 
-   **A helper sees it and cannot follow it.** The editor is organizer-tier — a room filter is
-   configuration, and it persists into the save — but a helper fielding that question needs to know
+   **A helper sees it and cannot follow it.** The editor is organizer-tier, a room filter being
+   configuration that persists into the save, but a helper fielding that question needs to know
    one exists, so they get the chip and its hover without a link that would answer 403. #}
 {% if let Some(summary) = room_filter %}
 {% if is_organizer %}
@@ -113,7 +113,7 @@
 {# **The lobby import's leftovers, to staff, as soon as the room opens.**
 
    An import claims what it can match and reports what it cannot, rather than refusing outright over
-   a couple of edge cases — nobody wants to send a hundred claim links because two names diverged.
+   a couple of edge cases: nobody wants to send a hundred claim links because two names diverged.
    So the leftovers have to be said somewhere the organizer will actually be, and that is here: they
    land on this page the moment the room is created.
 
@@ -598,7 +598,7 @@ unclaimed
    its absence is what makes this behave differently.
 
    **This is the only way to give a slot its FIRST filter.** The chip beside the player's name links
-   here too, and the chip only renders once a slot already diverges — so without this entry the
+   here too, and the chip only renders once a slot already diverges, so without this entry the
    editor was reachable for exactly the slots that did not need it. #}
 <a class="act" href="/room/{{ room.id }}/slot/{{ slot.slot_number }}/filter"
    title="Filter traffic: drop or thin what this slot sends or receives.">

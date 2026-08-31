@@ -1,6 +1,6 @@
 {# The rule editor: one table of rules, edited in place and saved in one go.
 
-   **One definition, three callers** — the room's filter, one slot's, and the bulk panel — which is
+   **One definition, three callers** (the room's filter, one slot's, and the bulk panel) which is
    what Troy asked for and is also the only way the three stay the same: a rule typed on the panel
    and a rule typed on a slot's page have to mean the same thing, and three copies of these knobs
    would drift the first time pahoa gains a matcher.
@@ -35,7 +35,7 @@
 </thead>
 <tbody data-rules>
 {# **One loop, including the blank trailing row.** The blank one was separate markup at first,
-   differing only in a `value=` and which cells started disabled — and a mutation showed the price
+   differing only in a `value=` and which cells started disabled, and a mutation showed the price
    at once: renaming a field in one copy left the other spelling it right, so a lint asserting the
    name still passed while every real row posted something the route does not read. The server
    builds the blank row now (`editor_rows`), so there is one set of field names on the page. #}
@@ -68,11 +68,11 @@
 
    A **submit button carrying its own field**, which is the part worth knowing: only the clicked
    submit contributes its `name`/`value`, so `rules[N].remove=true` names the row that was pressed
-   with no index plumbing anywhere. With scripting it never submits at all — the row is taken out of
+   with no index plumbing anywhere. With scripting it never submits at all: the row is taken out of
    the table and the change goes with the next save.
 
    It is a submit button, so it would be the form's DEFAULT button and Enter in any field would
-   delete the first rule — M20's lesson in a new place. Each host form puts an inert submit ahead of
+   delete the first rule: M20's lesson in a new place. Each host form puts an inert submit ahead of
    the table to take that role. #}
 <td class="remove"><button type="submit" class="remove-row" name="rules[{{ row.index }}].remove" value="true"
         data-rule-remove title="Remove this rule" aria-label="Remove this rule">
@@ -87,8 +87,8 @@
 </table>
 </div>
 
-{# **Suggestions, never a picker.** A tag is whatever its sender chose — pahoa calls the list a
-   convention rather than a schema — so the next link type has to be typeable before Puna hears
+{# **Suggestions, never a picker.** A tag is whatever its sender chose, and pahoa calls the list a
+   convention rather than a schema, so the next link type has to be typeable before Puna hears
    about it. Subtypes are a closed set and are still offered this way, because a value the room does
    not recognize is a rule that matches nothing rather than an error. #}
 <datalist id="bounce-tags">
@@ -107,7 +107,7 @@
 {% if empty_means_choice %}
 {# **An empty table is ambiguous here, and the ambiguity is the whole feature.** No rules can mean
    "this slot follows whatever the room does" or "this slot is filtered by nothing at all, even
-   though the room filters" — the only way to say "everybody except this one". So an empty table
+   though the room filters", the only way to say "everybody except this one". So an empty table
    has to be told apart, and a state already chosen is pre-selected while a table just emptied by
    hand is not: `required` then does real work in exactly the case that is genuinely unanswered. #}
 <fieldset class="empty-meaning" data-empty-meaning{% if has_rules +%} hidden{% endif %}>
@@ -116,7 +116,7 @@
    written. Imperative labels sidestep the number agreement entirely. #}
 <legend>With no rules:</legend>
 {# **`required` only where this form has one submit button.** The bulk panel is a single form with
-   eight other action buttons in it, and a required control blocks EVERY submit in its form — so
+   eight other action buttons in it, and a required control blocks EVERY submit in its form, so
    marking these required there would make Lock and Kick silently refuse to submit whenever the
    filter table happened to be empty, which it always is. There it is refused by the route instead,
    with a sentence. #}
