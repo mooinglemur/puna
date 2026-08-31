@@ -377,7 +377,7 @@ impl Rule {
             Some(p) if p >= 1.0 => format!("drop every {what} {way}"),
             Some(p) if p <= 0.0 => format!("keep every {what} {way} (this rule drops nothing)"),
             Some(p) => format!(
-                "drop {:.0}% of {what} {way} — about {:.0}% still get through",
+                "drop {:.0}% of {what} {way}, so about {:.0}% still get through",
                 p * 100.0,
                 (1.0 - p) * 100.0
             ),
@@ -401,7 +401,7 @@ impl Rule {
         if !self.kind.travels(self.direction) {
             let sends = self.kind.travels(Direction::FromSlot);
             return Err(format!(
-                "a {} cannot travel {} — it is something a slot {}, so this rule could never \
+                "a {} cannot travel {}: it is something a slot {}, so this rule could never \
                  match. Use {} instead.",
                 self.kind.label(),
                 self.direction.as_str(),

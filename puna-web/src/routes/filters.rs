@@ -367,7 +367,7 @@ pub(crate) fn collect_rules(rules: &[RuleFields]) -> std::result::Result<Vec<Rul
         let matcher = rule.matcher();
         if let Some(earlier) = collected.iter().position(|r| r.matcher() == matcher) {
             return Err(format!(
-                "row {row} matches the same thing as row {} — the room keeps one rule per match, \
+                "row {row} matches the same thing as row {}. The room keeps one rule per match, \
                  so give them different tags or subtypes, or remove one",
                 earlier + 1
             ));
@@ -590,7 +590,7 @@ async fn edit_room(
         }
     } else {
         format!(
-            " It does not reach {} that {} a filter of their own — they are listed below.",
+            " It does not reach {} that {} a filter of their own; they are listed below.",
             puna_core::text::count(missed, "slot"),
             puna_core::text::plural(missed, "has", "have"),
         )
@@ -735,7 +735,7 @@ async fn edit_slot(
         }
         (SlotFilter::Exempt, false) => "Saved. This slot is exempt from everything.",
         (SlotFilter::Own(_), true) => {
-            "Saved. These rules REPLACE the room's for this slot — the room's filter no longer \
+            "Saved. These rules REPLACE the room's for this slot: the room's filter no longer \
              applies to it."
         }
         (SlotFilter::Own(_), false) => "Saved.",

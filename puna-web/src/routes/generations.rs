@@ -406,7 +406,7 @@ async fn rebuild_all_names(
         Flash::warning(
             back,
             format!(
-                "Rebuilt {}; {failed} failed — see the log for which and why.",
+                "Rebuilt {}. {failed} failed; see the log for which and why.",
                 puna_core::text::count(rebuilt, "generation")
             ),
         )
@@ -454,7 +454,7 @@ async fn rebuild_names(
         Flash::error(
             back,
             format!(
-                "Could not rebuild the names for {} — see the log for why.",
+                "Could not rebuild the names for {}; see the log for why.",
                 generation.seed_name
             ),
         )

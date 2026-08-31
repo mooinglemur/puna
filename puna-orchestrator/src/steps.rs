@@ -421,7 +421,7 @@ async fn start(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
                 action,
                 &format!(
                     "the load balancer will not give this room an address: {} ({}). This is not a \
-                     port conflict — check PUNA_LB_IP, PUNA_LB_SHARING_KEY and the Service's \
+                     port conflict. Check PUNA_LB_IP, PUNA_LB_SHARING_KEY and the Service's \
                      lb-pool label, which are the same for every room here.",
                     refusal.message, refusal.reason
                 ),

@@ -819,7 +819,7 @@ async fn run_inner(
             "ok": false,
             "pending": true,
             "heading": "Still running",
-            "lines": ["This is taking longer than usual. It has not been lost — it will appear in \
+            "lines": ["This is taking longer than usual. It has not been lost, and will appear in \
                       the room's command history when it finishes."],
             "command": id.to_string(),
         }),

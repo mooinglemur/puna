@@ -462,7 +462,7 @@ async fn apply(
         return Ok(Flash::warning(
             Redirect::to(back),
             format!(
-                "This room is {}. Bulk actions need a running room — nothing was done.",
+                "This room is {}. Bulk actions need a running room, so nothing was done.",
                 access.room.state
             ),
         ));
@@ -507,7 +507,7 @@ async fn apply(
             Redirect::to(back),
             format!(
                 "{} applied to {} and stored. This room is not running, so there was \
-                 nothing to tell — it takes effect the next time it starts.",
+                 nothing to tell; it takes effect the next time it starts.",
                 label_for(&form.action),
                 puna_core::text::count(commands.len(), "slot")
             ),

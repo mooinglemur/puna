@@ -2002,7 +2002,7 @@ async fn set_live_options(
     );
     Ok(Flash::success(
         Redirect::to(format!("/room/{id}/options")),
-        "Saved. These took effect immediately — nobody was disconnected.",
+        "Saved. These took effect immediately, and nobody was disconnected.",
     ))
 }
 
@@ -2041,7 +2041,7 @@ async fn set_restart_options(
     if !mode_changed && !password_changed {
         return Ok(Flash::success(
             Redirect::to(format!("/room/{id}/options")),
-            "Nothing to change — the room already has these settings, so it was left alone.",
+            "Nothing to change: the room already has these settings, so it was left alone.",
         ));
     }
 
