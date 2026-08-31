@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ room_name +}} &mdash; console{% endblock %}
+{% block title %}Console: {{+ room_name }}{% endblock %}
 {# `wide`: fifteen forms side by side with their descriptions. The 62rem prose measure is for
    paragraphs and this page is a control panel, the same opt-out the admin tables take. #}
 {% block layout %}wide{% endblock %}

@@ -11,7 +11,14 @@
    redirect ended. A page that answers for itself fixes both, and needs no user-agent sniffing to
    do it — the crawler and the person are served the same bytes. #}
 
-{% block title %}{{ headline +}} &mdash; {{+ base.site_name }}{% endblock %}
+{# **The tab and the unfurl part company here, deliberately.** `og:title` below stays `headline` --
+   "Claim Kai in Friday async", which is what a chat card should say -- while the tab takes the same
+   `<page>: <room>` shape every other room page uses.
+
+   `room` is absent for a link that is spent, expired or bogus, and that is not an oversight: the
+   route does not look one up, because saying which room a dead token belonged to would answer *was
+   this ever real* for anybody who asked. So the tab is the bare page name there. #}
+{% block title %}{{ page }}{% if let Some(room) = room_name %}: {{+ room }}{% endif %}{% endblock %}
 
 {# **The unfurl, which is the reason the page is server-rendered at all.**
 

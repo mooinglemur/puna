@@ -1575,6 +1575,8 @@ async fn invite_page(token: &str, session: Session, pool: &State<Pool>) -> Resul
         Some(offer) => RedeemTemplate {
             base: TplContext::new(&session),
             headline: format!("Help run {}", offer.room_name),
+            page: "Invite",
+            room_name: Some(offer.room_name.clone()),
             summary: format!(
                 "You have been invited to join the staff of {} on {}.",
                 offer.room_name,
@@ -1584,7 +1586,7 @@ async fn invite_page(token: &str, session: Session, pool: &State<Pool>) -> Resul
             confirm: "Accept the invitation".into(),
             offered: true,
         },
-        None => RedeemTemplate::spent(&session, "This invitation is no longer usable"),
+        None => RedeemTemplate::spent(&session, "Invite", "This invitation is no longer usable"),
     })
 }
 
@@ -1624,6 +1626,8 @@ async fn claim_page(token: &str, session: Session, pool: &State<Pool>) -> Result
         Some(offer) => RedeemTemplate {
             base: TplContext::new(&session),
             headline: format!("Claim {} in {}", offer.player_name, offer.room_name),
+            page: "Claim",
+            room_name: Some(offer.room_name.clone()),
             summary: format!(
                 "Slot {} — {}, playing {}. Claiming it links the slot to your Discord account, so \
                  you can download its patch and read its password.",
@@ -1633,7 +1637,7 @@ async fn claim_page(token: &str, session: Session, pool: &State<Pool>) -> Result
             confirm: format!("Claim {}", offer.player_name),
             offered: true,
         },
-        None => RedeemTemplate::spent(&session, "This claim link is no longer usable"),
+        None => RedeemTemplate::spent(&session, "Claim", "This claim link is no longer usable"),
     })
 }
 
@@ -1742,7 +1746,20 @@ pub struct RedeemTemplate {
     base: TplContext,
     /// The unfurl's title, and the page's heading. One string for both, so a card cannot say
     /// something the page does not.
+    ///
+    /// **Not the `<title>`** — that is [`Self::page`] and [`Self::room_name`], which take the
+    /// `<page>: <room>` shape the rest of the room's pages use. The two are separate because they
+    /// are read in different places: a chat card wants "Claim Kai in Friday async", and a tab wants
+    /// the half that survives truncation.
     headline: String,
+    /// Which kind of link this is, for the tab: `Claim` or `Invite`.
+    page: &'static str,
+    /// The room, where there is one to name.
+    ///
+    /// **`None` for a link that is spent, expired or never existed**, and that follows from
+    /// [`Self::spent`] rather than being a separate decision: those three answer alike precisely so
+    /// that nothing distinguishes them, and a room name in the tab would distinguish them.
+    room_name: Option<String>,
     summary: String,
     /// Where the confirming `POST` goes, and the address to come back to after a login.
     action: String,
@@ -1757,10 +1774,14 @@ impl RedeemTemplate {
     /// **One answer for all three.** They want different words for whoever *minted* the link and
     /// none at all for somebody holding a bad one — distinguishing them would answer "is this a
     /// real token" for anyone who cared to ask, which is the only question a stranger has.
-    fn spent(session: &Session, headline: &str) -> Self {
+    fn spent(session: &Session, page: &'static str, headline: &str) -> Self {
         Self {
             base: TplContext::new(session),
             headline: headline.into(),
+            // Which KIND of link it was, which the tab can say without naming anything. That the
+            // room is `None` here is the whole point: see the field.
+            page,
+            room_name: None,
             summary: "It may have been used already, or it may have expired.".into(),
             action: String::new(),
             confirm: String::new(),
@@ -2674,6 +2695,8 @@ pub(crate) mod tests {
         let page = RedeemTemplate {
             base: crate::tpl::TplContext::new(&Session::default()),
             headline: "Claim MooingYacht1 in Friday async".into(),
+            page: "Claim",
+            room_name: Some("Friday async".into()),
             summary: "Slot 3 — MooingYacht1, playing Balatro.".into(),
             action: "/claim/tok".into(),
             confirm: "Claim MooingYacht1".into(),
@@ -2712,12 +2735,22 @@ pub(crate) mod tests {
     fn a_spent_link_offers_nothing_and_distinguishes_nothing() {
         use askama::Template;
 
-        let html =
-            RedeemTemplate::spent(&Session::default(), "This claim link is no longer usable")
-                .render()
-                .expect("renders");
+        let html = RedeemTemplate::spent(
+            &Session::default(),
+            "Claim",
+            "This claim link is no longer usable",
+        )
+        .render()
+        .expect("renders");
 
         assert!(html.contains("no longer usable"));
+        // **The tab names the kind of link and no room**, which is the same refusal to distinguish
+        // wearing different clothes: every other room page titles itself `<page>: <room>`, and a
+        // room name here would say that this token was once real.
+        assert!(
+            html.contains("<title>Claim</title>"),
+            "a spent link's tab is not the bare page name: {html:.300}"
+        );
         assert!(
             !html.contains("<form"),
             "a spent link still renders a control that cannot work"

@@ -1,5 +1,10 @@
 {% extends "base.html" %}
-{% block title %}{{ base.site_name +}} admin{% endblock %}
+{# **The site name stays on every admin tab**, which is why these read `<page>: <site> admin` rather
+   than `<page>: admin`. It is there so a page cannot be mistaken for the other environment's at a
+   glance — the reason `PUNA_SITE_NAME` is configuration at all — and the room pages have no
+   equivalent to lose, since they never carried it. The page still leads, which is the whole point of
+   the reshuffle. #}
+{% block title %}Admin: {{+ base.site_name }}{% endblock %}
 {% block content %}
 <h1>Administration</h1>
 <p>Signed in as {{+ base.username +}} (administrator).</p>

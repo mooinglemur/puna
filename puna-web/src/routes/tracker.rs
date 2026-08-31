@@ -2035,6 +2035,30 @@ mod tests {
         ));
     }
     /// Build a tracker page for one slot, or for the whole multiworld.
+    /// **A slot's tracker and the multiworld's are two tabs, and were titled identically.**
+    ///
+    /// A player watching their own world beside the room's had no way to tell them apart — the same
+    /// complaint that put the page name in front of the room name everywhere on 2026-08-31, and the
+    /// one case where the page name alone still would not have been enough.
+    ///
+    /// The player is named on the page and in the document it fetches, so the tab discloses nothing
+    /// to somebody who is already holding the id that renders it.
+    #[test]
+    fn a_slots_tracker_says_whose_it_is_and_the_multiworlds_does_not() {
+        use askama::Template;
+
+        let title = |slot| {
+            let html = tracker_page(slot).render().expect("renders");
+            html.split_once("<title>")
+                .and_then(|(_, rest)| rest.split_once("</title>"))
+                .map(|(title, _)| title.to_string())
+                .expect("a title")
+        };
+
+        assert_eq!(title(None), "Tracker: Friday async");
+        assert_eq!(title(Some(3)), "Tracker (Troy): Friday async");
+    }
+
     fn tracker_page(slot: Option<i32>) -> TrackerTemplate {
         TrackerTemplate {
             base: TplContext {

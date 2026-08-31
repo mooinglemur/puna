@@ -191,9 +191,17 @@ pub struct FilterTemplate {
     /// **inside the `<h1>`**, because a slot named only in the dimmed line under the room name is a
     /// slot readers do not see.
     ///
-    /// It is also the `<title>`, with the room name after it — so it carries no trailing
-    /// punctuation of its own and nothing that would read as a separator twice.
+    /// **No longer the `<title>`** — see [`Self::page`], which is the short form. This one stays
+    /// long on purpose, and the two are separate fields because a heading and a tab are truncated
+    /// by different things: nothing truncates the heading, and everything truncates the tab.
     scope: String,
+    /// The same page, named for a tab: `Room filter`, or `Slot 3 filter`.
+    ///
+    /// The player's name is deliberately absent here where [`Self::scope`] carries it. A title is
+    /// read at a glance and cut from the right, so every character before the room name is one the
+    /// room name may not survive — and the player is named twice on the page itself, in the heading
+    /// and in the roster the reader came from.
+    page: String,
     /// `None` for the room's own filter; the slot number otherwise. The template branches on it for
     /// every difference between the two scopes, so there is one page rather than two that drift.
     slot: Option<i32>,
@@ -507,6 +515,7 @@ async fn show_room(
         room_id: room.id.to_string(),
         room_name: room.name.clone(),
         scope: "Room filter".to_string(),
+        page: "Room filter".to_string(),
         slot: None,
         // The room's own page, which is about everybody rather than about a slot.
         effective: views(&rules, Subject::AnySlot),
@@ -618,12 +627,12 @@ async fn show_slot(
         base: TplContext::new(access.session.session()),
         room_id: room.id.to_string(),
         room_name: room.name.clone(),
-        // **Parenthesised rather than dashed**, for two reasons beyond the em dash itself: this
-        // string is also the `<title>`, where the template puts the room name after it, so a dash
-        // here produced `Filter for slot 3 — Troy — Friday async`. And it keeps "Filter for", which
-        // is what makes it a sibling of `Room filter` above rather than a bare slot label on a page
-        // whose own identity would then rest on the `<h2>`.
+        // **Parenthesised rather than dashed**, and it keeps "Filter for", which is what makes it a
+        // sibling of `Room filter` above rather than a bare slot label on a page whose own identity
+        // would then rest on the `<h2>`.
         scope: format!("Filter for slot {n} ({})", slot.player_name),
+        // The tab's form. Short, and the player is left to the heading: see the field's own note.
+        page: format!("Slot {n} filter"),
         slot: Some(n),
         rules: editor_rows(match &state {
             SlotFilter::Own(rules) => rules,
@@ -999,6 +1008,10 @@ mod tests {
             room_name: "Initial Sync".into(),
             scope: match slot {
                 Some(n) => format!("Filter for slot {n} (MooingYacht1)"),
+                None => "Room filter".into(),
+            },
+            page: match slot {
+                Some(n) => format!("Slot {n} filter"),
                 None => "Room filter".into(),
             },
             slot,

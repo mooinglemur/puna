@@ -1,5 +1,9 @@
 {% extends "base.html" %}
-{% block title %}{{ room_name +}} &mdash; tracker{% endblock %}
+{# **A slot's tracker names the slot**, because it is otherwise titled identically to the whole
+   multiworld's -- and a player watching their own world alongside the room's had no way to tell the
+   two tabs apart. The player name is already on the page and in the document this fetches, so it
+   discloses nothing the reader is not already holding the id for. #}
+{% block title %}Tracker{% if let Some(slot) = slot_name +%} ({{ slot }}){% endif %}: {{+ room_name }}{% endblock %}
 {# Tables, not prose -- the same reason the admin pages and the room page opt out of the 62rem
    measure. A slot's location list is two narrow columns and thousands of rows; holding it to a
    paragraph's width helps nobody. #}

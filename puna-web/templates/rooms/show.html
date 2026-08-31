@@ -1,5 +1,9 @@
 {% extends "base.html" %}
-{% block title %}{{ room.name }}{% endblock %}
+{# **`<page>: <room>`, and the page name leads on every room-scoped tab.** A browser truncates a
+   title from the right, so the half that survives has to be the half that says which page this is --
+   the older `<room> &mdash; tracker` shape spent its first twenty characters on the thing every one
+   of a room's tabs has in common. #}
+{% block title %}Room: {{+ room.name }}{% endblock %}
 {# **Always wide.** This was briefly conditional on `is_staff`, on the theory that a player's view is
    prose-shaped and wants the 62rem measure. It is not: the page is a heading, an address and a
    roster, and the only long-form text on it sits inside a collapsed section. A table given the room

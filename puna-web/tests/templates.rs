@@ -297,6 +297,45 @@ fn renders_text(content: &str) -> bool {
     !rendered.trim().is_empty()
 }
 
+/// Replace every `{% ... %}` span with spaces, so what is left is what the template renders.
+///
+/// Indices survive, which is the point: the callers compare positions inside the original string.
+fn blank_tags(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut i = 0;
+
+    while i < source.len() {
+        if source[i..].starts_with("{%") {
+            let end = source[i..]
+                .find("%}")
+                .map_or(source.len(), |offset| i + offset + 2);
+            out.extend(
+                source[i..end]
+                    .chars()
+                    .map(|c| if c == '\n' { '\n' } else { ' ' }),
+            );
+            i = end;
+        } else {
+            let c = source[i..].chars().next().expect("in bounds");
+            out.push(c);
+            i += c.len_utf8();
+        }
+    }
+    out
+}
+
+/// Every `{{ ... }}` in a string, as `(offset, the trimmed expression)`.
+///
+/// The `+` whitespace markers are stripped, so `{{+ room_name +}}` reads as `room_name` — a caller
+/// asking *which value is this* should not have to know how its spacing was spelled.
+fn expressions(source: &str) -> impl Iterator<Item = (usize, &str)> {
+    source.match_indices("{{").filter_map(|(at, _)| {
+        let rest = &source[at + 2..];
+        let end = rest.find("}}")?;
+        Some((at, rest[..end].trim_matches(['+', ' ', '\t'])))
+    })
+}
+
 /// Content that actually renders, as opposed to markup or another tag.
 ///
 /// `>` and `<` are excluded because HTML collapses whitespace around a tag boundary anyway, and
@@ -2198,6 +2237,77 @@ fn every_progression_has_a_tint_and_every_tint_a_progression() {
             "`prog-{tone}` is styled and no progression emits it"
         );
     }
+}
+
+/// **A tab says which page before it says which room.**
+///
+/// A browser truncates a title from the right, so the surviving half has to be the half that
+/// distinguishes one of a room's tabs from another. Titles used to read `<room> &mdash; tracker`,
+/// which spent their first twenty characters on the thing every tab of that room had in common —
+/// `Friday async — con…` and `Friday async — mem…` are the same string to a reader.
+///
+/// Two rules, and neither is expressible as "every title matches a format": some pages have no room
+/// (`Your rooms`), one leads with an expression that *is* the page name (the batch page's action),
+/// and one omits the room deliberately (a spent claim link).
+///
+/// 1. **No em dash in a title.** It was the old shape's separator, so its return is the regression.
+/// 2. **Where a title names the room, the room comes after a colon.** That is the ordering, checked
+///    positionally rather than by matching a whole format.
+///
+/// Neither can be caught by rendering: the page is correct either way, and the cost is paid by
+/// somebody squinting at a strip of tabs.
+#[test]
+fn a_tab_names_its_page_before_the_room_it_belongs_to() {
+    let mut titles = 0;
+    let mut with_a_room = 0;
+
+    for path in templates() {
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("could not read {path:?}: {e}"));
+        let Some(block) = source
+            .split_once("{% block title %}")
+            .and_then(|(_, rest)| rest.split_once("{% endblock %}"))
+            .map(|(block, _)| block)
+        else {
+            continue;
+        };
+        titles += 1;
+        let name = label(&path);
+
+        assert!(
+            !block.contains("&mdash;"),
+            "{name}: the title is back to the dashed shape, which puts the room first: {block}"
+        );
+
+        // **Control tags are blanked first, and that is not tidiness.** The redeem page's title is
+        // `{{ page }}{% if let Some(room) = room_name %}: {{+ room }}{% endif %}` -- the earliest
+        // mention of `room_name` is the *binding*, which renders nothing and sits before the colon
+        // that the value it binds sits after. Reading the raw text failed that page for having the
+        // right order.
+        let rendered = blank_tags(block);
+
+        // Which expression is the room has to be named: a title's other expressions are page names
+        // (the batch page's action) and site names, and nothing in the string says which is which.
+        let Some(at) = expressions(&rendered)
+            .find(|(_, expr)| matches!(*expr, "room.name" | "room_name" | "room"))
+            .map(|(at, _)| at)
+        else {
+            continue;
+        };
+        with_a_room += 1;
+
+        assert!(
+            rendered[..at].contains(':'),
+            "{name}: the room is named before the page is, so a truncated tab says which room and \
+             not which page: {block}"
+        );
+    }
+
+    assert!(
+        titles >= 20 && with_a_room >= 9,
+        "read {titles} titles and {with_a_room} that name a room -- this lint is no longer looking \
+         at anything"
+    );
 }
 
 /// **The sort direction is `compare`'s to apply, and negating its answer breaks a rule it states.**

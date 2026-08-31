@@ -571,9 +571,13 @@ mod tests {
             html.contains(">Example Multiworld</a>"),
             "the brand link is the configured name"
         );
+        // **The page leads and the name survives**, which is the shape every title took on
+        // 2026-08-31: a tab is cut from the right, so "which page" has to come before "which
+        // deployment". The admin pages are the ones that carry the site name at all -- a room page
+        // has a room name in that slot and never had one to lose.
         assert!(
-            html.contains("<title>Example Multiworld admin"),
-            "and so is the tab: {html:.400}"
+            html.contains("<title>Rooms: Example Multiworld admin</title>"),
+            "and so is the tab, after the page it names: {html:.400}"
         );
 
         // The name is a link to the room. An admin reading this table almost always wants the room

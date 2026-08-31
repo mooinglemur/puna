@@ -3,7 +3,11 @@
    where the word is the whole point of carrying pahoa's `from_slot` / `to_slot` with their gloss
    attached. Same opt-out the bulk panel and the admin tables take. #}
 {% block layout %}wide{% endblock %}
-{% block title %}{{ scope +}} &mdash; {{+ room_name }}{% endblock %}
+{# `page` and not `scope`: the heading wants the long form, naming the slot AND the player, because
+   somebody reading this page has to know which slot they are editing. A tab has room for neither --
+   it is truncated from the right, so "Filter for slot 3 (Troy): Frida..." loses the room, which is
+   the half the other tabs are distinguished by. #}
+{% block title %}{{ page }}: {{+ room_name }}{% endblock %}
 {% block content %}
 
 {# **The scope is the heading, not a footnote under it.** The room name is the bold thing on the
