@@ -5,7 +5,9 @@
 {% block content %}
 
 <h1>{{ room_name }}</h1>
-<p class="hint"><a href="/room/{{ room_id }}">Back to the room</a> &mdash; bulk actions</p>
+{# Where you are, then the way back. The page name leads for the same reason the tab's does: it is
+   what tells this page apart from the room's others, and the link says the same thing either way. #}
+<p class="hint">Bulk actions. <a href="/room/{{ room_id }}">Back to the room</a></p>
 
 {% if let Some(notice) = notice %}
 <p class="{{ notice.class }}">{{ notice.message }}</p>
@@ -61,8 +63,8 @@ The room page's per-slot controls work without it.</p>
 <option value="{{ slot.slot_number }}"
         data-game="{{ slot.game }}"
         data-claimed="{{ slot.claimed }}"
-        data-owner="{{ slot.owner_name.as_deref().unwrap_or_default() }}">{{ slot.slot_number +}}
-&mdash; {{+ slot.player_name +}} ({{ slot.game }})</option>
+        data-owner="{{ slot.owner_name.as_deref().unwrap_or_default() }}">{{ slot.slot_number }}:
+{{+ slot.player_name +}} ({{ slot.game }})</option>
 {% endfor %}
 </select>
 

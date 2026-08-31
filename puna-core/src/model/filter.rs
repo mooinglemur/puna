@@ -67,8 +67,8 @@ impl Direction {
     /// [`Rule::describe`] is where the subject belongs, and it takes one.
     pub fn label(self) -> &'static str {
         match self {
-            Self::FromSlot => "from_slot — what a slot sends",
-            Self::ToSlot => "to_slot — what reaches a slot",
+            Self::FromSlot => "from_slot: what a slot sends",
+            Self::ToSlot => "to_slot: what reaches a slot",
         }
     }
 

@@ -20,7 +20,7 @@
 <select name="slot" required>
 <option value="">&mdash;</option>
 {% for slot in slots %}
-<option value="{{ slot.0 }}"{% if preselect_slot == Some(*slot.0) +%} selected{% endif %}>{{ slot.0 +}} &mdash; {{+ slot.1 }}</option>
+<option value="{{ slot.0 }}"{% if preselect_slot == Some(*slot.0) +%} selected{% endif %}>{{ slot.0 }}: {{+ slot.1 }}</option>
 {% endfor %}
 </select>
 </label>
@@ -29,7 +29,7 @@
 {% block content %}
 
 <h1>{{ room_name }}</h1>
-<p class="hint"><a href="/room/{{ room_id }}">Back to the room</a> &mdash; console</p>
+<p class="hint">Console. <a href="/room/{{ room_id }}">Back to the room</a></p>
 
 {% if room_state != "running" %}
 {# Stated rather than enforced by hiding the forms: a command against a stopped room is REJECTED

@@ -509,7 +509,7 @@ mod tests {
             "the space before the configured tag survives suppression"
         );
         assert!(
-            html.contains("</code>\n&mdash;") || html.contains("</code> &mdash;"),
+            html.contains("</code>\n(") || html.contains("</code> ("),
             "and so does the one after it"
         );
 

@@ -138,7 +138,7 @@ theirs to lose.</p>
 new rooms or upload generations. Nothing is deleted.</p>
 <input type="hidden" name="user_id" value="{{ row.id }}">
 <input type="hidden" name="status" value="restricted">
-<label for="restrict-note-{{ row.id }}">Reason &mdash; shown to them</label>
+<label for="restrict-note-{{ row.id }}">Reason (shown to them)</label>
 <input type="text" id="restrict-note-{{ row.id }}" name="note" autocomplete="off">
 <p class="buttons">
 <button type="submit">Restrict</button>
@@ -165,7 +165,7 @@ seconds. Their rooms, slots and memberships survive &mdash; a room somebody else
 not theirs to lose.</p>
 <input type="hidden" name="user_id" value="{{ row.id }}">
 <input type="hidden" name="status" value="banned">
-<label for="ban-note-{{ row.id }}">Reason &mdash; shown to them</label>
+<label for="ban-note-{{ row.id }}">Reason (shown to them)</label>
 <input type="text" id="ban-note-{{ row.id }}" name="note" autocomplete="off">
 <p class="buttons">
 <button type="submit">Ban</button>

@@ -31,8 +31,8 @@ it.</p>
 {% if may_download %}
 <p>
 {% if let Some(size) = size %}
-<a href="/journal/{{ room.journal_id }}/download" download>Download the feed history</a>
-<span class="hint">&mdash; {{+ size|filesizeformat +}} on disk, sent compressed. One JSON object per
+<a href="/journal/{{ room.journal_id }}/download" download>Download the feed history</a>:
+<span class="hint">{{ size|filesizeformat +}} on disk, sent compressed. One JSON object per
 line, including chat and hints.</span>
 {% else %}
 <span class="hint">There is no feed history to download yet. It is written while the room

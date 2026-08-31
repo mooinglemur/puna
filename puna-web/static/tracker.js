@@ -622,7 +622,7 @@
       // Posted per slot, so the URL carries which one and the form carries only its values.
       form.action = `${root.dataset.write}/slot/${encodeURIComponent(edit.slot)}/annotation`;
       // `textContent`: a player name is text out of an uploaded seed.
-      if (target) target.textContent = `Slot ${edit.slot} — ${edit.name}`;
+      if (target) target.textContent = `Slot ${edit.slot}: ${edit.name}`;
 
       // **Opened on what is stored, not on the defaults.** A dialog that came up blank would make
       // "save" quietly clear a note somebody wrote, since an empty box IS the delete.

@@ -12,7 +12,7 @@
 {% if let Some(notice) = notice %}
 <p class="{{ notice.class }}">{{ notice.message }}</p>
 {% endif %}
-<p class="hint"><a href="/room/{{ room_id }}/bulk">Back to bulk actions</a> &mdash; {{+ action }}</p>
+<p class="hint">{{ action }}. <a href="/room/{{ room_id }}/bulk">Back to bulk actions</a></p>
 
 {# --- the three buckets, and they are three on purpose ------------------------------------------
    **Refused is not failed.** A refusal is a completed command whose answer was no: the room
@@ -32,7 +32,7 @@
 {% if outcome.outstanding > 0 %}
 <span class="tally outstanding">{{ outcome.outstanding +}} still running</span>
 {% endif %}
-&mdash; {{+ outcome.total() +}} in total
+({{ outcome.total() +}} in total)
 </p>
 {% if !outcome.is_finished() %}
 {# The page reloads itself until nothing is outstanding. No JavaScript needed and none used: this

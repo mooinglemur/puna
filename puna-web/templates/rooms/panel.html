@@ -63,7 +63,7 @@
 <span data-room-message>
 {% if let Some(message) = message %}{{ message }}{% else %}This room is {{+ room.state }}{% endif %}
 </span>
-&mdash; <span data-room-elapsed>{{ elapsed }}</span></p>
+(<span data-room-elapsed>{{ elapsed }}</span>)</p>
 <p class="hint">This page updates on its own.</p>
 </div>
 {# Without JavaScript the page still moves, just less smoothly. Inside this branch only: a settled

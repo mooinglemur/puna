@@ -17,9 +17,9 @@
 {% if let Some(image) = desired_image %}
 {# Both `+` marks are load-bearing: the space before the `{% if %}` and the one after the
    `{% endif %}` are each adjacent to a tag, so `suppress` eats them and the line renders as
-   `runningsha-7bc9c967— registry...`. See base.html. #}
+   `runningsha-7bc9c967(registry...`. See base.html. #}
 <p>Rooms should be running {%+ if let Some(tag) = desired_tag %}<code>{{ tag }}</code>{% else %}<code>{{ image }}</code>{% endif +%}
-&mdash; <span class="hint">{{ image }}</span></p>
+(<span class="hint">{{ image }}</span>)</p>
 {% else %}
 <p class="warning">The orchestrator has not published a configured image yet. Drift cannot be
 computed until it completes a tick.</p>

@@ -104,8 +104,10 @@
 <p class="tracker"><a href="/tracker/{{ room.tracker_id }}">Multiworld Tracker</a></p>
 {% endif %}
 {% if can_see_journal %}
-<p class="tracker"><a href="/journal/{{ room.journal_id }}">Room Feed</a>
-<span class="hint">&mdash; every item found here, live. Shareable without sharing this page.</span></p>
+{# The colon rides on the link rather than opening the dimmed span: a separator that starts the gloss
+   renders a space before itself, which reads as a typo. #}
+<p class="tracker"><a href="/journal/{{ room.journal_id }}">Room Feed</a>:
+<span class="hint">every item found here, live. Shareable without sharing this page.</span></p>
 {% endif %}
 
 {# **The lobby import's leftovers, to staff, as soon as the room opens.**
@@ -491,7 +493,7 @@ unclaimed
      aria-labelledby="more-label-{{ slot.slot_number }}">
 {# Who this menu acts on, on screen rather than only in an `aria-label`. Once an action is behind a
    menu, the menu is the last place a misclick can be caught. #}
-<p class="hint" id="more-label-{{ slot.slot_number }}">Slot {{+ slot.slot_number +}} &mdash;
+<p class="hint" id="more-label-{{ slot.slot_number }}">Slot {{+ slot.slot_number }}:
 {{+ slot.player_name }}</p>
 
 {# A tray with an arrow coming IN: gather this slot's own items from everywhere else. #}
@@ -700,7 +702,7 @@ unclaimed
    would and MAY GRANT FEWER THAN ASKED OR NONE, so the room's answer is the truth rather than this
    box -- which is why the result below renders `output` verbatim. #}
 <p data-mod-field="force">
-<label class="inline"><input type="checkbox" name="force" value="true"> Force &mdash; grant it
+<label class="inline"><input type="checkbox" name="force" value="true"> Force: grant it
 without spending this slot's points</label>
 </p>
 

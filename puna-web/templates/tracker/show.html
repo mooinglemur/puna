@@ -66,7 +66,7 @@ need to.</p>
    between "for hints" and "yes" is only legible in words. #}
 {% for choice in ping_choices %}
 <label><input type="radio" name="preference" value="{{ choice.0 }}"{% if my_preference == choice.0 +%} checked{% endif %}>
-<strong>{{ choice.1 }}</strong> &mdash; {{+ choice.2 }}</label>
+<strong>{{ choice.1 }}</strong>: {{+ choice.2 }}</label>
 {% endfor %}
 </fieldset>
 <div class="run"><button type="submit">Save preference</button></div>

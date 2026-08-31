@@ -1629,7 +1629,7 @@ async fn claim_page(token: &str, session: Session, pool: &State<Pool>) -> Result
             page: "Claim",
             room_name: Some(offer.room_name.clone()),
             summary: format!(
-                "Slot {} — {}, playing {}. Claiming it links the slot to your Discord account, so \
+                "Slot {}: {}, playing {}. Claiming it links the slot to your Discord account, so \
                  you can download its patch and read its password.",
                 offer.slot_number, offer.player_name, offer.game
             ),
@@ -2697,7 +2697,7 @@ pub(crate) mod tests {
             headline: "Claim MooingYacht1 in Friday async".into(),
             page: "Claim",
             room_name: Some("Friday async".into()),
-            summary: "Slot 3 — MooingYacht1, playing Balatro.".into(),
+            summary: "Slot 3: MooingYacht1, playing Balatro.".into(),
             action: "/claim/tok".into(),
             confirm: "Claim MooingYacht1".into(),
             offered: true,
@@ -2706,7 +2706,7 @@ pub(crate) mod tests {
 
         for tag in [
             r#"property="og:title" content="Claim MooingYacht1 in Friday async""#,
-            r#"property="og:description" content="Slot 3 — MooingYacht1, playing Balatro.""#,
+            r#"property="og:description" content="Slot 3: MooingYacht1, playing Balatro.""#,
             r#"property="og:site_name""#,
         ] {
             assert!(html.contains(tag), "the unfurl is missing `{tag}`");
