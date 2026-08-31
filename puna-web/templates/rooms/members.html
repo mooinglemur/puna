@@ -73,7 +73,29 @@ it never lowers a role somebody already holds.</p>
 <tbody>
 {% for invite in invites %}
 <tr>
-<td><code>/invite/{{ invite.token }}</code></td>
+{# **The prefix names the row; the copy control carries the link.** This used to render the path and
+   nothing else, so sending somebody an invitation meant reading a thirty-two character token off the
+   page and building the URL by hand -- the one step this feature exists to remove, since the whole
+   point of an invite link is not needing anybody's Discord id.
+
+   `data-copy` starts with `/`, which is what makes `copy.js` resolve it against the origin: what
+   lands on the clipboard is the whole `https://host/invite/<token>`, the same as the roster's claim
+   links.
+
+   **A link as well as a button, and it is the unscripted path that needs it.** Without the
+   clipboard the button is hidden, so an anchor is what leaves "copy link address" available -- and
+   following it is safe rather than merely tolerable: `GET /invite/<token>` describes the offer and
+   spends nothing, the same separation `/claim/<token>` makes. Only the POST behind its confirm
+   button decrements a use. #}
+<td><a href="/invite/{{ invite.token }}"><code>{{ invite.prefix() }}&hellip;</code></a>
+<button type="button" class="copy" data-copy="/invite/{{ invite.token }}"
+        title="Copy this invite link"
+        aria-label="Copy the invite link beginning {{+ invite.prefix() }}">
+<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+<rect x="5.5" y="1.5" width="9" height="11" rx="1.5" fill="none" stroke="currentColor"/>
+<path d="M10.5 14.5h-8a1 1 0 0 1-1-1v-9" fill="none" stroke="currentColor" stroke-linecap="round"/>
+</svg>
+</button></td>
 <td>{{ invite.role.as_sql() }}</td>
 <td>{% if let Some(left) = invite.uses_remaining %}{{ left }}{% else %}unlimited{% endif %}</td>
 <td>
@@ -89,4 +111,12 @@ it never lowers a role somebody already holds.</p>
 </div>
 {% endif %}
 {% endif %}
+{% endblock %}
+
+{# `copy.js` is what puts `js-copy` on <html>, and the stylesheet reveals `.copy` only from there --
+   so without this the invite copy control renders and is invisible to everybody. A lint pins the
+   pairing, because the markup, the script and the stylesheet each spell the contract differently
+   and no grep in one finds the others. #}
+{% block scripts %}
+<script src="/static/copy.js?v={{ base.static_version }}" defer></script>
 {% endblock %}

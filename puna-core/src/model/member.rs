@@ -249,6 +249,30 @@ pub struct Invite {
     pub uses_remaining: Option<i32>,
 }
 
+/// How much of an invite token identifies a row, for a page that lists several.
+///
+/// Eight of thirty-two: enough that an organizer can tell two of their own links apart, and short
+/// enough that the column is a label rather than a wall. Nothing resolves a prefix — it names a row
+/// on a page and never travels — so this is a display length rather than a namespace, and it does
+/// not have to grow with the number of invites a room has open.
+pub const INVITE_PREFIX_CHARS: usize = 8;
+
+impl Invite {
+    /// The first [`INVITE_PREFIX_CHARS`] of the token.
+    ///
+    /// **Characters, not bytes**, and `take` rather than a slice: `url_token`'s alphabet is ASCII
+    /// today, so the two agree — but a slice is what turns "somebody widened the alphabet" into a
+    /// panic on a page rather than a shorter label, and the panic is in the render of an
+    /// organizer's own page.
+    ///
+    /// The whole token still reaches the markup, in the link and in what the copy control carries.
+    /// **This shortens what is READ, never what is sent** — a prefix somebody pasted to a helper
+    /// would be an invitation that does not work, which is worse than a long one.
+    pub fn prefix(&self) -> String {
+        self.token.chars().take(INVITE_PREFIX_CHARS).collect()
+    }
+}
+
 /// Mint an invite link.
 ///
 /// The path that does not require knowing anyone's Discord snowflake, which is the normal case:
@@ -490,5 +514,37 @@ mod tests {
         }
         assert_eq!(RoomRole::parse("admin"), None);
         assert_eq!(RoomRole::parse(""), None);
+    }
+
+    /// The prefix shortens what is READ. It never has to resolve, so the only two things that can
+    /// go wrong are cutting the wrong amount and panicking instead of cutting.
+    #[test]
+    fn an_invite_prefix_shortens_without_ever_failing() {
+        let invite = |token: &str| Invite {
+            token: token.into(),
+            room_id: RoomId::new(),
+            role: RoomRole::Helper,
+            created_by: 7,
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+            uses_remaining: None,
+        };
+
+        let real = crate::secret::url_token();
+        assert_eq!(invite(&real).prefix().chars().count(), INVITE_PREFIX_CHARS);
+        assert!(
+            real.starts_with(&invite(&real).prefix()),
+            "the prefix is not the start of the token it names"
+        );
+
+        // Shorter than the cut: the whole thing, not a panic. Nothing mints one this short today,
+        // which is exactly why a slice here would go unnoticed until it did.
+        assert_eq!(invite("abc").prefix(), "abc");
+        assert_eq!(invite("").prefix(), "");
+
+        // Characters, not bytes. `url_token`'s alphabet is ASCII, so this is unreachable through
+        // the minting path — and it is the reason `take` is right rather than a slice, which would
+        // panic mid-character here and take an organizer's own page down with it.
+        assert_eq!(invite(&"é".repeat(12)).prefix(), "é".repeat(8));
     }
 }

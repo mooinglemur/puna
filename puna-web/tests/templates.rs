@@ -218,14 +218,15 @@ fn a_glyph_only_control_names_itself_twice() {
     }
 
     // A source lint is the easiest kind to write vacuously, so say how much it must have seen.
-    // Twenty-eight glyph controls exist today -- twenty-seven until the roster gained a mention
-    // copy. The moderation column is why this number moves in steps, and it once moved DOWN:
+    // Twenty-nine glyph controls exist today -- twenty-seven until the roster gained a mention copy
+    // and the members page an invite copy. The moderation column is why this number moves in steps,
+    // and it once moved DOWN:
     // release and collect went into an overflow menu and gained written labels, so they are no
     // longer glyph-only and no longer this lint's business, while the menu's own button is. A
     // change that leaves none is a change this lint stopped guarding. Set it by reading the count
     // this assertion prints, not by guessing.
     assert!(
-        examined >= 28,
+        examined >= 29,
         "only {examined} glyph-only controls found -- this lint is no longer looking at anything"
     );
     assert!(
@@ -2830,6 +2831,73 @@ fn a_filter_box_is_hidden_until_the_script_that_drives_it_arrives() {
     assert!(
         boxes >= 3,
         "only {boxes} filter boxes found -- this lint is no longer looking at anything"
+    );
+}
+
+/// **Every page with a copy control loads the script that reveals it.**
+///
+/// The sibling of the rule above, and the same three-way contract spelled three ways: a template
+/// renders `class="copy"`, `copy.js` puts `js-copy` on `<html>` once it has proved the clipboard is
+/// reachable, and `puna.css` reveals `.copy` from that class. The gate is deliberate — on plain HTTP
+/// `navigator.clipboard` is absent, and a button that silently does nothing is worse than no button,
+/// because the value looks copied and the paste is whatever was there before.
+///
+/// The failure this catches is the *other* way round: markup and stylesheet both correct, and the
+/// page loading no script that ever sets the class, so the control is hidden from everybody
+/// forever. The members page was exactly that the moment it grew an invite copy button — it had no
+/// `{% block scripts %}` at all.
+#[test]
+fn a_copy_control_is_hidden_until_the_script_that_drives_it_arrives() {
+    let css = code_only_css(&std::fs::read_to_string(source("static/css/puna.css")).expect("css"));
+    let script = std::fs::read_to_string(source("static/copy.js")).expect("copy.js");
+
+    assert!(
+        script.contains(r#"classList.add("js-copy")"#),
+        "copy.js no longer marks the document, so every copy control stays hidden for everyone"
+    );
+    assert!(
+        css.contains(".js-copy .copy"),
+        "nothing reveals `.copy`, so the controls never appear at all"
+    );
+
+    let mut pages = 0;
+    for path in templates() {
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("could not read {path:?}: {e}"));
+
+        // Fragments are checked through the pages that include them: `rooms/panel.html` carries
+        // copy controls and loads nothing, because `rooms/show.html` includes it and loads the file.
+        if !raw.contains("{% extends") {
+            continue;
+        }
+        let page = expand_includes(&raw);
+        if !page.contains(r#"class="copy""#) {
+            continue;
+        }
+        pages += 1;
+
+        let reveals = page
+            .match_indices("/static/")
+            .filter_map(|(at, _)| page[at + "/static/".len()..].split(['?', '"']).next())
+            .filter(|f| f.ends_with(".js"))
+            .any(|file| {
+                std::fs::read_to_string(source(&format!("static/{file}")))
+                    .is_ok_and(|js| js.contains(r#"classList.add("js-copy")"#))
+            });
+
+        assert!(
+            reveals,
+            "{}: renders a copy control but loads no script that adds `js-copy`, so the stylesheet \
+             keeps it hidden and the button never appears",
+            label(&path)
+        );
+    }
+
+    // The tracker builds its own copy controls in `tracker.js` rather than in markup, so it is not
+    // one of these -- it loads `copy.js` for that reason and says so in its own comment.
+    assert!(
+        pages >= 3,
+        "only {pages} pages render a copy control -- this lint is no longer looking at anything"
     );
 }
 

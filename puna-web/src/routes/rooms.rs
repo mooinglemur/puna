@@ -2872,6 +2872,80 @@ pub(crate) mod tests {
         );
     }
 
+    /// **The invite row names itself and carries the whole link**, which is the difference between
+    /// sending somebody an invitation and reading a thirty-two character token off a page to build
+    /// a URL by hand.
+    ///
+    /// Three things have to be true together and each fails differently: the prefix is what makes
+    /// two of a room's own links tellable apart, the anchor is what leaves "copy link address"
+    /// working where there is no clipboard, and `data-copy` is what puts the whole URL on it —
+    /// **beginning with `/`**, which is the character `copy.js` keys on to resolve against the
+    /// origin. Without that it would copy a path, which is exactly the thing an organizer would
+    /// then have to complete by hand.
+    #[test]
+    fn an_invite_row_names_itself_and_copies_the_whole_link() {
+        use askama::Template;
+
+        // Thirty-two, as `secret::url_token` mints, so the prefix below is a real truncation.
+        const TOKEN: &str = "1p42cs6sfh33h072np1z72hsep3geg4p";
+
+        let page = |may_manage, invites| MembersTemplate {
+            base: crate::tpl::TplContext {
+                is_logged_in: true,
+                is_admin: false,
+                username: "troy".into(),
+                site_name: "puna",
+                version: "test",
+                static_version: "test",
+                view_as: None,
+            },
+            notice: None,
+            room: a_room(),
+            members: Vec::new(),
+            invites,
+            may_manage,
+        };
+
+        let invite = member::Invite {
+            token: TOKEN.into(),
+            room_id: puna_core::ids::RoomId::new(),
+            role: RoomRole::Helper,
+            created_by: 7,
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+            uses_remaining: Some(1),
+        };
+
+        let html = page(true, vec![invite])
+            .render()
+            .expect("the members page renders");
+
+        assert!(
+            html.contains("<code>1p42cs6s&hellip;</code>"),
+            "the invite row does not identify itself by its prefix"
+        );
+        assert!(
+            html.contains(&format!(r#"href="/invite/{TOKEN}""#)),
+            "the prefix is not a link, so there is nothing to copy the address of without a \
+             clipboard"
+        );
+        assert!(
+            html.contains(&format!(r#"data-copy="/invite/{TOKEN}""#)),
+            "the copy control does not carry the whole path, so what lands on the clipboard is not \
+             a link somebody can send"
+        );
+
+        // A helper is handed no invite at all -- the route withholds the list, and this is the
+        // markup half of that: nothing here reconstructs one from anything else on the page.
+        let helper = page(false, Vec::new())
+            .render()
+            .expect("the members page renders");
+        assert!(
+            !helper.contains("/invite/"),
+            "a helper's members page carries an invite link"
+        );
+    }
+
     fn page_as(is_staff: bool, is_organizer: bool) -> RoomTemplate {
         RoomTemplate {
             notice: None,
