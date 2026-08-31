@@ -684,7 +684,7 @@ pub fn entry<'a>(
 /// repeatedly by the same people, so a world stays in the same position from one `!progress` to the
 /// next and a viewer can find theirs without reading the whole thing. Sorting by completion would
 /// reshuffle it every time somebody found a check.
-pub fn summary(rows: &[SlotRow]) -> String {
+pub fn summary(rows: &[SlotRow], overall: bool) -> String {
     let mut parts = Vec::new();
 
     for row in rows.iter().filter(|row| !row.spectator) {
@@ -711,6 +711,32 @@ pub fn summary(rows: &[SlotRow]) -> String {
     // reads as the command being broken. Unmistakable for a slot, which always carries a colon.
     if parts.is_empty() {
         return "no slots\n".to_string();
+    }
+
+    // **Over the rows in hand, not over the room.** With no selection the two are the same; with
+    // one, this describes the line it is on the end of -- the property the tracker's own footer
+    // picks for the same reason, because a total contradicting the entries beside it is worse than
+    // no total. Somebody who wants the room's true figure asks without `?s`.
+    if overall {
+        let players: Vec<&SlotRow> = rows.iter().filter(|row| !row.spectator).collect();
+        let done: i64 = players.iter().map(|r| r.checks_done).sum();
+        let total: i64 = players.iter().map(|r| r.checks_total).sum();
+        let goaled = players.iter().filter(|r| r.status == "goal").count();
+
+        // Checks-weighted, as the footer is: a 12-location world must not count as much as a
+        // 2000-location one. An unknown total is not a number, so it does not get a percentage --
+        // the same rule each slot follows.
+        let share = if total > 0 {
+            percent(done, total)
+        } else {
+            "?".to_string()
+        };
+        // **Spectators are out of the goal denominator**, since they cannot goal and counting them
+        // would make a finished multiworld read as permanently short.
+        parts.push(format!(
+            "Overall: {share} ({goaled}/{} goaled)",
+            players.len()
+        ));
     }
 
     parts.join(" | ") + "\n"
@@ -1439,14 +1465,17 @@ mod tests {
         // session at all, so it is held to the same rule as the four beside it.
         let rendered: Vec<String> = rendered
             .into_iter()
-            .chain(std::iter::once(summary(&slot_rows(
-                &roster,
-                &live(),
-                &statics(),
-                None,
-                now(),
-                &Viewer::outsider(),
-            ))))
+            .chain(std::iter::once(summary(
+                &slot_rows(
+                    &roster,
+                    &live(),
+                    &statics(),
+                    None,
+                    now(),
+                    &Viewer::outsider(),
+                ),
+                true,
+            )))
             .collect();
 
         for body in &rendered {
@@ -1507,16 +1536,28 @@ mod tests {
     /// is a broken `!progress` command and nothing about the parts would say so.
     #[test]
     fn the_summary_is_one_line_a_bot_can_paste() {
-        let text = summary(&slot_rows(
+        let rows = slot_rows(
             &roster(),
             &live(),
             &statics(),
             None,
             now(),
             &Viewer::outsider(),
-        ));
+        );
 
-        assert_eq!(text, "Troy: 66.6% | Alice: 50.0% (goal)\n");
+        assert_eq!(summary(&rows, false), "Troy: 66.6% | Alice: 50.0% (goal)\n");
+
+        // **The overall segment is opt-in and goes on the end**, so a bot that has been reading this
+        // line since before the flag existed sees exactly what it always did.
+        //
+        // Checks-weighted rather than an average of the two percentages: 2 of 3 and 1 of 2 is 3 of
+        // 5, which is 60.0% -- averaging 66.6 and 50.0 would give 58.3 and would let a 12-location
+        // world count as much as a 2000-location one. The spectator contributes 0/0 to the checks
+        // and is excluded from the goal denominator, which is why that reads 1/2 and not 1/3.
+        assert_eq!(
+            summary(&rows, true),
+            "Troy: 66.6% | Alice: 50.0% (goal) | Overall: 60.0% (1/2 goaled)\n"
+        );
     }
 
     /// **`goal` alone means finished; `(goal)` means finished playing with checks left behind.**
@@ -1526,17 +1567,17 @@ mod tests {
     #[test]
     fn a_goal_replaces_the_percentage_only_when_the_world_is_complete() {
         assert_eq!(
-            summary(&[row("Done", 216, 216, "goal")]),
+            summary(&[row("Done", 216, 216, "goal")], false),
             "Done: goal\n",
             "a finished world says so and nothing else"
         );
         assert_eq!(
-            summary(&[row("Left", 108, 216, "goal")]),
+            summary(&[row("Left", 108, 216, "goal")], false),
             "Left: 50.0% (goal)\n",
             "goaled with checks outstanding needs both facts"
         );
         assert_eq!(
-            summary(&[row("Full", 216, 216, "playing")]),
+            summary(&[row("Full", 216, 216, "playing")], false),
             "Full: 100.0%\n",
             "every check found is not the same as having goaled"
         );
@@ -1547,21 +1588,36 @@ mod tests {
     /// question a viewer is asking.
     #[test]
     fn a_percentage_never_rounds_up_to_a_hundred() {
-        assert_eq!(summary(&[row("N", 2159, 2160, "playing")]), "N: 99.9%\n");
-        assert_eq!(summary(&[row("N", 2160, 2160, "playing")]), "N: 100.0%\n");
-        assert_eq!(summary(&[row("N", 0, 2160, "playing")]), "N: 0.0%\n");
+        assert_eq!(
+            summary(&[row("N", 2159, 2160, "playing")], false),
+            "N: 99.9%\n"
+        );
+        assert_eq!(
+            summary(&[row("N", 2160, 2160, "playing")], false),
+            "N: 100.0%\n"
+        );
+        assert_eq!(summary(&[row("N", 0, 2160, "playing")], false), "N: 0.0%\n");
 
         // The two counts come from different upstream documents, so nothing structurally stops the
         // first exceeding the second while the pair is out of step.
-        assert_eq!(summary(&[row("N", 2161, 2160, "playing")]), "N: 100.0%\n");
+        assert_eq!(
+            summary(&[row("N", 2161, 2160, "playing")], false),
+            "N: 100.0%\n"
+        );
     }
 
     /// A total of zero is **not known**, not "nothing to do", so it gets no percentage — and a
     /// goaled slot still reports the one thing that is known about it regardless.
     #[test]
     fn an_unknown_total_is_not_reported_as_a_percentage() {
-        assert_eq!(summary(&[row("N", 0, 0, "playing")]), "N: ?\n");
-        assert_eq!(summary(&[row("N", 0, 0, "goal")]), "N: goal\n");
+        assert_eq!(summary(&[row("N", 0, 0, "playing")], false), "N: ?\n");
+        assert_eq!(summary(&[row("N", 0, 0, "goal")], false), "N: goal\n");
+
+        // The overall segment follows the same rule: no denominator is not a percentage.
+        assert_eq!(
+            summary(&[row("N", 0, 0, "playing")], true),
+            "N: ? | Overall: ? (0/1 goaled)\n"
+        );
     }
 
     /// **The document is one line, so a name may not add another.** A player name is untrusted text
@@ -1569,12 +1625,21 @@ mod tests {
     /// truncated answer, and everything after the break does not exist as far as it is concerned.
     #[test]
     fn a_name_cannot_break_the_one_line_document() {
-        let text = summary(&[
-            row("Ray\r\nAdmin: 100.0%", 1, 4, "playing"),
-            row("B", 1, 4, "x"),
-        ]);
+        let text = summary(
+            &[
+                row("Ray\r\nAdmin: 100.0%", 1, 4, "playing"),
+                row("B", 1, 4, "x"),
+            ],
+            true,
+        );
 
-        assert_eq!(text, "RayAdmin: 100.0%: 25.0% | B: 25.0%\n");
+        // Rendered with the overall segment on, because that is the shape most likely to grow a
+        // second line later: the segment is appended after every name has been through `one_line`,
+        // so nothing about it can reintroduce a break.
+        assert_eq!(
+            text,
+            "RayAdmin: 100.0%: 25.0% | B: 25.0% | Overall: 25.0% (0/2 goaled)\n"
+        );
         assert_eq!(text.lines().count(), 1, "one line, always");
     }
 
@@ -1586,12 +1651,17 @@ mod tests {
         let mut watcher = row("Watcher", 0, 0, "connected");
         watcher.spectator = true;
 
-        assert_eq!(summary(&[watcher.clone()]), "no slots\n");
-        assert_eq!(summary(&[]), "no slots\n");
+        assert_eq!(summary(&[watcher.clone()], false), "no slots\n");
+        assert_eq!(summary(&[], false), "no slots\n");
         assert_eq!(
-            summary(&[row("Troy", 1, 4, "playing"), watcher]),
+            summary(&[row("Troy", 1, 4, "playing"), watcher.clone()], false),
             "Troy: 25.0%\n"
         );
+
+        // **"no slots" wins over the overall segment**, rather than the two being concatenated. A
+        // room with nothing to report has nothing to total, and `no slots | Overall: ? (0/0
+        // goaled)` would be a bot posting arithmetic about an empty set.
+        assert_eq!(summary(&[watcher], true), "no slots\n");
     }
 
     /// A room whose clock is ahead would otherwise produce a negative age, which renders as a time

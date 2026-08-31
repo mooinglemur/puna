@@ -811,12 +811,26 @@ async fn page(
 ///
 /// A slot's own tracker id resolves to that slot alone, exactly as every other view scopes — so a
 /// player can hand out a summary URL for their world without handing over the multiworld's.
-#[get("/tracker/<id>/summary.txt")]
+///
+/// ## The two modifiers
+///
+/// * **`?s=1,2,4`** — only these slots, in the roster's order rather than the order asked for. That
+///   makes one set of slots one URL, which matters for a response a shared cache may hold and for a
+///   bot diffing its own output.
+/// * **`?o`** — append an overall line. See [`flag`] for why the value is optional *and* forgiving.
+///
+/// **Both live in the URL rather than in a session**, which is what keeps this response identical
+/// for every reader and therefore `public`-cacheable: a cache keys on the whole URL, so two
+/// selections are two entries rather than one being served for the other.
+#[get("/tracker/<id>/summary.txt?<s>&<o>")]
 async fn summary_text(
     id: TrackerParam,
+    s: Option<String>,
+    o: Option<String>,
     pool: &State<Pool>,
     state: TrackerState<'_>,
 ) -> Result<PlainText> {
+    let overall = flag("o", o.as_deref())?;
     let mut conn = pool.get().await?;
 
     let target = tracker::resolve(&mut conn, id.0)
@@ -832,6 +846,8 @@ async fn summary_text(
     }
 
     let roster = slot::list(&mut conn, room.id).await?;
+    let wanted = selection(s.as_deref(), &roster, target.slot_number())?;
+
     // Both documents, for the same reason the slots view needs both: progress comes from one and
     // the location totals from the other.
     let live = obtain(&mut conn, &state, &room, Document::Live).await?;
@@ -853,8 +869,19 @@ async fn summary_text(
         &digest::Viewer::outsider(),
     );
 
+    // Filtered after the digest rather than before it, so a selected slot's row is built from the
+    // same code every other view builds it from -- and so `?s` cannot become a second place that
+    // decides what a row contains.
+    let rows: Vec<digest::SlotRow> = match &wanted {
+        Some(only) => rows
+            .into_iter()
+            .filter(|row| only.contains(&row.slot))
+            .collect(),
+        None => rows,
+    };
+
     Ok(PlainText {
-        body: digest::summary(&rows),
+        body: digest::summary(&rows, overall),
         // `public`, which no other response here can be: this one is identical for every reader by
         // construction, so a shared cache in front of it is free rate limiting rather than a way to
         // hand one viewer another's document. The window is pahoa's own for the live document, so a
@@ -1106,6 +1133,94 @@ fn unreachable_room(e: UpstreamError) -> Error {
         ),
         other => Error::new(Status::ServiceUnavailable, other.into()),
     }
+}
+
+/// A query-string flag whose **presence is the point**, spelled forgivingly.
+///
+/// `?o` on its own is on, which is what somebody writing a bot's URL by hand reaches for. So is
+/// `?o=1`, and that is the whole reason this exists rather than a plain `bool` parameter: Rocket's
+/// `FromFormField for bool` accepts an empty value, `on`, `yes` and `true` — and **refuses `1`**,
+/// with a 422 for the whole request. `1` is the most natural thing to type after `=`, and a
+/// hand-written URL failing with no explanation is a bad trade for four characters of parsing.
+///
+/// It refuses an unrecognized value rather than treating presence alone as on. `?o=false` meaning
+/// *on* would be the same trap pointing the other way, and this endpoint is read by bots whose
+/// config somebody wrote once and will not revisit.
+fn flag(name: &str, raw: Option<&str>) -> Result<bool> {
+    match raw.map(str::trim) {
+        None => Ok(false),
+        // Bare, which is the spelling this exists for.
+        Some("") => Ok(true),
+        Some(value) => match value.to_ascii_lowercase().as_str() {
+            "1" | "on" | "yes" | "true" => Ok(true),
+            "0" | "off" | "no" | "false" => Ok(false),
+            other => Err(Error::new(
+                Status::BadRequest,
+                anyhow::anyhow!(
+                    "`{name}={other}` is not a yes or a no; use `{name}` on its own, or one of \
+                     1/0, on/off, yes/no, true/false"
+                ),
+            )),
+        },
+    }
+}
+
+/// Which slots `?s=1,2,4` asked for, or `None` for all of them.
+///
+/// **Refuses rather than ignores**, in both directions. A token that is not a number and a number
+/// that is not a slot of this room are both configuration mistakes in a URL somebody pasted into a
+/// bot once — and the alternative is a summary quietly listing fewer slots than were asked for,
+/// which reads as the room having changed rather than as the URL being wrong.
+///
+/// Blank (`?s=` or `?s=,,`) is treated as absent rather than as an empty selection: an empty one
+/// could only ever produce `no slots`, so reading it as "everything" is the interpretation that
+/// might be what somebody meant.
+///
+/// **Order comes from the roster, never from the query.** `?s=4,1` and `?s=1,4` are the same
+/// request and must produce the same bytes — this response is `public`-cacheable and is diffed by
+/// bots, and two spellings of one selection producing two answers would be a needless difference.
+/// The filtering itself preserves roster order because it walks the digested rows.
+fn selection(
+    raw: Option<&str>,
+    roster: &[slot::Slot],
+    scope: Option<i32>,
+) -> Result<Option<Vec<i32>>> {
+    let Some(raw) = raw else { return Ok(None) };
+
+    let mut wanted = Vec::new();
+    for token in raw.split(',').map(str::trim).filter(|t| !t.is_empty()) {
+        let number: i32 = token.parse().map_err(|_| {
+            Error::new(
+                Status::BadRequest,
+                anyhow::anyhow!("`s={token}` is not a slot number"),
+            )
+        })?;
+        if !roster.iter().any(|slot| slot.slot_number == number) {
+            return Err(Error::new(
+                Status::BadRequest,
+                anyhow::anyhow!("this room has no slot {number}"),
+            ));
+        }
+        // Deduplicated, so `?s=1,1` is one entry rather than a slot listed twice.
+        if !wanted.contains(&number) {
+            wanted.push(number);
+        }
+    }
+
+    if wanted.is_empty() {
+        return Ok(None);
+    }
+
+    // **A slot's own tracker id already names its slot**, so combining it with a different one is
+    // two answers to one question -- the rule `scope_of` applies to the digested views, applied
+    // here for the same reason. `404` rather than a refusal, matching it.
+    if let Some(own) = scope
+        && wanted != [own]
+    {
+        return Err(not_found("no such slot"));
+    }
+
+    Ok(Some(wanted))
 }
 
 /// How long a response may be reused **without asking**, which is a different question from how
@@ -1725,6 +1840,97 @@ mod tests {
         html.split(|c: char| !c.is_ascii_digit())
             .filter_map(|run| run.parse::<u32>().ok())
             .any(|n| (40000..=49999).contains(&n))
+    }
+
+    /// **A bare `?o` is on, and so is `?o=1`** — which is the whole reason this is not a `bool`.
+    ///
+    /// Rocket's `FromFormField for bool` accepts an empty value, `on`, `yes` and `true`, and
+    /// **refuses `1`** by falling through to a `ParseBoolError`, which fails the entire request with
+    /// a 422 and no explanation. `1` is the first thing anybody types after `=`, and this endpoint's
+    /// URL is written by hand into a bot's config and then not looked at again.
+    ///
+    /// It refuses an unknown value rather than reading presence alone as on, because `?o=false`
+    /// meaning *on* is the same trap facing the other way.
+    #[test]
+    fn a_flag_is_on_when_bare_and_refuses_what_it_cannot_read() {
+        for on in ["", "1", "on", "yes", "true", "TRUE", " 1 "] {
+            assert_eq!(flag("o", Some(on)).ok(), Some(true), "`o={on:?}` is not on");
+        }
+        for off in ["0", "off", "no", "false", "False"] {
+            assert_eq!(
+                flag("o", Some(off)).ok(),
+                Some(false),
+                "`o={off:?}` is not off"
+            );
+        }
+        assert_eq!(flag("o", None).ok(), Some(false), "absent is off");
+
+        // Named rather than swallowed: a value nobody can read is a URL somebody got wrong, and
+        // choosing a meaning for it is how a bot reports the wrong thing indefinitely.
+        assert!(flag("o", Some("maybe")).is_err());
+        assert!(flag("o", Some("2")).is_err());
+    }
+
+    /// `?s=1,2,4` picks slots, and **anything it cannot honor is refused rather than dropped**.
+    ///
+    /// Silently omitting an unknown slot is the failure worth avoiding: the summary would list
+    /// fewer entries than were asked for, which reads as the room having changed rather than as the
+    /// URL being wrong — and this URL lives in a config somebody wrote once.
+    #[test]
+    fn a_slot_selection_is_deduplicated_ordered_and_strict() {
+        // Only the slot numbers matter here; `selection` reads nothing else off a roster.
+        let numbered = |slot_number: i32| slot::Slot {
+            room_id: puna_core::ids::RoomId::new(),
+            slot_number,
+            player_name: format!("p{slot_number}"),
+            game: "A Link to the Past".into(),
+            kind: puna_core::artifact::SlotKind::Player,
+            password: None,
+            owner_id: None,
+            claim_token: None,
+            claimed_at: None,
+            tracker_id: puna_core::ids::TrackerId::new(),
+            locked_at: None,
+            locked_by: None,
+            progression: puna_core::model::annotation::ProgressionStatus::Unknown,
+            note: None,
+            annotated_at: None,
+            annotated_by: None,
+        };
+        let roster: Vec<slot::Slot> = [1, 2, 4].into_iter().map(numbered).collect();
+
+        assert_eq!(selection(None, &roster, None).unwrap(), None, "no filter");
+        assert_eq!(
+            selection(Some("1,2,4"), &roster, None).unwrap(),
+            Some(vec![1, 2, 4])
+        );
+        // Deduplicated, so a slot cannot be listed twice by asking twice.
+        assert_eq!(
+            selection(Some("2,2, 1 "), &roster, None).unwrap(),
+            Some(vec![2, 1])
+        );
+
+        // Blank reads as absent rather than as an empty selection: an empty one could only produce
+        // `no slots`, so "everything" is the reading that might be what somebody meant.
+        for blank in ["", "  ", ",,", " , "] {
+            assert_eq!(selection(Some(blank), &roster, None).unwrap(), None);
+        }
+
+        assert!(
+            selection(Some("1,x"), &roster, None).is_err(),
+            "not a number"
+        );
+        assert!(selection(Some("1,9"), &roster, None).is_err(), "not a slot");
+
+        // A slot's own tracker id already names its slot, so combining it with a different one is
+        // two answers to one question -- `scope_of`'s rule, and its `404`.
+        assert!(selection(Some("2"), &roster, Some(1)).is_err());
+        assert_eq!(
+            selection(Some("1"), &roster, Some(1)).unwrap(),
+            Some(vec![1]),
+            "naming the slot the id already names is agreement, not conflict"
+        );
+        assert_eq!(selection(None, &roster, Some(1)).unwrap(), None);
     }
 
     /// **And the digested views have to ask for that**, which the responder above cannot enforce.
