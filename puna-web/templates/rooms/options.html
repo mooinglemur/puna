@@ -26,8 +26,8 @@
 <section class="panel create-room">
 <h2>Applies immediately upon save</h2>
 <p class="hint">These are decisions this site makes when it answers a request, so they take effect
-on the next page load &mdash; including for people already looking at one. Nobody is disconnected
-and the room is not restarted.</p>
+on the next page load, including for people already looking at one. Nobody is disconnected and the
+room is not restarted.</p>
 
 <form method="post" action="/room/{{ room.id }}/options/live" data-options-form>
 <div class="field" data-hints="tracker_policy">
@@ -42,8 +42,7 @@ works. Shareable with an audience who will never sign in.</p>
 required to view the tracker. Links you have already shared will stop working for anyone outside
 the room.</p>
 <p class="hint" data-for="disabled">Nobody but staff can see the tracker. Links you have already
-shared stop working, and the feed goes with it &mdash; it is reachable only where the tracker
-is.</p>
+shared stop working, and the feed goes with it: it is reachable only where the tracker is.</p>
 </div>
 </div>
 
@@ -53,11 +52,11 @@ is.</p>
 <label><input type="radio" name="journal_policy" value="full"{% if room.journal_policy == puna_core::model::room::JournalPolicy::Full +%} checked{% endif %}> Open</label>
 <label><input type="radio" name="journal_policy" value="feed"{% if room.journal_policy == puna_core::model::room::JournalPolicy::Feed +%} checked{% endif %}> Gameplay only</label>
 <label><input type="radio" name="journal_policy" value="disabled"{% if room.journal_policy == puna_core::model::room::JournalPolicy::Disabled +%} checked{% endif %}> Closed</label>
-<p class="hint" data-for="full">Anyone who can open the feed reads the whole history &mdash; chat,
-hints, admin actions, joins and parts &mdash; and can download the raw file. <strong>This applies
-to everything already written</strong>, not only to what happens next.</p>
+<p class="hint" data-for="full">Anyone who can open the feed reads the whole history (chat, hints,
+admin actions, joins and parts) and can download the raw file. <strong>This applies to everything
+already written</strong>, not only to what happens next.</p>
 <p class="hint" data-for="feed">The feed shows what happened in the games: item movements, Link
-events, goals, and worlds released or collected &mdash; without saying who ordered a release. Chat,
+events, goals, and worlds released or collected, without saying who ordered a release. Chat,
 hints and everything else stays with the organizers, who can always see it all and download the raw
 file.</p>
 <p class="hint" data-for="disabled">The feed is staff-only. Anyone holding a feed link gets the same
@@ -72,8 +71,8 @@ answer as somebody holding a made-up one.</p>
 <label><input type="radio" name="patch_policy" value="claimed"{% if room.patch_policy == puna_core::model::room::PatchPolicy::Claimed +%} checked{% endif %}> Claimed</label>
 <p class="hint" data-for="open"><em>Anyone with the room URL can download any patch</em>, as
 archipelago.gg does. The patch carries only the room's address, so a player with a password types it
-in themselves. <strong>Patches already downloaded still carry whatever they were built with</strong>
-&mdash; this changes what is served from now on.</p>
+in themselves. <strong>Patches already downloaded still carry whatever they were built with</strong>.
+This changes what is served from now on.</p>
 <p class="hint" data-for="claimed"><em>Only the slot's owner and this room's staff can download
 it.</em> The patch carries the address and the slot's credential, so the client it launches connects
 without being told anything.</p>
@@ -116,7 +115,7 @@ later need the file to settle an argument.</p>
 <p class="hint" data-for="admin_only">This room's staff. The default for a new room, and the
 tightest setting that still leaves somebody able to read it.</p>
 <p class="hint" data-for="players">Staff, and anyone holding a slot in this room. Reasonable once
-everybody has finished &mdash; and a decision to make once, since <strong>anyone who reads it cannot
+everybody has finished, and a decision to make once, since <strong>anyone who reads it cannot
 un-read it</strong>.</p>
 <p class="hint" data-for="public">Everybody, including anyone who was given the room's link.
 <strong>Applies to people already on the page</strong>: the next request they make serves the whole
@@ -209,8 +208,8 @@ Safe to run more than once.</p>
 <p class="hint">The room reads these once, when it starts, so changing them takes it down and brings
 it back.
 {%+ if restart_would_land %}
-<strong>The room is up, so saving here restarts it now</strong> &mdash; about a minute, and every
-player reconnects. Nothing is lost: the save is flushed on the way down.
+<strong>The room is up, so saving here restarts it now</strong>: about a minute, and every
+player reconnects. Nothing is lost, since the save is flushed on the way down.
 {% else %}
 <strong>The room is not up</strong>, so nothing happens until somebody starts it. It will come back
 with these settings.
@@ -241,8 +240,8 @@ theirs.</p>
    mode right now. #}
 {% if room.slot_auth == puna_core::model::room::SlotAuth::PerSlot %}
 <p class="warning">This room uses per-slot passwords. Switching away <strong>discards every one of
-them permanently</strong> &mdash; they are not recoverable, and switching back generates a fresh set
-that nobody has been given.</p>
+them permanently</strong>. They are not recoverable, and switching back generates a fresh set that
+nobody has been given.</p>
 {% endif %}
 
 <div class="field">

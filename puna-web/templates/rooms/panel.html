@@ -113,7 +113,7 @@
 </div>
 <p class="hint">This room is large enough that the full item feed overwhelms many game clients, so
 this address leaves out item traffic your slot is not part of. You still get your own items, chat
-and announcements &mdash; you just will not see other people's finds go by.</p>
+and announcements. You just will not see other people's finds go by.</p>
 {% endif %}
 
 {% if let Some(port) = room.advertised_port %}
@@ -122,7 +122,7 @@ and announcements &mdash; you just will not see other people's finds go by.</p>
    multiworld, which is what a text client or a tracker is for. #}
 <details class="alt-address">
 <summary><strong>Want to see every item found?</strong> There is a second address.</summary>
-<p class="hint">Same room, same save, same slot &mdash; this one carries the full item feed, so you
+<p class="hint">Same room, same save, same slot. This one carries the full item feed, so you
 see the whole multiworld go by. That is what a text client or a tracker wants. <strong>A game client
 in a room this size may not keep up with it</strong> and can be dropped for falling behind, which is
 why it is not the address above.</p>
@@ -159,7 +159,7 @@ why it is not the address above.</p>
    nobody without the problem opens it. #}
 <details class="alt-address">
 <summary><strong>Client lagging or dropping out?</strong> There is a second address.</summary>
-<p class="hint">Same room, same save, same slot &mdash; it just leaves out other players' item
+<p class="hint">Same room, same save, same slot. This one leaves out other players' item
 traffic, which is what floods a client in a large multiworld. You still get your own items, chat and
 announcements. <strong>Use the address above unless you are having trouble</strong>: on this one you
 will not see other people's finds go by.</p>
@@ -272,8 +272,8 @@ Changing it restarts the room, which disconnects everyone for about a minute.
 {# Everybody else, in the shared-password mode: the VALUE is withheld and the requirement is not.
    Without this a player who has not claimed a slot sees an address, is refused when they connect,
    and has no reason to think the room is anything but broken. #}
-<p class="hint">This room needs a password to join. Ask whoever invited you &mdash; the room's
-staff and anyone holding a slot here can see it on this page.</p>
+<p class="hint">This room needs a password to join. Ask whoever invited you: the room's staff and
+anyone holding a slot here can see it on this page.</p>
 {% endif %}
 
 </div>

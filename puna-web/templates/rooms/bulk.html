@@ -18,7 +18,7 @@
    exception is spelled out because it is genuinely different: rotation's durable half is Puna's
    own, so it lands in the database and the Secret and takes effect at the next start. #}
 <p class="warning">This room is {{+ room_state }}. Room actions need a running room and will be
-refused &mdash; except <strong>Rotate Passwords</strong>, which is stored now and applies when the
+refused, except <strong>Rotate Passwords</strong>, which is stored now and applies when the
 room next starts, and <strong>Release Claims</strong>, which never touches the room at all.</p>
 {% endif %}
 
@@ -139,7 +139,7 @@ The room page's per-slot controls work without it.</p>
         data-confirm="Release the claim on every staged slot? They become unclaimed and their claim links are reissued.">Release Claims</button>
 
 <button type="submit" name="action" value="lock"
-        title="Bar these slots from connecting. Nobody is disconnected — kick does that."
+        title="Bar these slots from connecting. Nobody is disconnected; kick does that."
         data-confirm="Lock every staged slot? They will be barred from logging in.">Lock</button>
 
 {# **The way back from the button above it.** Locking is the only bulk action with a bulk undo,
@@ -162,7 +162,7 @@ The room page's per-slot controls work without it.</p>
 
 <button type="submit" name="action" value="set_goaled"
         title="Mark these slots Goaled, as their own clients would. Cannot be undone."
-        data-confirm="Mark every staged slot as Goaled? Nobody can undo a goal — not staff, not the player — and the room may release or collect their worlds automatically.">Set as Goaled</button>
+        data-confirm="Mark every staged slot as Goaled? Nobody can undo a goal: not staff, not the player. The room may also release or collect their worlds automatically.">Set as Goaled</button>
 </fieldset>
 
 {# --- filters ---------------------------------------------------------------------------------

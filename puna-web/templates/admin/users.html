@@ -16,8 +16,8 @@
 <p class="warning">{{ restricted +}} restricted, {{+ banned +}} banned.</p>
 {% endif %}
 
-<p class="hint"><strong>Restricted</strong> accounts keep everything they are part of &mdash; their
-slots, their rooms, their memberships &mdash; and lose only the ability to open new rooms and upload
+<p class="hint"><strong>Restricted</strong> accounts keep everything they are part of (their slots,
+their rooms, their memberships) and lose only the ability to open new rooms and upload
 generations. <strong>Banned</strong> accounts cannot sign in and their existing sessions stop
 working within a few seconds. Neither deletes anything: a room somebody else is playing in is not
 theirs to lose.</p>
@@ -161,8 +161,8 @@ new rooms or upload generations. Nothing is deleted.</p>
 <form method="post" action="/admin/users/status">
 <h2>Ban {{+ row.username }}</h2>
 <p class="hint">They cannot sign in, and any session they already hold stops working within a few
-seconds. Their rooms, slots and memberships survive &mdash; a room somebody else is playing in is
-not theirs to lose.</p>
+seconds. Their rooms, slots and memberships survive: a room somebody else is playing in is not
+theirs to lose.</p>
 <input type="hidden" name="user_id" value="{{ row.id }}">
 <input type="hidden" name="status" value="banned">
 <label for="ban-note-{{ row.id }}">Reason (shown to them)</label>

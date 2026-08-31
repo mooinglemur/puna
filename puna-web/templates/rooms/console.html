@@ -40,8 +40,8 @@ room page first.</p>
 {% endif %}
 
 {% if still_running %}
-<p class="notice">That command is taking longer than usual. It is still running &mdash; it will
-appear below when it finishes.</p>
+<p class="notice">That command is taking longer than usual. It is still running, and will appear
+below when it finishes.</p>
 {% endif %}
 
 {% if uncertain %}
@@ -50,16 +50,15 @@ appear below when it finishes.</p>
    or the new one -- and "it takes effect at the next start" would be false by construction, since
    the start it refers to is the one that just happened. #}
 <p class="warning">The room started while this was being applied, so it may not be in force yet. The
-change is recorded &mdash; check the slot now that the room is up, and run it again if it did not
-take.</p>
+change is recorded. Check the slot now that the room is up, and run it again if it did not take.</p>
 {% endif %}
 
 {% if stored %}
 {# Not a refusal and not an error: the change landed in the database and in the room's Secret, and
    there was simply no running process to tell. Said plainly, because the alternative is an operator
    who thinks a lock did not take and locks again. #}
-<p class="notice">Stored. This room is not running, so there was nothing to tell &mdash; the change
-takes effect the next time it starts.</p>
+<p class="notice">Stored. This room is not running, so there was nothing to tell; the change takes
+effect the next time it starts.</p>
 {% endif %}
 
 {# **The answer stays at the top of the page rather than beside the form that produced it.** A run

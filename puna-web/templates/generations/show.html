@@ -65,8 +65,8 @@ before rather than a second copy of it.</p>
    nothing loaded -- unscripted, all of them show, which is verbose and never wrong. #}
 <section class="panel create-room">
 <h2>Open a room from this seed</h2>
-<p class="hint">One generation can back any number of rooms &mdash; they are independent
-multiworlds sharing the same seed, and a second one costs no storage.</p>
+<p class="hint">One generation can back any number of rooms. They are independent multiworlds
+sharing the same seed, and a second one costs no storage.</p>
 
 <form method="post" action="/rooms" id="create-room">
 <input type="hidden" name="generation_id" value="{{ generation.id }}">
@@ -104,7 +104,7 @@ The patch carries only the room's address, so a player with a password types it 
 <p class="hint" data-for="claimed"><em>Only the slot owner can see their patch.</em>
 The patch carries the address <em>and</em> the slot's credential, where the room has one,
 so the client it launches connects without being told anything. The credential travels inside
-the file &mdash; which is already a per-slot file served only to that slot's owner and the room's staff.</p>
+the file, which is already a per-slot file served only to that slot's owner and the room's staff.</p>
 </div>
 </div>
 
@@ -183,8 +183,7 @@ administer the room from inside an AP client.</p>
        placeholder="paste the lobby room's link">
 <p class="hint">Optional. Each slot is claimed for the Discord account that owns the matching YAML
 in the lobby, so nobody has to be sent a claim link. Anything it cannot match keeps its claim link
-and is listed on the room page &mdash; and if you skip this now, the room's options page can do it
-later.</p>
+and is listed on the room page. If you skip this now, the room's options page can do it later.</p>
 </div>
 </div>
 {% endif %}
