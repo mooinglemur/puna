@@ -855,7 +855,7 @@
     const stamp =
       isNaN(when) || !window.PunaTime ? d.as_of : window.PunaTime.absolute(when.getTime());
     freshness.textContent =
-      `As of ${stamp} — this room is not currently ` +
+      `As of ${stamp}. This room is not currently ` +
       `running, so this is the last state it reported.`;
     freshness.hidden = false;
   }

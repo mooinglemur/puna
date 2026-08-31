@@ -93,7 +93,7 @@
     // glance confirms -- and "Apply selection" doing nothing looks identical to it matching zero.
     report(
       total === 0
-        ? "Nothing matched — nothing is selected."
+        ? "Nothing matched, so nothing is selected."
         : slots(total) + " selected across both lists."
     );
   }
@@ -112,7 +112,7 @@
     });
     report(
       total === 0
-        ? "Everything was selected — nothing is now."
+        ? "Everything was selected, so nothing is now."
         : slots(total) + " selected across both lists."
     );
   }
@@ -163,7 +163,7 @@
   form.addEventListener("submit", function (event) {
     if (!staged.options.length) {
       event.preventDefault();
-      report("Nothing is staged — move some slots into Target Slots first.");
+      report("Nothing is staged. Move some slots into Target Slots first.");
       return;
     }
 

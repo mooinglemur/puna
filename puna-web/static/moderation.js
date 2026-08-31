@@ -49,7 +49,7 @@
       title: "Hint an item",
       explain:
         "Tells this slot where an item is. Unless you force it, this spends the slot's own hint " +
-        "points and may grant fewer than asked, or none — the room's answer is the truth.",
+        "points and may grant fewer than asked, or none. The room's answer is the truth.",
       working: "Hinting",
     },
     hint_location: {
@@ -105,8 +105,8 @@
       // sounds like. pahoa's own answer names whatever fired, and the result pane shows it.
       explain:
         "Marks this slot as having goaled, exactly as their own client would. Nobody can undo a " +
-        "goal afterwards — not staff, and not the player. If the room releases or collects " +
-        "automatically on goal, their world empties out too.",
+        "goal: not staff, not the player. If the room releases or collects automatically on " +
+        "goal, their world empties out too.",
       working: "Setting",
     },
     // Sets somebody ELSE's alias, which `!alias` cannot. Empty clears it — the one field in this
@@ -150,7 +150,7 @@
           ? "Lets this slot release its world whatever the room's release mode says. It is an " +
             "exemption for this slot alone and changes nothing for anybody else."
           : "Clears this slot's exemption and returns it to the room's release mode. That mode " +
-            "may still permit releasing — this forbids nothing.",
+            "may still permit releasing, so this forbids nothing.",
         working: "Applying",
       };
     },
