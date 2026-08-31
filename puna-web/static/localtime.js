@@ -112,7 +112,7 @@
   //
   // Split the way `absolute` is split, and for the same reason: the DATE keeps a fixed field order,
   // because a day heading that reads `08/22` to one person and `22/08` to another is the ambiguity
-  // this file exists to remove — while the WEEKDAY is localized, because it is a word rather than an
+  // this file exists to remove, while the WEEKDAY is localized, because it is a word rather than an
   // ordering and it is the part a reader cannot infer from the digits.
   //
   // Here rather than in `journal.js` because this file is the one place that decides how an instant

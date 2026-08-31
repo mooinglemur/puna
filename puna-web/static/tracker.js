@@ -51,11 +51,11 @@
   //
   // Three different absences, deliberately told apart rather than collapsed:
   //
-  //   * no `owner` at all — nobody holds the slot;
-  //   * an owner with no `contact` — somebody holds it and this viewer may not know who, because
+  //   * no `owner` at all: nobody holds the slot;
+  //   * an owner with no `contact`: somebody holds it and this viewer may not know who, because
   //     they chose "no pings" and this viewer is not staff. The chip still says so, which is the
   //     useful half: you learn not to go looking for another way to reach them.
-  //   * a `contact` whose `handle` is null — they hold a slot and have never signed in, so there is
+  //   * a `contact` whose `handle` is null: they hold a slot and have never signed in, so there is
   //     no handle to show. The mention still works, being built from the snowflake.
   function ownerCell(r) {
     if (!r.owner) return dash;
@@ -119,7 +119,7 @@
           // Two independent chips, and a slot can carry both: a spectator that somebody has
           // annotated. `tag` takes an array for that reason.
           // The progression carries its own tint, keyed on the wire spelling rather than on the
-          // label — a reworded label must not silently drop a color.
+          // label, because a reworded label must not silently drop a color.
           tag: [
             r.spectator ? "spectator" : null,
             r.progression && { text: r.progression.label, class: `prog-${r.progression.tone}` },
@@ -135,12 +135,12 @@
       // **Checks sort by COMPLETION, not by count**, which is what the column means: 400/2000 is
       // behind 12/12 however the raw numbers compare, and sorting on the count puts the biggest
       // world first and calls it the furthest along. The header keeps `data-key="checks_done"`
-      // because that is the column's identity — and because a remembered sort or a shared link
+      // because that is the column's identity, and because a remembered sort or a shared link
       // already carries that key, so renaming it would silently leave old links on the old
       // behavior rather than failing visibly.
       //
       // A slot with nothing to check has no answer, so it is `null` and sorts last in BOTH
-      // directions — the same rule `last seen` follows for a slot that has never acted.
+      // directions: the same rule `last seen` follows for a slot that has never acted.
       //
       // **Every key here must be a `data-key` in the template** or the column falls back to a field
       // lookup that finds nothing, which sorts by nothing and still draws the arrow. Pinned by a
@@ -151,7 +151,7 @@
       },
       // The footer, computed from the rows CURRENTLY DISPLAYED rather than from the server's
       // `totals`. With no filter the two agree exactly; with one, this describes the table it sits
-      // beneath — which is the property that cannot be wrong. A summary contradicting the rows
+      // beneath, which is the property that cannot be wrong. A summary contradicting the rows
       // above it is worse than no summary, and "how far along is everyone playing this game" is a
       // question worth being able to ask.
       //
@@ -228,7 +228,7 @@
     return ` (${pct}%)`;
   }
 
-  // The freshest activity among `rows`, as an age — so the **smallest** number, not the largest.
+  // The freshest activity among `rows`, as an age, so the **smallest** number, not the largest.
   //
   // **`null` is never, and is excluded rather than compared.** Treating a slot that has never acted
   // as `0` would make it the most recent thing in the multiworld and pin the total at "just now"
@@ -629,7 +629,7 @@
       // **Matched on the wire value, which is what the radio posts.** The row carries `tone`
       // alongside the label precisely because styling needed a stable name, and it turns out to be
       // the right thing to match on too: comparing rendered prose would have made the preselect
-      // depend on wording, and that failure is silent in the worst way — the dialog opens with
+      // depend on wording, and that failure is silent in the worst way: the dialog opens with
       // nothing checked and saving then CLEARS a progression somebody had set.
       const chosen = edit.progression ? edit.progression.tone : "unknown";
       for (const radio of form.querySelectorAll('input[name="progression"]')) {

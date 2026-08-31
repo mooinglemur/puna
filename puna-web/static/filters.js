@@ -7,18 +7,18 @@
 // remove control is a real submit button that posts `rules[N].remove=true` for the row it sits in,
 // and the tag/subtype cells arrive disabled or enabled to match the kind each row already has.
 //
-// So this is not the editor — it is the difference between one round trip per rule and none:
+// So this is not the editor; it is the difference between one round trip per rule and none:
 //
 // * **removal in place.** The button's default action is suppressed and the row simply goes, so the
 //   table always reads as what the next save will mean rather than as a list with marks against it.
 //
 // * **more rows at once**, by revealing an Add button that is `hidden` in the markup. Hidden there
 //   rather than styled away behind a root class, so a script that fails to load leaves no dead
-//   control — the one blank row is still there and still works.
+//   control: the one blank row is still there and still works.
 // * **live narrowing**: choosing a kind enables the cell that kind uses and disables the other.
 //   A disabled input is not submitted, which is the point rather than a side effect: a tag left
 //   over from when a row was a bounce cannot ride along and be refused.
-// * **the unsaved-changes notice**, which cannot exist without a script at all — with none, every
+// * **the unsaved-changes notice**, which cannot exist without a script at all: with none, every
 //   change IS a submit and there is nothing outstanding to warn about.
 // * **the empty-table question**, revealed the moment the last row is struck out rather than after
 //   the round trip that would otherwise be the first time anybody is asked it.
@@ -43,7 +43,7 @@
   // The highest `rules[N]` index in the form, so a new row gets one nothing else is using.
   //
   // Rocket starts a new element whenever the index changes, so the indices need only be distinct
-  // between neighbors — but distinct everywhere is cheaper to reason about than distinct enough,
+  // between neighbors, but distinct everywhere is cheaper to reason about than distinct enough,
   // and it means removing a row never has to renumber the ones after it.
   function highestIndex(form) {
     var highest = -1;
@@ -86,8 +86,8 @@
 
   // **Offer only the directions this kind can actually travel.**
   //
-  // Most kinds are one-way — a `Set` is something a slot sends, a `PrintJSON` something it receives
-  // — and pahoa refuses the impossible pairing outright, because a rule that cannot match looks
+  // Most kinds are one-way (a `Set` is something a slot sends, a `PrintJSON` something it receives)
+  // and pahoa refuses the impossible pairing outright, because a rule that cannot match looks
   // exactly like a filter that is not working. Which is what happened: a chat filter written
   // `from_slot` `PrintJSON` was accepted here, stored, pushed, and answered `400`, while the room
   // page went on showing it as the room's filter.
@@ -120,7 +120,7 @@
       direction.value = allowed;
     }
     // **Deliberately NOT greyed the way an inapplicable tag cell is.** A one-way kind leaves nothing
-    // to choose, but the direction still applies and is still submitted — dimming it would say the
+    // to choose, but the direction still applies and is still submitted; dimming it would say the
     // opposite, which is what `.inapplicable` means two columns over. A picker holding one option
     // says "no choice here" on its own.
   }
@@ -141,7 +141,7 @@
       meaning.hidden = !empty;
       // **Disabled as well as hidden, and this is the half that matters.** The radios are
       // `required`, and a required control inside a hidden fieldset blocks submission with a
-      // validation bubble the browser cannot point at anything — so the form would simply refuse to
+      // validation bubble the browser cannot point at anything, so the form would simply refuse to
       // save, silently, whenever the table had rules.
       meaning.querySelectorAll("input").forEach(function (input) {
         input.disabled = !empty;
@@ -179,7 +179,7 @@
 
     // **The remove button is a submit, and this is what stops it submitting.** Without a script it
     // posts `rules[N].remove=true` and the server drops that row; with one, the row simply goes and
-    // the change travels with the next save — which is what "the table is what I want in effect"
+    // the change travels with the next save, which is what "the table is what I want in effect"
     // means. Delegated, because rows arrive after this runs.
     form.addEventListener("click", function (event) {
       var button = event.target.closest("[data-rule-remove]");
@@ -202,11 +202,11 @@
     //
     // A `datalist` is otherwise invisible: nothing on the control says it has suggestions, so the
     // closed set of `PrintJSON` subtypes goes unread and people type from memory. Popping it open
-    // on an EMPTY field only — once there is text, the browser filters as you type and forcing the
+    // on an EMPTY field only: once there is text, the browser filters as you type and forcing the
     // list back open would fight the typing.
     //
     // `showPicker()` requires transient user activation, which a click grants and a Tab does not,
-    // and it is not everywhere yet — so both are caught and the field degrades to what it does
+    // and it is not everywhere yet, so both are caught and the field degrades to what it does
     // today: suggestions on the down arrow.
     function suggest(field) {
       if (!field || field.disabled || field.value !== "") return;

@@ -3,15 +3,15 @@
 // ## What this replaces, and what happens without it
 //
 // Every control in that column is a LINK to the console with the command and the slot already
-// chosen. This intercepts the click and runs it here instead. With scripting off — or if this file
-// fails to load — the link is followed and the console does the same job on its own page, with the
+// chosen. This intercepts the click and runs it here instead. With scripting off, or if this file
+// fails to load, the link is followed and the console does the same job on its own page, with the
 // same fields and the same route. Nothing here is the only way to do anything.
 //
 // ## It renders no markup
 //
 // The dialog, every field and the result pane are in `rooms/show.html`; this only chooses which
 // fields apply and fills them in. Building the form here would put "what does each command ask
-// for?" in a second place, in the file with no type checking — and `build()` in `console.rs` is
+// for?" in a second place, in the file with no type checking, and `build()` in `console.rs` is
 // already the authority, since it is what refuses a command with a field missing.
 //
 // ## Why a <dialog>, and why the result has to be dismissed
@@ -35,8 +35,8 @@
 
   // What each command asks for, and what to say about it before it runs.
   //
-  // `confirm: false` is the pair that change nothing a misclick cannot undo — a lock is reversed by
-  // unlocking, and a kicked client reconnects — so they go straight to the room. Everything else
+  // `confirm: false` is the pair that change nothing a misclick cannot undo (a lock is reversed by
+  // unlocking, and a kicked client reconnects) so they go straight to the room. Everything else
   // sends items or hints into somebody's game and cannot be taken back, so it asks first.
   var COMMANDS = {
     // The two that skip the confirmation still need a title and a target, because the dialog they
@@ -109,7 +109,7 @@
         "goal, their world empties out too.",
       working: "Setting",
     },
-    // Sets somebody ELSE's alias, which `!alias` cannot. Empty clears it — the one field in this
+    // Sets somebody ELSE's alias, which `!alias` cannot. Empty clears it: the one field in this
     // dialog that means something blank, so the explain says so rather than leaving an empty
     // submit to be read as a slip.
     alias: {
@@ -127,7 +127,7 @@
     allow_release: { confirm: true, title: "Release exemption", working: "Applying" },
   };
 
-  // Two commands point two ways, and the wording has to follow — a page full of "Locking" while
+  // Two commands point two ways, and the wording has to follow: a page full of "Locking" while
   // unlocking is the sort of thing nobody quite trusts afterwards. The direction rides on the
   // control in both cases (`data-locked`, `data-allowed`), so this reads it back off the link.
   var DIRECTED = {
@@ -139,7 +139,7 @@
       };
     },
     // **Neither wording says "deny", because clearing does not deny.** It returns the slot to the
-    // room's release mode, which may well still let it release — the reference calls this half
+    // room's release mode, which may well still let it release. The reference calls this half
     // `/forbid_release` and that name is the misreading being avoided. So the confirmation names
     // what is restored rather than what is taken away.
     allow_release: function (yes) {
@@ -190,11 +190,11 @@
       var input = row.querySelector("input");
       if (!input) return;
       // **Reset every time.** Left alone, an item typed for slot 3 would still be sitting there
-      // when the dialog reopens for slot 9 — pre-filled, plausible, and about the wrong player.
+      // when the dialog reopens for slot 9: pre-filled, plausible, and about the wrong player.
       //
       // Back to `defaultValue`, not to empty: that is the markup's own `value` attribute, so a text
       // box comes back blank and Copies comes back at 1. Clearing it instead would leave the number
-      // field empty, which submits nothing — and `build()` reads a missing count as one, so it
+      // field empty, which submits nothing, and `build()` reads a missing count as one, so it
       // would happen to work while showing an empty box where the default is supposed to be.
       if (input.type === "checkbox") input.checked = false;
       else input.value = input.defaultValue;
@@ -254,7 +254,7 @@
       body: new URLSearchParams(body),
     })
       .then(function (response) {
-        // The route answers JSON for every outcome it authored, including a refusal — so a body
+        // The route answers JSON for every outcome it authored, including a refusal, so a body
         // that will not parse is a failure further out than the handler, and saying so beats
         // showing an empty result pane.
         return response.json().catch(function () {
@@ -275,8 +275,8 @@
   }
 
   // --- suggestions ------------------------------------------------------------------------------
-  // pahoa matches item and location names EXACTLY, which is right — a program should not be guessed
-  // at — and makes an empty text box hostile. These come from the generation's own datapackage,
+  // pahoa matches item and location names EXACTLY, which is right (a program should not be guessed
+  // at) and makes an empty text box hostile. These come from the generation's own datapackage,
   // scoped to the target slot's game, which is the game the command will be read in.
   var pending = null;
   function suggest(input) {
@@ -357,7 +357,7 @@
     } else {
       // No confirmation: a lock is undone by unlocking and a kicked client reconnects, so a dialog
       // asking "are you sure" for these would be a click somebody learns to dismiss without
-      // reading — which is what makes the confirmations on the others worth anything.
+      // reading, which is what makes the confirmations on the others worth anything.
       submit(spec);
     }
   });

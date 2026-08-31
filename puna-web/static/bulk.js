@@ -3,15 +3,15 @@
 // ## What it does and does not own
 //
 // The markup is `rooms/bulk.html` and the work is the route. This moves `<option>`s between two
-// `<select multiple>`s and highlights them — nothing here decides what an action means, and nothing
+// `<select multiple>`s and highlights them. Nothing here decides what an action means, and nothing
 // here talks to the room.
 //
 // ## Why the right pane is the form field
 //
 // `<select multiple name="slots">` submits its **selected** options, not its contents. So the
 // staged set and the posted set are only the same thing if everything on the right is selected at
-// submit time, which is what `form.submit` does below. The alternative — hidden inputs kept in step
-// with the list — is two representations of one set, and the one that drifts is the one nobody
+// submit time, which is what `form.submit` does below. The alternative, hidden inputs kept in step
+// with the list, is two representations of one set, and the one that drifts is the one nobody
 // looks at.
 //
 // Without this file the panes do not move and the `<noscript>` says so. The room page's per-slot
@@ -100,7 +100,7 @@
 
   // **The one thing `Apply` cannot say on its own**, because it replaces rather than adds: "select
   // everything except X" is apply-then-invert. Acting on both panes for the same reason `Apply`
-  // does — it is a selection operation, so which pane a slot happens to be sitting in is not part
+  // does: it is a selection operation, so which pane a slot happens to be sitting in is not part
   // of the question.
   function invertSelection() {
     var total = 0;

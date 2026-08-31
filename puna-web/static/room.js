@@ -26,12 +26,12 @@
 //
 // **Its own IIFE, ahead of the panel's, deliberately.** The lifecycle panel below returns early on
 // a page without one, and hanging an unrelated roster feature off that guard is exactly how the
-// clipboard controls ended up dead on `/admin/users` at M21 — a feature working everywhere except
+// clipboard controls ended up dead on `/admin/users` at M21: a feature working everywhere except
 // the one page whose markup the guard was written for.
 //
 // The anchor's `href` is a real page: unscripted, the click lands on `/claim/<token>`, which
-// describes the slot and asks for a confirmation. That page exists for its own reasons — it is what
-// a chat client unfurls when the link is sent to somebody — so this is a shortcut over it rather
+// describes the slot and asks for a confirmation. That page exists for its own reasons (it is what
+// a chat client unfurls when the link is sent to somebody) so this is a shortcut over it rather
 // than a substitute for it.
 //
 // **The POST is what claims, and the GET never does.** It used to: `GET /claim/<token>` redeemed a
@@ -43,8 +43,8 @@
   document.addEventListener("click", function (event) {
     var link = event.target.closest("a[data-claim]");
     if (!link) return;
-    // Anything but a plain left click means the reader asked for something else — a new tab, a
-    // download, a context menu — and every one of those wants the page rather than a mutation
+    // Anything but a plain left click means the reader asked for something else (a new tab, a
+    // download, a context menu) and every one of those wants the page rather than a mutation
     // fired from under them.
     if (event.defaultPrevented || event.button !== 0) return;
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -73,7 +73,7 @@
       .catch(function () {
         // **Falls back to the page rather than reporting failure in place.** A claim that did not
         // land is nearly always a link somebody else spent first, and `/claim/<token>` is the thing
-        // that says so in words — where an error in a table cell would say only that something
+        // that says so in words, where an error in a table cell would say only that something
         // went wrong.
         window.location.href = link.href;
       });
