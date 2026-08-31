@@ -127,7 +127,23 @@ impl PingPreference {
         }
     }
 
-    /// The chip's text.
+    /// The chip's text, or **`None` for `Unknown`**.
+    ///
+    /// An absent chip is what "nobody has said" looks like. Rendering the word would put a fifth
+    /// answer on the page: a row reading "unknown" beside four saying something real looks like a
+    /// stated position, when it is the absence of one — and on a young room it would be a column of
+    /// them, which is a lot of ink for no information.
+    ///
+    /// Separate from [`label`](Self::label), which the preferences form still needs: there "Unknown"
+    /// is a choice somebody selects and has to be named.
+    pub fn chip(self) -> Option<&'static str> {
+        match self {
+            Self::Unknown => None,
+            other => Some(other.label()),
+        }
+    }
+
+    /// What the form calls it. Every value has one, including `Unknown`.
     pub fn label(self) -> &'static str {
         match self {
             Self::No => "no pings",
@@ -372,6 +388,35 @@ mod tests {
 
         assert_eq!(PingPreference::parse("something_new"), None);
         assert!(!PingPreference::No.shows_handle_to_players());
+    }
+
+    /// **An unanswered preference shows no chip, and every answered one does.**
+    ///
+    /// Absence is what "nobody has said" looks like on the page. Rendering the word would put a
+    /// fifth answer beside the four that are real positions — and on a young room it would be a
+    /// column of "unknown", which is a lot of ink for the information that nobody has been asked.
+    ///
+    /// `Unknown` keeps its `label`, because the preferences form offers it as a choice somebody
+    /// selects and a radio with no words is not a choice. The two functions differ for exactly one
+    /// value, which is why they are two functions.
+    #[test]
+    fn only_an_unanswered_preference_has_no_chip() {
+        let silent: Vec<&str> = PingPreference::ALL
+            .into_iter()
+            .filter(|p| p.chip().is_none())
+            .map(PingPreference::as_sql)
+            .collect();
+        assert_eq!(silent, ["unknown"]);
+
+        // Every other value's chip is its label, so the two cannot drift into saying different
+        // things about the same choice.
+        for value in PingPreference::ALL {
+            if value == PingPreference::Unknown {
+                assert!(!value.label().is_empty(), "the form still needs a word");
+            } else {
+                assert_eq!(value.chip(), Some(value.label()));
+            }
+        }
     }
 
     /// Exactly one value withholds the handle from other players.

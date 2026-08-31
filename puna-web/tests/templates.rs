@@ -2113,6 +2113,74 @@ fn a_checkbox_posts_something_its_rust_type_can_parse() {
     );
 }
 
+/// **Every progression a row can carry has a tint, and every tint belongs to one.**
+///
+/// The class name is built in the client as `prog-${tone}` from a value the server sends, so the
+/// three sides — `ProgressionStatus::as_sql`, the template's radio values, and `puna.css` — agree
+/// only because somebody kept them agreeing. A missing rule is silent: the chip renders in the
+/// default muted grey and looks like a chip that was never meant to be colored.
+///
+/// The other direction matters too. A rule for a tone nothing emits is dead style that reads as
+/// evidence the feature has a state it does not have.
+///
+/// `unknown` is deliberately absent from the stylesheet: it renders no chip at all, so a rule for it
+/// could never apply.
+#[test]
+fn every_progression_has_a_tint_and_every_tint_a_progression() {
+    let model = std::fs::read_to_string(source("../puna-core/src/model/annotation.rs"))
+        .expect("annotation.rs");
+    let css = std::fs::read_to_string(source("static/css/puna.css")).expect("puna.css");
+
+    // The wire spellings, read out of `ProgressionStatus::as_sql` rather than listed here.
+    let arms = model
+        .split_once("impl ProgressionStatus {")
+        .expect("ProgressionStatus is gone")
+        .1;
+    let arms = arms.split_once("pub fn label(").expect("no label fn").0;
+    let tones: Vec<&str> = arms
+        .match_indices("=> \"")
+        .map(|(at, m)| {
+            arms[at + m.len()..]
+                .split('"')
+                .next()
+                .expect("a closing quote")
+        })
+        .filter(|tone| *tone != "unknown")
+        .collect();
+
+    assert_eq!(
+        tones.len(),
+        4,
+        "expected four tinted progressions, found {tones:?}"
+    );
+
+    for tone in &tones {
+        assert!(
+            css.contains(&format!(".tag.prog-{tone} {{")),
+            "`prog-{tone}` has no rule, so that chip renders in the default grey and looks \
+             deliberate"
+        );
+    }
+
+    // And nothing else claims to be one.
+    let styled: Vec<String> = css
+        .match_indices(".tag.prog-")
+        .map(|(at, m)| {
+            css[at + m.len()..]
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect();
+    for tone in &styled {
+        assert!(
+            tones.contains(&tone.as_str()),
+            "`prog-{tone}` is styled and no progression emits it"
+        );
+    }
+}
+
 /// **The Owner cell is built from the server's flag, never from whether the row has an owner.**
 ///
 /// The `<th>` is server-rendered from `{% if annotations %}` and the body is the client's, so the

@@ -101,7 +101,12 @@
           text: r.game,
           // Two independent chips, and a slot can carry both: a spectator that somebody has
           // annotated. `tag` takes an array for that reason.
-          tag: [r.spectator ? "spectator" : null, r.progression],
+          // The progression carries its own tint, keyed on the wire spelling rather than on the
+          // label — a reworded label must not silently drop a color.
+          tag: [
+            r.spectator ? "spectator" : null,
+            r.progression && { text: r.progression.label, class: `prog-${r.progression.tone}` },
+          ],
         },
         r.spectator
           ? dash
@@ -558,10 +563,15 @@
     // An array, because a row can carry two: a spectator who has also said where they are up to.
     // `[].concat` takes either shape, and the filter is what lets a caller pass a null for "no chip
     // here" without writing a conditional at every call site.
-    for (const label of [].concat(value.tag || []).filter(Boolean)) {
+    //
+    // An entry is a plain string, or `{text, class}` where the chip is tinted. The class is a name
+    // the server chose, never a color: which red "BK" is drawn in is the stylesheet's business and
+    // has to answer to the theme.
+    for (const entry of [].concat(value.tag || []).filter(Boolean)) {
+      const chip = typeof entry === "string" ? { text: entry } : entry;
       const tag = document.createElement("span");
-      tag.className = "tag";
-      tag.textContent = label;
+      tag.className = chip.class ? `tag ${chip.class}` : "tag";
+      tag.textContent = chip.text;
       td.append(" ", tag);
     }
   }
@@ -594,17 +604,14 @@
 
       // **Opened on what is stored, not on the defaults.** A dialog that came up blank would make
       // "save" quietly clear a note somebody wrote, since an empty box IS the delete.
-      const chosen = edit.progression || "Unknown";
+      // **Matched on the wire value, which is what the radio posts.** The row carries `tone`
+      // alongside the label precisely because styling needed a stable name, and it turns out to be
+      // the right thing to match on too: comparing rendered prose would have made the preselect
+      // depend on wording, and that failure is silent in the worst way — the dialog opens with
+      // nothing checked and saving then CLEARS a progression somebody had set.
+      const chosen = edit.progression ? edit.progression.tone : "unknown";
       for (const radio of form.querySelectorAll('input[name="progression"]')) {
-        // Matched on the LABEL, because that is what a row carries — the wire value never reaches
-        // the client, deliberately, since the client has no use for a spelling only the database
-        // reads. Both sides come from `ProgressionStatus::label()`, so they cannot disagree.
-        //
-        // Read from `data-label` rather than from the label element's text: extracting it from the
-        // DOM would depend on the markup's whitespace and on the input being inside the label, and
-        // a mismatch is silent in the worst way — the dialog opens with nothing checked and saving
-        // then CLEARS a progression somebody had set.
-        radio.checked = radio.dataset.label === chosen;
+        radio.checked = radio.value === chosen;
       }
       form.querySelector('[name="note"]').value = edit.note || "";
 
@@ -730,7 +737,10 @@
     // front of them -- which is exactly the rule this function follows everywhere else. The handle
     // and the ping chip *are* rendered, so they are searchable, which is what makes "show me
     // everybody who is happy to be pinged" work.
-    const tags = [].concat(value.tag || []).filter(Boolean).join(" ");
+    const tags = [].concat(value.tag || [])
+      .filter(Boolean)
+      .map((entry) => (typeof entry === "string" ? entry : entry.text))
+      .join(" ");
     return `${value.text || ""} ${value.note || ""} ${tags}`;
   }
 

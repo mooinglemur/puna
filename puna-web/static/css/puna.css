@@ -1416,6 +1416,47 @@ h1 .scope {
 
 .form-actions .cancel { color: var(--muted); }
 
+/* --- progression chips ----------------------------------------------------------------------------
+   How far along a player says they are, tinted so a tracker can be read by scanning rather than
+   line by line.
+
+   **Every value is a different pair in light and dark**, and they are not one set lightened. A hue
+   that reads vividly at 60% lightness on #16181c goes muddy rather than pale when it is simply
+   dulled for white, which is the finding `.journal`'s palette already records — so the light values
+   are deeper and purer, and the dark ones lifted.
+
+   Measured rather than judged, as that palette also claims: every one of the eight clears **4.5:1**
+   against both grounds it can sit on (#ffffff / #fbfbfa in light, #1e2127 / #16181c in dark).
+
+   **BK and Soft BK are two reds, and that is the one pairing worth defending.** They are separated
+   by lightness as well as hue -- 1.77:1 between them in light and 1.51:1 in dark, deep red against
+   orange-red -- so they are not distinguishable by hue alone, which is the limitation `.journal`'s
+   own comment had to concede for progression and trap. And the chip carries its WORD: the tint is
+   the second signal here, never the only one, which is the same rule `.notice`/`.warning`/`.error`
+   follow with their left borders.
+
+   Border and text only, no fill: these sit inside table cells beside other chips, and four filled
+   badges per row would read as a status board rather than as a note in the margin. */
+.tag.prog-unblocked {
+  color: light-dark(#1a7f37, #4cc264);
+  border-color: light-dark(#1a7f37, #4cc264);
+}
+
+.tag.prog-bk {
+  color: light-dark(#8f1616, #f2696e);
+  border-color: light-dark(#8f1616, #f2696e);
+}
+
+.tag.prog-soft_bk {
+  color: light-dark(#c2410c, #f0a882);
+  border-color: light-dark(#c2410c, #f0a882);
+}
+
+.tag.prog-go_mode {
+  color: light-dark(#7a4c00, #f0c86a);
+  border-color: light-dark(#7a4c00, #f0c86a);
+}
+
 /* The pencil that opens the annotation dialog. Rendered only on rows the viewer may edit, so it is
    allowed to be quiet: on a 200-slot room a player sees one of these and staff see all of them, and
    a control that drew the eye would make an organizer's tracker a wall of pencils. */

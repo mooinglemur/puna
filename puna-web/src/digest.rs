@@ -100,11 +100,11 @@ pub struct SlotRow {
     /// slot is unclaimed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner: Option<SlotOwner>,
-    /// The player's own account of how far along they are, as a label. **Absent for `unknown`**
-    /// rather than sent as the word: a row saying "Unknown" beside four saying something real reads
-    /// as a fifth answer, and this way the client renders a chip if and only if there is one.
+    /// The player's own account of how far along they are. **Absent for `unknown`** rather than
+    /// sent as the word: a row saying "Unknown" beside four saying something real reads as a fifth
+    /// answer, and this way the client renders a chip if and only if there is one.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub progression: Option<&'static str>,
+    pub progression: Option<Chip>,
     /// The slot's note, where there is one and this viewer may read it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
@@ -125,13 +125,29 @@ fn is_false(value: &bool) -> bool {
     !value
 }
 
+/// A label and the name of the tint it is drawn in.
+///
+/// **`tone` is the wire spelling and is used as a CSS class suffix and nothing else.** The client
+/// could map the label to a color instead, and that would key a visual decision on prose — a
+/// reworded label would silently drop the tint. This way the two travel together and the one that
+/// styling depends on is the one the database also uses.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Chip {
+    pub label: &'static str,
+    pub tone: &'static str,
+}
+
 /// Who holds a slot, as much of it as this viewer is entitled to.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct SlotOwner {
-    /// The ping-preference chip, always present. **Shown even when the handle is not**, and
-    /// deliberately: "no pings" is something the person chose to publish, and a player who can see
-    /// it knows not to go looking for another way to reach them.
-    pub ping: &'static str,
+    /// The ping-preference chip, and **absent for `unknown`** — an unanswered preference shows no
+    /// chip rather than the word, so what is on the page is only what somebody actually said.
+    ///
+    /// **Shown even when the handle is not**, which is the case that matters: "no pings" is
+    /// something the person chose to publish, and a player who can see it knows not to go looking
+    /// for another way to reach them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ping: Option<&'static str>,
     /// Absent when this viewer may not know who this is — the owner said `no` and the viewer is not
     /// staff. Its absence is what distinguishes "withheld" from "never signed in", which is
     /// [`Contact::handle`] being null.
@@ -396,7 +412,10 @@ pub fn slot_rows(
                     .people
                     .and(Some(slot.progression))
                     .filter(|p| *p != ProgressionStatus::Unknown)
-                    .map(ProgressionStatus::label),
+                    .map(|p| Chip {
+                        label: p.label(),
+                        tone: p.as_sql(),
+                    }),
                 note: viewer.people.and_then(|_| slot.note.clone()),
                 editable: viewer.may_edit(slot),
             }
@@ -426,7 +445,7 @@ fn owner_of(slot: &Slot, people: &People, staff: bool) -> Option<SlotOwner> {
 
     let entitled = staff || preference.shows_handle_to_players();
     Some(SlotOwner {
-        ping: preference.label(),
+        ping: preference.chip(),
         contact: entitled.then(|| Contact {
             // The placeholder is turned into an absent handle **here**, in the one place that knows
             // both, rather than by a client comparing a username against a snowflake. `ensure_exists`
@@ -978,7 +997,13 @@ mod tests {
             staff: false,
             people: Some(&people),
         });
-        assert_eq!(rows[0].progression, Some("BK"));
+        assert_eq!(
+            rows[0].progression,
+            Some(Chip {
+                label: "BK",
+                tone: "bk"
+            })
+        );
         assert_eq!(rows[0].note.as_deref(), Some("ping me before 9pm"));
         assert_eq!(
             rows[0].owner.as_ref().and_then(|o| o.contact.as_ref()),
@@ -1095,14 +1120,18 @@ mod tests {
         };
 
         let player_view = rows(false)[0].owner.clone().expect("an owner");
-        assert_eq!(player_view.ping, "no pings", "the chip is not the secret");
+        assert_eq!(
+            player_view.ping,
+            Some("no pings"),
+            "the chip is not the secret"
+        );
         assert_eq!(
             player_view.contact, None,
             "a player was handed a handle its owner withheld"
         );
 
         let staff_view = rows(true)[0].owner.clone().expect("an owner");
-        assert_eq!(staff_view.ping, "no pings");
+        assert_eq!(staff_view.ping, Some("no pings"));
         assert_eq!(
             staff_view.contact.and_then(|c| c.handle).as_deref(),
             Some("troyhandle"),
