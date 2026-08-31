@@ -174,7 +174,7 @@ room is not restarted.</p>
    one. A bare id rather than a link, because the id is what Puna stores; pasting a full URL over
    it works just as well. #}
 <input type="text" id="lobby_url" name="lobby_url"
-       {%+ if let Some(lobby_room) = room.lobby_room_id +%}value="{{ lobby_room }}"{% endif %}
+       {%+ if let Some(lobby_room) = room.lobby_room_id +%}value="{{ lobby_room }}"{% endif +%}
        placeholder="paste the lobby room's link">
 <p class="hint">A link to the lobby room, or just its id.
 {%+ if room.lobby_room_id.is_some() %}
@@ -208,7 +208,7 @@ Safe to run more than once.</p>
    going to happen. #}
 <p class="hint">The room reads these once, when it starts, so changing them takes it down and brings
 it back.
-{% if restart_would_land %}
+{%+ if restart_would_land %}
 <strong>The room is up, so saving here restarts it now</strong> &mdash; about a minute, and every
 player reconnects. Nothing is lost: the save is flushed on the way down.
 {% else %}

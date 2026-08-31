@@ -2907,6 +2907,30 @@ pub(crate) mod tests {
             with(true, Some(3)).contains("claim links"),
             "the notice names a problem and not the thing that fixes it"
         );
+
+        // **The reported bug, at the level a reader meets it.** This shipped as
+        // `could not.They still have their claim links`: whitespace beside a tag is stripped
+        // unless a `+` asks for it, and the sentence wrapped onto the next line straight into one.
+        // `contains("claim links")` above was true throughout, which is why it needed its own
+        // assertion rather than a stronger reading of that one. The source lint in
+        // `tests/templates.rs` covers the shape; this covers the sentence.
+        // Read as a browser lays it out: askama preserves the newline the source wrapped on, and
+        // HTML collapses it to one space. What must never survive that collapse is NO whitespace,
+        // which is what a stripped one leaves.
+        let as_read = |unclaimed| {
+            with(true, Some(unclaimed))
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        assert!(
+            as_read(3).contains("it could not. They still have their claim links"),
+            "two sentences of the notice run together"
+        );
+        assert!(
+            as_read(1).contains("it could not. It still has its claim link"),
+            "two sentences of the notice run together"
+        );
     }
 
     /// **The helper boundary, as the page draws it.**

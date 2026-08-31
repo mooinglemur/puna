@@ -126,7 +126,8 @@ fn whitespace_between_text_and_a_tag_is_preserved_explicitly() {
             // nothing follows it inside the branch for the text to run together with.
             if run.contains('\n')
                 && (terminates_a_block(&source[at..])
-                    || !line_containing(&source, before.len() - 1).contains('<'))
+                    || (!continues_a_sentence(before)
+                        && !line_containing(&source, before.len() - 1).contains('<')))
             {
                 continue;
             }
@@ -305,6 +306,22 @@ fn renders_text(content: &str) -> bool {
 /// crate.
 fn is_rendered_text(c: char) -> bool {
     !c.is_whitespace() && !matches!(c, '>' | '<' | '{' | '}')
+}
+
+/// Is this text a sentence carrying on, rather than the whole of a branch's body?
+///
+/// **The newline exclusion above is what let a real bug through**, and this is the narrowing.
+/// `... it could match. {{ ... }} it could not.` split across two lines rendered as
+/// *"it could not.They still have their claim links"* — flowing prose in a `<p>`, where the
+/// exclusion's whole argument is that the stripped whitespace is layout around a branch whose body
+/// is a word on a line of its own.
+///
+/// The tell is the punctuation. A word standing in for a table cell does not end in `,` or `.`;
+/// prose that continues onto the next line does, and there the space is the one between two
+/// sentences. It only has to hold for text with a NEWLINE before the tag — everything else is
+/// flagged already.
+fn continues_a_sentence(before: &str) -> bool {
+    before.ends_with(['.', ',', ';', ':', '!', '?'])
 }
 
 fn line_of(source: &str, at: usize) -> Option<usize> {

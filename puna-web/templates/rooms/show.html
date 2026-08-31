@@ -127,8 +127,8 @@
    tag vanishes unless it is asked for. Without them this reads "3slotshere haveno owner". #}
 <p><strong>{{ unclaimed +}} slot{{ unclaimed|pluralize +}} here {{+ unclaimed|pluralize("has", "have") +}} no owner.</strong>
 This room was opened from a lobby room, and the lobby named an account for every YAML it could
-match &mdash; {{+ unclaimed|pluralize("this is the one", "these are the ones") +}} it could not.
-{{ unclaimed|pluralize("It still has its", "They still have their") +}} claim link{{ unclaimed|pluralize +}}
+match. {{+ unclaimed|pluralize("This is the one", "These are the ones") +}} it could not.
+{{+ unclaimed|pluralize("It still has its", "They still have their") +}} claim link{{ unclaimed|pluralize +}}
 in the table below, so sending {{+ unclaimed|pluralize("that", "those") +}} is all that is left.</p>
 {% if is_organizer %}
 <p class="hint">If that number looks wrong for this room, the

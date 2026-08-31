@@ -16,22 +16,28 @@
 //!
 //! ## The join is on the NAME, and the slot number is deliberately ignored
 //!
-//! Both are derived, by two different programs, and the name is the one that holds. The lobby's
-//! `get_ap_player_name` is a faithful port of Archipelago's `handle_name` (`Generate.py:374`) down
-//! to the `.strip()[:16].strip()`, and the lobby names the files it hands the generator after its
-//! own resolved names — so the generator's counter walks the same order and lands on the same
-//! strings.
+//! Both are derived, by two different programs, and the name is the one that holds.
 //!
-//! Two shapes still miss, and both miss **loudly**: `%number%`/`%player%`, which Archipelago
-//! converts to braces and the lobby does not, and `{player}`, where the lobby substitutes its own
-//! running count rather than the slot number. Each leaves a name that matches nothing, which is a
-//! slot that keeps its claim link — exactly where it was before the import ran.
+//! **The lobby sends the raw yaml name and the generator's is cut to sixteen characters**, so the
+//! two agree for every name that fits and for no name that does not. `/api/room/<id>` serves
+//! `yamls.player_name`, which is the `name:` field exactly as submitted; the lobby does have an
+//! Archipelago-resolved name — `get_ap_player_name`, a faithful port of `handle_name` down to the
+//! `.strip()[:16].strip()` — but it computes that for its own room page and does not put it on the
+//! wire. A player submitting `betterthanyou_Pupupu` is `betterthanyou_Pu` in the seed, and this
+//! read it as a name the lobby had never heard of.
 //!
-//! There is one case where the name is wrong rather than absent: ten or more slots sharing a
-//! templated base name sort as `Ray1, Ray10, Ray2, …`, so the generator's counter shifts from the
-//! ninth on. It cannot mis-assign anybody, because the lobby refuses a second person's YAML that
-//! resolves to an existing name — so a `{number}` family is always one account's, and every slot it
-//! shuffles has the same owner either way.
+//! So the match runs twice: on the strings as they stand, then on whatever is left over against
+//! [`ap_name`], which is the generator's own cut. The second pass takes a yaml **only where it is
+//! the one candidate** — two names cut to one string is a question for a person rather than a coin
+//! toss. It should never arise, because the lobby refuses a yaml whose resolved name collides with
+//! one already in the room, but [`plan`] is pure and matches whatever list it is handed.
+//!
+//! **Anything the generator SUBSTITUTED still misses, and misses loudly.** `{number}`, `{player}`
+//! and Archipelago's `%number%`/`%player%` reach us as the template rather than as what it became,
+//! and no amount of cutting turns one into the other; reproducing the substitution would mean
+//! reproducing a counter that walks the generator's file order rather than ours. Each leaves a name
+//! that matches nothing, which is a slot that keeps its claim link — exactly where it was before
+//! the import ran.
 //!
 //! ## A miss is not a failure
 //!
@@ -239,7 +245,36 @@ pub struct Plan {
     pub unused: usize,
 }
 
+/// What the generator would have called a yaml, once it cut the name to size.
+///
+/// Archipelago's `handle_name` ends `new_name.strip()[:16].strip()` (`Generate.py:387`), and the
+/// second strip is not redundant: the slice can leave a trailing space that the first one had no
+/// reason to touch, and a client that mishandles it is the comment upstream gives for doing it.
+/// Transcribed rather than approximated, because this decides who owns a slot.
+///
+/// **Sixteen CHARACTERS, not bytes.** Python slices code points, and Rust makes the difference easy
+/// to get wrong in the direction that panics. It is unobservable through the lobby, which refuses a
+/// non-ASCII name outright — but it is Archipelago that produced the string being matched against,
+/// so Archipelago's rule is the one to hold, whatever reaches this from where.
+///
+/// Deliberately **no substitution**: `{number}` and friends are the generator's, and reproducing
+/// them would mean reproducing its counter. See the module docs for what that costs, which is
+/// nothing this import cannot already survive.
+pub fn ap_name(submitted: &str) -> String {
+    submitted
+        .trim()
+        .chars()
+        .take(16)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 /// Work out the assignment. **Pure**, so every rule below is testable without a lobby.
+///
+/// Two passes, exact then [`ap_name`] — see the module docs for why the lobby's name and the
+/// generator's diverge past sixteen characters, and why the second pass takes a yaml only where it
+/// is the sole candidate.
 ///
 /// Two things it will not do:
 ///
@@ -262,22 +297,65 @@ pub struct Plan {
 /// **A yaml is `used` if it matched a slot at all**, claimed or already owned. Marking only the
 /// claimed ones is what made a fully-claimed room report every yaml as matching nothing.
 pub fn plan(roster: &[Slot], yamls: &[LobbyYaml]) -> Plan {
+    // **Every exact match is settled before a single cut name is considered.** The two passes
+    // cannot compete for one yaml -- a yaml that matches a slot exactly is at most sixteen
+    // characters, so cutting it changes nothing and it can only ever name that same slot -- but the
+    // ordering says so structurally rather than by that argument, and it is the argument that would
+    // stop holding if the cut ever gained a substitution step.
+    let mut matched: Vec<Option<usize>> = roster
+        .iter()
+        .map(|slot| yamls.iter().position(|y| y.player_name == slot.player_name))
+        .collect();
+
+    // Held by NAME rather than by index, which is how `unused` has always been counted: two yamls
+    // spelled identically both named the slot that one of them matched, and reporting the second as
+    // having named nothing would send an organizer looking for a mismatch.
+    let mut used: std::collections::HashSet<&str> = matched
+        .iter()
+        .flatten()
+        .map(|&i| yamls[i].player_name.as_str())
+        .collect();
+
+    // The second pass: the generator cut these names and the lobby did not. Order-independent,
+    // since a yaml cuts to exactly one string and no two slots share a name -- so a candidate here
+    // belongs to one slot or to none, and which slot asks first cannot change the answer.
+    for (slot, matched) in roster.iter().zip(matched.iter_mut()) {
+        if matched.is_some() {
+            continue;
+        }
+        let mut candidates = yamls
+            .iter()
+            .enumerate()
+            .filter(|(_, y)| !used.contains(y.player_name.as_str()))
+            .filter(|(_, y)| ap_name(&y.player_name) == slot.player_name);
+
+        let Some((i, yaml)) = candidates.next() else {
+            continue;
+        };
+        // **Two names cutting to one is left for a person.** Claiming either would be a guess about
+        // which account a slot belongs to, and a wrong guess hands somebody else's world away --
+        // where leaving it costs one claim link, which is what this slot has anyway.
+        if candidates.next().is_some() {
+            continue;
+        }
+        *matched = Some(i);
+        used.insert(yaml.player_name.as_str());
+    }
+
     let mut claims = Vec::new();
     let mut unmatched = Vec::new();
     let mut already_claimed = 0;
-    let mut used = std::collections::HashSet::new();
 
-    for slot in roster {
-        match yamls.iter().find(|y| y.player_name == slot.player_name) {
-            Some(yaml) => {
-                // Marked used before the ownership branch, deliberately: the question this answers
-                // is "did the lobby name a slot in this room", and it did either way.
-                used.insert(yaml.player_name.as_str());
-
+    for (slot, matched) in roster.iter().zip(&matched) {
+        match matched {
+            // Counted whichever pass found it: a cut name is as much a match as an exact one, and
+            // an organizer's next move is the same either way. What the two passes must not share
+            // is the ownership branch below.
+            Some(i) => {
                 if slot.owner_id.is_some() {
                     already_claimed += 1;
                 } else {
-                    claims.push((slot.slot_number, yaml.discord_id));
+                    claims.push((slot.slot_number, yamls[*i].discord_id));
                 }
             }
             // A slot nobody has claimed and the lobby cannot name. A slot that is already owned and
@@ -584,6 +662,109 @@ mod tests {
             "a name the generator expanded and the lobby did not"
         );
         assert_eq!(plan.unused, 1, "the lobby's Ray1 named no slot here");
+    }
+
+    /// Archipelago's own cut, transcribed. The second strip is the interesting one: it exists
+    /// because the slice can expose a trailing space the first strip had no reason to touch.
+    #[test]
+    fn a_name_is_cut_the_way_the_generator_cuts_it() {
+        assert_eq!(ap_name("Troy"), "Troy", "a name that fits is left alone");
+        assert_eq!(ap_name("betterthanyou_Pupupu"), "betterthanyou_Pu");
+        assert_eq!(ap_name("  Troy  "), "Troy");
+
+        assert_eq!(
+            ap_name("sixteencharacter"),
+            "sixteencharacter",
+            "exactly sixteen is not cut"
+        );
+        assert_eq!(
+            ap_name("Troy the Second X"),
+            "Troy the Second",
+            "the slice ends on a space, which only the second strip removes"
+        );
+
+        // Sixteen CHARACTERS. Byte slicing would panic here rather than answer, which is the
+        // failure mode worth pinning even though the lobby refuses a non-ASCII name.
+        assert_eq!(ap_name(&"é".repeat(20)), "é".repeat(16));
+
+        assert_eq!(
+            ap_name("Ray{number}"),
+            "Ray{number}",
+            "no substitution: that is the generator's counter, not ours"
+        );
+    }
+
+    /// **The reported case.** A 65-slot room imported from the prod lobby claimed 63 and reported
+    /// *"no lobby YAML matched betterthanyou_Pu, betterthanyou_SM"* — two players whose yaml names
+    /// ran past sixteen characters, which the lobby sends whole and the generator had already cut.
+    #[test]
+    fn a_name_the_generator_cut_still_matches_its_yaml() {
+        let roster = [
+            slot(1, "Troy", None, SlotKind::Player),
+            slot(2, "betterthanyou_Pu", None, SlotKind::Player),
+            slot(3, "betterthanyou_SM", None, SlotKind::Player),
+        ];
+        let yamls = [
+            yaml("Troy", 7),
+            yaml("betterthanyou_Pupupu", 8),
+            yaml("betterthanyou_SMB3", 9),
+        ];
+
+        let plan = plan(&roster, &yamls);
+
+        assert_eq!(plan.claims, vec![(1, 7), (2, 8), (3, 9)]);
+        assert!(plan.unmatched.is_empty());
+        assert_eq!(
+            plan.unused, 0,
+            "a yaml that named a slot under its cut name named a slot"
+        );
+    }
+
+    /// **Two names cutting to one string is a question for a person.** Claiming either would be a
+    /// guess about whose world a slot is, where leaving it costs the one claim link it already has.
+    #[test]
+    fn an_ambiguous_cut_claims_nobody() {
+        let roster = [slot(1, "betterthanyou_Pu", None, SlotKind::Player)];
+        let yamls = [
+            yaml("betterthanyou_Pupupu", 7),
+            yaml("betterthanyou_Punch", 8),
+        ];
+        // The fixture is the case, not two names that simply miss.
+        for y in &yamls {
+            assert_eq!(ap_name(&y.player_name), roster[0].player_name);
+        }
+
+        let plan = plan(&roster, &yamls);
+
+        assert!(plan.claims.is_empty());
+        assert_eq!(plan.unmatched, vec!["betterthanyou_Pu".to_string()]);
+        assert_eq!(plan.unused, 2, "neither of them named this slot");
+    }
+
+    /// **A name spelled in full beats one that only matches after cutting**, whichever order the
+    /// lobby listed them in.
+    ///
+    /// The shape has to be contrived, and that is worth knowing rather than hiding: for a yaml to
+    /// cut down to some *other* slot's name it must be padded, since anything short enough to match
+    /// a slot exactly is short enough to survive the cut unchanged. So the two passes cannot
+    /// genuinely compete for one yaml, and their separation is structure rather than a fix — which
+    /// is exactly why the preference is pinned here instead of resting on that argument.
+    #[test]
+    fn a_name_spelled_in_full_beats_one_that_only_matches_cut() {
+        let roster = [slot(1, "Ray", None, SlotKind::Player)];
+        // Listed so the cut candidate is seen first: it is sixteen characters of `Ray` and padding
+        // before the trailing strip, and `Ray` afterwards.
+        let yamls = [yaml("Ray             xx", 7), yaml("Ray", 8)];
+        assert_eq!(
+            ap_name(&yamls[0].player_name),
+            "Ray",
+            "the fixture is the case"
+        );
+
+        let plan = plan(&roster, &yamls);
+
+        assert_eq!(plan.claims, vec![(1, 8)], "the yaml that spells it wins");
+        assert_eq!(plan.unused, 1);
     }
 
     /// **Re-runnable, and it must never take a slot back.** Between the room opening and an
