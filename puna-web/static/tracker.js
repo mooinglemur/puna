@@ -73,6 +73,23 @@
     };
   }
 
+  // What the "Held by" column sorts on, derived from the cell so it can only ever order by what a
+  // reader can see -- the same rule filtering follows.
+  //
+  // **It needs an entry in `sortValues` at all**, and that is the interesting part: a bare
+  // `data-key` looks the row's field up, and `owner` is an OBJECT. Every claimed row stringified to
+  // `[object Object]` and compared equal, so the column did nothing but drift the unclaimed rows to
+  // the end -- with an arrow drawn over it saying it had sorted. The template's own note claimed it
+  // sorted by handle for as long as it did not.
+  //
+  // `copy` is present exactly where a contact is, which is exactly where the cell shows a name
+  // rather than a dash. Reading it rather than repeating `ownerCell`'s branches is what stops the
+  // two parting company. Both dashes sort as null, so they land last in either direction.
+  function ownerSortValue(r) {
+    const cell = ownerCell(r);
+    return cell.copy ? cell.text : null;
+  }
+
   const VIEWS = {
     slots: {
       rows: (d) => d.slots,
@@ -124,8 +141,13 @@
       //
       // A slot with nothing to check has no answer, so it is `null` and sorts last in BOTH
       // directions — the same rule `last seen` follows for a slot that has never acted.
+      //
+      // **Every key here must be a `data-key` in the template** or the column falls back to a field
+      // lookup that finds nothing, which sorts by nothing and still draws the arrow. Pinned by a
+      // lint, because both halves of that are silent.
       sortValues: {
         checks_done: (r) => (r.checks_total ? r.checks_done / r.checks_total : null),
+        held_by: ownerSortValue,
       },
       // The footer, computed from the rows CURRENTLY DISPLAYED rather than from the server's
       // `totals`. With no filter the two agree exactly; with one, this describes the table it sits
@@ -448,9 +470,9 @@
         // A column may sort by something other than the field it displays -- see `sortValues`.
         const valueOf =
           (this.config.sortValues && this.config.sortValues[key]) || ((row) => row[key]);
-        rows = rows
-          .slice()
-          .sort((a, b) => compare(valueOf(a), valueOf(b), type) * (dir === "asc" ? 1 : -1));
+        // `dir` goes IN rather than negating what comes out: `compare` keeps the nulls at the end
+        // whichever way the column is pointing, and a sign flip out here would take them with it.
+        rows = rows.slice().sort((a, b) => compare(valueOf(a), valueOf(b), type, dir));
       }
 
       this.tbody.replaceChildren(...rows.map((row) => this.rowElement(row)));
@@ -744,14 +766,25 @@
     return `${value.text || ""} ${value.note || ""} ${tags}`;
   }
 
-  function compare(a, b, type) {
-    // Nulls last in both directions: an untouched slot belongs at the end of "least recently seen"
-    // and at the end of "most recently seen" alike, because it has no answer either way.
+  // **The direction is applied HERE and must not be applied by the caller**, which is the whole
+  // reason it is a parameter rather than a multiplication at the call site.
+  //
+  // Nulls last in both directions: an untouched slot belongs at the end of "least recently seen"
+  // and at the end of "most recently seen" alike, because it has no answer either way. A caller
+  // negating the returned number negates that too, so the nulls led on every descending sort --
+  // which is what shipped, for as long as this comment claimed otherwise. It affected the two
+  // columns whose null rule was written down deliberately, `last seen` and `checks`, and it is the
+  // rule "held by" was built on top of.
+  function compare(a, b, type, dir) {
     if (a === null || a === undefined) return b === null || b === undefined ? 0 : 1;
     if (b === null || b === undefined) return -1;
-    if (type === "number") return a - b;
-    if (type === "boolean") return (a ? 1 : 0) - (b ? 1 : 0);
-    return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
+
+    const sign = dir === "desc" ? -1 : 1;
+    if (type === "number") return (a - b) * sign;
+    if (type === "boolean") return ((a ? 1 : 0) - (b ? 1 : 0)) * sign;
+    return (
+      String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" }) * sign
+    );
   }
 
   function parseSort(value) {

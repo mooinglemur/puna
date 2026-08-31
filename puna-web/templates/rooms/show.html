@@ -237,6 +237,28 @@ claimed
 {% else %}
 unclaimed
 {% endif %}
+{# **A ping, for staff, on every branch above that has a holder** -- including "you" and "never
+   logged in", which is the one this exists for: the lobby named an account, nobody has a handle to
+   type, and `<@id>` is the only thing that reaches them.
+
+   Outside the branches rather than repeated inside three of them, because `owner_mention` is `None`
+   for an unclaimed slot and for anybody who is not staff -- so one control, gated once, in the route
+   where the gate can be proved.
+
+   **Independent of the enhanced tracker**, deliberately: that feature's owner column carries ping
+   preferences and a room toggle, and neither is a reason staff cannot reach the people in their own
+   room. Same `.copy` control as the claim link and the password, so it is revealed only where the
+   clipboard actually works. #}
+{% if let Some(mention) = slot.owner_mention %}
+<button type="button" class="copy" data-copy="{{ mention }}"
+        title="Copy a Discord mention for this player"
+        aria-label="Copy a Discord mention for the holder of slot {{+ slot.slot_number }}">
+<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+<rect x="5.5" y="1.5" width="9" height="11" rx="1.5" fill="none" stroke="currentColor"/>
+<path d="M10.5 14.5h-8a1 1 0 0 1-1-1v-9" fill="none" stroke="currentColor" stroke-linecap="round"/>
+</svg>
+</button>
+{% endif %}
 {# Unbinding the slot, for organizers. A roster action, not a kick: whoever is connected right now
    stays connected, and the console's `kick` is the separate decision that says so.
 

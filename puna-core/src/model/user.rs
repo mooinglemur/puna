@@ -111,6 +111,24 @@ pub fn is_placeholder(username: &str) -> bool {
     username.starts_with('<') && username.ends_with('>')
 }
 
+/// A Discord mention, `<@id>`, for pasting into a message.
+///
+/// **Built from the snowflake and never from a username**, which is the whole reason it is worth
+/// offering: typing a handle into Discord does not reliably reach anybody, and it reaches nobody at
+/// all for somebody who has never signed in here — the lobby-push case, where the id is all Puna
+/// has. So this is defined for every owner, including one whose stored name is
+/// [`placeholder_username`].
+///
+/// Two callers, which is why it is here rather than a `format!` at each: the tracker's owner column
+/// and the room page's roster. One string, so they cannot spell a ping two ways.
+///
+/// **Deliberately not confusable with [`placeholder_username`]**, which is `<id>` — this is `<@id>`,
+/// and the `@` is what makes Discord resolve it. They live beside each other so the difference is
+/// read once rather than inferred later.
+pub fn mention(discord_id: i64) -> String {
+    format!("<@{discord_id}>")
+}
+
 pub async fn ensure_exists(
     conn: &mut AsyncPgConnection,
     discord_id: i64,

@@ -267,6 +267,19 @@ pub struct SlotView {
     /// True when the holder exists but has never signed in — the lobby-push case, where a slot is
     /// assigned to a Discord id that has no account here yet.
     pub owner_never_logged_in: bool,
+    /// `<@id>` for the holder, to paste into Discord. **Staff only**, and a narrower tier than
+    /// [`Self::owner_name`] beside it.
+    ///
+    /// A username is what the roster is *for*, so anybody in the room reads it. A mention carries
+    /// the **snowflake**, which the username does not, and which is the durable identity — so it is
+    /// held to the tier that already reaches every player's password and lock state. That is also
+    /// the tracker's rule for its own owner column: staff get a contact whatever the holder's ping
+    /// preference says, and this page has no preferences to consult.
+    ///
+    /// **Present for a holder who has never signed in**, where `owner_name` renders nothing usable.
+    /// That is the case it earns its keep in: the lobby named the account, nobody has a handle to
+    /// type, and the id is the only way to reach them.
+    pub owner_mention: Option<String>,
     /// Whether this slot is barred from connecting, which decides which way the lock control points.
     ///
     /// Shown to staff only, with the rest of the moderation column: it is a fact about a sanction
@@ -381,6 +394,15 @@ fn slot_views(
                     .get(&owner)
                     .is_some_and(|name| puna_core::model::user::is_placeholder(name)),
                 _ => false,
+            },
+            // **`role`, not `may_see_roster`**, and the difference is deliberate: a player holding
+            // a slot reads the roster's names and does not get everyone's snowflake with it. Same
+            // gate as the lock state and the password below, decided here rather than in markup for
+            // the same reason -- `GET /room/<id>` is public, and a template cannot prove what it
+            // did not render.
+            owner_mention: match (role.is_some(), s.owner_id) {
+                (true, Some(owner)) => Some(puna_core::model::user::mention(owner)),
+                _ => None,
             },
             is_mine: matches!((viewer, s.owner_id), (Some(v), Some(o)) if v == o),
             // Staff only, and gated here rather than in markup for the same reason the password is:
@@ -2403,6 +2425,58 @@ pub(crate) mod tests {
         );
     }
 
+    /// **A mention is staff's, where a username is the whole room's**, and the two tiers are
+    /// deliberately different: the mention carries the snowflake, which the name does not.
+    ///
+    /// The case it exists for is the third assertion — a holder who has never signed in has no
+    /// handle to type, and `<@id>` is the only thing that reaches them. Nothing else on this page
+    /// offers a way to do that.
+    #[test]
+    fn a_mention_is_staffs_where_a_username_is_the_rooms() {
+        let slots = vec![slot(1, Some(100)), slot(2, Some(200)), slot(3, None)];
+        let names: std::collections::HashMap<i64, String> = [
+            (100, "alice".to_string()),
+            (200, puna_core::model::user::placeholder_username(200)),
+        ]
+        .into_iter()
+        .collect();
+
+        let views = |role| {
+            slot_views(
+                slots.clone(),
+                Some(100),
+                role,
+                &Default::default(),
+                false,
+                &names,
+                true,
+                &Default::default(),
+                puna_core::model::room::PatchPolicy::Claimed,
+            )
+        };
+
+        // A participant who runs nothing: names, and no snowflakes.
+        let player = views(None);
+        assert_eq!(player[0].owner_name.as_deref(), Some("alice"));
+        assert!(
+            player.iter().all(|v| v.owner_mention.is_none()),
+            "a player holding a slot was handed everybody's Discord id"
+        );
+
+        // A helper: the lowest staff tier, and the one the control is for.
+        let staff = views(Some(RoomRole::Helper));
+        assert_eq!(staff[0].owner_mention.as_deref(), Some("<@100>"));
+        assert_eq!(
+            staff[1].owner_mention.as_deref(),
+            Some("<@200>"),
+            "somebody who has never signed in is exactly who this reaches"
+        );
+        assert!(
+            staff[2].owner_mention.is_none(),
+            "an unclaimed slot has nobody to ping"
+        );
+    }
+
     /// A placeholder is told apart by its shape, and a real username never wears it.
     #[test]
     fn a_stand_in_username_is_recognizable() {
@@ -2964,6 +3038,7 @@ pub(crate) mod tests {
             tracker_id: None,
             owner_name: Some("kai".into()),
             owner_never_logged_in: false,
+            owner_mention: Some("<@77>".into()),
         }];
         let html = helper.render().expect("renders");
 
@@ -2973,6 +3048,9 @@ pub(crate) mod tests {
             ("/slot/1/rotate-password", "rotating a slot's password"),
             ("/slot/1/release", "releasing a claimed slot"),
             ("/members", "seeing who else is staff"),
+            // The route decides who gets a mention at all; this is the other half -- that the
+            // control is reachable rather than sitting in a branch a helper never enters.
+            (r#"data-copy="&#60;@77&#62;""#, "copying a player's mention"),
         ] {
             assert!(html.contains(fragment), "a helper is not offered {what}");
         }
@@ -4275,6 +4353,7 @@ pub(crate) mod tests {
             can_release: true,
             owner_name: Some("kai".into()),
             owner_never_logged_in: false,
+            owner_mention: Some("<@77>".into()),
         }
     }
 

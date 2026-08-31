@@ -218,13 +218,14 @@ fn a_glyph_only_control_names_itself_twice() {
     }
 
     // A source lint is the easiest kind to write vacuously, so say how much it must have seen.
-    // Twenty-five glyph controls exist today. The moderation column is why this number moves in
-    // steps, and it moved DOWN here: release and collect went into an overflow menu and gained
-    // written labels, so they are no longer glyph-only and no longer this lint's business, while
-    // the menu's own button is. A change that leaves none is a change this lint stopped guarding.
-    // Set it by reading the count this assertion prints, not by guessing.
+    // Twenty-eight glyph controls exist today -- twenty-seven until the roster gained a mention
+    // copy. The moderation column is why this number moves in steps, and it once moved DOWN:
+    // release and collect went into an overflow menu and gained written labels, so they are no
+    // longer glyph-only and no longer this lint's business, while the menu's own button is. A
+    // change that leaves none is a change this lint stopped guarding. Set it by reading the count
+    // this assertion prints, not by guessing.
     assert!(
-        examined >= 27,
+        examined >= 28,
         "only {examined} glyph-only controls found -- this lint is no longer looking at anything"
     );
     assert!(
@@ -2194,6 +2195,109 @@ fn every_progression_has_a_tint_and_every_tint_a_progression() {
         assert!(
             tones.contains(&tone.as_str()),
             "`prog-{tone}` is styled and no progression emits it"
+        );
+    }
+}
+
+/// **The sort direction is `compare`'s to apply, and negating its answer breaks a rule it states.**
+///
+/// `compare` puts nulls last *in both directions* — an untouched slot belongs at the end of "least
+/// recently seen" and of "most recently seen" alike, because it has no answer either way. A caller
+/// that multiplies the result by `-1` for a descending sort negates that too, so the nulls lead.
+///
+/// That is what shipped, underneath a comment saying the opposite, on the two columns whose null
+/// rule was written down on purpose: `last seen` and `checks`. It is invisible in review because
+/// both halves read correctly on their own, and invisible in use because a column of nulls at the
+/// wrong end still looks sorted.
+///
+/// Forbidding the sign flip rather than trusting the parameter: passing `dir` in and negating on
+/// the way out are not exclusive, and doing both is the same bug with an extra argument.
+#[test]
+fn the_sort_direction_is_applied_inside_compare_rather_than_by_its_caller() {
+    let script = std::fs::read_to_string(source("static/tracker.js")).expect("tracker.js");
+    // Comments name the thing they warn about, so a lint reading them rejects the correct file --
+    // which has happened here before and teaches the next person to delete the lint.
+    let code: String = script
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        code.contains("function compare(a, b, type, dir)"),
+        "`compare` no longer takes the direction, so its caller must be flipping the sign"
+    );
+    assert!(
+        code.contains("compare(valueOf(a), valueOf(b), type, dir)"),
+        "the sort no longer hands `compare` the direction"
+    );
+    for flip in [r#"dir === "asc" ? 1 : -1"#, r#"dir === "desc" ? -1 : 1"#] {
+        assert!(
+            !code.contains(&format!(
+                "compare(valueOf(a), valueOf(b), type, dir)) * ({flip}"
+            )),
+            "the sort negates `compare`, which sends the nulls to the wrong end"
+        );
+    }
+    // The general shape, wherever it is written: nothing outside `compare` decides direction.
+    let inside = code
+        .split_once("function compare(a, b, type, dir)")
+        .expect("compare")
+        .1;
+    let outside = code.replace(inside, "");
+    assert!(
+        !outside.contains(r#"=== "asc" ? 1 : -1"#),
+        "something outside `compare` is applying the sort direction"
+    );
+}
+
+/// **Every `sortValues` key is a column that exists**, or the column it meant to fix sorts by
+/// nothing.
+///
+/// `data-key` is a header's identity and its default sort is `row[key]`; `sortValues` overrides that
+/// for a column whose display and its ordering differ. The two live in different files and are
+/// joined only by the string, so a rename in either one lands here:
+///
+/// * an entry naming no header is dead — the column it was written for went back to the default,
+///   which is what "checks" sorting by raw count looked like before it was fixed;
+/// * a header whose entry lost its name falls back to `row["held_by"]`, which is `undefined` on
+///   every row, so every row compares equal and the table simply does not reorder.
+///
+/// Both draw the arrow and neither logs anything. The reverse direction — a header with no entry —
+/// is deliberately **not** flagged: most columns want the default, and only a column whose key is
+/// not a field on the row needs one, which is not a thing this can see from here.
+#[test]
+fn every_sort_override_names_a_column_that_exists() {
+    let script = std::fs::read_to_string(source("static/tracker.js")).expect("tracker.js");
+    let markup = std::fs::read_to_string(source("templates/tracker/show.html")).expect("show.html");
+
+    let block = script
+        .split_once("sortValues: {")
+        .expect("tracker.js no longer configures any sort override")
+        .1
+        .split_once('}')
+        .expect("unterminated sortValues")
+        .0;
+
+    // `key: ...` per line, comments and blanks skipped. The block is a literal by construction --
+    // it is a config object -- so this does not have to parse JavaScript to read it.
+    let keys: Vec<&str> = block
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("//"))
+        .filter_map(|line| line.split_once(':').map(|(key, _)| key.trim()))
+        .collect();
+
+    assert!(
+        keys.len() >= 2,
+        "read {} sort overrides out of tracker.js -- this lint is no longer looking at anything",
+        keys.len()
+    );
+    for key in keys {
+        assert!(
+            markup.contains(&format!(r#"data-key="{key}""#)),
+            "`sortValues.{key}` overrides the sort for a column no header declares, so the column \
+             it was written for is back on the default and this entry does nothing"
         );
     }
 }

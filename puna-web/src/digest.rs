@@ -456,7 +456,7 @@ fn owner_of(slot: &Slot, people: &People, staff: bool) -> Option<SlotOwner> {
                 .get(&owner)
                 .filter(|name| !puna_core::model::user::is_placeholder(name))
                 .cloned(),
-            mention: format!("<@{owner}>"),
+            mention: puna_core::model::user::mention(owner),
         }),
     })
 }

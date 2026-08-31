@@ -1738,7 +1738,7 @@ mod tests {
         assert!(html.contains("data-view=\"items\""));
     }
 
-    /// **The Owner column and the header count move together, or the table shifts.**
+    /// **The "Held by" column and the header count move together, or the table shifts.**
     ///
     /// The skeleton is server-rendered and the bodies are the client's, so the `<th>` and
     /// `tracker.js`'s cell array have to agree about how many columns there are. They agree because
@@ -1759,8 +1759,8 @@ mod tests {
 
         let off = render(false);
         assert!(
-            !off.contains(r#"data-key="owner""#),
-            "an outsider's tracker grew an Owner column"
+            !off.contains(r#"data-key="held_by""#),
+            "an outsider's tracker grew a \"Held by\" column"
         );
         assert!(
             !off.contains("data-annotations"),
@@ -1768,7 +1768,11 @@ mod tests {
         );
 
         let on = render(true);
-        assert!(on.contains(r#"<th data-key="owner">Owner</th>"#));
+        // **The room page's word, and a key that matches it.** The key is `tracker.js`'s handle on
+        // this column and is no longer the name of a field on the row, so what makes it sort is an
+        // explicit `sortValues` entry -- pinned separately, since a key with no entry falls back to
+        // a lookup that finds nothing and orders by nothing.
+        assert!(on.contains(r#"<th data-key="held_by">Held by</th>"#));
         assert!(on.contains(r#"data-annotations="1""#));
 
         // The summary spans the table it sits under. Counted the way the standing lint counts it,

@@ -92,8 +92,15 @@ need to.</p>
 
              Sorted on the handle rather than on the ping chip beside it: the chip is a property of a
              person and the column is a list of people, and `PingPreference`'s values are not a scale
-             — ordering by them would invent a ranking nobody expressed. #}
-          {% if annotations %}<th data-key="owner">Owner</th>{% endif %}
+             — ordering by them would invent a ranking nobody expressed. That takes a `sortValues`
+             entry in `tracker.js` and did not have one, so it sorted on the owner OBJECT and
+             ordered nothing at all while drawing an arrow that said otherwise.
+
+             **"Held by" to match the room page's roster**, which answers the same question about the
+             same slots — a reader moving between the two pages should not have to work out that two
+             headings mean one thing. The key moved with the label: it is `held_by`, and it no longer
+             names a field on the row, which is exactly why the sort has to be spelled out. #}
+          {% if annotations %}<th data-key="held_by">Held by</th>{% endif %}
           <th data-key="game">Game</th>
           <th data-key="checks_done" data-type="number">Checks</th>
           <th data-key="status">Status</th>
