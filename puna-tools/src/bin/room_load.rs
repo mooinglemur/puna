@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::Barrier;
 
 const USAGE: &str = "\
-room-load — synthetic check traffic against a running Puna room
+room-load: synthetic check traffic against a running Puna room
 
   --generation PATH  the zip that made this room (required)
   --room HOST:PORT   the room's advertised address (required)

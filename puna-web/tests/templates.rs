@@ -1084,8 +1084,8 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
         code.matches(r#""warning""#).count(),
         1,
         "the warning class is applied somewhere other than linkDown, so a disconnection can be \
-         announced without the dot agreeing — the bug that put a green circle beside \"Lost \
-         contact\". Reword the sentences freely; route them through linkDown."
+         announced without the dot agreeing. That is the bug that put a green circle beside \
+         \"Lost contact\". Reword the sentences freely; route them through linkDown."
     );
     // The backoff, and the one thing that must reset it. Coming back to a tab is information about
     // the reader rather than about the server, so the wait that had built up does not apply.

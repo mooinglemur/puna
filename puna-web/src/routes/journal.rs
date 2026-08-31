@@ -1026,7 +1026,7 @@ mod tests {
             assert_eq!(
                 visibility_for(Some(RoomRole::Organizer), policy),
                 Some(Visibility::Everything),
-                "an organizer is bound by {} — the policy names the tier BELOW them",
+                "an organizer is bound by {}; the policy names the tier BELOW them",
                 policy.as_sql()
             );
         }

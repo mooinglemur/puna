@@ -9,7 +9,7 @@ use puna_tools::args::Args;
 use puna_tools::seed::{self, Spec};
 
 const USAGE: &str = "\
-make-generation — a synthetic multiworld seed, uploadable to Puna as a generation
+make-generation: a synthetic multiworld seed, uploadable to Puna as a generation
 
   --slots N        player slots, each owning --locations checks   (default 4)
   --spectators N   slots that connect and play nothing            (default 0)
@@ -21,8 +21,8 @@ make-generation — a synthetic multiworld seed, uploadable to Puna as a generat
   --out PATH       where to write the zip            (default ./AP_<seed name>.zip)
   --help
 
-Every slot gets exactly one Goal item, shuffled into the multiworld like any other — it may sit in
-its own world or anybody else's. The seed embeds release_mode=auto, so a slot that goals releases
+Every slot gets exactly one Goal item, shuffled into the multiworld like any other, so it may sit
+in its own world or anybody else's. The seed embeds release_mode=auto, so a slot that goals releases
 its remaining items; that is what lets a room played by room-load reach an end.
 ";
 

@@ -732,7 +732,7 @@ mod tests {
             let expected = format!(r#"name="{name}" value="{value}" checked"#);
             assert!(
                 html.contains(&expected),
-                "`{name}` does not default to `{value}` — the form opens on a different choice \
+                "`{name}` does not default to `{value}`; the form opens on a different choice \
                  from the one that was decided on"
             );
         }
