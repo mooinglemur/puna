@@ -104,7 +104,7 @@ impl RoomError {
             Self::Transport(_) | Self::Resolve { .. } => true,
             Self::RateLimited { .. } => false,
             // One rule for both, because carrying the room's explanation must not change whether
-            // the call is retried — a `400` with a reason is the same non-transient Puna bug a
+            // the call is retried: a `400` with a reason is the same non-transient Puna bug a
             // `400` without one is.
             Self::Status { status } | Self::Refused { status, .. } => *status >= 500,
         }

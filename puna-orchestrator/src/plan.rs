@@ -262,11 +262,11 @@ impl Step {
             // room comes down in seconds rather than at the next full interval. The PACE is on how
             // many reaps are started per full pass, not on how quickly one of them finishes.
             Step::Reap => true,
-            // `MarkIdle` settles the room only if nobody wants it running — and if somebody does,
+            // `MarkIdle` settles the room only if nobody wants it running, and if somebody does,
             // the next pass plans a Start. Cheaper to look again than to encode that here.
             Step::MarkIdle(_) => true,
             // Terminal for this transition. `NotReady` and `MarkDegraded` describe a room waiting on
-            // something outside Puna — an image pull, a scheduler — on a timescale where a
+            // something outside Puna (an image pull, a scheduler) on a timescale where a
             // three-second pass is noise; `FailStart` is a backoff, which is a wall clock.
             Step::MarkRunning | Step::MarkDegraded | Step::NotReady | Step::FailStart => false,
         }
@@ -291,7 +291,7 @@ pub fn converging(rooms: &[RoomView], cluster: &ClusterSnapshot) -> usize {
                 RoomState::Provisioning | RoomState::Starting | RoomState::Stopping => true,
                 // **The case `puna_rooms{state}` cannot show.** A room that is restarting reads as
                 // `idle` for the whole time its previous pod is draining, which is indistinguishable
-                // from resting — and is exactly the window worth looking at often. Also covers a
+                // from resting, and is exactly the window worth looking at often. Also covers a
                 // plain start request, where there is no Deployment and the work is immediate.
                 RoomState::Idle => room.desired == DesiredState::Running,
                 // Settled, or waiting on a clock. A `running` room wanting a redeploy is settled:
@@ -500,7 +500,7 @@ fn step_for(
         RoomState::Failed => match room.desired {
             DesiredState::Running => {
                 // **A changed spec interrupts the backoff, and outranks the timer.** The backoff
-                // exists to stop a room broken by its own configuration being retried forever — but
+                // exists to stop a room broken by its own configuration being retried forever, but
                 // a spec that now renders differently is evidence that the recorded failure no
                 // longer describes this room, because an operator has already changed something:
                 // the image, or the row. Waiting out a timer that measures a problem somebody has
@@ -546,7 +546,7 @@ fn step_for(
             // room that is being taken down.
             //
             // **`is_at_rest`, not `== Stopped`.** `closed` is the same instruction to the
-            // reconciler and this is the arm that carries it out — an equality check here is the
+            // reconciler and this is the arm that carries it out, so an equality check here is the
             // one the compiler cannot catch, and getting it wrong leaves a closed room running
             // forever while its page says it is closed.
             if room.desired.is_at_rest() {
@@ -974,7 +974,7 @@ mod tests {
             );
         }
 
-        // And once down it rests exactly as a stopped room does — holding its reservation, holding
+        // And once down it rests exactly as a stopped room does, holding its reservation, holding
         // its directory. The gate on starting it again is the web tier's, not the planner's.
         let closed = view(RoomState::Idle, DesiredState::Closed);
         assert_eq!(

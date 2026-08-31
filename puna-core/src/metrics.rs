@@ -355,8 +355,8 @@ pub static COMMAND_SECONDS: LazyLock<Histogram> = LazyLock::new(|| {
 //
 // **Polled by the orchestrator and cached here, never scraped from a room.** A Prometheus scrape
 // reads these values and never touches a live multiworld, which decouples scrape rate from room
-// load: a monitoring change cannot add work to a game in progress. The rejected alternative — a
-// ServiceMonitor per room — is argued in `puna-orchestrator/src/probing.rs`.
+// load: a monitoring change cannot add work to a game in progress. The rejected alternative, a
+// ServiceMonitor per room, is argued in `puna-orchestrator/src/probing.rs`.
 //
 // Every one is labeled by room, which makes them the only families here with an **unbounded** label
 // space. That is what `retain_rooms` exists for.
@@ -658,7 +658,7 @@ pub fn publish_room(room: &str, status: &crate::probe::RoomStatus) {
     set(&ROOM_IDLE_SECONDS, room, status.activity.idle_seconds);
     set(&ROOM_SLOTS_FILTERED, room, status.filters.slots_filtered);
     // The room's own answer for when its process started. Its partner,
-    // `ROOM_DEPLOYMENT_CREATED`, is written from the cluster snapshot instead — the two come from
+    // `ROOM_DEPLOYMENT_CREATED`, is written from the cluster snapshot instead. The two come from
     // different observers on purpose, which is what makes a disagreement between them mean
     // something. See `publish_room_deployment`.
     set(
@@ -1070,7 +1070,7 @@ fn init_orchestrator() {
         PORT_REFUSALS.with_label_values(&[conflict]).reset();
     }
     // Seeded, so "the proxy is passing everything through" is a row of zeros rather than a family
-    // that has not appeared yet — the same reason `puna_integrity_faults` is seeded.
+    // that has not appeared yet: the same reason `puna_integrity_faults` is seeded.
     for reason in proxy::DROP_REASONS {
         ROOM_METRICS_DROPPED.with_label_values(&[reason]).reset();
     }
@@ -1354,7 +1354,7 @@ mod tests {
         };
 
         // **Every total moves, and by wildly different amounts**, which is what makes a crossed
-        // baseline visible. An earlier version of this test held lag at zero — true under the bug
+        // baseline visible. An earlier version of this test held lag at zero, which was true under the bug
         // as well as under the fix, so it proved nothing.
         publish_room(room, &filtering(10, 400, 5));
         assert_eq!(count(&ROOM_FILTERED_FROM_SLOTS), 10);
@@ -1511,7 +1511,7 @@ mod tests {
         assert_eq!(gauge_of(&ROOM_DEPLOYMENT_CREATED, room), Some(1_000));
         assert_eq!(gauge_of(&ROOM_PROCESS_STARTED, room), Some(9_000));
 
-        // A room that cannot say when it started publishes nothing, rather than the epoch — the
+        // A room that cannot say when it started publishes nothing, rather than the epoch: the
         // same null-is-not-zero rule the rest of these follow. `time() - 0` would render as
         // fifty-six years of uptime.
         status.started_at = None;

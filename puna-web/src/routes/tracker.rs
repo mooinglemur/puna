@@ -1301,13 +1301,13 @@ impl<'r> rocket::request::FromRequest<'r> for IfNoneMatch {
 //
 // **The first mutations this tier has ever accepted**, and the reason they live here rather than on
 // the web tier is the tracker page's own leak rule: it must never carry the room's id, so a write
-// route has to be keyed by the tracker id — and `/tracker/**` is routed to `puna-tracker`. Putting
+// route has to be keyed by the tracker id, and `/tracker/**` is routed to `puna-tracker`. Putting
 // them on the web tier would mean either publishing the room id onto this page or inventing a
 // web-tier path that carries a tracker id.
 //
 // What that costs is stated rather than hidden: this tier's character moves from "reads and caches"
 // to "reads, caches, and accepts authenticated per-slot edits". What it does *not* cost is any new
-// reach — it already holds a database connection and already writes `last_tracker_doc`, and its
+// reach: it already holds a database connection and already writes `last_tracker_doc`, and its
 // NetworkPolicy needs no change. It still has no ServiceAccount token, no Discord credentials and no
 // artifact volume.
 //

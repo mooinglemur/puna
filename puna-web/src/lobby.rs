@@ -359,7 +359,7 @@ pub fn plan(roster: &[Slot], yamls: &[LobbyYaml]) -> Plan {
                 }
             }
             // A slot nobody has claimed and the lobby cannot name. A slot that is already owned and
-            // matches nothing is not reported at all — there is nothing for an organizer to do about
+            // matches nothing is not reported at all: there is nothing for an organizer to do about
             // a slot that is already where it needs to be.
             None if slot.owner_id.is_none() => unmatched.push(slot.player_name.clone()),
             None => {}

@@ -282,7 +282,7 @@ pub async fn record_upload(
         generation_id: GenerationId,
     }
 
-    // `DO NOTHING` returns no row on conflict, the same signal `insert` reads — one row back means
+    // `DO NOTHING` returns no row on conflict, the same signal `insert` reads: one row back means
     // this user had not uploaded it before.
     let inserted: Vec<Row> = diesel::sql_query(
         "INSERT INTO generation_uploads (generation_id, user_id)

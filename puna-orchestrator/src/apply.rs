@@ -631,8 +631,8 @@ mod tests {
         let room = RoomId::new();
         let spec = spec(room, "pahoa:test");
 
-        // Cilium's verbatim shape. The applier does not classify — it hands the refusal up whole,
-        // and `steps` decides whether a different port would help — but a fabricated message here
+        // Cilium's verbatim shape. The applier does not classify: it hands the refusal up whole,
+        // and `steps` decides whether a different port would help. A fabricated message here
         // would read as real to the next person.
         const MESSAGE: &str = "The IP '38.246.56.121' is already allocated to an incompatible \
                                service. Reason: same port and protocol";

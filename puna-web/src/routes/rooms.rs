@@ -656,7 +656,7 @@ async fn create(
         .ok_or_else(|| Error::new(Status::BadRequest, anyhow::anyhow!("unknown password mode")))?;
     // **Each parsed rather than defaulted on a miss.** A radio group that arrives unrecognized is a
     // form and a route that have drifted, and silently substituting a default would open a room
-    // configured differently from what somebody just chose — visibly wrong only later, on the one
+    // configured differently from what somebody just chose, visibly wrong only later, on the one
     // page nobody re-reads after creating it.
     let patch_policy = room::PatchPolicy::parse(&form.patch_policy)
         .ok_or_else(|| Error::new(Status::BadRequest, anyhow::anyhow!("unknown patch policy")))?;
@@ -708,7 +708,7 @@ async fn create(
     //
     // Everything below is best-effort by construction: the room is committed, the redirect is
     // built, and the worst outcome here is a message saying the import did not happen. That is the
-    // whole reason creation-time import is the backfill path run once — a lobby that is down at
+    // whole reason creation-time import is the backfill path run once: a lobby that is down at
     // this moment costs an organizer one button press on a page that already works, rather than a
     // failed room creation they have to understand.
     let pasted = form
@@ -887,7 +887,7 @@ async fn show(
 
     // The chip beside the room's name, with what it drops on hover.
     let room_filter = slot_filters.room_filters.then(|| {
-        // `AnySlot`, because a room-wide rule is about everybody — the same sentence the room's own
+        // `AnySlot`, because a room-wide rule is about everybody: the same sentence the room's own
         // filter page renders, from the same function, so the chip and the page cannot describe one
         // rule two ways.
         let listed = room_rules
@@ -895,14 +895,14 @@ async fn show(
             .map(|r| r.describe(puna_core::model::filter::Subject::AnySlot))
             .collect::<Vec<_>>()
             .join("; ");
-        // **"This room's filter:", not "This room drops:"** — every sentence `describe()` produces
+        // **"This room's filter:", not "This room drops:"**, because every sentence `describe()` produces
         // already begins with a verb ("drop 95% of…"), so a prefix ending in one reads "drops:
         // drop". The prefix names what is being listed and lets the rules speak for themselves.
         format!("This room's filter: {listed}")
     });
 
     // **Counted before the roster is consumed**, not after: `slot_views` takes ownership, and the
-    // view it produces has deliberately dropped `owner_id` — see `SlotView`. Asking the question
+    // view it produces has deliberately dropped `owner_id`; see `SlotView`. Asking the question
     // here keeps it asked of the model rather than of the rendering.
     //
     // Staff only, and derived rather than remembered. A room nobody associated with a lobby has
@@ -939,7 +939,7 @@ async fn show(
     // Two gates on one fact, and neither is the other's backup. The query returns nothing but rooms
     // this person already organizes, so it cannot leak a stranger's room whoever calls it. This
     // condition decides whether to ask at all: membership is per room, so a helper here has no
-    // standing to learn that a second room from this seed exists — an organizer may deliberately
+    // standing to learn that a second room from this seed exists, and an organizer may deliberately
     // have put different helpers on it.
     //
     // No admin bypass. `/admin/rooms` is the fleet view; this list answers "which of MY rooms came
@@ -2713,7 +2713,7 @@ pub(crate) mod tests {
         }
 
         // **No `og:url`.** It is the canonical address a card links to, and this page's canonical
-        // address is the bearer token in its own URL — writing it into the markup would put the
+        // address is the bearer token in its own URL, so writing it into the markup would put the
         // capability somewhere a crawler stores it, for no gain.
         assert!(
             !html.contains("og:url"),
@@ -2721,7 +2721,7 @@ pub(crate) mod tests {
         );
 
         // An unauthenticated reader is offered the login, carrying this page as the return address
-        // rather than the room — so they come back and confirm instead of arriving with it done.
+        // rather than the room, so they come back and confirm instead of arriving with it done.
         assert!(html.contains("/auth/login?redirect=/claim/tok"));
     }
 
@@ -2872,8 +2872,8 @@ pub(crate) mod tests {
             "the room page does not link its feed, so nothing reaches it"
         );
         assert!(html.contains("/tracker/"), "the tracker link went missing");
-        // **The link goes the safe way round.** The room page may name the feed's id — it already
-        // holds the room — but a URL shaped `/room/<id>/journal` would have put the room's id inside
+        // **The link goes the safe way round.** The room page may name the feed's id, since it
+        // already holds the room, but a URL shaped `/room/<id>/journal` would have put the room's id inside
         // the feed's address, which is what the separate id exists to prevent.
         assert!(
             !html.contains(&format!("/room/{}/journal", visible.room.id)),
@@ -3167,7 +3167,7 @@ pub(crate) mod tests {
             ("/stop", "stopping the room"),
             ("/close", "closing the room"),
             // The password mode and the feed policy moved onto their own page, so what this room
-            // page offers is the link — which is still an organizer's, and is the thing a helper
+            // page offers is the link, which is still an organizer's, and is the thing a helper
             // must not be pointed at.
             ("/options", "reaching the room's options"),
             ("/settings/name", "renaming the room"),
@@ -3525,7 +3525,7 @@ pub(crate) mod tests {
 
         // **All four spoiler settings, `never` included.** It is the only one that withholds the
         // file from the organizer as well, so it cannot be reached by picking the "tightest" of a
-        // three-way control — and it is the setting a race wants.
+        // three-way control, and it is the setting a race wants.
         for value in ["never", "staff", "players", "public"] {
             assert!(
                 live.contains(&format!(r#"name="spoiler_policy" value="{value}""#)),
@@ -3554,7 +3554,7 @@ pub(crate) mod tests {
     fn leaving_per_slot_mode_is_warned_about_where_it_can_happen() {
         use askama::Template;
 
-        // Collapsed, because the markup wraps and a browser renders it as one sentence — an
+        // Collapsed, because the markup wraps and a browser renders it as one sentence. An
         // assertion that broke on a line break would be about the source rather than about what
         // anybody reads.
         let render = |mode| {
@@ -3954,7 +3954,7 @@ pub(crate) mod tests {
         );
 
         // **The phase advances and the clock RESTARTS.** The orchestrator acts, `state` becomes
-        // `stopping`, and the sentence changes — so the number is how long *this* step has taken,
+        // `stopping`, and the sentence changes, so the number is how long *this* step has taken,
         // not how long ago the button was pressed. Carrying it across was the previous behavior and
         // is what this test now exists to prevent.
         let mut draining = stopping.clone();
@@ -3968,7 +3968,7 @@ pub(crate) mod tests {
 
         // **A redeploy: `desired_at` is STALE and must not be used.** A redeploy never changes
         // `desired_state`, so the request clock still points at whenever the room was first asked
-        // to run — hours, on a room that has been up all day. Reported from the live deployment as
+        // to run: hours, on a room that has been up all day. Reported from the live deployment as
         // a counter that opened at a large number and did not reset between phases.
         let mut redeployed = a_room();
         redeployed.state = "starting".into();
@@ -3982,7 +3982,7 @@ pub(crate) mod tests {
         );
 
         // `degraded` needs no special case under this rule: nobody asked for it, so the request
-        // clock is old and the `max` picks the state change — which is when it started failing.
+        // clock is old and the `max` picks the state change, which is when it started failing.
         let mut degraded = a_room();
         degraded.state = "degraded".into();
         degraded.desired_at = ago(9_000);
@@ -4362,7 +4362,7 @@ pub(crate) mod tests {
             alone.filter_summary
         );
 
-        // Exempt reads the same either way — "unfiltered" already says it is not doing what the
+        // Exempt reads the same either way: "unfiltered" already says it is not doing what the
         // room does, and with no room filter it is still a deliberate state worth marking.
         let mut exempt = std::collections::HashMap::new();
         exempt.insert(1, SlotFilter::Exempt);

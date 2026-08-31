@@ -183,7 +183,7 @@ fn the_proxied_names_are_pahoas_and_the_tables_stay_punas() {
         "a family table should only ever hold names this process computes"
     );
 
-    // A room claiming a Puna name is refused rather than merged into the real family — beside a
+    // A room claiming a Puna name is refused rather than merged into the real family, beside a
     // legitimate family from the same document, which is the positive control: without it this
     // assertion also passes when nothing is being re-exported at all.
     let hostile = format!(

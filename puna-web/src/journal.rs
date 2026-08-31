@@ -168,7 +168,7 @@ fn tail_to(
 
     // The first line is only whole if the walk reached the start of the file; otherwise the chunk
     // began mid-record. Dropping it moves `start` past its newline, which is what keeps the
-    // reported boundary exact — a backfill page that misreported it would skip or repeat a record.
+    // reported boundary exact: a backfill page that misreported it would skip or repeat a record.
     let mut first = start;
     if start > 0 {
         match buffer.iter().position(|b| *b == b'\n') {
@@ -522,8 +522,8 @@ mod tests {
     /// aligned away.
     #[test]
     fn paging_backwards_rebuilds_the_journal_without_gaps_or_repeats() {
-        // **Larger than the 64 KiB read chunk, deliberately.** The first version used 200 lines —
-        // about 40 KiB — so every backwards walk reached offset zero in one chunk and the branch
+        // **Larger than the 64 KiB read chunk, deliberately.** The first version used 200 lines,
+        // about 40 KiB, so every backwards walk reached offset zero in one chunk and the branch
         // where a page begins mid-record never ran. A mutation returning the chunk's start instead
         // of the first whole record's start passed cleanly against it. This fixture is this size
         // because of that mutation.

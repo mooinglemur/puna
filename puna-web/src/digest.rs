@@ -1040,7 +1040,7 @@ mod tests {
         );
 
         // **A stand-in username is an absent handle, not a rendered snowflake**, and the mention
-        // still works — which is the whole reason the two are separate fields.
+        // still works, which is the whole reason the two are separate fields.
         let ghost = rows[1].owner.as_ref().expect("slot 2 has an owner");
         let contact = ghost
             .contact

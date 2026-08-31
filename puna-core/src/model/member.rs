@@ -543,7 +543,7 @@ mod tests {
         assert_eq!(invite("").prefix(), "");
 
         // Characters, not bytes. `url_token`'s alphabet is ASCII, so this is unreachable through
-        // the minting path — and it is the reason `take` is right rather than a slice, which would
+        // the minting path, and it is the reason `take` is right rather than a slice, which would
         // panic mid-character here and take an organizer's own page down with it.
         assert_eq!(invite(&"é".repeat(12)).prefix(), "é".repeat(8));
     }

@@ -619,7 +619,7 @@ pub fn plan_window(budget: u32, jitter: f64, rng: &mut impl Rng) -> Vec<u32> {
     let total: f64 = weights.iter().sum();
 
     // Largest-remainder, so the window's budget is spent exactly rather than drifting with
-    // rounding — the whole promise of this function is that the average comes out true.
+    // rounding: the whole promise of this function is that the average comes out true.
     let scaled: Vec<f64> = weights
         .iter()
         .map(|w| w / total * f64::from(budget))
@@ -1018,14 +1018,14 @@ async fn play_once(
     } = handshake(&mut socket, plan).await?;
     let mut connection = Connection::opened(totals, been_up);
 
-    // Whatever was already waiting for this slot counts as received, because it was — minus
+    // Whatever was already waiting for this slot counts as received, because it was, minus
     // anything a previous session already counted, since the room replays from index zero every
     // time. See `Session::absorb_replay`.
     session.absorb_replay(replayed.len(), totals);
 
     // Shuffled so slots do not all walk their worlds in ascending id order. Two slots sharing a
     // game have identically-shaped location tables, and unshuffled they would march through them
-    // in lockstep — traffic with a regularity no room ever sees.
+    // in lockstep, which is traffic with a regularity no room ever sees.
     remaining.shuffle(rng);
 
     // **Nothing left to check means this slot is done**, which is how a resumed run behaves: point
@@ -1034,10 +1034,10 @@ async fn play_once(
     //
     // Declaring the goal rather than merely going quiet is the part that matters. A slot that has
     // exhausted its world can contribute nothing else, and saying so releases whatever is left in
-    // it — which is what keeps the *other* slots' Goals reachable. Staying silent instead is how a
+    // it, which is what keeps the *other* slots' Goals reachable. Staying silent instead is how a
     // resumed run deadlocks: two finished-but-unannounced slots, each holding the other's Goal
     // behind a location neither will ever check again.
-    // **A spectator is not "already finished"** — it has nothing to check because it never had
+    // **A spectator is not "already finished"**: it has nothing to check because it never had
     // anything, which is a different fact from a player who has checked everything. It stops
     // sending either way; only a player declares a goal or counts toward the run's end.
     //
@@ -1055,7 +1055,7 @@ async fn play_once(
     // anyway. Cheap insurance rather than duplication: a slot that goaled and lost the connection
     // in the same breath may never have got the `StatusUpdate` out, and telling a room a goal it
     // already has is idempotent. What must not repeat is the *run's* tally, which is why the
-    // counter moves only on the transition — `totals.goaled >= players` ends the run, so a slot
+    // counter moves only on the transition: `totals.goaled >= players` ends the run, so a slot
     // counting itself twice would stop the run with somebody still playing.
     let goal_replayed = plan.goal_item.is_some_and(|goal| replayed.contains(&goal));
     let finished_here = session.goaled || remaining.is_empty() || goal_replayed;
@@ -1089,13 +1089,13 @@ async fn play_once(
     // period the length of the ramp. See `schedule`.
     //
     // **Timed out, because a barrier is a deadlock waiting for a bad slot.** One connection refused
-    // — a wrong password, a slot name the room does not have, a room that went down mid-start —
+    // (a wrong password, a slot name the room does not have, a room that went down mid-start)
     // and every other slot would wait at this gate forever, which reads as a hang rather than as
     // the one error it is.
     //
     // **AND IT KEEPS READING WHILE IT WAITS**, which the first version did not. A slot at the gate
     // holds a live connection, and **pahoa pings, and is the only side that does** (`config.rs`:
-    // Archipelago's own clients connect with `ping_interval=None`) — 20 s, with 20 s more to
+    // Archipelago's own clients connect with `ping_interval=None`): 20 s, with 20 s more to
     // answer, so 40 s of silence is a connection the room closes with `no pong within the keepalive
     // timeout`, appearing here as a TLS EOF that names nothing. A storm of two thousand slots takes
     // long enough to connect that this is reachable even with no ramp at all.
@@ -1122,8 +1122,9 @@ async fn play_once(
                     let Some(text) = message? else {
                         return Ok(Ended::Lost);
                     };
-                    // Items can already be arriving here — a resumed room replays a slot's history
-                    // on connect — so this goes through the same handler rather than being dropped.
+                    // Items can already be arriving here, since a resumed room replays a slot's
+                    // history on connect, so this goes through the same handler rather than
+                    // being dropped.
                     if pump(&mut socket, text, plan, totals, session).await? {
                         totals.goaled.fetch_add(1, Ordering::Relaxed);
                     }
@@ -1141,7 +1142,7 @@ async fn play_once(
     // The gate releases all of them in the same instant, so a clock started here would put all two
     // hundred on one grid: `next_tick` steps a fixed second from a shared origin and never drifts.
     // The jitter then chooses *which* tick a slot fires on and nothing chooses *when inside it*, so
-    // the traffic arrives in ten synchronized clumps a window instead of spread across it — at
+    // the traffic arrives in ten synchronized clumps a window instead of spread across it: at
     // `--rate 0.1`, twenty checks landing in the same millisecond, each fanning out to two hundred
     // connections. That is a thundering herd the harness manufactures and then measures, on both
     // ends: the room sees one burst, and two hundred client tasks wake together to read the reply.
@@ -1161,8 +1162,8 @@ async fn play_once(
     //
     // The previous loop read *until* the tick was due and then left the socket alone while it
     // planned a window, drained locations and awaited a send. At ordinary rates that gap is
-    // nothing. Under a goal cascade — 247,000 frames a second delivered across two thousand
-    // connections — it is the difference between draining and falling behind, and falling behind
+    // nothing. Under a goal cascade (247,000 frames a second delivered across two thousand
+    // connections) it is the difference between draining and falling behind, and falling behind
     // has a hard floor: pahoa's `budget::reserve` checks the **per-connection** share first, so a
     // client 256 KiB behind on its own socket is dropped by design. 545 of 2000 went that way.
     //
@@ -1171,7 +1172,7 @@ async fn play_once(
     // the surviving population matched what the harness could drain.
     //
     // **Not `Client::split()`, which is what pahoa built for this**, because `Reader::recv`
-    // discards ping frames — the writer half owns writing — and pahoa is the only side that pings,
+    // discards ping frames (the writer half owns writing) and pahoa is the only side that pings,
     // with 40 seconds of silence being a closed connection. A true split would need the reader to
     // hand pings to the writer; one task that always has a read armed gets the same drain behavior
     // and keeps `Client::recv` answering them.
@@ -1197,7 +1198,7 @@ async fn play_once(
             _ = &mut tick_at => {
                 // **Missed ticks are dropped rather than chased.** Without the clamp, a slot that
                 // fell behind had every later deadline already in the past, so this branch would
-                // fire continuously and crowd out the read — which is how an earlier version
+                // fire continuously and crowd out the read, which is how an earlier version
                 // manufactured its own lag disconnects and made them look like the room's.
                 let now = Instant::now();
                 next_tick = next_tick.max(now) + tick_len;
@@ -1207,7 +1208,7 @@ async fn play_once(
                 //
                 // **`pace` outlives the session on purpose, and it does the right thing without
                 // being told to.** It counts windows as they are refilled, so a slot that spent
-                // ninety seconds backing off simply did not refill during them — where a rate
+                // ninety seconds backing off simply did not refill during them, where a rate
                 // derived from wall-clock elapsed time would hand that slot every check it "owed"
                 // the moment it reconnected, aiming a catch-up burst at a room that has just
                 // finished shedding load.
@@ -1284,7 +1285,7 @@ async fn pump(
     // **Received, then dropped without parsing**, which is the only thing in this loop that is
     // about the harness rather than the room. A check broadcasts a `PrintJSON` and a `RoomUpdate`
     // to *every* connection, so the firehose is two orders of magnitude larger than the traffic
-    // this tool acts on — 53,042 `PrintJSON` against 16,809 `ReceivedItems` in one measured room —
+    // this tool acts on (53,042 `PrintJSON` against 16,809 `ReceivedItems` in one measured room)
     // and parsing it all would make the client the expensive half of a measurement of the server.
     // The room still does every bit of its own work: the message was produced, framed and written.
     //

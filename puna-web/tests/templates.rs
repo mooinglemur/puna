@@ -197,7 +197,7 @@ fn a_glyph_only_control_names_itself_twice() {
                     continue;
                 }
                 // **Not a control for anybody, so not this lint's business.** A form's default
-                // button — the one that claims what Enter does, so a row's remove button cannot —
+                // button (the one that claims what Enter does, so a row's remove button cannot)
                 // is never painted, never announced and never reachable by tab. Both conditions
                 // are required together on purpose: `aria-hidden` alone would be a way to silence
                 // this lint on a control people can still see and press.
@@ -724,7 +724,7 @@ fn a_links_claimed_sender_is_shown_but_never_as_the_identity() {
         code.contains("event.source"),
         "`claimed()` no longer reads `source`"
     );
-    // Dimmed and footnoted rather than styled like a verified name — the whole point is that it
+    // Dimmed and footnoted rather than styled like a verified name: the whole point is that it
     // must not read as authority.
     assert!(
         styles(&css, "claimed"),
@@ -863,14 +863,14 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
     // Ids the script gives up on, silently, if the template renames them.
     //
     // `journal-earlier` and `journal-progress` are the backfill control: `journal.js` guards on
-    // their absence, so a rename does not throw — the button simply never appears and the whole
+    // their absence, so a rename does not throw. The button simply never appears and the whole
     // feed can never be loaded, with nothing anywhere saying why.
     for id in [
         "journal",
         "journal-status",
         // The status paragraph is now a container: a dot and a message, as two spans. `say` writes
         // to the MESSAGE, so if it ever went back to writing the paragraph's `textContent` the dot
-        // would be deleted on the first status change — which is to say immediately and forever.
+        // would be deleted on the first status change, which is to say immediately and forever.
         "journal-message",
         "journal-link",
         "journal-earlier",
@@ -889,7 +889,7 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
     // The FEED's id travels through a data attribute, and the script returns without it.
     //
     // **`data-feed`, never `data-room`.** The page is addressed by an id that is not the room's, so
-    // the room's id must not appear in its markup at all — putting it in a data attribute would leak
+    // the room's id must not appear in its markup at all: putting it in a data attribute would leak
     // it just as surely as an `href` would, to every viewer holding a link meant to be shareable.
     assert!(
         !markup.contains("data-room="),
@@ -942,7 +942,7 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
 
     // --- THE CONNECTION DOT, WHOSE EVERY HALF FAILS WITHOUT A SYMPTOM ----------------------------
     // The script sets `link-state up` / `link-state down`; the stylesheet colors them. Break either
-    // side and the page still works perfectly — the feed streams, the message says the right thing —
+    // side and the page still works perfectly (the feed streams, the message says the right thing)
     // and the indicator is simply always the same color. Nothing throws and nothing logs.
     for class in ["link-state", "up", "down"] {
         assert!(
@@ -960,7 +960,7 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
     // --- RECONNECTION IS GATED ON VISIBILITY -----------------------------------------------------
     // The Page Visibility API, and both halves are needed: `visibilityState` to decide, and the
     // `visibilitychange` listener to notice. With the listener gone a tab that dropped while hidden
-    // stays disconnected FOREVER — the redial is never scheduled and nothing else would ever
+    // stays disconnected FOREVER: the redial is never scheduled and nothing else would ever
     // schedule it, so the page sits on a red dot until somebody reloads it.
     assert!(
         code.contains("document.visibilityState"),
@@ -973,11 +973,11 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
     );
     // **The gate has to be inside the scheduler, and asserting the API is merely PRESENT does not
     // say that.** The first version of this lint checked only that `visibilityState` appeared
-    // somewhere in the file — which it still does, in the listener — so deleting the early return
+    // somewhere in the file, which it still does in the listener, so deleting the early return
     // from `scheduleReconnect` passed it. Caught by mutating exactly that.
     // Anchored on the name and the open paren, not on a full signature: it grew a `reason`
     // parameter and this assertion failed on the argument list rather than on anything it checks.
-    // Loud, so cheap to fix — but a lint that breaks on an unrelated edit is a lint people delete.
+    // Loud, so cheap to fix; but a lint that breaks on an unrelated edit is a lint people delete.
     let scheduler = code
         .split_once("function scheduleReconnect(")
         .map(|(_, rest)| {
@@ -996,8 +996,8 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
     );
 
     // --- THE DEAD-LINK WATCHDOG ------------------------------------------------------------------
-    // A dropped-not-reset link leaves the socket `OPEN` for as long as TCP keeps retransmitting —
-    // minutes — and the protocol's own ping is invisible to JavaScript, so the page has nothing to
+    // A dropped-not-reset link leaves the socket `OPEN` for as long as TCP keeps retransmitting,
+    // which is minutes, and the protocol's own ping is invisible to JavaScript, so the page has nothing to
     // go on but an ordinary frame arriving. Every piece of this is silent when removed: the page
     // keeps working perfectly and simply never notices a black hole again, which is the state it
     // was in when a five-minute outage left the dot green.
@@ -1043,7 +1043,7 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
     // --- A DISOWNED SOCKET STAYS DISOWNED ----------------------------------------------------------
     // The watchdog abandons a socket rather than waiting on `close`, because `close()` starts a
     // handshake that a black-holed link never completes. That leaves a socket whose events are still
-    // coming, and every one of its four handlers has to ignore them — the `error` arm most of all,
+    // coming, and every one of its four handlers has to ignore them, the `error` arm most of all,
     // which used to close whatever was current rather than its own and would have torn down the
     // healthy replacement.
     assert_eq!(
@@ -1053,7 +1053,7 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
          the page after the watchdog gave up on it"
     );
     // Line-anchored, not a bare `contains`. The first spelling of this forbade the substring
-    // `socket.addEventListener(` — which the CORRECT form `sock.addEventListener(` also contains,
+    // `socket.addEventListener(`, which the CORRECT form `sock.addEventListener(` also contains,
     // so the assertion failed on the fix. A negative assertion has to forbid the shape rather than
     // a spelling that something legitimate ends with.
     assert!(
@@ -1070,7 +1070,7 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
             "journal.js no longer has `{helper}`, which is what makes the two inseparable"
         );
     }
-    // A disconnection announced without painting is exactly the shipped bug — and this is anchored
+    // A disconnection announced without painting is exactly the shipped bug, and this is anchored
     // on the CLASS rather than on the words, deliberately.
     //
     // The first version forbade `say("Reconnecting` and `say("Lost contact`, which keyed the whole
@@ -2635,7 +2635,7 @@ fn the_bulk_panel_offers_exactly_the_actions_its_route_implements() {
         .expect("unterminated ACTIONS")
         .0;
 
-    // `("name", "Label")` — take the first string of each pair.
+    // `("name", "Label")`: take the first string of each pair.
     let declared: Vec<&str> = table
         .lines()
         .filter_map(|line| line.trim().strip_prefix("(\""))
@@ -2761,7 +2761,7 @@ fn the_rule_table_renders_every_hook_and_field_name_its_readers_expect() {
     );
 
     // `data-rule-form` is the one the script looks for on the FORM, which the table itself does not
-    // render — the two callers do, and both are checked below.
+    // render; the two callers do, and both are checked below.
     let missing: Vec<&&str> = wanted
         .iter()
         .filter(|name| **name != "data-rule-form" && !template.contains(**name))
@@ -2786,7 +2786,7 @@ fn the_rule_table_renders_every_hook_and_field_name_its_readers_expect() {
 
         // **The first submit button in a form is what Enter presses.** Every row of the rule table
         // ends in one, so whichever host form does not claim that role first has an Enter key that
-        // deletes rule 1 — and on the bulk panel, before this was claimed, one that rotated every
+        // deletes rule 1, and on the bulk panel, before this was claimed, one that rotated every
         // staged slot's password. Nothing about the page looks wrong either way.
         let form = page
             .split_once("<form")
@@ -2806,7 +2806,7 @@ fn the_rule_table_renders_every_hook_and_field_name_its_readers_expect() {
         );
     }
 
-    // The field names, which are a contract with Rocket rather than with the script — and the one
+    // The field names, which are a contract with Rocket rather than with the script, and the one
     // whose failure looks like the room clearing its own filter.
     for field in ["direction", "kind", "tag", "subtype", "percent", "remove"] {
         assert!(
@@ -2828,7 +2828,7 @@ fn the_rule_table_renders_every_hook_and_field_name_its_readers_expect() {
     // **The direction constraint, which is a three-file contract like the rest.** `travels_text`
     // renders into `data-travels`, `filters.js` reads it to hide the impossible directions, and
     // `Rule::validate` refuses one that gets through anyway. Break the attribute and the editor
-    // silently goes back to offering a `from_slot` `PrintJSON` — a rule the room answers `400` to,
+    // silently goes back to offering a `from_slot` `PrintJSON`: a rule the room answers `400` to,
     // over a page still showing it as saved.
     assert!(
         template.contains("data-travels="),

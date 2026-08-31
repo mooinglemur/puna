@@ -231,7 +231,7 @@ fn convert(
                 metric.set_gauge(gauge);
             }
             // A sample whose family carried no `# TYPE` line. pahoa always writes one, so this is
-            // the degenerate case — but a proxy that dropped data because the far side omitted a
+            // the degenerate case; but a proxy that dropped data because the far side omitted a
             // header would be discarding a real reading over a formatting detail.
             //
             // `prometheus` deprecates the untyped setters as protobuf-specific rather than as

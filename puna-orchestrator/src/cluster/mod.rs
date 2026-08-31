@@ -440,7 +440,7 @@ mod refusal_tests {
             }
             .is_port_collision()
         );
-        // Right reason, reworded verdict — still not positively identified, so still no.
+        // Right reason, reworded verdict: still not positively identified, so still no.
         assert!(
             !refusal(
                 "already_allocated_incompatible_service",

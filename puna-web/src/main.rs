@@ -390,7 +390,7 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(2 * 1024 * 1024);
 
     // **Web role only.** The tracker tier serves no room controls and must not hold a credential for
-    // a system it has no reason to reach — the same rule that keeps Discord's secrets off it.
+    // a system it has no reason to reach: the same rule that keeps Discord's secrets off it.
     let lobby = (role == Role::Web)
         .then(puna_core::config::lobby_from_env)
         .transpose()?

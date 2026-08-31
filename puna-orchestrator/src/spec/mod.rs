@@ -45,7 +45,7 @@ pub struct Site {
 
 // A `from_config` constructor belongs here and is deliberately absent until there is a caller: the
 // tick builds the `Site` once, when it is rewired. An untested mapping of five same-typed String
-// fields is exactly the shape that silently swaps two of them — which is also why [`Naming`] is its
+// fields is exactly the shape that silently swaps two of them, which is also why [`Naming`] is its
 // own struct rather than four more of them here.
 
 /// `app.kubernetes.io/managed-by=puna` — what makes an object Puna's to reason about.

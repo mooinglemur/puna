@@ -396,7 +396,7 @@ impl Rule {
         }
         // **An impossible direction, refused here rather than at the room.** pahoa answers `400`,
         // and until this existed that arrived as "the room answered 400" over a rule the page was
-        // still displaying as the room's filter — which is how a chat filter came to be set,
+        // still displaying as the room's filter, which is how a chat filter came to be set,
         // stored, and silently not in force.
         if !self.kind.travels(self.direction) {
             let sends = self.kind.travels(Direction::FromSlot);
@@ -494,7 +494,7 @@ pub struct Effective {
 impl Effective {
     pub fn of(room: &[Rule], slot: &SlotFilter) -> Self {
         match slot {
-            // The room's, whole — this is the only branch where the room reaches the slot at all.
+            // The room's, whole: this is the only branch where the room reaches the slot at all.
             SlotFilter::Follows => Self {
                 rules: room.to_vec(),
                 from_room: true,
@@ -901,7 +901,7 @@ mod tests {
             (Kind::PrintJson, Direction::ToSlot),
             (Kind::SetReply, Direction::ToSlot),
             (Kind::Retrieved, Direction::ToSlot),
-            // `Say` is a slot's own chat line going up, so it is the mirror of `PrintJson` — and
+            // `Say` is a slot's own chat line going up, so it is the mirror of `PrintJson`, and
             // the pair is exactly the confusion this table exists to pin.
             (Kind::Say, Direction::FromSlot),
             (Kind::Set, Direction::FromSlot),
@@ -944,7 +944,7 @@ mod tests {
             );
         }
 
-        // A bounce is the relay and exists in both directions — the only kind with a real choice.
+        // A bounce is the relay and exists in both directions: the only kind with a real choice.
         for direction in Direction::ALL {
             assert!(Kind::Bounce.travels(*direction));
         }

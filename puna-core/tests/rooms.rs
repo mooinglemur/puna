@@ -127,8 +127,8 @@ async fn creating_a_room_populates_slots_membership_and_credentials() {
         assert_eq!(stored.slot_auth, SlotAuth::None);
         assert_eq!(stored.password, None);
         // **A new room is created running, as the reference implementation does.** An organizer
-        // preparing one days early does not share the link yet, and Puna offers Stop and Close —
-        // controls upstream has none of — so the unusual case is one click away while the ordinary
+        // preparing one days early does not share the link yet, and Puna offers Stop and Close
+        // (controls upstream has none of) so the unusual case is one click away while the ordinary
         // one is no clicks at all.
         assert_eq!(stored.desired_state, "running", "a new room starts running");
         assert_eq!(stored.state, "provisioning");
@@ -163,14 +163,14 @@ async fn a_race_seed_defaults_to_the_closed_policies() {
             .expect("get")
             .expect("present");
         // **The spoiler does NOT vary with the seed, and no longer does.** It used to be `never`
-        // for a race — nobody at all, the organizer included — which is a real choice and a bad
+        // for a race (nobody at all, the organizer included) which is a real choice and a bad
         // one to be handed silently: the person it locks out is the one who would need the file to
         // settle an argument. Every room now starts staff-only, and the options page offers all
         // four settings including `never`.
         assert_eq!(stored.spoiler_policy, SpoilerPolicy::Staff);
         assert_eq!(stored.tracker_policy, TrackerPolicy::Members);
-        // **Not `Disabled`, and the difference matters.** A race's history is a live scoreboard —
-        // who found what, in order — so the chat and hints come out; the item feed stays, because
+        // **Not `Disabled`, and the difference matters.** A race's history is a live scoreboard of
+        // who found what, in order, so the chat and hints come out; the item feed stays, because
         // it is the same information the room already broadcasts to every unfiltered client and a
         // racer's own client is showing it to them anyway.
         assert_eq!(stored.journal_policy, JournalPolicy::Feed);
@@ -1378,8 +1378,8 @@ async fn siblings_are_only_rooms_the_reader_organizes() {
         .expect("create");
 
         // **HELPER is a helper on BOTH rooms**, which is what makes the tier the thing under test
-        // rather than the scoping. A helper only on `mine` is excluded by the scoping alone — they
-        // are not a member of the sibling — so relaxing `organizer` to "any member" would still
+        // rather than the scoping. A helper only on `mine` is excluded by the scoping alone, not
+        // being a member of the sibling, so relaxing `organizer` to "any member" would still
         // show them nothing, and the assertion below would pass against the wrong rule.
         //
         // With a membership on the sibling too, the only thing standing between them and it is the

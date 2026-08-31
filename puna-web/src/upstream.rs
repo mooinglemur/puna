@@ -148,7 +148,7 @@ impl Upstream {
         // **Deliberately not `.json()`, and this is the whole of M36's fix.** A room-scoped tracker
         // request is bytes in and bytes out: the caller needs the body to serve it and to hash it
         // for an `ETag`, and needs its *structure* only when a slot id asks for a projection.
-        // Parsing here paid for structure on every request whether or not anybody wanted it — and a
+        // Parsing here paid for structure on every request whether or not anybody wanted it, and a
         // `serde_json::Value` tree is millions of small allocations running an order of magnitude
         // past the wire size, which on a 2000-slot room's 17.6 MiB document is what was killing
         // this tier. See `routes::tracker::project`, which parses only when a scope is present.

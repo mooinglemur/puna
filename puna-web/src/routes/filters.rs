@@ -156,7 +156,7 @@ pub(crate) fn editor_rows(rules: &[Rule]) -> Vec<RuleRow> {
 
     rows.push(RuleRow {
         index: rules.len(),
-        // No kind chosen yet, so the row names nothing to drop and the route skips it entirely —
+        // No kind chosen yet, so the row names nothing to drop and the route skips it entirely:
         // an untouched blank row costs nothing. **Both narrowing cells stay enabled**, because the
         // row is not a rule yet and disabling a field before knowing whether it applies would leave
         // somebody unable to type the tag they came to type.
@@ -361,7 +361,7 @@ pub(crate) fn collect_rules(rules: &[RuleFields]) -> std::result::Result<Vec<Rul
 
         let rule = build_rule(fields).map_err(|why| format!("row {row}: {why}"))?;
 
-        // pahoa keys rules on the matcher, so two rows naming the same thing are one rule there —
+        // pahoa keys rules on the matcher, so two rows naming the same thing are one rule there,
         // and the page would go on showing a rule the room does not have. Refused rather than
         // collapsed, because which of the two probabilities survived would be anybody's guess.
         let matcher = rule.matcher();
@@ -390,7 +390,7 @@ pub(crate) fn slot_state_from(
     if !rules.is_empty() {
         return Ok(SlotFilter::Own(rules));
     }
-    // The two meanings of nothing, and they are opposites — so this is asked rather than assumed.
+    // The two meanings of nothing, and they are opposites, so this is asked rather than assumed.
     match state.map(str::trim).filter(|s| !s.is_empty()) {
         Some("follow") => Ok(SlotFilter::Follows),
         Some("exempt") => Ok(SlotFilter::Exempt),
@@ -644,7 +644,7 @@ async fn show_slot(
             SlotFilter::Exempt => "exempt",
             SlotFilter::Own(_) => "own",
         }),
-        // A slot's page, where both lists are about what happens to THIS slot — including the
+        // A slot's page, where both lists are about what happens to THIS slot, including the
         // room's rules, which are shown here as what they would do to it.
         effective: views(&effective.rules, Subject::ThisSlot),
         effective_from_room: effective.from_room,
@@ -836,7 +836,7 @@ mod tests {
     #[test]
     fn a_stored_probability_renders_as_a_percentage_that_reads_back_the_same() {
         // **0.07 and 0.29 are the point of this test.** Round numbers survive the trip whatever
-        // this function does — `0.75 * 100.0` is exactly `75.0` — so a test built from those passes
+        // this function does (`0.75 * 100.0` is exactly `75.0`) so a test built from those passes
         // against no rounding at all. These two do not: they are `7.000000000000001` and
         // `28.999999999999996`, which is both a cell nobody would leave alone and a probability
         // that walks a little further from where it started on every save.
@@ -984,7 +984,7 @@ mod tests {
         assert_eq!(SlotFilter::from_stored(None), SlotFilter::Follows);
         assert_eq!(SlotFilter::from_stored(Some(vec![])), SlotFilter::Exempt);
 
-        // With rules, the answer is not consulted at all — an unanswered radio group is only a
+        // With rules, the answer is not consulted at all: an unanswered radio group is only a
         // refusal when the table is genuinely empty.
         assert!(matches!(
             slot_state_from(&[row("bounce", None, None)], None).expect("own"),
@@ -1126,7 +1126,7 @@ mod tests {
             subtype_cell.contains("disabled"),
             "a bounce is not narrowed by a subtype, so the cell must not submit one: {subtype_cell}"
         );
-        // Greyed by the server too, not only once the script runs — otherwise the table reads as
+        // Greyed by the server too, not only once the script runs; otherwise the table reads as
         // fully editable until JavaScript arrives and half of it goes flat.
         assert!(
             html.contains(

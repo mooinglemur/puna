@@ -653,7 +653,7 @@ async fn feed(
                         //
                         // The protocol Ping keeps the connection alive through Envoy, which closes
                         // an idle stream and a quiet room is idle by nature. A browser answers it
-                        // itself, with no script running — which is exactly what makes it useless
+                        // itself, with no script running, which is exactly what makes it useless
                         // for detecting a dead link: **the WebSocket API exposes no ping or pong to
                         // JavaScript at all**, so a page cannot send one, cannot see one, and
                         // cannot tell a silent room from a black hole.
@@ -661,7 +661,7 @@ async fn feed(
                         // Found by blocking the site with iptables: nothing was RESET, so TCP kept
                         // retransmitting into the void, the socket stayed open, `close` never
                         // fired, and the page sat on a green dot for five minutes. It recovered
-                        // when the block lifted and a retransmission finally landed — the same
+                        // when the block lifted and a retransmission finally landed: the same
                         // connection catching up, never a reconnect.
                         //
                         // So the heartbeat is an ordinary text frame. It is the ONLY thing that
@@ -797,7 +797,7 @@ mod tests {
         // type added upstream and quietly admitted is the failure this guards, and a complement
         // would admit it by construction.
         //
-        // The three link types are deliberately absent — they are a *feed* event, the same kind of
+        // The three link types are deliberately absent: they are a *feed* event, the same kind of
         // cross-game effect a check is, and they are asserted as public in the test below.
         // `goal` moved out of this list, for the reason given on PUBLIC_KINDS. `admin` stays in it:
         // an explicitly-run release leaves one, and it is withheld along with every other verb.
@@ -1167,7 +1167,7 @@ mod tests {
         assert!(!name.contains(&room.journal_id.to_string()));
 
         // The stem is an allowlist with no `.` at all, so `..` and a leading dot are unspellable
-        // rather than filtered — the same rule the patch download follows, and for the same reason:
+        // rather than filtered: the same rule the patch download follows, and for the same reason:
         // this is untrusted text out of a room name heading for a response header.
         room.name = "../../etc/passwd".into();
         let escaped = download_name(&room);

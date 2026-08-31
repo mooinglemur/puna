@@ -324,7 +324,7 @@ fn multidata(
     // upstream's own reserved entries, copied verbatim from the corpus rather than invented.
     //
     // An EMPTY package would not do. `resolve_datapackage` counts a game with no names as
-    // unresolved, so a room would log `no data package for Archipelago` at every start — a line an
+    // unresolved, so a room would log `no data package for Archipelago` at every start: a line an
     // operator would reasonably read as the seed being malformed. Tried that first; it warned
     // exactly the same.
     let generic_package = (
@@ -592,13 +592,13 @@ fn package(
         .compression_method(zip::CompressionMethod::Deflated)
         // **A fixed timestamp, because the default is the wall clock and that makes `--seed` a
         // lie.** `SimpleFileOptions::default()` calls `DateTime::default_for_write()`, which under
-        // the `time` feature — enabled in this graph — stamps *now* into every entry. DOS time has
+        // the `time` feature (enabled in this graph) stamps *now* into every entry. DOS time has
         // two-second resolution, so two runs of one seed produce identical multidata inside a zip
         // whose bytes differ, at four offsets: the time field of each local header and of each
         // central-directory entry.
         //
         // That is not only a flaky test. **Puna content-addresses generations by the sha256 of this
-        // file**, so `--seed 42` twice would ingest as two separate generations — which is exactly
+        // file**, so `--seed 42` twice would ingest as two separate generations, which is exactly
         // the deduplication that reproducing a run is supposed to give. The seed is printed so a
         // reported failure can be rebuilt; rebuilding it has to produce the same artifact.
         //

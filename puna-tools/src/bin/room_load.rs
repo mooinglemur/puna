@@ -136,7 +136,7 @@ async fn main() -> Result<()> {
     );
     // Computed once, here, so every slot's ramp position and the gate they share come off one
     // clock. See `load::schedule` for why the connects are dealt out at all. **Sized to
-    // CONNECTIONS, not slots** — three clients per slot is three dials, and ramping only the game
+    // CONNECTIONS, not slots**: three clients per slot is three dials, and ramping only the game
     // clients would let the other two thirds arrive as a storm.
     let schedules = load::schedule(
         Instant::now(),
@@ -163,7 +163,7 @@ async fn main() -> Result<()> {
     // that is a hundred seconds of `checks 0` on a run doing exactly what it was told.
     //
     // The first check comes one window after the FIRST slot connects, since a ramped run no longer
-    // waits for the rest — where the last slot's world is not finished until a ramp later, which is
+    // waits for the rest, where the last slot's world is not finished until a ramp later, which is
     // why only the full-run figure carries it.
     let first_check = Duration::from_secs_f64(1.0 / config.rate.max(f64::MIN_POSITIVE));
     if config.rate > 0.0 && locations > 0 {
@@ -213,7 +213,7 @@ async fn main() -> Result<()> {
 
     // **Interleaved per slot, not role by role.** A player opens their game client, their text
     // client and their tracker together, so this is both the realistic arrival order and the one
-    // that grows the population evenly — three separate waves would put every tracker at the end.
+    // that grows the population evenly; three separate waves would put every tracker at the end.
     let mut tasks = Vec::new();
     for (i, plan) in plans.into_iter().enumerate() {
         let slot = plan.slot;
@@ -300,7 +300,7 @@ async fn main() -> Result<()> {
         //
         // **Two numbers, because reconnection made one insufficient.** How often the room dropped
         // somebody is a measure of the room; how many never came back is a measure of the run. A
-        // run with 545 drops that ended full is a room that shed and recovered — which used to be
+        // run with 545 drops that ended full is a room that shed and recovered, which used to be
         // indistinguishable here from one that lost 545 slots for good.
         //
         // **From the two counters, never from `connected`**, which is zero by the time this runs:
@@ -348,7 +348,7 @@ async fn watch(
         // full house doing less work rather than as a smaller run doing its share.
         //
         // Since connections reconnect, the number is a count of *events* and the population is
-        // `connected` beside it — which is why that is now shown against the total rather than
+        // `connected` beside it, which is why that is now shown against the total rather than
         // alone. `connected 1455/2000` with `drops 545` is a room shedding and a harness coming
         // back; `connected 2000/2000` with the same drops is a room that shed and recovered, and
         // those are different runs that used to print the same line.
@@ -383,7 +383,7 @@ async fn watch(
         );
         // **Flushed, because stdout to a file is block-buffered.** A run of any length is one you
         // want to `tee` or watch through a pipe, and without this the progress arrives in 4 KiB
-        // lumps or — for a run that is killed — not at all.
+        // lumps, or, for a run that is killed, not at all.
         let _ = std::io::Write::flush(&mut std::io::stdout());
 
         if goaled >= players && players > 0 {
@@ -468,7 +468,7 @@ fn read_generation(path: &str) -> Result<(Vec<SlotPlan>, usize)> {
     }
     // The largest world in the seed, which is what a fresh run's length is bounded by. Read from
     // the multidata rather than counted after connecting, because the estimate is wanted at
-    // startup — and a resumed run against a part-played room will finish sooner than it says.
+    // startup, and a resumed run against a part-played room will finish sooner than it says.
     let locations = plans
         .iter()
         .map(|p| data.locations.count_for(p.slot))

@@ -411,7 +411,7 @@ fn build(form: &CommandForm) -> std::result::Result<RoomCommand, String> {
         "set_status" => RoomCommand::SetStatus {
             slot: slot()?,
             // Parsed against the enum rather than passed through, so a typo is refused here with a
-            // list rather than at the far end as "unknown status" — and so the vocabulary has one
+            // list rather than at the far end as "unknown status", and so the vocabulary has one
             // definition. `goal` is the one anybody reaches for and is still not a default.
             status: form
                 .status

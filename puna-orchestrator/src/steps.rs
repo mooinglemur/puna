@@ -750,7 +750,7 @@ async fn recreate(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome>
     let mut conn = ctx.pool.get().await?;
     // **Asked, exactly as a stop is, and for a reason that is not politeness.** A redeploy used to
     // be the one teardown that let SIGTERM do the talking, which put `(SIGTERM)` in the journal for
-    // the single most operator-driven action in the system while a reap — which nobody performs —
+    // the single most operator-driven action in the system while a reap, which nobody performs,
     // read as an admin request.
     //
     // It costs no downtime, which is the whole reason it is here: this is the room's start pistol

@@ -502,8 +502,9 @@ mod tests {
         let html = page.render().expect("renders");
 
         // `whitespace = "suppress"` ate both spaces around the configured tag here and shipped
-        // `runningsha-7bc9c967— registry...`. Asserting the rendered words rather than the markup,
-        // because the bug is invisible in the source.
+        // `runningsha-7bc9c967(registry...`. Asserting the rendered words rather than the markup,
+        // because the bug is invisible in the source. The quoted failure follows the template: the
+        // separator was an em dash until the sweep of 2026-08-31 made it a parenthesis.
         assert!(
             html.contains("should be running <code>sha-new</code>"),
             "the space before the configured tag survives suppression"

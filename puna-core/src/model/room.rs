@@ -879,7 +879,7 @@ pub async fn create(
             // is deliberately not what creation uses.**
             //
             // The reference implementation starts a room the moment it is made, so that is what
-            // anybody who has run an Archipelago game expects — and Puna is the side with the
+            // anybody who has run an Archipelago game expects, and Puna is the side with the
             // controls to disagree, since it offers Stop and Close where upstream offers neither.
             // An organizer preparing a room days early simply does not share the link yet, and can
             // stop it with one click if they would rather it were down.
@@ -890,7 +890,7 @@ pub async fn create(
             //
             // **This also removes a race rather than working around it.** The redirect after
             // creation lands on `/room/<id>` while the room is still `provisioning`, and D8's
-            // implicit start fires only on `idle` — so the one navigation that would have started
+            // implicit start fires only on `idle`, so the one navigation that would have started
             // it always arrived too early, while a manual reload a few seconds later worked. A
             // desired state needs no timing to be correct: the orchestrator reaches it whenever it
             // gets there, which is what that column is for.

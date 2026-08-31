@@ -213,7 +213,7 @@ pub async fn cached(
     };
 
     // **A document with no timestamp is not a cache entry.** Pairing them here rather than at the
-    // call site is what makes "a body without the moment it was written" unrepresentable — the
+    // call site is what makes "a body without the moment it was written" unrepresentable: the
     // caller cannot then reach for a body and a stamp separately and pair the wrong two, which is
     // the whole of the defect this replaced.
     let live = row.live.zip(row.last_tracker_at);

@@ -406,7 +406,7 @@ impl Dispatcher {
                 let disposition = match &e {
                     // **Both status cases, and the wildcard below is why this needs saying.**
                     // `Refused` is a `Status` that also carries the room's explanation, so it must
-                    // land in the same disposition — a `400` is a Puna bug whether or not the room
+                    // land in the same disposition: a `400` is a Puna bug whether or not the room
                     // told us what was wrong with it. Adding the variant compiled silently and
                     // would have demoted every explained refusal to a plain `Failed`, losing the
                     // "this is a Puna bug, alert" path exactly when the room had said why.

@@ -254,7 +254,7 @@ pub fn serve(spec: &RoomSpec) -> Vec<String> {
     // see `room::memory_limit_bytes`, whose test asserts the room can always reach this cap before
     // the kernel reaches the room.
     //
-    // **In MiB, which is the unit pahoa spells this option in** — `main.rs` multiplies what it is
+    // **In MiB, which is the unit pahoa spells this option in.** `main.rs` multiplies what it is
     // given by 1024×1024 and its help text says `<MiB>`. Passing bytes here is accepted, reported
     // without comment in the startup banner, and configures a cap a million times too large; see
     // `room::outbound_budget_mib`, which is named for its unit because of it.

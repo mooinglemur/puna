@@ -349,10 +349,10 @@ async fn apply(
 
     // **Filters: the same state on every staged slot, then one command per slot so the running room
     // hears it.** Set apart from the command actions above because the durable half is Puna's own
-    // tables — the command carries only a scope and the dispatcher reads them back.
+    // tables: the command carries only a scope and the dispatcher reads them back.
     if is_filter_action(&form.action) {
         // **The same table, read by the same code as a slot's own page.** Every staged slot ends up
-        // identical, so this REPLACES whatever each of them had rather than merging into it —
+        // identical, so this REPLACES whatever each of them had rather than merging into it,
         // which is what "identically per affected slot" can honestly promise, since adding to each
         // would leave them in different end states depending on where they started.
         let state =
@@ -440,7 +440,7 @@ async fn apply(
         ));
     }
 
-    // The per-command tier, checked once — every command in a batch is the same verb, so one check
+    // The per-command tier, checked once: every command in a batch is the same verb, so one check
     // is the whole check. Kept rather than dropped because a command that changes tier later must
     // be caught here by the same expression that catches it in the console.
     if let Some(command) = commands.first()

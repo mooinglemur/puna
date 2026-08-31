@@ -760,7 +760,7 @@ mod tests {
         }
 
         // **The primary port is preselected from the seed's size**, which is the one default here
-        // computed rather than fixed — so it is asserted against the same function `room::create`
+        // computed rather than fixed, so it is asserted against the same function `room::create`
         // calls rather than against a literal. A form recommending one port while creation stored
         // the other would be invisible until somebody compared the page with the room.
         for slots in [1, 199, 200, 2000] {
@@ -800,7 +800,7 @@ mod tests {
         );
 
         // **A hint per option, not per group.** They are server-rendered and revealed one at a
-        // time, so a page with no scripting shows all of them — verbose and correct — where
+        // time, so a page with no scripting shows all of them, verbose and correct, where
         // building the text in script would leave an unscripted reader with unlabelled radios.
         let hints = html.matches("data-for=").count();
         assert_eq!(
@@ -828,7 +828,7 @@ mod tests {
         // **The creation form does not ask about the spoiler, deliberately.** It is the one thing
         // on a room whose disclosure cannot be taken back, so a new room starts at the tightest
         // setting anybody can still reach and widening it is a deliberate visit to the options
-        // page — not a radio somebody passes on the way to making a room.
+        // page, not a radio somebody passes on the way to making a room.
         assert!(
             !html.contains("spoiler_policy"),
             "the creation form offers a spoiler setting, which is a decision to make on purpose \

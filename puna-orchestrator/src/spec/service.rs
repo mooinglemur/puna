@@ -123,7 +123,7 @@ pub fn secret(spec: &SecretSpec, site: &Site) -> Secret {
             namespace: Some(site.namespace.clone()),
             labels: Some(site.naming.labels(spec.room_id)),
             // `None` on the first apply, because the Deployment it would point at does not exist
-            // yet — the pod cannot start without the Secret, so the Secret cannot wait for the pod.
+            // yet: the pod cannot start without the Secret, so the Secret cannot wait for the pod.
             owner_references: spec
                 .owner
                 .as_ref()
