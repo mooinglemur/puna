@@ -14,8 +14,12 @@
 //!
 //! ## Three cache layers, in the order they remove work
 //!
-//! 1. **`ETag` and `Cache-Control`**, so a browser stops re-fetching at all. This cuts request
-//!    volume at the source and is worth more than any amount of replica scaling.
+//! 1. **`ETag` and `Cache-Control`**, so a browser stops re-fetching, or at least stops
+//!    re-downloading. **Which of those depends on what the response is made of** — see [`Caching`].
+//!    A passthrough of pahoa's document may be reused for pahoa's own window without asking; a view
+//!    Puna derives from its own rows as well must revalidate, because those rows change when
+//!    somebody presses Save rather than on pahoa's schedule. The `ETag` is what makes revalidating
+//!    nearly free, and it is the layer that cuts bytes rather than requests.
 //! 2. **The shared cache in `rooms.last_tracker_doc`**, honoring pahoa's own windows. Shared
 //!    matters: with a per-process cache, adding replicas *multiplies* upstream fetches instead of
 //!    amortizing them.
@@ -348,7 +352,11 @@ async fn document(
     let scope = access.target.slot_number();
     let fetched = obtain(&mut conn, &state, &access.room, which).await?;
 
-    Ok(respond(project(fetched.body, scope), which, &conditional))
+    Ok(respond(
+        project(fetched.body, scope),
+        Caching::Upstream(which),
+        &conditional,
+    ))
 }
 
 /// One document, from whichever layer has it.
@@ -708,7 +716,7 @@ fn json<T: serde::Serialize>(view: &T, conditional: &IfNoneMatch) -> Result<Json
             anyhow::anyhow!("could not render the tracker view: {e}"),
         )
     })?;
-    Ok(respond(body, Document::Live, conditional))
+    Ok(respond(body, Caching::Derived, conditional))
 }
 
 // ---- the page ---------------------------------------------------------------------------------
@@ -1100,23 +1108,58 @@ fn unreachable_room(e: UpstreamError) -> Error {
     }
 }
 
-/// `ETag` over the body, plus the window pahoa itself would have served.
-fn respond(body: String, which: Document, conditional: &IfNoneMatch) -> Json {
+/// How long a response may be reused **without asking**, which is a different question from how
+/// long it stays accurate.
+///
+/// ## The distinction this exists to draw, and getting it wrong was a real bug
+///
+/// Every response here once carried `max-age` from pahoa's own document window, which was exactly
+/// right while every response *was* pahoa's document. It is not right for the digested views: those
+/// are a function of the room's documents **and of Puna's own rows** — a slot's owner, its
+/// progression, its note, its holder's ping preference — and those change the instant somebody
+/// presses Save rather than on pahoa's schedule.
+///
+/// Under `max-age` the browser serves its own copy without a request, so saving an annotation and
+/// landing back on the tracker showed the *previous* body for the rest of the window. The `ETag`
+/// was already correct and never got a chance to run: a browser with a fresh entry does not ask.
+///
+/// **`claimed` had the same defect and nobody noticed**, because a claim lands rarely enough that
+/// the stale window closed before anybody looked twice. The annotations only made a latent
+/// wrongness visible.
+enum Caching {
+    /// A passthrough of pahoa's own document, where pahoa's window is precisely the right answer:
+    /// asking again sooner cannot produce different data.
+    Upstream(Document),
+    /// A view Puna derives, which may change between one request and the next for reasons the
+    /// upstream window knows nothing about.
+    ///
+    /// `no-cache` rather than `no-store`: the browser may keep it and **must revalidate**, so the
+    /// `ETag` still does the work it was added for. The common answer is a 304 with no body, which
+    /// is what keeps this cheap on the tier that exists to absorb polling.
+    Derived,
+}
+
+/// `ETag` over the body, plus how long it may be reused without asking.
+fn respond(body: String, caching: Caching, conditional: &IfNoneMatch) -> Json {
     let etag = format!("\"{}\"", puna_core::hash::sha256_hex(body.as_bytes()));
 
     if conditional.0.as_deref() == Some(etag.as_str()) {
         return Json::Unchanged(NotModified(()));
     }
 
+    // `private` throughout, because a `members`-policy tracker is per-viewer and the digested views
+    // are per-viewer on EVERY policy -- a shared cache in front of this must never hand one reader
+    // another's document. `summary.txt` is the one `public` response here, and the one that is
+    // identical for every reader by construction.
+    let cache_control = match caching {
+        Caching::Upstream(which) => format!("private, max-age={}", which.ttl().as_secs()),
+        Caching::Derived => "private, no-cache".to_string(),
+    };
+
     Json::Body(Box::new(Cached {
         body,
         etag: Header::new("ETag", etag),
-        // `private` because a `members`-policy tracker is per-viewer, and a shared cache in front of
-        // this must not hand one viewer's document to another.
-        cache_control: Header::new(
-            "Cache-Control",
-            format!("private, max-age={}", which.ttl().as_secs()),
-        ),
+        cache_control: Header::new("Cache-Control", cache_control),
     }))
 }
 
@@ -1684,6 +1727,82 @@ mod tests {
             .any(|n| (40000..=49999).contains(&n))
     }
 
+    /// **And the digested views have to ask for that**, which the responder above cannot enforce.
+    ///
+    /// `json` is the one funnel every `/api/puna/tracker/**` view goes through, so pinning its
+    /// argument pins all four. Without this the header test passes against the original bug intact:
+    /// `respond` would still map `Derived` to `no-cache` correctly, and nothing would be asking it
+    /// for `Derived`.
+    ///
+    /// The same call-site shape this project has now been bitten by three times — a good test on a
+    /// rule, and nothing checking that the rule is invoked.
+    #[test]
+    fn the_digested_views_ask_to_be_revalidated() {
+        let source = include_str!("tracker.rs");
+        let at = source
+            .find("fn json<T: serde::Serialize>")
+            .expect("the digest responder is gone, so this lint checks nothing");
+        let body = &source[at..];
+        let body = &body[..body.find("\n}\n").expect("unterminated")];
+
+        assert!(
+            body.contains("Caching::Derived"),
+            "the digested views are served with a window that describes pahoa's document rather \
+             than Puna's rows, so an annotation saved now will not be visible until it expires"
+        );
+        assert!(
+            !body.contains("Caching::Upstream"),
+            "a digested view is being served as though it were a passthrough"
+        );
+    }
+
+    /// **A view Puna derives must be revalidated; a passthrough of pahoa's document need not be.**
+    ///
+    /// This is a fix rather than a preference. Every response here used to carry `max-age` from
+    /// pahoa's window, which is right only while the response *is* pahoa's document. The digested
+    /// views also read Puna's own rows — a slot's owner, its note, its progression, its holder's
+    /// ping preference — and those change when somebody presses Save. Under `max-age` the browser
+    /// answered its own fetch without asking, so saving an annotation and landing back on the
+    /// tracker showed the previous body for the rest of the window.
+    ///
+    /// **Nothing server-side can see that failure**, which is why it is asserted on the header: the
+    /// route runs correctly, returns correct data, and the browser never calls it. The only evidence
+    /// is one string in one response.
+    #[test]
+    fn a_derived_view_is_revalidated_and_a_passthrough_is_not() {
+        let header = |caching| match respond("{}".to_string(), caching, &IfNoneMatch(None)) {
+            Json::Body(cached) => cached.cache_control.value().to_string(),
+            Json::Unchanged(_) => panic!("a fresh request answered 304"),
+        };
+
+        assert_eq!(
+            header(Caching::Derived),
+            "private, no-cache",
+            "a derived view may be reused without asking, so a save will not show up"
+        );
+
+        // The passthroughs keep pahoa's own window, where it is exactly the right answer: asking
+        // again sooner cannot produce different data.
+        assert_eq!(
+            header(Caching::Upstream(Document::Live)),
+            "private, max-age=60"
+        );
+        assert_eq!(
+            header(Caching::Upstream(Document::Static)),
+            "private, max-age=300"
+        );
+
+        // `private` on every one of them: the digested views are per-viewer on every policy, so a
+        // shared cache in front of this must never hand one reader another's document.
+        for caching in [
+            Caching::Derived,
+            Caching::Upstream(Document::Live),
+            Caching::Upstream(Document::Static),
+        ] {
+            assert!(header(caching).starts_with("private"));
+        }
+    }
+
     /// A caller presenting the current ETag gets a 304 and no body, which is the layer that removes
     /// the most work.
     #[test]
@@ -1692,16 +1811,16 @@ mod tests {
         let etag = format!("\"{}\"", puna_core::hash::sha256_hex(body.as_bytes()));
 
         assert!(matches!(
-            respond(body.clone(), Document::Live, &IfNoneMatch(Some(etag))),
+            respond(body.clone(), Caching::Derived, &IfNoneMatch(Some(etag))),
             Json::Unchanged(_)
         ));
         assert!(matches!(
-            respond(body.clone(), Document::Live, &IfNoneMatch(None)),
+            respond(body.clone(), Caching::Derived, &IfNoneMatch(None)),
             Json::Body(_)
         ));
         // A stale ETag is a full response, not a 304.
         assert!(matches!(
-            respond(body, Document::Live, &IfNoneMatch(Some("\"old\"".into()))),
+            respond(body, Caching::Derived, &IfNoneMatch(Some("\"old\"".into()))),
             Json::Body(_)
         ));
     }
