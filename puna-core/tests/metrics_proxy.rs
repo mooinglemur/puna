@@ -1,7 +1,7 @@
 //! The room metrics proxy, from a room's exposition through to the orchestrator's `/metrics`.
 //!
 //! Its own binary because it publishes into the process-global registry, which is exactly what
-//! `metrics_scope_orchestrator.rs` asserts the *absence* of — that file checks a cold process
+//! `metrics_scope_orchestrator.rs` asserts the *absence* of: that file checks a cold process
 //! renders precisely the families Puna owns, and a proxied series arriving in the same binary would
 //! break it for the right reason at the wrong time.
 //!
@@ -31,7 +31,7 @@ fn exclusive() -> MutexGuard<'static, ()> {
 ///
 /// The distinction is the whole reason this helper exists. `puna_room_metrics_series{room="…"}` is
 /// Puna's own gauge and renders whatever the proxy does, so a bare search for `room="…"` passes
-/// with the collector unregistered and nothing re-exported at all — which is what mutating
+/// with the collector unregistered and nothing re-exported at all, which is what mutating
 /// `proxy::register` out proved before this was written.
 fn carries_proxied_series(rendered: &str, room: &str) -> bool {
     rendered.lines().any(|line| {
@@ -81,7 +81,7 @@ fn a_rooms_metrics_reach_the_orchestrators_scrape() {
     metrics::proxy::forget("room-a");
 }
 
-/// **One `# HELP` per name, whatever the fleet size** — and this is the assertion that matters
+/// **One `# HELP` per name, whatever the fleet size**, and this is the assertion that matters
 /// most, because getting it wrong does not lose a series, it makes the whole scrape unparseable at
 /// the far end. A second `# HELP` line for one metric name is an error to Prometheus, so two
 /// hundred rooms exporting the same counter have to render as one family.
@@ -120,7 +120,7 @@ fn many_rooms_render_as_one_family() {
 /// A room that stops being live takes **every** series it had, not one stale reading.
 ///
 /// The gauges lose one series per room; these are keyed by `(room, slot, cmd, …)`, so a room left
-/// behind by `retain_rooms` strands its whole label space — and every one of those series would go
+/// behind by `retain_rooms` strands its whole label space, and every one of those series would go
 /// on asserting a counter that stopped moving, which reads as a room gone quiet rather than a room
 /// that is gone.
 #[test]
@@ -158,7 +158,7 @@ fn a_room_that_is_no_longer_live_leaves_nothing_behind() {
 /// **The families being proxied are deliberately not in Puna's tables, and cannot be.**
 ///
 /// `ORCHESTRATOR_FAMILIES` is an exact list that `metrics_scope_orchestrator.rs` holds the registry
-/// to — which works precisely because every name in it is one Puna chose. A proxied name is
+/// to, which works precisely because every name in it is one Puna chose. A proxied name is
 /// pahoa's, arrives at runtime, and changes when they add a metric; listing it would mean a Puna
 /// release for every metric they ship, which is the coupling the exposition-format handoff exists
 /// to remove.

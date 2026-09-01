@@ -1,7 +1,7 @@
 //! Feature gates: who may create a room, and from which source.
 //!
 //! Both gates ship `disabled` and **admins bypass every gate**, so a fresh deployment is
-//! admin-only with no further configuration -- which is exactly the posture the first rounds of
+//! admin-only with no further configuration, which is exactly the posture the first rounds of
 //! testing want. Opening up is a deliberate `settings` change through `/admin/gates`, recorded
 //! with `updated_by`.
 //!
@@ -19,7 +19,7 @@
 //! ## Everything here fails closed
 //!
 //! A missing `settings` row, or a `mode` this build does not recognize, resolves to
-//! [`GateMode::Disabled`] with a loud warning -- never to `Open`. A gate is a thing that
+//! [`GateMode::Disabled`] with a loud warning, never to `Open`. A gate is a thing that
 //! *permits*, so the absence of one must permit nothing. The alternative, treating an
 //! unreadable gate as absent and therefore open, turns a deleted row or a botched migration into
 //! open room creation, which is the failure nobody would notice until it mattered.

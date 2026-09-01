@@ -1,19 +1,19 @@
 //! The console's command set, and who may run each one.
 //!
 //! Commands are **rows, not RPCs**. That is what gives them an audit trail, durability across an
-//! orchestrator restart, and one place to enforce tiering — and it is why the web tier never needs
+//! orchestrator restart, and one place to enforce tiering, and it is why the web tier never needs
 //! pahoa's credential to run one.
 //!
 //! ## The capability table is a `match`, checked in exactly one place
 //!
 //! [`RoomCommand::required_role`] is the only authority on who may run what. Adding a command means
 //! answering "which tier?" in the same expression that defines it, rather than remembering to guard
-//! a route — and the compiler makes the answer mandatory, because the match is exhaustive.
+//! a route, and the compiler makes the answer mandatory, because the match is exhaustive.
 //!
 //! ## Three semantics the UI must reflect rather than assume
 //!
 //! - **An admin is not bound by the modes that gate players.** `--release-mode disabled` stops
-//!   `!release` and does *not* stop `{"command":"release"}` — acting for somebody who cannot is the
+//!   `!release` and does *not* stop `{"command":"release"}`: acting for somebody who cannot is the
 //!   point. So the console must not grey out commands based on the room's options.
 //! - **`hint` has two modes.** `force: true` grants outright and spends nothing; the default charges
 //!   the slot's own points as `!hint` would and **may grant fewer than asked, or none**. `granted`
@@ -29,12 +29,12 @@
 //! pods at all**. Only the orchestrator can reach a room, so asking it through this queue is the
 //! only shape available.
 //!
-//! Its stated objection is answered rather than ignored — the variant carries **no password**, only
+//! Its stated objection is answered rather than ignored: the variant carries **no password**, only
 //! a slot number, so the audit trail records what was rotated and by whom without holding the value.
 //! What remains true is that it is not a *pahoa command*: the dispatcher handles it before the
 //! passthrough, because pahoa's own set is the sixteen others and it would answer `400`.
 //!
-//! `lock` used to be the second such exception and is not any more — pahoa shipped the verb, so it
+//! `lock` used to be the second such exception and is not any more: pahoa shipped the verb, so it
 //! is an ordinary passthrough. See [`RoomCommand::LockSlot`].
 //!
 //! **There is no room-wide password setter and there will not be one** (P18, settled): pahoa
@@ -46,7 +46,7 @@ use super::member::RoomRole;
 
 /// One thing an organizer or helper can ask a room to do.
 ///
-/// Transcribed from pahoa's `http/command.rs` — the tags and field names are its wire format, and
+/// Transcribed from pahoa's `http/command.rs`: the tags and field names are its wire format, and
 /// a mismatch is a `400` the room will explain but Puna cannot have anticipated.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
@@ -72,7 +72,7 @@ pub enum RoomCommand {
         slot: i32,
         item: String,
         /// `true` grants outright and spends nothing. The default charges the slot's own points and
-        /// **may grant fewer than asked, or none** — so the caller renders the answer, not the ask.
+        /// **may grant fewer than asked, or none**, so the caller renders the answer, not the ask.
         #[serde(default)]
         force: bool,
     },
@@ -80,7 +80,7 @@ pub enum RoomCommand {
     ///
     /// A separate verb rather than a flag, because that is how the reference names it and an
     /// operator who knows `/hint_location` looks for that word. The location is in the target
-    /// slot's own world, so it resolves in **that slot's game** — which is also the game whose
+    /// slot's own world, so it resolves in **that slot's game**, which is also the game whose
     /// name table an autocomplete must read.
     HintLocation {
         slot: i32,
@@ -88,7 +88,7 @@ pub enum RoomCommand {
         #[serde(default)]
         force: bool,
     },
-    /// **Check** a location, sending out whatever it holds — one step past hinting at it.
+    /// **Check** a location, sending out whatever it holds: one step past hinting at it.
     ///
     /// The same distinction `!hint` and the reference's `/send_location` draw, and the reason this
     /// is not a mode of [`HintLocation`](Self::HintLocation): one tells somebody where to look and
@@ -103,7 +103,7 @@ pub enum RoomCommand {
     /// both of a slot's item streams and replayed from index zero on each reconnect, so a stray
     /// extra digit is a room that never finishes sending. A default of one would make a
     /// `send_multiple` that did a fraction of its job look like it worked, which is why there is no
-    /// default here either — `send_item` is the one-copy spelling.
+    /// default here either: `send_item` is the one-copy spelling.
     SendMultiple {
         slot: i32,
         item: String,
@@ -112,7 +112,7 @@ pub enum RoomCommand {
     /// Exempt one slot from the room's `release_mode`, or return it to the mode.
     ///
     /// **An exemption, not a third permission level**, and the trap is the `false` case: it clears
-    /// the exemption and returns that slot to whatever the room's mode says — which may still
+    /// the exemption and returns that slot to whatever the room's mode says, which may still
     /// permit releasing. It does **not** forbid it. The reference spells these as two commands and
     /// the second is called `/forbid_release`, which reads like a denial and is not one; pahoa made
     /// it one command with a boolean for exactly that reason, and the UI has to carry the same
@@ -131,17 +131,17 @@ pub enum RoomCommand {
     ///
     /// **The verb that changes what Puna can do**, and the only one here that is an organizer's.
     /// Before it existed, a room's rules could be changed by a chat user holding the server
-    /// password and *not* by a token holder — which inverted the trust ordering, since the bearer
+    /// password and *not* by a token holder, which inverted the trust ordering, since the bearer
     /// token is the stronger credential and the one Puna holds.
     ///
     /// **These changes PERSIST**, and that is the opposite of the password contract in §4: the save
     /// is authoritative for gameplay options, so a restart restores what was set here over whatever
     /// flag the room was started with. §7's "gameplay flags are an initial value, never a setting"
-    /// rule is unchanged by this — what changes is that Puna finally has a write path, which §7 said
+    /// rule is unchanged by this: what changes is that Puna finally has a write path, which §7 said
     /// a settings UI would need before Puna could store any of them.
     ///
     /// `value` is a string on the wire even for a number or a boolean. pahoa accepts all three and
-    /// parses from text either way, and a string keeps this type `Eq` — `serde_json::Value` is not,
+    /// parses from text either way, and a string keeps this type `Eq`: `serde_json::Value` is not,
     /// because of floats. The two passwords are **recognized and refused by name** with an
     /// explanation rather than an "unknown option", so sending one is an answer rather than a bug.
     #[serde(rename = "option")]
@@ -153,7 +153,7 @@ pub enum RoomCommand {
     ///
     /// **The one variant that is not a pahoa command**, and the departure from §6 is deliberate.
     /// That section says rotation is `POST /admin/v1/slots/<n>/password` called directly rather than
-    /// a ninth command — written before the tier boundary was drawn. The web tier has **no egress to
+    /// a ninth command, written before the tier boundary was drawn. The web tier has **no egress to
     /// room pods at all** (its NetworkPolicy says so, and calls it the point rather than an
     /// omission), so the only process that can reach a room is the orchestrator. This queue is how
     /// you ask it to.
@@ -161,7 +161,7 @@ pub enum RoomCommand {
     /// §6's stated objection was that a command variant "would put a credential in the audit
     /// trail". It carries **no password** for exactly that reason: the new value is already in
     /// `room_slots` and the orchestrator reads it there. This row records that slot 3 was rotated,
-    /// by whom, and when — which is what an audit trail is for.
+    /// by whom, and when, which is what an audit trail is for.
     ///
     /// The dispatcher must handle it **before** the generic passthrough. Serialized into a pahoa
     /// `/admin/v1/command` body it would be a `400`, since pahoa's command set is the eight above.
@@ -172,7 +172,7 @@ pub enum RoomCommand {
     ///
     /// **pahoa's own verb since it shipped `lock`**, and an ordinary passthrough. Puna used to
     /// achieve this by omitting the slot from `PAHOA_SLOT_PASSWORDS` and relying on the fail-closed
-    /// rule — which worked, and was worse on four counts: it needed per-slot mode to be in force at
+    /// rule, which worked, and was worse on four counts: it needed per-slot mode to be in force at
     /// all, it took a Secret write plus a live push with an ordering between them, it overloaded a
     /// password map with an access decision, and it made "which slots have credentials" and "who is
     /// barred" the same field. **Locking now works in every password mode.**
@@ -182,7 +182,7 @@ pub enum RoomCommand {
     /// leaves a window in which they reconnect. The obvious reading of a control called "Lock" is
     /// that it ejects somebody, so anything offering it has to say otherwise.
     ///
-    /// **A locked slot is refused with `["InvalidSlot", "SlotLocked"]`** — both, in that order. The
+    /// **A locked slot is refused with `["InvalidSlot", "SlotLocked"]`**: both, in that order. The
     /// protocol's reason list is closed and has nothing for this; `InvalidSlot` is what makes a
     /// stock client stop cleanly instead of retrying on a doubling delay, and `SlotLocked` is what
     /// lets a reader tell a lock from a typo. The accepted cost is that **a stock client tells a
@@ -191,14 +191,14 @@ pub enum RoomCommand {
     ///
     /// **Puna's `room_slots.locked_at` stays the record of intent**, and that is deliberate rather
     /// than redundant: pahoa persists the lock in `room.save`, so it goes with a save that is reset
-    /// or a PVC that is recreated — which the old Secret-based lock survived, because it lived in
+    /// or a PVC that is recreated, which the old Secret-based lock survived, because it lived in
     /// Puna's own state. Puna keeps the intent and the audit trail (`locked_by`, `locked_at`, which
     /// pahoa does not record), and re-applies it when a room starts.
     #[serde(rename = "lock")]
     LockSlot {
         slot: i32,
         /// `true` locks, `false` lets them back in. pahoa defaults an absent `locked` to true; Puna
-        /// sends it either way, for the reason it does on `allow_release` — a body that says which
+        /// sends it either way, for the reason it does on `allow_release`: a body that says which
         /// way it meant is worth more than a byte saved, on a command whose two directions are easy
         /// to confuse.
         locked: bool,
@@ -211,14 +211,14 @@ pub enum RoomCommand {
         reason: Option<String>,
     },
 
-    /// Push Puna's stored traffic filter at the **running** room — its own, or one slot's.
+    /// Push Puna's stored traffic filter at the **running** room: its own, or one slot's.
     ///
     /// **Not a pahoa command**, like [`Self::RotatePassword`]: filters are a REST resource, and this
     /// serialized into an `/admin/v1/command` body would be a `400`. The dispatcher intercepts it
     /// before the passthrough.
     ///
     /// It exists because the **web tier has no egress to room pods at all**, so the editor that
-    /// writes `room_filters` cannot also tell the room — and a filter that only takes effect at the
+    /// writes `room_filters` cannot also tell the room, and a filter that only takes effect at the
     /// next restart is useless for the case it was built for, which is a client crashing right now.
     ///
     /// It carries **no rules**, only a scope: the dispatcher reads Puna's tables, so the audit row
@@ -226,11 +226,11 @@ pub enum RoomCommand {
     /// the one stored.
     #[serde(rename = "apply_filters")]
     ApplyFilters {
-        /// `None` is the room-wide filter. **The tier follows this field** — see `required_role`.
+        /// `None` is the room-wide filter. **The tier follows this field**: see `required_role`.
         slot: Option<i32>,
     },
 
-    /// Declare a slot's completion on its behalf — the third verb with no reference equivalent,
+    /// Declare a slot's completion on its behalf: the third verb with no reference equivalent,
     /// alongside `kick` and `lock`.
     ///
     /// **Why it has to exist.** Upstream's only external writer of a slot's status is that slot's
@@ -239,12 +239,12 @@ pub enum RoomCommand {
     ///
     /// **It is not a bare write.** pahoa routes it through the same path a client's own
     /// `StatusUpdate` takes, so the room announces it and the `collect_mode` / `release_mode` auto
-    /// rules fire exactly as they would otherwise — a world can empty out as a consequence, which
+    /// rules fire exactly as they would otherwise: a world can empty out as a consequence, which
     /// is why the response names what happened and why the console asks first.
     ///
     /// **Goal is monotonic and cannot be undone, including from here.** Upstream guards every
-    /// status change with `if current != CLIENT_GOAL` — not even the client that declared it may
-    /// take it back — and pahoa keeps that rather than carving out an operator exception. Declaring
+    /// status change with `if current != CLIENT_GOAL` (not even the client that declared it may
+    /// take it back) and pahoa keeps that rather than carving out an operator exception. Declaring
     /// an existing goal a second time is refused rather than silently ignored, so the announcement
     /// and the auto-release are not replayed.
     #[serde(rename = "set_status")]
@@ -252,7 +252,7 @@ pub enum RoomCommand {
         slot: i32,
         /// Named rather than numbered, matching pahoa. `Unknown` and `Connected` are accepted
         /// because a client may send them, but they are derived from the connection and the next
-        /// connect or disconnect overwrites them — pahoa's own response says so.
+        /// connect or disconnect overwrites them, and pahoa's own response says so.
         status: SlotStatus,
     },
 }
@@ -326,7 +326,7 @@ impl RoomCommand {
     ///
     /// **Every command is a helper's**, and the split that decides it is *the room versus the
     /// game inside it*. A helper is somebody an organizer trusts to run the multiworld day to
-    /// day — answering a stuck player, releasing a world whose owner has gone quiet, rotating a
+    /// day: answering a stuck player, releasing a world whose owner has gone quiet, rotating a
     /// password somebody pasted in the wrong channel. Making them fetch an organizer for each of
     /// those makes the tier useless and the organizer a bottleneck.
     ///
@@ -343,8 +343,8 @@ impl RoomCommand {
     /// **`option` is the day that came.** It is the first command that is not a helper's, and it is
     /// the same line M20 drew everywhere else: a helper runs the multiworld, an organizer decides
     /// whether it runs, *how it is configured*, and who is trusted with it. Every other verb here
-    /// acts on one slot's game; `option` changes the rules the whole room plays by, and — unlike
-    /// everything else on this list — it **persists into the save**, so it outlives the person who
+    /// acts on one slot's game; `option` changes the rules the whole room plays by, and (unlike
+    /// everything else on this list) it **persists into the save**, so it outlives the person who
     /// set it.
     pub fn required_role(&self) -> RoomRole {
         match self {
@@ -401,7 +401,7 @@ impl RoomCommand {
     /// The slot this acts on, where it acts on one.
     ///
     /// Every targeted command carries its target **explicitly**, because pahoa's underlying
-    /// handlers are connection-scoped — `cmd_release(conn, out)` releases *the caller's* slot — and
+    /// handlers are connection-scoped (`cmd_release(conn, out)` releases *the caller's* slot) and
     /// the admin variants supply the target rather than inferring it. There is no caller to infer
     /// from here.
     pub fn target_slot(&self) -> Option<i32> {
@@ -432,7 +432,7 @@ impl RoomCommand {
 /// What a room answered.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandOutput {
-    /// **`false` is an ANSWER, not a failure.** The room understood and said no — no such slot,
+    /// **`false` is an ANSWER, not a failure.** The room understood and said no: no such slot,
     /// nobody to kick, a countdown out of range. It lands in a terminal state with `output` saying
     /// why, because retrying it would loop forever and, under the 10/min limit, lock the room out.
     pub ok: bool,
@@ -452,7 +452,7 @@ pub struct CommandOutput {
 pub enum Disposition {
     /// The room answered, whether yes or no. Terminal, and `result.ok` carries which.
     Answered,
-    /// Malformed — unknown command, missing field, wrong type. **A Puna bug**, not a caller's:
+    /// Malformed: unknown command, missing field, wrong type. **A Puna bug**, not a caller's:
     /// this set is generated from a typed enum, so a `400` means the two sides have drifted.
     /// Terminal, and worth alerting on.
     Malformed,
@@ -489,8 +489,8 @@ mod tests {
 
     /// **pahoa's sixteen verbs, each beside the JSON pahoa's own parser reads.**
     ///
-    /// One list rather than two, because the previous shape — a list of commands here and a series
-    /// of indexed assertions below — meant a command could be added to the set and quietly not
+    /// One list rather than two, because the previous shape (a list of commands here and a series
+    /// of indexed assertions below) meant a command could be added to the set and quietly not
     /// checked against the wire, which is the only thing this file is really for.
     ///
     /// Transcribed from `pahoa-net/src/http/command.rs`, **not** from the handoff's summary table:
@@ -614,7 +614,7 @@ mod tests {
 
     /// **The one command whose tier depends on its own field.**
     ///
-    /// Not covered by the capability table above, which walks pahoa's set — this is a Puna-only
+    /// Not covered by the capability table above, which walks pahoa's set: this is a Puna-only
     /// command, so nothing else would notice if both scopes collapsed to one tier. Getting it
     /// backwards would let a helper reconfigure what every player in the room can see.
     #[test]
@@ -679,7 +679,7 @@ mod tests {
     ///
     /// The wire-shape test walks that list against pahoa's parser; this one would fail it, because
     /// pahoa has no such command and would answer `400`. It is a Puna instruction that happens to
-    /// travel on the same queue, and the dispatcher must intercept it before the passthrough — a
+    /// travel on the same queue, and the dispatcher must intercept it before the passthrough: a
     /// source lint over `dispatch.rs` asserts that ordering, since getting it wrong is a `400`
     /// logged as "Puna generated a body the room could not read", which is true and unhelpful.
     ///
@@ -741,7 +741,7 @@ mod tests {
     /// untested.**
     ///
     /// The list above is hand-written, so a variant added to the enum and not to it would simply
-    /// never be checked against the wire — the failure this whole module exists to prevent, arriving
+    /// never be checked against the wire: the failure this whole module exists to prevent, arriving
     /// by omission rather than by error. Naming them individually is what makes the diff say which
     /// one appeared.
     #[test]
@@ -775,7 +775,7 @@ mod tests {
     ///
     /// Pinned separately because the hazard is semantic rather than syntactic: a reader who assumes
     /// the reference's `/forbid_release` naming will expect `false` to forbid releasing, and it
-    /// returns the slot to `release_mode` — which may well still permit it.
+    /// returns the slot to `release_mode`, which may well still permit it.
     #[test]
     fn clearing_a_release_exemption_says_so_explicitly() {
         assert_eq!(
@@ -813,7 +813,7 @@ mod tests {
         }
     }
 
-    /// Every command has a tier, and the compiler enforces it — but the *split* is a decision, so
+    /// Every command has a tier, and the compiler enforces it, but the *split* is a decision, so
     /// it is pinned here where changing it is visible in review.
     #[test]
     fn the_capability_table_matches_the_design() {
@@ -941,7 +941,7 @@ mod tests {
     }
 
     /// `output` and `affected_slots` are optional on the wire, so a terse answer must not fail to
-    /// parse — the console renders what it got.
+    /// parse: the console renders what it got.
     #[test]
     fn an_output_with_only_ok_still_parses() {
         let terse: CommandOutput = serde_json::from_value(serde_json::json!({"ok": true}))
@@ -1016,7 +1016,7 @@ struct RawRow {
 
 /// A row this build cannot read is **dropped, not defaulted**.
 ///
-/// The command JSON comes from a database that may be newer than this binary — a rollout runs both
+/// The command JSON comes from a database that may be newer than this binary: a rollout runs both
 /// for a few minutes. Executing a command this build parsed loosely would be acting on a guess
 /// about what somebody asked for, which is the one thing an audited action must not do.
 fn hydrate(raw: RawRow) -> Option<CommandRow> {
@@ -1040,7 +1040,7 @@ const COLUMNS: &str = "id, room_id, requested_by, requested_role::text AS reques
 /// Queue a command, and wake the dispatcher.
 ///
 /// The insert and the `NOTIFY` are one transaction so a notification can never precede the row it
-/// announces — the dispatcher would look, find nothing, and the command would wait for the
+/// announces: the dispatcher would look, find nothing, and the command would wait for the
 /// backstop poll instead of running now.
 pub async fn enqueue(
     conn: &mut AsyncPgConnection,
@@ -1161,7 +1161,7 @@ pub async fn get(
     Ok(rows.into_iter().next().and_then(hydrate))
 }
 
-/// One room's recent commands, newest first — the console's history pane.
+/// One room's recent commands, newest first: the console's history pane.
 pub async fn recent(
     conn: &mut AsyncPgConnection,
     room: RoomId,
@@ -1184,13 +1184,13 @@ pub async fn recent(
 /// **One transaction for the whole batch**, which is what makes a bulk action all-or-nothing at the
 /// point of asking: an operator who stages two hundred slots and submits gets two hundred rows or
 /// none, never the first ninety because a connection dropped. What happens *afterwards* is
-/// per-command and partial by nature — that is what [`BatchOutcome`] is for — but the enqueue is
+/// per-command and partial by nature (that is what [`BatchOutcome`] is for) but the enqueue is
 /// not the place to introduce a second kind of partial.
 ///
 /// **One `NOTIFY` rather than one per row**, because the dispatcher's wake-up is not a work list:
 /// it claims every pending command it can find, so a second notification would wake it to look at a
 /// queue it is already draining. Sent last, inside the transaction, for the same reason the single
-/// enqueue does it — a notification cannot precede the rows it announces.
+/// enqueue does it: a notification cannot precede the rows it announces.
 ///
 /// Returns `None` for an empty list rather than minting an id for a batch with nothing in it: a
 /// page that exists and lists nothing is worse than the route saying there was nothing to do.
@@ -1250,7 +1250,7 @@ pub async fn enqueue_batch(
     Ok(Some(batch))
 }
 
-/// Every command of one batch, oldest first — the order the panel staged them in.
+/// Every command of one batch, oldest first: the order the panel staged them in.
 pub async fn batch(
     conn: &mut AsyncPgConnection,
     room: RoomId,
@@ -1279,8 +1279,8 @@ pub async fn batch(
 /// transport error, a rate limit, or a command Puna generated that pahoa could not parse.
 ///
 /// It matters immediately rather than in principle. A bulk **Set as Goaled** across a sync where
-/// thirty slots have already goaled produces thirty refusals — pahoa refuses a repeat goal rather
-/// than replaying the announcement and the auto-release — and every one of them is the correct,
+/// thirty slots have already goaled produces thirty refusals (pahoa refuses a repeat goal rather
+/// than replaying the announcement and the auto-release) and every one of them is the correct,
 /// expected answer. Painting those as errors is how an operator learns to ignore the bucket that
 /// actually needs reading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1324,7 +1324,7 @@ impl BatchOutcome {
 /// Fail commands left `running` by a dispatcher that went away.
 ///
 /// **A `running` row is nobody's until it is stale**, because the process that claimed it is the
-/// only one that will finish it — so a restart would otherwise leave commands pending forever with
+/// only one that will finish it, so a restart would otherwise leave commands pending forever with
 /// a waiter that times out and no record of why. `older_than` must exceed anything this process
 /// could legitimately still be doing; the probe's own timeout bounds that at a few seconds.
 pub async fn fail_stale(

@@ -1,13 +1,13 @@
 //! Port pair allocation.
 //!
-//! Each room gets an ADJACENT PAIR -- `base` and `base + 1` -- published as `game-full` and
+//! Each room gets an ADJACENT PAIR (`base` and `base + 1`) published as `game-full` and
 //! `game-filtered`. One row per pair keyed on the even base port, never one row per port: two
 //! rows would let a third allocation land on `base + 1` between the two inserts, whereas one row
 //! makes the primary key itself protect the pair.
 //!
 //! Rows deliberately outlive the Services they describe. This is a RESERVATION table, not an
 //! allocation table: a torn-down room must come back on the same port, and that requirement is
-//! the reason Puna needs a database at all -- the Kubernetes API cannot answer it, because the
+//! the reason Puna needs a database at all: the Kubernetes API cannot answer it, because the
 //! Service is deleted when the room is torn down.
 //!
 //! The allocator, in order:
@@ -16,7 +16,7 @@
 //!   3. otherwise the least recently used reservation
 //!
 //! Steps 2 and 3 share one `ORDER BY`, because the table is pre-seeded with every pair and
-//! `last_activity` defaults to `'-infinity'` -- so "never allocated" sorts first under the same
+//! `last_activity` defaults to `'-infinity'`, so "never allocated" sorts first under the same
 //! expression that means "least recently used". That collapse is why there is no sentinel and no
 //! `COALESCE` here.
 //!
@@ -28,8 +28,8 @@
 //! roughly nineteen have ever existed. That is not information a room's address should carry,
 //! least of all early in an environment's life when the number is small and telling.
 //!
-//! `random()` costs nothing here -- the ordering only ever decides *which* equally-good pair is
-//! taken -- and it leaves both real properties intact, because `last_activity` still dominates:
+//! `random()` costs nothing here (the ordering only ever decides *which* equally-good pair is
+//! taken) and it leaves both real properties intact, because `last_activity` still dominates:
 //! never-allocated pairs are still taken before released ones, and released ones are still taken
 //! oldest-first. It also breaks ties fairly in step 3, where `touch_live_rooms` stamps every live
 //! room with the same `now()` and a port-ordered tiebreak would always pick the lowest.
@@ -39,7 +39,7 @@
 //! unpredictability while keeping the sequence stable.
 //!
 //! Reservations are a WEAK claim, not a lease: honored while nothing else needs the port, taken
-//! away when something does. There is deliberately no TTL and no expiry sweep -- reclaiming on
+//! away when something does. There is deliberately no TTL and no expiry sweep: reclaiming on
 //! demand needs no constant, releases nothing while there is headroom, and degrades gracefully.
 
 use diesel::sql_types::{Integer, Text, Timestamptz, Uuid as SqlUuid};
@@ -85,7 +85,7 @@ struct ReclaimedPort {
 /// THE DESIGN DOC OMITS THIS EXCLUSION and it matters: its ordering is own-port, never-allocated,
 /// oldest `last_activity`. In normal operation a running room's `last_activity` is recent so it
 /// sorts last, but under genuine exhaustion the allocator would take a port out from under
-/// connected clients -- and Cilium does not report that as an error, so the symptom would be
+/// connected clients, and Cilium does not report that as an error, so the symptom would be
 /// players dropped from a room that still looks healthy. Failing loudly is the correct
 /// degradation.
 const LIVE_STATES: &str = "'starting','running','degraded'";
@@ -121,7 +121,7 @@ pub struct Allocation {
 /// `ORDER BY`, because pre-seeding plus `'-infinity'` makes never-allocated sort first. That is
 /// correct in isolation and WRONG under concurrency: the subquery orders on a READ COMMITTED
 /// snapshot, and by the time a row is locked another allocator may already have taken it. The row
-/// then still qualifies -- a just-allocated *idle* room is not live, so it is reclaimable -- and
+/// then still qualifies (a just-allocated *idle* room is not live, so it is reclaimable) and
 /// the second allocator takes the port straight back out of the first one's hands.
 ///
 /// The 64-way concurrency test caught exactly this: 59 distinct ports out of 64.
@@ -323,7 +323,7 @@ async fn any_candidate_exists(
 /// Unbind whatever pair a room holds, leaving the reservation itself intact.
 ///
 /// `last_activity` is deliberately NOT reset. The row keeps its position in the LRU ordering, so
-/// a recently-released port is handed out last -- which is what makes a room torn down and
+/// a recently-released port is handed out last, which is what makes a room torn down and
 /// restarted land back on its own port.
 ///
 /// This is the "reclaiming a port must null the binding and touch nothing else" rule: the room's
@@ -344,7 +344,7 @@ pub async fn release(
 ///
 /// **Read-only, and therefore not gated on [`Orchestrator`]**: the web tier calls this, and it is
 /// the reason it can. A patch download embeds the room's address, and reservations are sticky, so a
-/// patch taken from a room that is torn down already carries the address it will come back on —
+/// patch taken from a room that is torn down already carries the address it will come back on,
 /// which the lobby cannot do, because it only knows an address while a room is up.
 ///
 /// The one thing that invalidates the answer is an LRU reclaim under range pressure, which is why
@@ -369,7 +369,7 @@ pub async fn reserved_pair(
 /// Hold a pair out of circulation until `until`.
 ///
 /// Used when a Service comes up on an address other than the expected shared VIP. That collision
-/// is necessarily with something Puna did not create -- Puna's own uniqueness is enforced here --
+/// is necessarily with something Puna did not create (Puna's own uniqueness is enforced here)
 /// so the pair is parked rather than immediately retried.
 pub async fn quarantine(
     _orchestrator: &Orchestrator,
@@ -459,7 +459,7 @@ pub async fn stats(
 
 /// Refuse to start against a database belonging to the other environment.
 ///
-/// Dev and prod have separate clusters, so this should be impossible -- but the two share one
+/// Dev and prod have separate clusters, so this should be impossible, but the two share one
 /// public address and therefore one port space, and a `DATABASE_URL` pointed at the wrong one
 /// would allocate from the wrong half. Cilium reports that as nothing Puna can see: because every
 /// room requests a specific address, a conflict is **refused** rather than reallocated, and the
@@ -507,19 +507,19 @@ pub async fn assert_environment_matches(
 /// Every database is seeded by the initial migration with reservations for **both** environments,
 /// and the migration that made the range configurable backfilled a `port_ranges` row for each. Only
 /// one of those is ever real: a database belongs to exactly one environment, and nothing else in
-/// this module touches the other one -- `ensure_range` writes only its own row, and `allocate`
+/// this module touches the other one: `ensure_range` writes only its own row, and `allocate`
 /// filters on `environment`, so the foreign rows are inert.
 ///
 /// Inert but **misleading**, which is the reason to remove them. `port_ranges` is the table someone
 /// reads to answer "which ports does this environment own", and a stale foreign row answers a
-/// question nobody asked with a number that is no longer true -- the dev database's `prod` row still
+/// question nobody asked with a number that is no longer true: the dev database's `prod` row still
 /// claimed a range that dev itself had since expanded into.
 ///
 /// ## Ordering, which is the part that matters
 ///
 /// **[`assert_environment_matches`] must run first**, and this function must never be called before
 /// it. That guard refuses to start when it finds foreign reservations *bound to rooms*, which is how
-/// a `DATABASE_URL` pointed at the wrong environment is caught — the one mistake the design calls
+/// a `DATABASE_URL` pointed at the wrong environment is caught: the one mistake the design calls
 /// unrecoverable. Cleaning up first would delete exactly the evidence it reads, turning a loud
 /// refusal into a silent adoption of somebody else's database.
 ///
@@ -578,12 +578,12 @@ pub async fn forget_foreign_environment(
 /// Every reservation outside the new range is released, because a row that cannot legitimately be
 /// allocated should not exist. What happens to the room depends on whether it is serving:
 ///
-///   * **Live** — a restart is queued. The room is genuinely on a port this deployment no longer
+///   * **Live**: a restart is queued. The room is genuinely on a port this deployment no longer
 ///     claims, so it cannot simply stay there; the recreate stops it and [`allocate`] gives it a
 ///     fresh port inside the range. That goes through the same `redeploy_requested_at` signal an
 ///     operator's restart uses, so it inherits the per-tick cap and rolls gradually rather than
 ///     restarting an environment at once.
-///   * **Anything else** — nothing to do. It is not serving on that port, and it will allocate a
+///   * **Anything else**: nothing to do. It is not serving on that port, and it will allocate a
 ///     valid one whenever it next starts.
 pub async fn ensure_range(
     _orchestrator: &Orchestrator,
@@ -722,8 +722,8 @@ mod tests {
     /// The SQL literal and [`RoomState::is_live`] have to agree, and nothing else makes them.
     ///
     /// They are two spellings of D4: the allocator will not take a pair from a live room. If a
-    /// state is added to the enum as live and not here, the exclusion silently stops covering it
-    /// — and the symptom is a room losing its port while players are connected, which Cilium
+    /// state is added to the enum as live and not here, the exclusion silently stops covering it,
+    /// and the symptom is a room losing its port while players are connected, which Cilium
     /// reports as nothing at all.
     #[test]
     fn the_live_state_list_matches_the_enum() {

@@ -1,6 +1,6 @@
 //! The real probe: pahoa's admin API over its own TLS.
 //!
-//! Every field is read defensively — `as_i64`, `as_str`, missing-is-`None` — rather than through a
+//! Every field is read defensively (`as_i64`, `as_str`, missing-is-`None`) rather than through a
 //! `Deserialize` derive. That is deliberate. A status document is a **diagnostic**, and a strict
 //! parse turns "pahoa added a field" or "one counter is null" into a room Puna can no longer see at
 //! all. Reading it loosely means a newer room degrades to fewer numbers instead of to none, which is
@@ -265,7 +265,7 @@ async fn read_bounded(response: reqwest::Response, limit: usize) -> Result<Strin
 
 /// Read what is there, ignore what is not.
 ///
-/// Split from the request so the whole shape is testable from a JSON literal — which is the only
+/// Split from the request so the whole shape is testable from a JSON literal, which is the only
 /// way to assert the two states that mean "no data" rather than zero.
 pub fn parse(document: &serde_json::Value) -> RoomStatus {
     RoomStatus {
@@ -359,7 +359,7 @@ fn number(value: &serde_json::Value, key: &str) -> Option<i64> {
     value.get(key)?.as_i64()
 }
 
-/// RFC 3339, which is what this surface uses — unlike the tracker documents, which use RFC 1123
+/// RFC 3339, which is what this surface uses, unlike the tracker documents, which use RFC 1123
 /// because the reference does. Two surfaces, two formats, and mixing them up yields `None` rather
 /// than a wrong instant.
 fn timestamp(value: &serde_json::Value, key: &str) -> Option<DateTime<Utc>> {
@@ -377,7 +377,7 @@ mod tests {
     ///
     /// Found the accidental way: `execute` was written without `.bearer_auth`, and only an
     /// *unused variable* warning caught it. Had the token been used anywhere else in the function
-    /// the compiler would have been silent, and the symptom would have been actively misleading —
+    /// the compiler would have been silent, and the symptom would have been actively misleading:
     /// pahoa answers `404` to an unauthenticated admin call, which Puna reads as "the Secret did
     /// not arrive" and reports as a provisioning fault.
     ///
@@ -476,7 +476,7 @@ mod tests {
 
     /// **The two `null`s that are not zero.** A room with no `--save-dir` reports `save: null`, and a
     /// room nobody has spoken to reports a null activity block. Rendering either as a number would
-    /// claim something false — "saved 0 bytes", "last spoke in 1970".
+    /// claim something false: "saved 0 bytes", "last spoke in 1970".
     #[test]
     fn absent_data_is_none_and_never_zero() {
         let mut document = document();

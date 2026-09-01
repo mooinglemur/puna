@@ -8,7 +8,7 @@
 //! ```
 //!
 //! The unit tests in `artifact::ingest` cover the filename cases exhaustively; this covers the
-//! parts only a real archive can exercise -- multidata parsing, manifest reads, and the slot/patch
+//! parts only a real archive can exercise: multidata parsing, manifest reads, and the slot/patch
 //! join across every naming convention at once.
 
 use pahoa_multidata::{MultiData, SlotType};
@@ -202,7 +202,7 @@ fn connectable_slots_are_kept_and_groups_are_dropped() {
     );
 }
 
-/// **A check that is too strict does not fail a unit test -- it refuses somebody's multiworld**,
+/// **A check that is too strict does not fail a unit test: it refuses somebody's multiworld**,
 /// so the direction that matters most is this one: real generation output must pass.
 ///
 /// It is not idle. Switching these checks on in pahoa refused every seed with a spectator in it,
@@ -226,7 +226,7 @@ fn a_real_seed_would_load() {
 ///
 /// Mutating a parsed `MultiData` rather than hand-building one is what makes these discriminating:
 /// everything except the one broken fact is a working seed, so a refusal can only be the mutation.
-/// It is also the only route available -- there is no pickle *encoder*, so a bad seed cannot be
+/// It is also the only route available: there is no pickle *encoder*, so a bad seed cannot be
 /// written back into a zip and pushed through `inspect`. The call site is pinned by a source lint
 /// in `artifact::ingest` instead.
 #[test]

@@ -1,7 +1,7 @@
 //! Re-exporting a room's own Prometheus exposition under this process's registry.
 //!
 //! pahoa serves `/admin/v1/metrics` with per-slot, per-message-type counters. Puna scrapes it on
-//! the probe pass, adds `room="<uuid>"`, and republishes — so **a Prometheus scrape reads a cache
+//! the probe pass, adds `room="<uuid>"`, and republishes, so **a Prometheus scrape reads a cache
 //! and never reaches a live multiworld**, which is the property the whole poll-cache-re-export
 //! design exists for. See `puna-orchestrator/src/probing.rs` for why the alternative, a
 //! ServiceMonitor per room, was rejected.
@@ -10,7 +10,7 @@
 //!
 //! **Nothing here knows what pahoa exports**, and that is the point: a label or a metric added on
 //! their side needs no release on ours. Mirroring would mean declaring each family, which brings
-//! back everything the exposition format already solves — and two specific walls in the
+//! back everything the exposition format already solves, and two specific walls in the
 //! `prometheus` crate. `IntCounter` has no `set`, so a cumulative total has to be tracked and
 //! advanced by difference; and `remove_label_values` needs the *full* label set, which is
 //! unknowable for a label space Puna does not define. A collector sidesteps both by holding
@@ -18,14 +18,14 @@
 //!
 //! [`Registry::gather`](prometheus::Registry::gather) also **merges families by name across
 //! collectors and sorts their metrics**, so two hundred rooms exporting `pahoa_packets_in_total`
-//! render as one family — which the text format requires, since a second `# HELP` line for one
+//! render as one family, which the text format requires, since a second `# HELP` line for one
 //! name is a parse error at the far end.
 //!
 //! ## The landmine: one desc-less collector per registry
 //!
 //! [`Collector::desc`] returns nothing here, because the descriptors are not knowable ahead of the
 //! scrape. `Registry::register` sums desc ids into a collector id, so **every desc-less collector
-//! hashes to the same id and the second one registers as `AlreadyReg`** — a silent
+//! hashes to the same id and the second one registers as `AlreadyReg`**: a silent
 //! nothing-happens, since registration failures are conventionally ignored. There is exactly one
 //! in this process and `tests/metrics_proxy.rs` pins that.
 //!
@@ -35,15 +35,15 @@
 //! rather than re-exported, each counted under `puna_room_metrics_dropped_total`:
 //!
 //! - **A name that collides with a family Puna owns.** `gather` merges by name, so a room
-//!   exporting `puna_rooms` would have its metrics folded into Puna's own family — one series
+//!   exporting `puna_rooms` would have its metrics folded into Puna's own family: one series
 //!   silently claiming to be a reading this process made.
 //! - **Histograms and summaries**, including their `_sum` and `_count` companions. Not a
 //!   limitation worth hiding: `prometheus-parse` folds bucket lines into one sample and leaves the
 //!   companions as separate untyped ones, so passing through what survives would publish half a
-//!   histogram — a `_count` with no buckets reads as a working metric. pahoa exports none today;
+//!   histogram: a `_count` with no buckets reads as a working metric. pahoa exports none today;
 //!   when it does, this is the place, and the counter is what says so.
 //! - **An incoming `room` label**, which is replaced rather than duplicated. Two label pairs with
-//!   one name is an invalid metric, and the value Puna adds is the authoritative one — it knows
+//!   one name is an invalid metric, and the value Puna adds is the authoritative one: it knows
 //!   which room it just scraped.
 //!
 //! A room whose exposition cannot be parsed at all contributes nothing and leaves Puna's own
@@ -407,7 +407,7 @@ mod tests {
     /// A room cannot claim to be this process.
     ///
     /// `gather` merges by name, so without this a room exporting `puna_rooms` would have its
-    /// metrics folded into the family the orchestrator computes — a series indistinguishable from
+    /// metrics folded into the family the orchestrator computes: a series indistinguishable from
     /// one Puna made, asserting whatever the room felt like.
     #[test]
     fn a_room_cannot_publish_under_a_name_puna_owns() {

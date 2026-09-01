@@ -3,7 +3,7 @@
 //! Gated on `DATABASE_URL` / `PUNA_REQUIRE_DB_TESTS` and **not** on `PUNA_TEST_GENERATION_ZIP`:
 //! everything here works on synthetic tables, so it runs in CI, where there is a database and no
 //! zip. The extraction from a real seed is `tests/names.rs`, which is gated the other way. Keeping
-//! the two guards independent is deliberate — coupling them is what once made a suite pass locally
+//! the two guards independent is deliberate: coupling them is what once made a suite pass locally
 //! and skip silently in CI.
 
 mod common;
@@ -127,7 +127,7 @@ async fn an_uncached_generation_reads_as_absent_rather_than_failing() {
 }
 
 /// Storing twice replaces rather than conflicts, which is what makes a rebuild the same code path
-/// as a first write — a repair needing its own statement would be a repair nobody had tested.
+/// as a first write: a repair needing its own statement would be a repair nobody had tested.
 #[tokio::test]
 async fn storing_again_replaces_what_was_there() {
     with_db(|pool| async move {
@@ -171,7 +171,7 @@ async fn storing_again_replaces_what_was_there() {
 }
 
 /// **A rebuild REPLACES, it does not merge**, and this is the case an upsert alone cannot reach: a
-/// game — or a slot — that the new extraction no longer produces has to disappear. Without it a fix
+/// game (or a slot) that the new extraction no longer produces has to disappear. Without it a fix
 /// to the extraction could never remove what the bug had written, and the repair path would have a
 /// state it could not repair.
 #[tokio::test]

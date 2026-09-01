@@ -74,7 +74,7 @@ async fn a_command_round_trips_through_the_queue() {
 }
 
 /// **The property the conditional claim exists for.** Two dispatchers racing one row must produce
-/// exactly one execution — otherwise a `release` runs twice, which for a player is items appearing
+/// exactly one execution: otherwise a `release` runs twice, which for a player is items appearing
 /// out of nowhere and cannot be undone.
 #[tokio::test]
 async fn two_dispatchers_racing_one_command_execute_it_once() {

@@ -2,13 +2,13 @@
 //!
 //! **This is a regression test for a bug that was live for weeks and invisible.**
 //! `raw_connection_with_notifications` used to hand back the raw message *stream*, which is also
-//! what drives the connection — so `client.batch_execute("LISTEN ...")` awaited a response that
+//! what drives the connection, so `client.batch_execute("LISTEN ...")` awaited a response that
 //! could only arrive if somebody polled the stream, which the caller could not do while awaiting
 //! the query. Every listener in Puna deadlocked on its first statement: no error, no log line, no
 //! symptom beyond "NOTIFY never arrives".
 //!
 //! It survived because every caller has a polling fallback and the design says *NOTIFY is latency,
-//! the tick is the contract* — so the only cost was that a room start waited up to 30 seconds for
+//! the tick is the contract*, so the only cost was that a room start waited up to 30 seconds for
 //! the next tick instead of being immediate. Nothing was broken; everything was just slow, in a way
 //! nobody had a number for.
 //!
@@ -69,7 +69,7 @@ async fn a_notification_reaches_a_listener() {
     listener.abort();
 }
 
-/// The same statement the deadlock hit. A query on a listening client must complete — if the
+/// The same statement the deadlock hit. A query on a listening client must complete: if the
 /// connection is not being driven, this never returns.
 #[tokio::test]
 async fn a_query_on_a_listening_connection_completes() {

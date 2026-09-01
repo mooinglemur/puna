@@ -7,14 +7,14 @@
 //! ## Insertion is idempotent on the content hash
 //!
 //! `sha256` is `UNIQUE`, so re-uploading the same zip converges on the existing row rather than
-//! creating a second one -- the same convergence the filesystem gets from naming a directory after
+//! creating a second one: the same convergence the filesystem gets from naming a directory after
 //! its hash, expressed with the same input. [`insert`] reports which happened.
 //!
 //! ## Two different questions, and telling them apart is a disclosure boundary
 //!
 //! [`Insertion::created`] is GLOBAL: were these bytes already indexed, by anyone. [`record_upload`]
 //! is PER USER: had *this* person uploaded them before. They diverge exactly when a second account
-//! uploads a zip somebody else already has -- and there, only the second answer may be shown.
+//! uploads a zip somebody else already has, and there, only the second answer may be shown.
 //! Reporting the global one tells the uploader that another account holds the same seed, which they
 //! came with their own copy of the bytes and no right to learn.
 //!
@@ -22,7 +22,7 @@
 //! page says. A caller reaching for `created` to phrase a message is reaching for the wrong one.
 //!
 //! Provenance beyond that lives elsewhere. `first_ingested_by` is who got here first and nothing
-//! more -- authority over who holds a reference is `generation_uploads`. Who opened a room and where
+//! more: authority over who holds a reference is `generation_uploads`. Who opened a room and where
 //! it came from live on `rooms`, because one generation may back a direct upload and a lobby push at
 //! the same time and the bytes cannot say which.
 
@@ -35,7 +35,7 @@ use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use crate::artifact::{GenerationMeta, SlotKind};
 use crate::ids::GenerationId;
 
-/// What [`insert`] did — two answers to two different questions.
+/// What [`insert`] did: two answers to two different questions.
 ///
 /// **They are not interchangeable and only one of them may be shown to the uploader.** See the
 /// module docs: `created` is about everybody, `first_for_this_user` is about the caller, and they
@@ -58,11 +58,11 @@ pub struct Insertion {
 ///
 /// Runs in one transaction: a `generations` row without its `generation_slots` would be a
 /// generation from which no room could be built, and the slot table is not reconstructible from
-/// the row -- it would need the zip re-read.
+/// the row: it would need the zip re-read.
 ///
 /// **The reference is recorded HERE rather than by the caller**, and that is not tidiness. Indexing
 /// a generation without recording who uploaded it produces an upload that succeeded and then does
-/// not appear in the uploader's list -- with nothing failing anywhere. A caller that must remember
+/// not appear in the uploader's list, with nothing failing anywhere. A caller that must remember
 /// a second call is a caller that will forget it, and the lobby push is a second caller waiting to
 /// happen. Same transaction, so it cannot half-happen either.
 pub async fn insert(
@@ -236,7 +236,7 @@ const GENERATION_COLUMNS: &str = "id, sha256, size_bytes, seed_name, slots, loca
                                   race_mode, spoiler_member, created_at";
 
 /// The same columns, prefixed for a join. Derived from [`GENERATION_COLUMNS`] rather than written
-/// out again, so a column added there cannot be missing here — which would fail at runtime, in the
+/// out again, so a column added there cannot be missing here, which would fail at runtime, in the
 /// listing only, as a deserialization error rather than as anything that names the cause.
 fn qualified_generation_columns(alias: &str) -> String {
     GENERATION_COLUMNS
@@ -268,7 +268,7 @@ pub async fn get(
 /// that somebody else holds the same seed.
 ///
 /// Idempotent, so a repeat upload converges on one reference rather than accumulating them, and
-/// `uploaded_at` keeps the FIRST time this user uploaded it — a re-upload is the same act, not a
+/// `uploaded_at` keeps the FIRST time this user uploaded it: a re-upload is the same act, not a
 /// newer one, and touching the timestamp would reshuffle their listing for no reason.
 pub async fn record_upload(
     conn: &mut AsyncPgConnection,
@@ -300,7 +300,7 @@ pub async fn record_upload(
 /// A generation as it appears in one user's own listing.
 ///
 /// Carries `uploaded_at` separately from `generation.created_at` because for a second uploader they
-/// are different moments — the generation dates from whenever it first arrived, under whoever's
+/// are different moments: the generation dates from whenever it first arrived, under whoever's
 /// account that was. The listing must show the reader's own, or it dates their upload to a day they
 /// had nothing to do with.
 #[derive(Debug, Clone)]

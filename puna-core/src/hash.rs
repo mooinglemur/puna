@@ -36,7 +36,7 @@ mod tests {
     }
 
     /// The published vector, so a dependency swap cannot quietly change what a content address
-    /// means -- every generation directory on disk is named by this function.
+    /// means: every generation directory on disk is named by this function.
     #[test]
     fn sha256_matches_the_known_answer_for_abc() {
         assert_eq!(

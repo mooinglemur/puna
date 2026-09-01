@@ -1,7 +1,7 @@
 //! Asking a room how it is, and asking it to stop.
 //!
 //! pahoa's admin API is the only thing that can answer "how many clients, how long idle, what are
-//! this room's rules **now**" — and the last of those matters most, because a room's save is
+//! this room's rules **now**", and the last of those matters most, because a room's save is
 //! authoritative for its gameplay options. After the first save, what Puna passed on the command
 //! line describes how a room *started*, not how it *is*, and an organizer may have moved an option
 //! with `!admin /option` since. So anything rendering a gameplay option must read it from here.
@@ -16,14 +16,14 @@
 //!
 //! ## `clients_connected` counts SOCKETS, not players
 //!
-//! One player commonly holds three — game client, text client, tracker. Rendering it as a player
+//! One player commonly holds three: game client, text client, tracker. Rendering it as a player
 //! count is wrong, and **an idle reaper must read `activity.idle_seconds` rather than this number**,
 //! or a room full of abandoned tracker tabs never reaps.
 //!
 //! ## The trait exists so the fallback is expressible
 //!
 //! `HttpsProbe` is the default and pahoa has shipped the whole surface, so `TcpProbe` is not a
-//! transitional stage — it is what a room pinned to an older image gets. Under it the console is
+//! transitional stage: it is what a room pinned to an older image gets. Under it the console is
 //! **hidden entirely** rather than shown greyed out, and a graceful stop degrades to deleting the
 //! Deployment, which is what `Step::Stop` already does.
 
@@ -43,7 +43,7 @@ pub enum ProbeError {
     #[error(transparent)]
     Room(#[from] RoomError),
 
-    /// This probe cannot answer that at all — the `TcpProbe` case. Distinct from a failure, because
+    /// This probe cannot answer that at all: the `TcpProbe` case. Distinct from a failure, because
     /// a caller should hide a control rather than report an error.
     #[error("this probe cannot {what}")]
     Unsupported { what: &'static str },
@@ -92,7 +92,7 @@ impl ProbeCapabilities {
     /// It lives here because it was previously written down twice: M9 declared the metric's label
     /// set before a probe existed, guessing `activity` and `client_count`, and M11 then built the
     /// real capabilities as `status`/`commands`/`graceful_shutdown`. Both writers ran, so the gauge
-    /// carried the *union* — and reported `puna_probe_capability{capability="client_count"} 0`
+    /// carried the *union*, and reported `puna_probe_capability{capability="client_count"} 0`
     /// beside a populated `puna_room_clients_connected`, which is a flat contradiction on a
     /// dashboard.
     ///
@@ -130,8 +130,8 @@ pub struct NetStatus {
     pub clients_connected: Option<i64>,
     pub mailbox_depth: Option<i64>,
     pub mailbox_peak: Option<i64>,
-    /// Cumulative. Whatever re-exports this must treat it as a counter — see M11's note about
-    /// `inc_by(new - old)` — or `rate()` breaks.
+    /// Cumulative. Whatever re-exports this must treat it as a counter (see M11's note about
+    /// `inc_by(new - old)`) or `rate()` breaks.
     pub lag_disconnects: Option<i64>,
     pub outbound_queued_bytes: Option<i64>,
     pub outbound_peak_bytes: Option<i64>,
@@ -143,12 +143,12 @@ pub struct NetStatus {
 /// `None` throughout until a client has spoken. Never zero for "never".
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ActivityStatus {
-    /// Moves on **any** packet from any client — chat, `Sync`, `Get`, `StatusUpdate`. It answers
+    /// Moves on **any** packet from any client: chat, `Sync`, `Get`, `StatusUpdate`. It answers
     /// whether the sockets are alive, which is what it is named for, and it is **not** the number
     /// an idle reaper wants: a room full of people idling in chat keeps it fresh forever.
     pub last_client_message_at: Option<DateTime<Utc>>,
     pub idle_seconds: Option<i64>,
-    /// Moves only when a slot registers a genuinely **new** location check — the reference's own
+    /// Moves only when a slot registers a genuinely **new** location check: the reference's own
     /// auto-shutdown signal (`MultiServer.py:2671-2682`), room-wide here and per-slot inside pahoa.
     ///
     /// **`None` means no slot has ever checked anything**, which is a real answer rather than a
@@ -157,7 +157,7 @@ pub struct ActivityStatus {
     ///
     /// **Persisted across a room restart**, unlike `last_client_message_at`, which is a
     /// process-global that resets. So a room stopped for three days reports three days of
-    /// check-idle the moment it comes back — the honest answer, and the reason anything reaping on
+    /// check-idle the moment it comes back: the honest answer, and the reason anything reaping on
     /// this needs a floor on how long the room has been *up*. pahoa's own README says so.
     pub last_check_at: Option<DateTime<Utc>>,
     pub check_idle_seconds: Option<i64>,
@@ -166,8 +166,8 @@ pub struct ActivityStatus {
 /// One slot, as the room reports it.
 ///
 /// **pahoa sends a `team` on every row here and this deliberately does not read it.** Team is
-/// provably 0 for every slot that can exist — nothing upstream can generate a second one, and pahoa
-/// refuses at load a seed that names one — so Puna keys slots on the room and the number alone. The
+/// provably 0 for every slot that can exist (nothing upstream can generate a second one, and pahoa
+/// refuses at load a seed that names one) so Puna keys slots on the room and the number alone. The
 /// decision, and what would have to change if Archipelago ever grows teams, is written up once in
 /// [`crate::model::slot`]; this is only the place the field arrives and is dropped.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -214,7 +214,7 @@ pub struct RoomStatus {
 
 /// The `filters` block: how much a room's filters are discarding.
 ///
-/// **`dropped_to_slots` is counted per RECIPIENT, not per broadcast** — one chat line filtered for
+/// **`dropped_to_slots` is counted per RECIPIENT, not per broadcast**: one chat line filtered for
 /// forty slots is forty. pahoa names it as the number worth alerting on, because *a filter quietly
 /// discarding far more than an operator intended is the failure mode this feature introduces*, and
 /// per-recipient counting is what makes a room-wide rule's cost visible at all.
@@ -260,7 +260,7 @@ pub trait RoomProbe: Send + Sync {
     ///
     /// Returns the room's **answer**, including a refusal: `ok: false` is a `CommandOutput`, not an
     /// `Err`. Only a request the room could not understand, could not be sent, or was rate limited
-    /// becomes an error — see [`crate::model::command::Disposition`] for why that line matters.
+    /// becomes an error. See [`crate::model::command::Disposition`] for why that line matters.
     async fn execute(
         &self,
         endpoint: &RoomEndpoint,
@@ -274,15 +274,15 @@ pub trait RoomProbe: Send + Sync {
     /// its own endpoint, and it `404`s outside per-slot mode.
     ///
     /// **The caller must have written the Secret first.** This changes the live room and persists
-    /// nothing — deliberately, since that is what stops a stale on-disk value shadowing the
-    /// configured one — so a rotation done only here reverts to the environment's value the next
+    /// nothing (deliberately, since that is what stops a stale on-disk value shadowing the
+    /// configured one) so a rotation done only here reverts to the environment's value the next
     /// time the room starts. See §4.
     ///
     /// The password is a parameter rather than something this reads, for the same reason
     /// `admin_token` is: it must not be reachable from a `Debug` of anything that gets logged.
     ///
     /// **`None` sends `{"password": null}`, which BARS the slot rather than opening it.** That is
-    /// pahoa's fail-closed rule seen from the other end — a slot with no entry is refused — and it
+    /// pahoa's fail-closed rule seen from the other end (a slot with no entry is refused) and it
     /// is the opposite of what "clear the password" suggests, so every caller and every control
     /// says *lock*. The durable half is the Secret, which omits a locked slot from the map; this is
     /// what makes it take effect without waiting for a restart.
@@ -306,7 +306,7 @@ pub trait RoomProbe: Send + Sync {
     /// exempts it from everything. `Some(&[])` is that exemption and is sent as `[]`.
     ///
     /// **The durable half is Puna's tables.** This changes the live room and pahoa persists it into
-    /// `room.save` — which a save reset takes with it, and which records nothing about who asked —
+    /// `room.save` (which a save reset takes with it, and which records nothing about who asked)
     /// so `room_filters` / `room_slot_filters` stay the authority and this is what makes them
     /// take effect without waiting for a restart.
     async fn set_filter(
@@ -321,7 +321,7 @@ pub trait RoomProbe: Send + Sync {
     /// The room's own Prometheus exposition, **verbatim**.
     ///
     /// Text rather than anything parsed, and that is the contract: Puna adds `room` and
-    /// republishes, so pahoa's names, help text and types carry through without agreement — a
+    /// republishes, so pahoa's names, help text and types carry through without agreement: a
     /// label or a metric they add later needs no release here. See [`crate::metrics::proxy`].
     ///
     /// Bounded, because this is the one room response whose size is a function of a *seed*: slots
@@ -403,7 +403,7 @@ mod tests {
         );
     }
 
-    /// `connected` is derived from the count so the two cannot disagree — and an idle *slot* with a
+    /// `connected` is derived from the count so the two cannot disagree, and an idle *slot* with a
     /// tracker tab open is still connected, which is why a reaper must not read this either.
     #[test]
     fn connected_is_derived_from_the_socket_count() {

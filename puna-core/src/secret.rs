@@ -18,7 +18,7 @@
 //! are gone.
 //!
 //! That is 28 symbols, so 4.807 bits each. A 15-character slot password is **72 bits**, and a
-//! 32-character URL token is **153 bits** -- both far past the point where the limiting factor is
+//! 32-character URL token is **153 bits**, both far past the point where the limiting factor is
 //! the server rather than the secret.
 //!
 //! ## Why not a wordlist
@@ -55,20 +55,20 @@ pub fn url_token() -> String {
 /// **Ten symbols, not fifteen**, decided 2026-08-21. The alphabet is 32 characters, so each symbol
 /// is exactly five bits: ten of them is 2^50, a little over a quadrillion combinations, against an
 /// endpoint that rate-limits authentication failures to ten a minute per room. Guessing one at that
-/// rate is not a threat model, and a slot password is not protecting much anyway -- it keeps a
+/// rate is not a threat model, and a slot password is not protecting much anyway: it keeps a
 /// stranger out of somebody's slot in a game, it is not a credential for the platform.
 ///
 /// What the five symbols bought was length in a field a player types by hand, having read it off a
 /// web page, often on a phone. That is the cost this removes.
 ///
-/// **Nice-to-have, not built:** a deployment-configurable pattern -- `PUNA_SLOT_PASSWORD_PATTERN`
-/// or similar, defaulting to what this generates -- so an operator running a race can ask for more
+/// **Nice-to-have, not built:** a deployment-configurable pattern (`PUNA_SLOT_PASSWORD_PATTERN`
+/// or similar, defaulting to what this generates) so an operator running a race can ask for more
 /// without a code change. Recorded in the plan.
 pub fn slot_password() -> String {
     grouped(10, 5)
 }
 
-/// A room-wide password. Same shape as a slot's -- one person types either.
+/// A room-wide password. Same shape as a slot's: one person types either.
 pub fn room_password() -> String {
     grouped(15, 5)
 }
@@ -85,8 +85,8 @@ fn grouped(len: usize, group: usize) -> String {
 
 /// `len` symbols from a CSPRNG.
 ///
-/// Rejection-sampled rather than reduced modulo 28. The bias from `% 28` over a byte is small --
-/// the first 4 symbols come up 1.14x as often as the rest -- but it is free to avoid and it is the
+/// Rejection-sampled rather than reduced modulo 28. The bias from `% 28` over a byte is small
+/// (the first 4 symbols come up 1.14x as often as the rest) but it is free to avoid and it is the
 /// kind of shortcut that looks harmless in a password generator right up until someone quantifies
 /// it.
 fn random_string(len: usize) -> String {
@@ -162,7 +162,7 @@ mod tests {
         assert!(!token.contains('-'));
     }
 
-    /// Not a randomness test -- it cannot be, from inside. It catches the failure that actually
+    /// Not a randomness test: it cannot be, from inside. It catches the failure that actually
     /// happens: a generator wired to a constant seed, or to nothing at all.
     #[test]
     fn generated_secrets_do_not_repeat() {

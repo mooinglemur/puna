@@ -448,8 +448,8 @@ async fn room_still_exists(
 /// **A narrowed range never blocks startup, and a room caught outside it moves.**
 ///
 /// A range is configuration, so refusing to run because it changed would let one edit wedge the
-/// orchestrator for a whole environment. Instead the reservation is released and — for a room that
-/// is actually serving on that port — a restart is queued, which stops it and brings it back on a
+/// orchestrator for a whole environment. Instead the reservation is released and, for a room that
+/// is actually serving on that port, a restart is queued, which stops it and brings it back on a
 /// valid port through the ordinary path.
 #[tokio::test]
 async fn narrowing_the_range_moves_a_live_room_rather_than_refusing() {
@@ -517,7 +517,7 @@ async fn narrowing_the_range_moves_a_live_room_rather_than_refusing() {
 ///
 /// Step one of allocation is "the room's own previous pair", which is what makes a torn-down room
 /// come back on the address its players already hold. That must not resurrect a reservation the
-/// range no longer covers — the room would return to a port this deployment does not own, and the
+/// range no longer covers: the room would return to a port this deployment does not own, and the
 /// collision is silent.
 #[tokio::test]
 async fn a_reservation_outside_the_range_is_never_handed_back() {
@@ -622,8 +622,8 @@ async fn reconciling_the_range_preserves_existing_reservations() {
 /// **The other environment's rows are removed, and the range row only once they are gone.**
 ///
 /// Every database is seeded with reservations for both environments and carries a backfilled range
-/// row for each, but a database serves exactly one. The foreign rows are inert — `allocate` filters
-/// on environment — and they are removed because `port_ranges` is what somebody reads to answer
+/// row for each, but a database serves exactly one. The foreign rows are inert (`allocate` filters
+/// on environment) and they are removed because `port_ranges` is what somebody reads to answer
 /// "which ports does this environment own", where a stale row answers with a number that is no
 /// longer true.
 #[tokio::test]
@@ -659,7 +659,7 @@ async fn the_other_environments_rows_are_forgotten() {
 
 /// The range row is kept while ANY foreign reservation survives.
 ///
-/// The condition is a second opinion rather than the mechanism — the delete above should already
+/// The condition is a second opinion rather than the mechanism: the delete above should already
 /// have emptied them. But a bound foreign reservation is a wrong-database misconfiguration, and in
 /// that case the row documenting the other environment is exactly what a person needs to see rather
 /// than something to tidy away.

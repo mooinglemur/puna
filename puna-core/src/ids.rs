@@ -6,7 +6,7 @@
 //! expected would leak a room URL through a tracker link. A bare `Uuid` everywhere makes that a
 //! code-review question; a newtype makes it a compile error.
 //!
-//! Rocket's `FromParam` and `UriDisplayPath` impls live in the web crate, not here -- puna-core
+//! Rocket's `FromParam` and `UriDisplayPath` impls live in the web crate, not here: puna-core
 //! must not depend on rocket (see the note in Cargo.toml).
 
 use std::fmt;
@@ -109,7 +109,7 @@ new_id_type!(
 );
 
 new_id_type!(
-    /// A tracker's URL segment. **Deliberately not derivable from [`RoomId`]** -- that
+    /// A tracker's URL segment. **Deliberately not derivable from [`RoomId`]**: that
     /// independence is the whole reason a tracker link can be shared without leaking the room.
     /// Both rooms and individual slots have one, drawn from the same space so a bare
     /// `/tracker/<uuid>` does not disclose which kind it is until it resolves.
@@ -131,7 +131,7 @@ new_id_type!(
     /// A set of commands enqueued together by one bulk action.
     ///
     /// **Not a capability.** It appears in a URL an operator is redirected to, but every read of a
-    /// batch is scoped to the room the guard already authorized — holding one must not be a way to
+    /// batch is scoped to the room the guard already authorized: holding one must not be a way to
     /// read another room's commands, for the same reason a [`CommandId`] is not.
     BatchId
 );

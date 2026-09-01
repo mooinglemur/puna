@@ -2,9 +2,9 @@
 //!
 //! Everything here is a hard input with no default that could plausibly be wrong. The port range
 //! in particular: dev and prod share one public address and therefore one port space, and Cilium
-//! does not report a collision as an error. It **refuses the room an address entirely** -- every
+//! does not report a collision as an error. It **refuses the room an address entirely**: every
 //! room Service requests a specific IP, and that branch of LB-IPAM answers a conflict with
-//! `already_allocated_incompatible_service` and no allocation -- so the room never starts and
+//! `already_allocated_incompatible_service` and no allocation, so the room never starts and
 //! nothing on Puna's side counts it. A defaulted environment would be a way to get that wrong
 //! quietly, so there is no default.
 
@@ -85,7 +85,7 @@ pub struct CommonConfig {
     /// The hostname rooms are advertised on, e.g. `rooms.example.com`.
     ///
     /// A DNS name rather than the literal VIP, so the address can be re-pointed without
-    /// invalidating every bookmarked room -- and it is also the name on the room certificate,
+    /// invalidating every bookmarked room, and it is also the name on the room certificate,
     /// which makes it load-bearing rather than cosmetic.
     pub advertise_host: String,
     /// Root of the shared CephFS volume.
@@ -122,8 +122,8 @@ pub struct OrchestratorConfig {
     pub pahoa_image: String,
     /// The Secret holding the room certificate, mounted read-only into every room pod.
     ///
-    /// One certificate for the single name every room shares — they differ only by port, so no
-    /// wildcard is needed — and pahoa reloads it in place, which is what makes a renewal invisible
+    /// One certificate for the single name every room shares (they differ only by port, so no
+    /// wildcard is needed) and pahoa reloads it in place, which is what makes a renewal invisible
     /// to connected players.
     pub room_tls_secret: String,
     /// The CephFS claim holding `generations/`, `rooms/`, `shared/` and `trash/`.
@@ -135,32 +135,32 @@ pub struct OrchestratorConfig {
     /// How often the loop looks again **while a room is mid-transition**, as opposed to the full
     /// pass above.
     ///
-    /// It exists because a restart crosses two passes — one stops the room, one starts it — and at
+    /// It exists because a restart crosses two passes (one stops the room, one starts it) and at
     /// the full interval that gap is most of a room's downtime. A convergence pass reads the
     /// cluster, plans and applies, and skips everything that is about the fleet rather than about a
     /// room in flight: the probe, the sweep, the filesystem checks.
     ///
     /// **It deliberately does not accelerate a redeploy.** Recreates are emitted only on full
     /// passes, so their pace stays one per [`Self::reconcile_interval`] no matter how often this
-    /// fires — a fleet-wide restart rolls at the same speed either way. See `plan::plan`.
+    /// fires: a fleet-wide restart rolls at the same speed either way. See `plan::plan`.
     pub converge_interval: Duration,
     /// How long a running room may go without any client speaking before the orchestrator takes it
     /// down. Zero disables the reaper entirely.
     ///
     /// **Measured from the last client MESSAGE, never from the socket count.** One player commonly
-    /// holds three connections — game client, text client, tracker — and a tab left open overnight
+    /// holds three connections (game client, text client, tracker) and a tab left open overnight
     /// keeps a socket alive indefinitely while nobody is playing. A reaper counting sockets would
     /// never fire on exactly the rooms it exists for.
     ///
     /// **Idle means nobody has CHECKED A LOCATION, which is what the reference means by it.**
     /// Puna reads pahoa's `activity.last_check_at` (its P23), which moves only on a genuinely new
-    /// location check — the same signal the reference server's own `auto_shutdown` uses
+    /// location check, the same signal the reference server's own `auto_shutdown` uses
     /// (`MultiServer.py:2675`, over `client_activity_timers`). A room full of people idling in chat
     /// reaps; a room where somebody is playing does not.
     ///
     /// Deliberately **not** `activity.idle_seconds`, which moves on any packet at all and would
     /// keep such a room up forever. That number is still recorded and shown, because "somebody is
-    /// connected and talking" is worth knowing on its own — it is just not this decision.
+    /// connected and talking" is worth knowing on its own: it is just not this decision.
     ///
     /// **Floored at how long the room has been up.** pahoa persists the check timer across a
     /// restart, so a room stopped for three days reports three days of check-idle the moment it
@@ -179,7 +179,7 @@ pub struct OrchestratorConfig {
     pub room_probe: crate::probe::ProbeKind,
     /// How Puna reaches a room: in-cluster by Service name, or out through the public address.
     ///
-    /// `service` is the default and the right answer in a cluster — the public route hairpins
+    /// `service` is the default and the right answer in a cluster: the public route hairpins
     /// in-cluster traffic out to the load balancer and back. Either way TLS is verified against the
     /// advertised host, which is the only name on the room certificate.
     pub room_route: crate::room::Route,
@@ -194,7 +194,7 @@ pub struct OrchestratorConfig {
     /// nothing else in the apply loop bounds this: it is a sequential pass with no throttle, and a
     /// foreground delete returns as soon as the API server accepts it rather than when the pod is
     /// gone. Uncapped, a fleet-wide redeploy stops every room within a single tick and brings them
-    /// all back together — one simultaneous final save and restore per room, onto one shared CephFS
+    /// all back together: one simultaneous final save and restore per room, onto one shared CephFS
     /// volume.
     ///
     /// Raising it trades that risk for wall-clock. At one per tick a rollout moves at roughly two
@@ -202,7 +202,7 @@ pub struct OrchestratorConfig {
     /// progress rather than a stateless replica.
     pub max_recreates_per_tick: usize,
     /// The inclusive port range this environment may allocate from, as `(low, high)` **base**
-    /// ports — both even, because each room reserves `base` and `base + 1` as an adjacent pair.
+    /// ports, both even, because each room reserves `base` and `base + 1` as an adjacent pair.
     ///
     /// **From the environment, not from the code.** Which ports a deployment owns is a property of
     /// that deployment's network, not of Puna: the range depends on what else shares the address,
@@ -211,7 +211,7 @@ pub struct OrchestratorConfig {
     ///
     /// It stays load-bearing, though, and the reason is worth keeping: where two environments share
     /// one public address they share one port space, and an overlap is the one mistake in this
-    /// system that is unrecoverable — the second allocation silently lands on a different address
+    /// system that is unrecoverable: the second allocation silently lands on a different address
     /// rather than erroring, leaving a room reachable at a name DNS never mentions. The database
     /// records the configured range per environment and refuses reservations outside it, but it can
     /// only see its own environment. **Non-overlap between environments is the deployment's to get
@@ -220,12 +220,12 @@ pub struct OrchestratorConfig {
     /// The label and annotation KEYS this cluster uses, and the address-pool value.
     ///
     /// Prefixed keys belong to whoever owns the domain in them, and two of these are matched by
-    /// objects outside this repository — an address-pool selector and an L2 announcement policy —
+    /// objects outside this repository (an address-pool selector and an L2 announcement policy)
     /// so they are the cluster's vocabulary rather than Puna's and arrive from the deployment.
     ///
     /// **Changing `room_label_key` on a live deployment is not a config change.** It is the
     /// Deployment's `spec.selector`, which Kubernetes will not let you update, and it is what every
-    /// object is read back through — so a new value makes the whole fleet unrecognizable at once.
+    /// object is read back through, so a new value makes the whole fleet unrecognizable at once.
     /// The orchestrator refuses to start rather than let that proceed silently.
     pub room_label_key: String,
     pub lb_pool_label_key: String,
@@ -276,7 +276,7 @@ fn require(key: &str) -> anyhow::Result<String> {
     std::env::var(key).map_err(|_| anyhow::anyhow!("{key} must be set"))
 }
 
-/// `"40000-44999"` — the inclusive range of PORTS the environment owns, returned as the inclusive
+/// `"40000-44999"`: the inclusive range of PORTS the environment owns, returned as the inclusive
 /// range of **base** ports.
 ///
 /// Written as ports rather than as bases because that is what an operator reads off a firewall rule
@@ -284,7 +284,7 @@ fn require(key: &str) -> anyhow::Result<String> {
 /// off-by-one. So the parser does it: `40000-44999` is 2500 pairs, base ports 40000 through 44998.
 ///
 /// Both ends are checked rather than rounded. A range starting on an odd port or ending on an even
-/// one is a typo, and quietly repairing it would hand back a range the operator did not write —
+/// one is a typo, and quietly repairing it would hand back a range the operator did not write,
 /// which, for the one value where an overlap between environments is unrecoverable, is the wrong
 /// kindness.
 fn parse_port_range(key: &str) -> anyhow::Result<(u16, u16)> {
@@ -325,7 +325,7 @@ fn optional(key: &str, default: &str) -> String {
 /// **One lobby, and it is deployment configuration rather than request input.** An organizer pastes
 /// a lobby room link and Puna reads the id out of it; the host is discarded and the fetch goes here.
 /// A host taken from a request would make this tier a confused deputy holding somebody else's
-/// credential — the same rule `PUNA_ADVERTISE_HOST` and the room route already follow.
+/// credential, the same rule `PUNA_ADVERTISE_HOST` and the room route already follow.
 ///
 /// **Both values or neither.** Half-configured is the state that fails at the moment somebody is
 /// using it rather than at startup: a URL with no token gets a `403` from the lobby that reads as
@@ -438,7 +438,7 @@ mod tests {
 
     /// The range is written as PORTS and returned as BASE ports, so the upper bound moves by one.
     ///
-    /// Getting this backwards would hand out a base port whose `base + 1` sits outside the range —
+    /// Getting this backwards would hand out a base port whose `base + 1` sits outside the range:
     /// the filtered half landing in the next environment's space, which is the collision the whole
     /// partition exists to prevent and which nothing downstream would notice.
     #[test]
@@ -457,7 +457,7 @@ mod tests {
     /// **A grace nobody set is not the same as one set wrong**, and both have to be distinguishable
     /// from a value that quietly did nothing.
     ///
-    /// This exists because the obvious spelling — `ROCKET_SHUTDOWN_GRACE` — is silently inert:
+    /// This exists because the obvious spelling (`ROCKET_SHUTDOWN_GRACE`) is silently inert:
     /// Rocket merges `ROCKET_`-prefixed variables with no key splitting, so it lands as a flat key,
     /// matches no field, and leaves the two-second default in force while looking configured. Puna
     /// reads its own variable so a typo stops a pod instead.

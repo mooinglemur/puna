@@ -7,14 +7,14 @@
 //!
 //! ## The certificate names the room, and the address does not
 //!
-//! In-cluster, Puna connects to `mw-<room>.<namespace>.svc` — but the room's certificate carries
+//! In-cluster, Puna connects to `mw-<room>.<namespace>.svc`, but the room's certificate carries
 //! exactly one name, `rooms.example.com`, because every room shares that hostname and differs only by
 //! port (D10). So the connection **resolves the Service name to an address and then verifies against
 //! the advertised host**, via reqwest's `resolve` override. Dialing the Service name directly would
 //! fail verification; disabling verification to make it work would throw away the reason the
 //! certificate exists.
 //!
-//! The alternative — hairpinning through the public VIP — works and is kept as a switch
+//! The alternative (hairpinning through the public VIP) works and is kept as a switch
 //! ([`Route::Public`]) for running a tier outside a cluster, but it sends in-cluster traffic out to
 //! the load balancer and back.
 //!
@@ -68,7 +68,7 @@ pub enum RoomError {
     /// **Rate limited, and this needs its own case.** pahoa limits authentication failures to 10 a
     /// minute per room and the lockout applies to the *correct* token too, deliberately, so it
     /// cannot be used as an oracle. A caller that retries a failing call in a tight loop therefore
-    /// locks itself out — so this carries `Retry-After` and must not be folded into an ordinary
+    /// locks itself out, so this carries `Retry-After` and must not be folded into an ordinary
     /// transport error or into the Kubernetes-client backoff, which measures something else.
     #[error("the room is rate limiting; retry after {retry_after:?}")]
     RateLimited { retry_after: Option<Duration> },
@@ -81,12 +81,12 @@ pub enum RoomError {
     #[error("the room answered {status}")]
     Status { status: u16 },
 
-    /// The room answered, said no, **and said why** — its own words, carried through.
+    /// The room answered, said no, **and said why**: its own words, carried through.
     ///
     /// A `400` from pahoa is a Puna bug by construction (§6: the body is serialized from a typed
     /// enum, so the room failing to parse it means the two have drifted), and pahoa states the
     /// reason in `{"error": …}`. Discarding it cost real time: a chat filter written `from_slot`
-    /// `PrintJSON` — a pairing pahoa refuses because it can never match — reached an operator as
+    /// `PrintJSON` (a pairing pahoa refuses because it can never match) reached an operator as
     /// *"could not apply the filter: the room answered 400"*, over a page still showing the filter
     /// as the room's. The room had said "a print_json cannot travel from_slot" all along.
     #[error("the room answered {status}: {detail}")]
@@ -97,7 +97,7 @@ impl RoomError {
     /// Whether this is worth trying again on the next tick.
     ///
     /// `404` is not: a room with no token will not grow one without a Secret being rewritten, and
-    /// hammering it turns a configuration fault into load. Rate limiting is not either — it has its
+    /// hammering it turns a configuration fault into load. Rate limiting is not either: it has its
     /// own wait, which the caller must honor rather than re-attempt.
     pub fn is_transient(&self) -> bool {
         match self {
@@ -115,7 +115,7 @@ impl RoomError {
 ///
 /// `classify` deliberately takes `&Response` and cannot read a body, so this is the async half:
 /// only reached on a failure, so a healthy call pays nothing. pahoa answers `{"error": …}`; anything
-/// else — an empty body, a proxy's HTML — leaves the error exactly as it was rather than pasting
+/// else (an empty body, a proxy's HTML) leaves the error exactly as it was rather than pasting
 /// something unhelpful into an operator's face.
 pub async fn explain(error: RoomError, response: reqwest::Response) -> RoomError {
     let RoomError::Status { status } = error else {
@@ -137,7 +137,7 @@ pub async fn explain(error: RoomError, response: reqwest::Response) -> RoomError
 }
 
 impl RoomEndpoint {
-    /// `https://<advertise_host>:<port><path>` — built from the row, never from a request.
+    /// `https://<advertise_host>:<port><path>`, built from the row, never from a request.
     pub fn url(&self, path: &str) -> String {
         format!("https://{}:{}{}", self.advertise_host, self.base_port, path)
     }
@@ -177,7 +177,7 @@ impl RoomEndpoint {
 
 /// Turn a non-success response into the error that describes it.
 ///
-/// Separated from the request so every caller classifies a status the same way — in particular so
+/// Separated from the request so every caller classifies a status the same way, in particular so
 /// nobody forgets that `429` is not an ordinary failure.
 pub fn classify(response: &reqwest::Response) -> Option<RoomError> {
     let status = response.status();
@@ -218,7 +218,7 @@ mod tests {
         }
     }
 
-    /// The URL is the advertised host and the room's own port. Never the Service name — that is
+    /// The URL is the advertised host and the room's own port. Never the Service name: that is
     /// where the connection *goes*, not what the certificate says.
     #[test]
     fn a_url_names_the_certificate_host_not_the_service() {

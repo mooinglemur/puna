@@ -12,7 +12,7 @@
 //!    `player`, `player_name` and `game`, and it is authoritative. 91 of 100 patch members across
 //!    13 real generation zips have one.
 //! 2. **The `P<n>` component of the filename** otherwise, because several patch types are not
-//!    containers at all -- `.apmanual` and `.apmc` are raw bytes, not zips.
+//!    containers at all: `.apmanual` and `.apmc` are raw bytes, not zips.
 //!
 //! Puna differs from the reference in one respect, deliberately: the reference gates step 1 on
 //! `AutoPatchRegister`, a registry populated by the apworlds a WebHost happens to have installed,
@@ -28,7 +28,7 @@
 //! ```
 //!
 //! `get_out_file_name_base` replaces spaces in player names with underscores, so neither separator
-//! is a reliable field boundary. Player names are therefore never used to CHOOSE a slot -- only,
+//! is a reliable field boundary. Player names are therefore never used to CHOOSE a slot, only,
 //! when a manifest supplies one, to detect a patch that belongs to a different generation.
 //!
 //! Anything attributable by neither route is REPORTED rather than guessed at: silently attaching a
@@ -39,8 +39,8 @@
 //! Players and spectators; group slots (item links) are dropped. That is the reference's rule from
 //! both ends: `process_multidata` skips `SlotType.group` and nothing else, and `MultiServer`
 //! resolves a Connect through the multidata's `connect_names` with no slot-type filter at all
-//! (`MultiServer.py:1880`). A spectator is a slot someone logs into -- it comes from a yaml, has a
-//! name in `connect_names`, and watches the multiworld -- so it needs an owner, a claim link and a
+//! (`MultiServer.py:1880`). A spectator is a slot someone logs into: it comes from a yaml, has a
+//! name in `connect_names`, and watches the multiworld, so it needs an owner, a claim link and a
 //! tracker id like any other. It simply plays nothing, which is what `SlotKind` records.
 //!
 //! Groups are the opposite case: no yaml creates one, nothing connects as one, and the server
@@ -49,9 +49,9 @@
 //! ## The load-time checks
 //!
 //! Parsing is not the whole question. pahoa runs `MultiData::validate` on the serve path, before
-//! it binds its port, so a seed that parses and is *inconsistent* -- a hole in the locations
+//! it binds its port, so a seed that parses and is *inconsistent* (a hole in the locations
 //! table, a connect name pointing at a slot with no world behind it, a group listing a member
-//! that does not exist, a team this server cannot serve -- is a pod that exits at startup rather
+//! that does not exist, a team this server cannot serve) is a pod that exits at startup rather
 //! than a room. That is the [`load_refusal`] check here, and it is pahoa's own function rather
 //! than a transcription of it: the two must agree, and the only way to be sure they do is for
 //! there to be one of them.
@@ -137,7 +137,7 @@ pub struct GenerationMeta {
     /// Total slots as pahoa counts them, INCLUDING spectator and group slots.
     ///
     /// This feeds the room's memory request, and pahoa sizes its outbound budget from
-    /// `slot_info.len()` -- so counting only players here would under-request memory for a
+    /// `slot_info.len()`, so counting only players here would under-request memory for a
     /// multiworld with item-link groups. `slots` below is the per-player list, which is a
     /// different question and deliberately a different number.
     pub slot_count: i32,
@@ -150,7 +150,7 @@ pub struct GenerationMeta {
     /// Path of the `.archipelago` inside the zip.
     pub multidata_member: String,
     pub spoiler_member: Option<String>,
-    /// Connectable slots -- players and spectators -- in slot order.
+    /// Connectable slots (players and spectators) in slot order.
     pub slots: Vec<SlotEntry>,
     /// Members that look like patches but could not be attributed to a slot.
     ///
@@ -173,7 +173,7 @@ fn is_ignorable(name: &str) -> bool {
 /// Extensions that are whole game ROMs rather than patches, taken from `banned_extensions` in
 /// `WebHostLib/upload.py`.
 ///
-/// Patch extensions are all `.ap*` (`.apsms`, `.apgb`, ...), so none of these can match one -- a
+/// Patch extensions are all `.ap*` (`.apsms`, `.apgb`, ...), so none of these can match one: a
 /// bare `.sms` or `.gb` in a generation zip is a ROM someone added by hand. Puna stores what it is
 /// given and serves it back per-slot, so accepting one would make it a ROM distributor.
 const BANNED_EXTENSIONS: &[&str] = &[
@@ -228,12 +228,12 @@ fn is_separator_at(s: &[u8], i: usize) -> bool {
 /// Note that player names therefore CONTAIN underscores (`IronSquire_SMS`, `octo_doge_SML2`), and
 /// Factorio-style containers use hyphens with the game and version appended
 /// (`AP-{seed}-P51-Matthias_KH2-19Apr2026-181027_0.6.7.zip`). So neither separator can be treated
-/// as a reliable field boundary, and player names are not consulted at all -- a name can contain
+/// as a reliable field boundary, and player names are not consulted at all: a name can contain
 /// separators, be a substring of another name, or repeat.
 ///
 /// VERIFIED against the reference: `WebHostLib/upload.py` reads `archipelago.json` for registered
 /// container types and otherwise takes the third `_`-delimited component. Run over 13 real modern
-/// generation zips -- 100 patch members, 91 of them carrying a manifest -- this function agreed
+/// generation zips (100 patch members, 91 of them carrying a manifest) this function agreed
 /// with the reference on all 100, and with the manifest's authoritative `player` on all 91.
 ///
 /// The delimiter requirement is defensive rather than necessary for well-formed output. It matters
@@ -276,18 +276,18 @@ fn slot_from_filename(name: &str) -> Option<u32> {
 ///
 /// This is **pahoa's `MultiData::validate`, called rather than transcribed**. It is the same
 /// function the room runs before it binds its port, so the answer here and the answer there cannot
-/// disagree -- which a second implementation of the reference's `NetUtils.py:449-506` checks would
+/// disagree, which a second implementation of the reference's `NetUtils.py:449-506` checks would
 /// eventually manage to do. Puna already links the parser for the same reason.
 ///
 /// It covers: a locations table with a hole in its slot ids or a duplicated location, a
 /// `connect_names` entry pointing at a slot with no `slot_info` (a name somebody could
 /// authenticate as with no world behind it), a group listing a member that does not exist, and a
-/// slot on a team other than 0 -- which nothing can generate and neither server can serve.
+/// slot on a team other than 0, which nothing can generate and neither server can serve.
 ///
 /// **The version arm is deliberately made vacuous, by handing `validate` the seed's own floor.**
 /// That arm asks "is *this server* new enough", and Puna is not the server: the room's version is
 /// whatever `PUNA_PAHOA_IMAGE` resolves to, which only the orchestrator names and only the probe
-/// can read back -- and neither is available at upload. The alternative is a version constant
+/// can read back, and neither is available at upload. The alternative is a version constant
 /// transcribed from another repository, and its failure runs the wrong way: a constant that goes
 /// stale LOW makes Puna refuse a seed the room would happily serve, blaming the seed for a number
 /// in Puna's source. A seed genuinely demanding a newer server is left to the room, which refuses
@@ -304,7 +304,7 @@ pub fn load_refusal(data: &MultiData) -> Option<String> {
 
 /// [`load_refusal`], for a seed already promoted to the volume.
 ///
-/// The upload check is not the whole answer, and the reason is not the rows that predate it -- it
+/// The upload check is not the whole answer, and the reason is not the rows that predate it: it
 /// is that **these checks change**. They live in `pahoa-multidata` at a pinned rev, and pahoa
 /// tightening them (or fixing one, as it just did for spectators) means every generation on the
 /// volume was last checked under the previous rules. A room opened from one of them is the case
@@ -534,7 +534,7 @@ mod tests {
     /// Tolerance for malformed LEGACY names, kept deliberately and labeled as such.
     ///
     /// A since-fixed Minecraft apworld bug emitted seeds containing `_` and `P`-plus-digits. The
-    /// reference implementation rejects those outright, which is correct on its part -- this is a
+    /// reference implementation rejects those outright, which is correct on its part: this is a
     /// tolerance, not a correctness advantage. Pinned so it cannot regress into a silent
     /// mis-attribution, which is the outcome that actually matters.
     #[test]
@@ -645,7 +645,7 @@ mod tests {
     /// else here can reach that.
     ///
     /// The refusal cases are covered against a real seed in `tests/ingest.rs`, by mutating a
-    /// parsed `MultiData` -- but a test that calls `load_refusal` directly keeps passing when the
+    /// parsed `MultiData`, but a test that calls `load_refusal` directly keeps passing when the
     /// call site is deleted, and there is no other symptom: a malformed seed simply uploads,
     /// indexes cleanly, and becomes a room whose pod exits at startup. The whole feature is the
     /// call site, so the call site is what is pinned.

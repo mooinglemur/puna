@@ -1,7 +1,7 @@
 //! Content-addressed promotion, against a real filesystem and a real database.
 //!
 //! Gated on `PUNA_TEST_GENERATION_ZIP` for the parts that need a real archive, because the
-//! interesting properties -- what gets extracted, and that re-uploading converges -- are not
+//! interesting properties (what gets extracted, and that re-uploading converges) are not
 //! observable against a synthetic zip with no multidata in it.
 //!
 //! The property under test is that **dedup and idempotence are the same mechanism** on both

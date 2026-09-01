@@ -134,7 +134,7 @@ impl ServerCertVerifier for NoVerifier {
 ///
 /// DEVIATION: the lobby calls `.expect("Failed to set ring as crypto provider")`.
 /// `install_default` returns `Err` when a default is ALREADY installed, so that panics if
-/// anything built a TLS config first -- and in Puna something will: reqwest in the web tier,
+/// anything built a TLS config first, and in Puna something will: reqwest in the web tier,
 /// kube in the orchestrator, and every test that builds a second pool. Since `ring` is the only
 /// provider feature enabled (see the workspace Cargo.toml), rustls would auto-install it anyway;
 /// this call just makes the choice explicit and early. An already-installed provider is success.
@@ -173,7 +173,7 @@ fn establish_connection(config: &str) -> BoxFuture<'_, ConnectionResult<AsyncPgC
 /// Two things in Puna need a connection whose *session* they own rather than one borrowed from a
 /// pool: the orchestrator's leader advisory lock, which Postgres releases when the session that
 /// took it ends, and `LISTEN`, whose subscription is likewise session-scoped. A pooled connection
-/// is recycled between callers, so neither would survive in one -- the lock would drop the moment
+/// is recycled between callers, so neither would survive in one: the lock would drop the moment
 /// the handle went back to the pool.
 ///
 /// Uses the same TLS setup as [`get_database_pool`], including its inherited `NoVerifier`
@@ -202,7 +202,7 @@ pub async fn raw_connection(db_url: &str) -> anyhow::Result<tokio_postgres::Clie
 ///
 /// **The connection is driven by a spawned task, not by the caller.** That is the whole point of the
 /// shape, and it was learned the hard way: an earlier version returned the raw message *stream* and
-/// left the caller to poll it, which meant `client.batch_execute("LISTEN ...")` deadlocked —
+/// left the caller to poll it, which meant `client.batch_execute("LISTEN ...")` deadlocked:
 /// the query went out, and the response could only arrive if somebody polled the stream, which the
 /// caller could not do while awaiting the query. It hung forever, silently, with no error and no
 /// log line. Every `LISTEN` in Puna was dead for weeks and nothing noticed, because every caller
@@ -257,7 +257,7 @@ pub async fn raw_connection_with_notifications(
 /// Build the pool, optionally running migrations first.
 ///
 /// DEVIATION: `migrations` is an `Option`, and that is the orchestrator/web split. The
-/// orchestrator passes `Some(MIGRATIONS)` -- it is a singleton holding a leader lock, so it is
+/// orchestrator passes `Some(MIGRATIONS)`: it is a singleton holding a leader lock, so it is
 /// the natural migrator. The web tier passes `None` and calls [`assert_schema_current`] instead,
 /// failing readiness rather than serving against a schema it does not understand. The lobby runs
 /// migrations from every replica, which is a race it has been lucky with.

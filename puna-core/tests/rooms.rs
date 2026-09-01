@@ -2,9 +2,9 @@
 //!
 //! Two families of property here, and they fail differently:
 //!
-//!   * **Authorization** -- who may see a slot's credentials, and what a clone carries over.
+//!   * **Authorization**: who may see a slot's credentials, and what a clone carries over.
 //!     A wrong answer hands one player another's password, and nothing at the time looks wrong.
-//!   * **Credential completeness** -- every `per_slot` room has a password on every slot. Under
+//!   * **Credential completeness**: every `per_slot` room has a password on every slot. Under
 //!     pahoa's fail-closed rule a gap locks a player out, which is loud, but an *empty* map locks
 //!     the room, which is worse and is one line away.
 
@@ -182,7 +182,7 @@ async fn a_race_seed_defaults_to_the_closed_policies() {
 ///
 /// **A journal policy is not a restart**, unlike every other control beside it in that section:
 /// nothing here reaches pahoa, moves the spec hash, or queues a redeploy. Getting that wrong would
-/// disconnect a room full of people to change a gate that lives entirely in the web tier — and it
+/// disconnect a room full of people to change a gate that lives entirely in the web tier, and it
 /// would look like the setting working, because the gate would also change.
 #[tokio::test]
 async fn changing_the_journal_policy_changes_nothing_about_the_room() {
@@ -224,7 +224,7 @@ async fn changing_the_journal_policy_changes_nothing_about_the_room() {
 /// A clone carries the source room's answer rather than re-deriving it from the seed.
 ///
 /// The seed is not a race, so a re-derivation would silently reopen a room whose organizer had
-/// closed it — and a clone is usually the *same group playing again*, which is exactly when the
+/// closed it, and a clone is usually the *same group playing again*, which is exactly when the
 /// decision they already made should carry.
 #[tokio::test]
 async fn a_clone_keeps_the_journal_policy_it_was_cloned_from() {
@@ -331,7 +331,7 @@ async fn assert_mode(conn: &mut diesel_async::AsyncPgConnection, id: RoomId, mod
 /// on.
 ///
 /// A claim token is single-use and a chat client fetches a link the moment it is pasted, before
-/// anybody has clicked — so a read path that went through `claim` would leave the recipient with a
+/// anybody has clicked, so a read path that went through `claim` would leave the recipient with a
 /// link that had already worked for a crawler. The same is true of any prefetch holding a session,
 /// which is how the old `GET`-that-redeemed could be spent by a browser being helpful.
 ///
@@ -380,7 +380,7 @@ async fn describing_a_claim_link_does_not_spend_it() {
 }
 
 /// The same property for an invite, where the cost of getting it wrong is one use rather than the
-/// only one — an organizer who minted a three-use link would find it two.
+/// only one: an organizer who minted a three-use link would find it two.
 #[tokio::test]
 async fn describing_an_invite_does_not_spend_a_use() {
     with_db(|pool| async move {
@@ -778,14 +778,14 @@ async fn a_spectator_is_a_first_class_slot() {
 
 /// **`open` widens the patch and nothing else.**
 ///
-/// This is the reference implementation's behavior — archipelago.gg serves every slot's patch to
-/// anyone holding the room's URL — and it is the whole trade the two policies express: `claimed`
+/// This is the reference implementation's behavior (archipelago.gg serves every slot's patch to
+/// anyone holding the room's URL) and it is the whole trade the two policies express: `claimed`
 /// costs a player a sign-in and a claim, and pays them back by embedding the credential so the
 /// client connects on its own.
 ///
 /// **The half that must not move is the password route.** Both take a slot guard, they sit two
 /// lines apart in the roster, and widening them together would turn "patches are public, as
-/// upstream" into "every slot's password is public" — with nothing failing, on a page that is
+/// upstream" into "every slot's password is public", with nothing failing, on a page that is
 /// already public. So the two rules are separate functions and this asserts they disagree.
 #[tokio::test]
 async fn an_open_patch_policy_widens_the_patch_and_never_the_password() {
@@ -839,7 +839,7 @@ async fn an_open_patch_policy_widens_the_patch_and_never_the_password() {
 /// A rename changes the label and nothing else.
 ///
 /// **The point of the test is the second half.** Every other control on the room page that looks
-/// like a setting is a restart, and this one is not — object names are `mw-<room id>`, so
+/// like a setting is a restart, and this one is not: object names are `mw-<room id>`, so
 /// `rooms.name` reaches no manifest and no spec hash. A rename that moved `spec_hash` would bounce
 /// the room and disconnect everybody for a cosmetic edit, and nothing at the time would say why.
 #[tokio::test]
@@ -944,7 +944,7 @@ fn a_room_name_is_trimmed_and_bounded() {
 
 /// `/admin/rooms` splits the fleet on `desired_state`, and this is the query that does it.
 ///
-/// **The predicate is interpolated SQL**, which nothing else here is — a scope that silently
+/// **The predicate is interpolated SQL**, which nothing else here is: a scope that silently
 /// matched everything would put every stopped room back on a page built to keep them off it, and
 /// the page would look completely normal. So each scope is asserted for what it returns *and* for
 /// what it leaves out.
@@ -1040,7 +1040,7 @@ async fn the_fleet_overview_scopes_on_what_was_asked_for() {
 ///
 /// **The second half is the load-bearing one.** A ban is a statement about a person; the rooms they
 /// opened and the slots they hold are other people's games. A sanction that quietly emptied those
-/// would punish everybody in the room, and it would do it silently — nothing about a missing slot
+/// would punish everybody in the room, and it would do it silently: nothing about a missing slot
 /// owner says *why*.
 #[tokio::test]
 async fn a_sanction_withholds_and_never_deletes() {
@@ -1280,7 +1280,7 @@ async fn locking_a_slot_withholds_it_without_disturbing_its_password() {
 /// claim link in between must win. Deciding it in the statement makes the check and the write one
 /// operation.
 ///
-/// Nothing above this layer can see the difference — a caller-side filter passes every unit test in
+/// Nothing above this layer can see the difference: a caller-side filter passes every unit test in
 /// `lobby::plan` and loses the race only under load, where the symptom is a player who claimed a
 /// slot and then did not have it.
 #[tokio::test]
@@ -1339,7 +1339,7 @@ async fn importing_owners_never_overwrites_a_slot_somebody_already_claimed() {
 /// **A sibling list is scoped to rooms the reader organizes, and to nothing else.**
 ///
 /// Generations are content-addressed and deduplicated, so two people who upload the same zip land
-/// on one `generations` row and their rooms become each other's siblings — strangers sharing nothing
+/// on one `generations` row and their rooms become each other's siblings: strangers sharing nothing
 /// but a seed. This query used to take no reader at all and return every one of them, and the room
 /// page rendered the lot to anybody holding the URL.
 ///
@@ -1450,13 +1450,13 @@ async fn siblings_are_only_rooms_the_reader_organizes() {
 /// **A clone carries the person and not the playthrough.**
 ///
 /// The split is what each thing is about. A ping preference is a standing statement about how
-/// somebody wants to be contacted, which a second room on the same seed does not change — so
+/// somebody wants to be contacted, which a second room on the same seed does not change, so
 /// carrying it saves everybody re-answering a question they already answered. A progression status
 /// and a note describe a *playthrough*, and a clone is starting one over.
 ///
 /// **The annotations need no code to be dropped, which is exactly why this exists.** `create`
 /// inserts fresh slots and the clone copies only owners over them, so "BK does not travel" holds
-/// today by omission — nothing would fail if somebody widened that UPDATE, and the symptom would be
+/// today by omission: nothing would fail if somebody widened that UPDATE, and the symptom would be
 /// a brand-new room describing the old one's progress to everybody looking at its tracker.
 #[tokio::test]
 async fn a_clone_carries_ping_preferences_and_leaves_the_playthrough_behind() {
@@ -1541,7 +1541,7 @@ async fn a_clone_carries_ping_preferences_and_leaves_the_playthrough_behind() {
 /// **Emptying the note deletes it, and the column is what enforces that.**
 ///
 /// `''` and `NULL` would otherwise be two ways to say nothing, and every reader would have to know
-/// both — the page, the digest, and whatever asks "does this slot have a note". The CHECK makes the
+/// both: the page, the digest, and whatever asks "does this slot have a note". The CHECK makes the
 /// empty string unspellable, so absence is the only answer, and `set_slot_annotation` trims before
 /// it writes so a box containing three spaces is a deletion rather than a constraint violation
 /// surfacing as a database error.

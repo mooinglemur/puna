@@ -1,6 +1,6 @@
 //! Pulling the tracker's name tables out of a seed.
 //!
-//! Three of the tracker's four tables render **names** — items received, locations checked, hints —
+//! Three of the tracker's four tables render **names** (items received, locations checked, hints)
 //! and the two documents pahoa serves carry only numeric ids. The reference implementation solves
 //! this by being an Archipelago install; Puna solves it by reading the seed it already has, which
 //! it can do better than the reference in one respect: `MultiData.locations` carries every location
@@ -9,14 +9,14 @@
 //! ## What is deliberately not extracted
 //!
 //! `LocationEntry` is `(location, item, sender, receiver, flags)`, and only `location` is taken.
-//! The other fields are the answer to "what is in that chest" — the seed's central spoiler — and a
+//! The other fields are the answer to "what is in that chest" (the seed's central spoiler) and a
 //! tracker that leaked them would be a spoiler log with a search box. Dropping them here, rather
 //! than filtering them at render time, is what makes that structural: the data never enters the
 //! cache, so no later code path can be careless with it.
 //!
 //! ## Names are per game, and per generation
 //!
-//! Item and location ids are namespaced by game, so the tables are keyed by game — and the whole
+//! Item and location ids are namespaced by game, so the tables are keyed by game, and the whole
 //! set is keyed by *generation* upstream of that, because these names come out of a datapackage
 //! embedded in an uploaded zip. See the migration for why that scoping is the load-bearing part.
 
@@ -81,7 +81,7 @@ pub fn from_seed(seed: &[u8]) -> Result<NameTables, IngestError> {
     Ok(from_multidata(&data))
 }
 
-/// Split from [`from_seed`] so tests can hold the `MultiData` and compare against it directly —
+/// Split from [`from_seed`] so tests can hold the `MultiData` and compare against it directly:
 /// asserting the tables *match the seed* rather than merely that they parsed.
 pub fn from_multidata(data: &MultiData) -> NameTables {
     // The MERGED package, not `embedded_datapackage`: `resolve_datapackage` is what pahoa itself

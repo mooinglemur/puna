@@ -1,7 +1,7 @@
 //! Putting a validated generation on disk, content-addressed.
 //!
 //! The layout, which the web tier owns and mounts read-write at `generations/` (and nothing else,
-//! by `subPath` -- it cannot reach room state):
+//! by `subPath`, it cannot reach room state):
 //!
 //! ```text
 //! generations/<sha256-hex>/
@@ -25,8 +25,8 @@
 //!   * **A crash leaves only garbage that names nothing.** An abandoned `.tmp-*` is referenced by
 //!     no row and swept after an hour by the orchestrator's slow lane.
 //!
-//! `EEXIST` on the rename is therefore **success, not a conflict**: somebody else -- another
-//! replica, or this user's double-click -- already promoted these exact bytes. See
+//! `EEXIST` on the rename is therefore **success, not a conflict**: somebody else (another
+//! replica, or this user's double-click) already promoted these exact bytes. See
 //! [`Promotion::AlreadyPresent`].
 //!
 //! ## Why the web tier does this synchronously
@@ -46,7 +46,7 @@ pub enum Promotion {
     Stored,
     /// A directory for this hash already existed, so nothing was written.
     ///
-    /// Not an error. The content is identical by definition -- the name is its hash -- so the
+    /// Not an error. The content is identical by definition (the name is its hash) so the
     /// caller proceeds exactly as it would have.
     AlreadyPresent,
 }
@@ -253,7 +253,7 @@ fn fill(dir: &Path, bytes: &[u8], meta: &GenerationMeta) -> Result<(), StorageEr
 
 /// The extension a patch member should keep, sanitized.
 ///
-/// Clients dispatch on the extension, so it has to survive -- but it reaches the filesystem, so
+/// Clients dispatch on the extension, so it has to survive, but it reaches the filesystem, so
 /// anything that is not plainly alphanumeric is replaced rather than trusted. `bin` is the
 /// fallback for a member with no usable extension at all.
 ///
@@ -316,7 +316,7 @@ fn read_member(
 ///
 /// The fsync matters: a rename is atomic with respect to the directory entry, not to the contents
 /// of the files inside it. Without this, a crash could leave a correctly named directory holding
-/// empty files -- which is worse than no directory, because the name asserts completeness.
+/// empty files, which is worse than no directory, because the name asserts completeness.
 fn write_file(path: &Path, contents: &[u8]) -> Result<(), StorageError> {
     let mut file = io(
         std::fs::File::create(path),

@@ -34,7 +34,7 @@ pub struct Event {
 pub enum Actor {
     /// A logged-in person, by Discord id.
     User(i64),
-    /// A person acting without a session — the public start button on a room page.
+    /// A person acting without a session: the public start button on a room page.
     Anonymous,
     /// The orchestrator, carrying out a step.
     Orchestrator,

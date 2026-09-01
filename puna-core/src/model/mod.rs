@@ -18,7 +18,7 @@ pub mod user;
 /// Where a room came from.
 ///
 /// Maps to the `room_source` enum, and names the `settings` key holding that source's creation
-/// gate -- so adding a third source cannot compile without deciding which switch admits it.
+/// gate, so adding a third source cannot compile without deciding which switch admits it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoomSource {
     /// A zip uploaded through Puna's own form.
@@ -58,7 +58,7 @@ impl RoomSource {
 ///
 /// M6 REPLACES [`Orchestrator::assume_leader`] with a constructor taking a `LeaderLock` witness,
 /// so the token becomes proof that `pg_try_advisory_lock` actually succeeded rather than proof
-/// that someone meant well. Until then the guarantee is review-visible, not compile-enforced --
+/// that someone meant well. Until then the guarantee is review-visible, not compile-enforced,
 /// stated plainly because a token that looks stronger than it is would be worse than none.
 #[derive(Debug, Clone, Copy)]
 pub struct Orchestrator(());
@@ -67,7 +67,7 @@ impl Orchestrator {
     /// Assert that this process holds the orchestrator leader lock.
     ///
     /// Call this once, in the orchestrator, immediately after acquiring the advisory lock.
-    /// Calling it anywhere else -- and in particular anywhere in `puna-web` -- is a bug.
+    /// Calling it anywhere else (and in particular anywhere in `puna-web`) is a bug.
     pub fn assume_leader() -> Self {
         Self(())
     }

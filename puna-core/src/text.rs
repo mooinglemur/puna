@@ -11,7 +11,7 @@
 //! Templates do not use this. Askama ships `pluralize`, so a template writes
 //! `{{ n }} slot{{ n|pluralize }}` and `{{ n|pluralize("is", "are") }}` directly.
 
-/// `1 slot`, `3 slots`, `0 slots` — the count and its noun, agreeing.
+/// `1 slot`, `3 slots`, `0 slots`: the count and its noun, agreeing.
 ///
 /// Regular `-s` only. A noun that pluralizes some other way wants [`plural`] with both forms
 /// written out, rather than an exception list here that nobody would think to look in.
@@ -33,7 +33,7 @@ pub fn plural<'a>(n: impl Count, one: &'a str, many: &'a str) -> &'a str {
 /// Implemented for the integer types counts actually arrive as, so a call site does not have to cast.
 ///
 /// **A cast would be the wrong fix**: `len() as i64` is noise at fifteen sites, and `as` on a signed
-/// count would wrap a negative into a huge positive rather than failing — which is the class of
+/// count would wrap a negative into a huge positive rather than failing, which is the class of
 /// silent breakage this codebase keeps paying for. Every implementation asks only whether the value
 /// is exactly one, which is a question every integer type answers correctly.
 pub trait Count: Copy + std::fmt::Display {
@@ -67,7 +67,7 @@ mod tests {
         assert_eq!(plural(0i64, "is", "are"), "are");
     }
 
-    /// Zero is plural in English — *no slots have an owner*, not *no slot has* — and it is the case
+    /// Zero is plural in English (*no slots have an owner*, not *no slot has*) and it is the case
     /// a naive `n > 1` gets wrong. Worth its own assertion because zero is a routine answer here:
     /// every one of these counters starts there.
     #[test]
@@ -76,7 +76,7 @@ mod tests {
         assert_eq!(plural(0usize, "was", "were"), "were");
     }
 
-    /// A negative count cannot occur — these come from `len()` and from SQL `COUNT(*)` — but the
+    /// A negative count cannot occur (these come from `len()` and from SQL `COUNT(*)`) but the
     /// answer has to be *defined* rather than wrapped, which is the whole reason `Count` exists
     /// instead of `as u64` at the call sites.
     #[test]

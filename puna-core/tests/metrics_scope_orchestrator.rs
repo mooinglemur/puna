@@ -4,7 +4,7 @@
 //!
 //! This is the direction that catches the opposite mistake from the other two files. Theirs fail
 //! when a family leaks into a tier that cannot compute it; this one fails when a family is
-//! declared and listed but never actually forced -- which does not break a scrape, it just means
+//! declared and listed but never actually forced, which does not break a scrape, it just means
 //! the series is absent until something touches it. That is the ambiguity `init` exists to remove:
 //! `puna_integrity_faults` reading 0 is reassuring, and reading "no data" is not.
 
@@ -37,7 +37,7 @@ fn the_orchestrator_exports_exactly_the_families_it_owns() {
 /// The tables have to partition the registry, not merely cover it.
 ///
 /// A name in two lists would make `families()` report a component exporting something it does
-/// not, which is the same class of wrongness this whole change is fixing -- just in the
+/// not, which is the same class of wrongness this whole change is fixing, just in the
 /// documentation rather than in the process.
 #[test]
 fn the_family_tables_are_disjoint_and_free_of_duplicates() {

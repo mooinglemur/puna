@@ -3,7 +3,7 @@
 //! ## Why this is an integration test rather than a unit test
 //!
 //! The registry is a process-global, and every `#[test]` in a lib's unit-test module shares one
-//! binary -- so a unit test asserting "the web tier does not export `puna_ports_bound`" would pass
+//! binary, so a unit test asserting "the web tier does not export `puna_ports_bound`" would pass
 //! or fail depending on whether some other test had already forced that family. It would be a test
 //! of execution order.
 //!

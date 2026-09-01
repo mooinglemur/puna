@@ -35,7 +35,7 @@ fn shellexpand_tilde(p: &str) -> String {
 }
 
 /// Promote a real zip into a temp data dir and hand back the seed exactly as the tracker's cache
-/// will read it — through `GenerationPaths::seed`, which is the path both the ingest route and the
+/// will read it, through `GenerationPaths::seed`, which is the path both the ingest route and the
 /// admin rebuild use.
 fn promoted_seed(bytes: &[u8]) -> (tempfile::TempDir, Vec<u8>, MultiData) {
     let meta = artifact::inspect(bytes, LIMIT).expect("a real generation zip must parse");
@@ -50,8 +50,8 @@ fn promoted_seed(bytes: &[u8]) -> (tempfile::TempDir, Vec<u8>, MultiData) {
 
 /// **The spoiler property, and the reason this cache stores location ids and nothing else.**
 ///
-/// `MultiData.locations` hands out `(location, item, receiver, flags)` per entry — the answer to
-/// "what is in that chest" — and a tracker that leaked it would be a searchable spoiler log. The
+/// `MultiData.locations` hands out `(location, item, receiver, flags)` per entry (the answer to
+/// "what is in that chest") and a tracker that leaked it would be a searchable spoiler log. The
 /// assertion is that what was extracted is exactly the location list, so the item, the receiver and
 /// the flags are absent by construction rather than by a filter someone could later relax.
 #[test]
@@ -139,7 +139,7 @@ fn names_match_the_resolved_datapackage() {
 }
 
 /// Every game a slot is playing has names, because a slot whose game is missing renders a table of
-/// raw ids — survivable, but it would make the whole feature look broken for that player.
+/// raw ids: survivable, but it would make the whole feature look broken for that player.
 #[test]
 fn every_played_game_has_a_name_table() {
     let Some(bytes) = fixture() else {

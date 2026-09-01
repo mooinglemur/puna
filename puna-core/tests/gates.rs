@@ -5,7 +5,7 @@
 //! create rooms, and nothing about the wrong answer looks like a failure at the time.
 //!
 //! The forward-compatibility case is the one worth reading. `gate_mode` is a Postgres enum, so a
-//! value this build does not recognize cannot be inserted by accident -- it can only arrive from a
+//! value this build does not recognize cannot be inserted by accident: it can only arrive from a
 //! database migrated ahead of the binary, which is exactly what a rollout does for a few minutes.
 //! `a_gate_mode_this_build_does_not_know_is_refused` provokes that state deliberately.
 
@@ -142,7 +142,7 @@ async fn the_two_sources_are_independent() {
 
 /// A gate that cannot be read must permit nothing.
 ///
-/// The migration seeds both rows, so this state means one was deleted by hand -- and the tempting
+/// The migration seeds both rows, so this state means one was deleted by hand, and the tempting
 /// reading, "no gate configured, so nothing is gated", would turn a deleted row into open room
 /// creation.
 #[tokio::test]
@@ -209,7 +209,7 @@ async fn a_missing_settings_row_is_refused() {
     .await;
 }
 
-/// A database migrated ahead of the binary -- which every rollout produces for a few minutes.
+/// A database migrated ahead of the binary, which every rollout produces for a few minutes.
 ///
 /// The old binary meets a `gate_mode` value it has never heard of. It must refuse, not guess.
 #[tokio::test]

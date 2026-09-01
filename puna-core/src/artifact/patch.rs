@@ -12,7 +12,7 @@
 //!
 //! ## Anything unexpected is served unchanged, deliberately
 //!
-//! Not a zip, no `archipelago.json`, a manifest that is not an object — every one of those returns
+//! Not a zip, no `archipelago.json`, a manifest that is not an object: every one of those returns
 //! the bytes as stored rather than an error. **Puna serves what it was given**: these are a game's
 //! own files, the set of patch formats is open, and refusing to hand over a file because Puna did not
 //! recognize its shape would break a game Puna has never heard of. The address is a convenience; the
@@ -35,7 +35,7 @@ const MANIFEST: &str = "archipelago.json";
 
 /// The credential a `claimed` patch carries, if the room has one for this slot.
 ///
-/// The slot name is always needed — it is the *username* half of the URL — so this is `None` only
+/// The slot name is always needed (it is the *username* half of the URL) so this is `None` only
 /// when the room has no password at all, in which case the patch keeps the bare address.
 #[derive(Debug, Clone)]
 pub struct Credential<'a> {
@@ -52,7 +52,7 @@ pub struct Credential<'a> {
 /// netloc `urlparse` cannot read. Encoded, every one of them survives to be decoded back.
 ///
 /// The set kept unescaped is RFC 3986's `unreserved`. Anything else is escaped, including the
-/// sub-delims a URL would technically allow in userinfo — there is nothing to gain from leaving
+/// sub-delims a URL would technically allow in userinfo: there is nothing to gain from leaving
 /// them raw, and each one is a character somebody's parser might treat specially.
 fn encode_userinfo(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
@@ -70,13 +70,13 @@ fn encode_userinfo(raw: &str) -> String {
 /// Rewrite `archipelago.json`'s `server`, leaving every other member's contents exactly as they
 /// were.
 ///
-/// Without a credential the value is `<host>:<port>`, no scheme — what the reference implementation
+/// Without a credential the value is `<host>:<port>`, no scheme: what the reference implementation
 /// writes and what every client parses.
 ///
 /// With one it is `wss://<slot>:<password>@<host>:<port>`, which Archipelago's own client reads:
 /// `server_loop` hands the address to `urlparse` and takes `username` and `password` off it, and a
 /// patch's `server` reaches that same parser through `args.connect`. The `wss://` is load-bearing
-/// and survives — only `archipelago://` is rewritten to `ws://`, and the TLS context is chosen by
+/// and survives: only `archipelago://` is rewritten to `ws://`, and the TLS context is chosen by
 /// the `wss` prefix, which is what a Puna room needs since it terminates its own TLS.
 pub fn embed_server(
     patch: Vec<u8>,
@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(first["server"], "rooms.example.com:41234");
     }
 
-    /// Directory entries are members too, and reading one as a file yields nothing -- so a patch
+    /// Directory entries are members too, and reading one as a file yields nothing, so a patch
     /// with a folder in it must not come out with the folder flattened away.
     #[test]
     fn directory_entries_survive() {
@@ -352,8 +352,8 @@ mod tests {
     ///
     /// The shape is `wss://<slot>:<password>@<host>:<port>`, and it is not a guess: `server_loop`
     /// in `CommonClient.py` hands the address to `urlparse` and takes `username` and `password` off
-    /// it, and a patch's `server` reaches that parser through `args.connect`. `wss://` survives —
-    /// only `archipelago://` is rewritten — and the TLS context is chosen by that prefix, which a
+    /// it, and a patch's `server` reaches that parser through `args.connect`. `wss://` survives
+    /// (only `archipelago://` is rewritten) and the TLS context is chosen by that prefix, which a
     /// Puna room needs because it terminates its own TLS.
     #[test]
     fn a_claimed_patch_embeds_a_url_the_client_can_connect_with() {
@@ -379,7 +379,7 @@ mod tests {
     /// **Every character that would silently change the address is escaped.**
     ///
     /// Archipelago `unquote`s both halves, so this is one side of a round trip rather than
-    /// decoration — and it is load-bearing because a slot name is arbitrary text out of an uploaded
+    /// decoration, and it is load-bearing because a slot name is arbitrary text out of an uploaded
     /// seed. Raw, an `@` ends the userinfo early and points the client at a different host
     /// entirely; a `:` splits the password in the wrong place; a space produces a netloc `urlparse`
     /// cannot read. None of those fail loudly: they connect somewhere else, or refuse with a

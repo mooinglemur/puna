@@ -2,10 +2,10 @@
 //!
 //! Two things, stored differently because they are about different subjects:
 //!
-//! * **Per slot** — a progression status and a short note, on `room_slots` (see the migration for
+//! * **Per slot**: a progression status and a short note, on `room_slots` (see the migration for
 //!   why they are columns rather than a table). Written by the slot's owner, and by the room's
 //!   staff, who may need to correct or remove what a player left.
-//! * **Per person** — how somebody wants to be pinged about this room, in
+//! * **Per person**: how somebody wants to be pinged about this room, in
 //!   [`room_ping_preferences`](set_preference). **Only they set it**: staff may edit a note or a
 //!   progression, never somebody's stated willingness to be contacted, because that is the one
 //!   field here that records what a person agreed to rather than a fact about a world.
@@ -13,7 +13,7 @@
 //! ## Every reader of this is gated, and this module does not do the gating
 //!
 //! Nothing here is public. A note, a handle and a ping preference reach the room's staff and the
-//! people holding slots in it, and nobody else — an anonymous viewer of a `link`-policy tracker
+//! people holding slots in it, and nobody else: an anonymous viewer of a `link`-policy tracker
 //! sees the page exactly as it was before any of this existed. That decision is made where the
 //! viewer is known, in `routes::tracker`, and the digest is handed a tier rather than working one
 //! out. This module answers "what is stored", never "who may see it".
@@ -31,7 +31,7 @@ use crate::ids::RoomId;
 /// nothing should ever derive from it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProgressionStatus {
-    /// Nothing said. The default, and rendered as no chip at all rather than as a word — a row
+    /// Nothing said. The default, and rendered as no chip at all rather than as a word: a row
     /// carrying "unknown" beside four that say something real reads as a fifth answer.
     #[default]
     Unknown,
@@ -39,7 +39,7 @@ pub enum ProgressionStatus {
     Unblocked,
     /// Beat Known: out of checks reachable without receiving something.
     Bk,
-    /// Nearly out — a few checks left, all of them awkward. Distinct from `Bk` because it is the
+    /// Nearly out: a few checks left, all of them awkward. Distinct from `Bk` because it is the
     /// state where a well-aimed release actually helps.
     SoftBk,
     /// Everything needed is in hand; only the finish remains.
@@ -94,13 +94,13 @@ impl ProgressionStatus {
 /// Whether a participant wants to be contacted about this room, and on what terms.
 ///
 /// **The values are not a scale and must not be rendered as one.** `SeeNotes` is a pointer at the
-/// slot's own note, and `ForHints` is narrower than `Yes` in kind rather than in degree — it is
+/// slot's own note, and `ForHints` is narrower than `Yes` in kind rather than in degree: it is
 /// consent for one specific reason. Sorting or comparing these would invent an ordering the person
 /// did not express.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PingPreference {
     /// Not by other players. **Staff may still ping**, which is why this hides the handle from
-    /// participants and not from organizers and helpers — they have the room to run.
+    /// participants and not from organizers and helpers, who have the room to run.
     No,
     /// The default, and an honest one: the handle is shown to other players and nothing has been
     /// said about when contact is welcome.
@@ -131,7 +131,7 @@ impl PingPreference {
     ///
     /// An absent chip is what "nobody has said" looks like. Rendering the word would put a fifth
     /// answer on the page: a row reading "unknown" beside four saying something real looks like a
-    /// stated position, when it is the absence of one — and on a young room it would be a column of
+    /// stated position, when it is the absence of one, and on a young room it would be a column of
     /// them, which is a lot of ink for no information.
     ///
     /// Separate from [`label`](Self::label), which the preferences form still needs: there "Unknown"
@@ -166,7 +166,7 @@ impl PingPreference {
     }
 
     /// **Whether other PLAYERS get this person's handle.** Staff always do, and ask this of
-    /// nobody — the check at the call site is `is_staff || preference.shows_handle_to_players()`.
+    /// nobody: the check at the call site is `is_staff || preference.shows_handle_to_players()`.
     ///
     /// The one value this is false for is [`No`](Self::No), which is the only reading of it: the
     /// handle is how somebody gets pinged, so withholding contact means withholding the handle.
@@ -207,7 +207,7 @@ impl PingPreference {
 }
 
 /// The longest a note may be, in **characters** rather than bytes, so the limit does not depend on
-/// the alphabet somebody writes in — the same rule `room::validate_name` follows.
+/// the alphabet somebody writes in, the same rule `room::validate_name` follows.
 ///
 /// Enforced by the column as well as by the route: this one is rendered into a panel on a page that
 /// polls, so the bound is worth having in the place that cannot be bypassed.
@@ -217,7 +217,7 @@ pub const MAX_NOTE_CHARS: usize = 1000;
 ///
 /// **An empty note is a deletion**, not an empty note: the column refuses `''` outright, so absence
 /// is the only way to say nothing and no reader has to treat two values as one. That is also the
-/// whole of the delete affordance the UI needs — a player clears the box.
+/// whole of the delete affordance the UI needs: a player clears the box.
 ///
 /// `actor` is whoever asked, which is the slot's owner or a member of the room's staff. Recorded
 /// because staff may edit somebody else's, and "who wrote this" is the first question about a note
@@ -332,8 +332,8 @@ pub async fn set_preference(
 /// progression and a note describe a playthrough that the clone is starting over. Carrying BK
 /// status into a fresh room would have it describe the old one's progress.
 ///
-/// The annotations need no code to be dropped — a clone inserts fresh slots and copies only owners
-/// over them — which is precisely why there is a test pinning it. Nothing here would fail if
+/// The annotations need no code to be dropped (a clone inserts fresh slots and copies only owners
+/// over them) which is precisely why there is a test pinning it. Nothing here would fail if
 /// somebody widened that copy.
 pub async fn copy_preferences(
     conn: &mut AsyncPgConnection,
@@ -360,7 +360,7 @@ mod tests {
     /// Both spellings of every value, held together.
     ///
     /// `as_sql` is a contract with a Postgres enum and `label` is prose on a page; they drift in
-    /// opposite directions — a rename in the database silently stops parsing, and a reworded label
+    /// opposite directions: a rename in the database silently stops parsing, and a reworded label
     /// silently changes a column value if the two are ever collapsed into one function.
     #[test]
     fn every_value_round_trips_through_its_wire_spelling() {
@@ -377,7 +377,7 @@ mod tests {
     /// **The default and the fail-safe are different values here**, which is true of nothing else in
     /// this schema and is the thing to get wrong.
     ///
-    /// Absent means `Unknown`, which shows the handle to other players — that is the answer for
+    /// Absent means `Unknown`, which shows the handle to other players: that is the answer for
     /// somebody who has simply not been asked. An *unrecognized* value means `No`, which hides it.
     /// One `unwrap_or_default()` in `preferences` would collapse the two and publish a handle for a
     /// value nobody could read.
@@ -393,7 +393,7 @@ mod tests {
     /// **An unanswered preference shows no chip, and every answered one does.**
     ///
     /// Absence is what "nobody has said" looks like on the page. Rendering the word would put a
-    /// fifth answer beside the four that are real positions — and on a young room it would be a
+    /// fifth answer beside the four that are real positions, and on a young room it would be a
     /// column of "unknown", which is a lot of ink for the information that nobody has been asked.
     ///
     /// `Unknown` keeps its `label`, because the preferences form offers it as a choice somebody
@@ -422,7 +422,7 @@ mod tests {
     /// Exactly one value withholds the handle from other players.
     ///
     /// Spelled out rather than derived, because widening this is how a preference somebody set
-    /// stops being honored — and the direction that matters is that nothing except `No` may hide a
+    /// stops being honored, and the direction that matters is that nothing except `No` may hide a
     /// handle, since the rest are all forms of yes.
     #[test]
     fn only_no_withholds_a_handle() {

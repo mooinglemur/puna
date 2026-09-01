@@ -4,7 +4,7 @@
 //!
 //! `rooms.tracker_id` and `room_slots.tracker_id` are both unguessable uuids drawn from the same
 //! space, and [`resolve`] tries them in that order. A bare `/tracker/<uuid>` therefore does not
-//! disclose which kind it is until it resolves — which matters because the two are shared with
+//! disclose which kind it is until it resolves, which matters because the two are shared with
 //! different audiences: a multiworld tracker goes to everyone watching, and a slot tracker is what
 //! one player hands their own stream chat.
 //!
@@ -18,7 +18,7 @@
 //! `rooms.last_tracker_doc` holds the last document a proxy fetch got. It exists for the case that
 //! is most of an async's life: **the room is torn down**, and a tracker link is the thing people
 //! keep open. Serving the last known state with an "as of" stamp is better than an error page, and
-//! it is also what makes the shared cache shared — a per-process one would multiply upstream
+//! it is also what makes the shared cache shared: a per-process one would multiply upstream
 //! fetches by the replica count instead of amortizing them.
 //!
 //! ## The documents cross this boundary as TEXT, never as a `serde_json::Value`
@@ -26,7 +26,7 @@
 //! The column is `jsonb` and the tracker tier is a proxy: it serves these documents back verbatim
 //! and hashes them for an `ETag`, so on the room-scoped path nothing here ever needs their
 //! structure. Handing a `Value` over meant parsing on the read, cloning the tree, and rendering it
-//! again — three times the peak of a document that is 17.6 MiB on the wire for a 2000-slot room,
+//! again: three times the peak of a document that is 17.6 MiB on the wire for a 2000-slot room,
 //! which is what OOM-killed the tier. So the read casts to text in Postgres and the write casts
 //! back, and the merge of the two documents happens **in SQL** rather than by reading the column
 //! into this process first.
@@ -116,9 +116,9 @@ pub struct CachedDocument {
     pub body: String,
     /// **When THIS document was written**, never when its neighbor was.
     ///
-    /// The two are written on different schedules and under different rules — the static one every
+    /// The two are written on different schedules and under different rules (the static one every
     /// five minutes and always successfully, the live one every minute and only while it fits under
-    /// the size cap — so a timestamp shared between them describes whichever wrote last and is
+    /// the size cap) so a timestamp shared between them describes whichever wrote last and is
     /// evidence about the other only by coincidence. It stopped being a coincidence on a 2000-slot
     /// room, where the live document permanently exceeds the cap: the stored copy froze, the static
     /// writes kept the shared stamp current, and the frozen copy was served as fresh. See the
@@ -148,7 +148,7 @@ impl CachedDocuments {
 /// Which of a room's two tracker documents a cache entry is for.
 ///
 /// The web tier has its own `Document` for the same distinction, because it also carries the
-/// upstream path and the cache window — neither of which belongs in a model. This exists so
+/// upstream path and the cache window, neither of which belongs in a model. This exists so
 /// [`store`] can be told which key to write without being handed a string, where the only two
 /// valid values would live in another crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,7 +170,7 @@ impl Kind {
 ///
 /// One column rather than two because they are written together and read together, and because a
 /// room whose live document is cached and whose static one is not would render a slot table with no
-/// game names — a state worth not being able to represent.
+/// game names: a state worth not being able to represent.
 const LIVE_KEY: &str = "tracker";
 const STATIC_KEY: &str = "static_tracker";
 
@@ -239,7 +239,7 @@ pub async fn cached(
 /// **`max_bytes` bounds one document rather than the pair**, which is a change from the form that
 /// merged in Rust: the merge is now a SQL `||`, so this side never holds both at once and has
 /// nothing to measure the pair with. The column's worst case is therefore twice the cap. That is
-/// the better bargain anyway — under the old rule a live document that fit was refused because the
+/// the better bargain anyway: under the old rule a live document that fit was refused because the
 /// static one beside it did not.
 ///
 /// The merge is server-side for the same reason the read casts to text: doing it here meant reading

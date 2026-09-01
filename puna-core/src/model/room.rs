@@ -3,22 +3,22 @@
 //! ## Creation is one transaction, and it has to be
 //!
 //! A room row without its slots is a room nobody can join, and a room without its first organizer
-//! is a room nobody can administer -- and the last-organizer trigger means the second cannot be
+//! is a room nobody can administer, and the last-organizer trigger means the second cannot be
 //! repaired by adding one later without first having one. So the row, the membership and every
 //! slot land together or not at all.
 //!
 //! ## Two column families
 //!
 //! Everything here writes only the *desired* half: `desired_state`, the room's options, its
-//! passwords. The observed half -- `state`, `advertised_*`, `provisioned_at` -- belongs to the
+//! passwords. The observed half (`state`, `advertised_*`, `provisioned_at`) belongs to the
 //! orchestrator and is read-only from the web tier. Nothing in this module writes an observed
 //! column, which is the property the [`Orchestrator`](super::Orchestrator) token exists to make
 //! greppable elsewhere.
 //!
 //! ## Requesting is not doing
 //!
-//! [`request_state`] writes `desired_state` and nothing else. It is idempotent by construction --
-//! a second request updates zero rows -- and it never blocks: the room page renders from the row
+//! [`request_state`] writes `desired_state` and nothing else. It is idempotent by construction
+//! (a second request updates zero rows) and it never blocks: the room page renders from the row
 //! and polls, so a cold start is a visible state rather than a hanging request.
 
 use diesel::sql_types::{BigInt, Bool, Integer, Nullable, Text, Timestamptz, Uuid as SqlUuid};
@@ -70,7 +70,7 @@ pub enum SpoilerPolicy {
     /// Nobody at all, an organizer included. The route answers `404`, so a room withholding a
     /// spoiler is indistinguishable from a seed that never had one.
     Never,
-    /// **This room's staff** — any roster role, plus a site admin, which is what
+    /// **This room's staff**: any roster role, plus a site admin, which is what
     /// [`may_see_spoiler`] has always resolved it to.
     Staff,
     /// Staff, and anyone holding a slot in the room.
@@ -91,13 +91,13 @@ impl SpoilerPolicy {
     /// **`admin_only` is still accepted, and nothing emits it.**
     ///
     /// It was this value's name until the migration that renamed it, and "admin" said the wrong
-    /// thing twice: the value admits any roster role — a helper included — and it is a fact about
+    /// thing twice: the value admits any roster role (a helper included) and it is a fact about
     /// one room's staff rather than about the site.
     ///
     /// The alias covers the window a rollout opens. Migrations run from the orchestrator while web
     /// pods are already serving, so for a few seconds a process and the database can disagree about
-    /// which spelling exists. Without it an unrecognized value falls to `Never`, which fails closed
-    /// — the right direction, and still a room that briefly hides its spoiler from its own staff
+    /// which spelling exists. Without it an unrecognized value falls to `Never`, which fails closed:
+    /// the right direction, and still a room that briefly hides its spoiler from its own staff
     /// for no reason anybody could see. One line is cheaper than that.
     pub fn parse(raw: &str) -> Option<Self> {
         match raw {
@@ -113,7 +113,7 @@ impl SpoilerPolicy {
 /// Who may read this room's spoiler, from one rule used by every caller.
 ///
 /// The room page and the download route both ask, and they must agree: a page that offers a link
-/// the route refuses is a bug report, and a page that hides a link the route would serve is worse —
+/// the route refuses is a bug report, and a page that hides a link the route would serve is worse:
 /// it teaches people to guess URLs.
 ///
 /// `is_staff` covers global admins too, resolved by the caller, because "admin" is a fact about the
@@ -133,7 +133,7 @@ pub fn may_see_spoiler(policy: SpoilerPolicy, is_staff: bool, owns_a_slot: bool)
 ///
 /// The same shape as [`may_see_spoiler`] and for the same reason, but the default is far more open:
 /// a tracker is **meant** to be shared, with stream chats and spectators who will never log in, so
-/// `link` — the unguessable URL is the authorization — is what an ordinary room gets and what the
+/// `link` (the unguessable URL is the authorization) is what an ordinary room gets and what the
 /// reference implementation does.
 ///
 /// `members` is the race default, and it is the one case where a tracker link handed to a friend
@@ -179,8 +179,8 @@ impl TrackerPolicy {
 ///
 /// **The mechanism is Archipelago's, verified in its source rather than inferred.**
 /// `CommonClient.py`'s `server_loop` parses userinfo out of the address it is handed and
-/// `unquote`s both halves, and a patch's `server` field reaches that parser through `args.connect`
-/// — so `wss://<slot>:<password>@<host>:<port>` connects a client with no typing. The `unquote` is
+/// `unquote`s both halves, and a patch's `server` field reaches that parser through `args.connect`,
+/// so `wss://<slot>:<password>@<host>:<port>` connects a client with no typing. The `unquote` is
 /// why [`crate::artifact::patch`] percent-encodes both: a slot name is arbitrary text out of a
 /// seed and may hold an `@`, a `:` or a space, any of which silently changes what the netloc is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,7 +188,7 @@ pub enum PatchPolicy {
     /// `host:port`, as the reference writes it. A player with a password types it.
     Open,
     /// The credential too, where the room or the slot has one. A patch is already served only to
-    /// its slot's owner and the room's staff, so this hands them something they are entitled to —
+    /// its slot's owner and the room's staff, so this hands them something they are entitled to,
     /// but it does travel with the file, which is what `Open` is for.
     Claimed,
 }
@@ -213,13 +213,13 @@ impl PatchPolicy {
 /// Which of a room's two ports its page leads with.
 ///
 /// **The two ports are one room, and choosing wrongly fails asymmetrically.** On the full port a
-/// client that cannot keep up is dropped and told so — loud, and it points at itself. On the
+/// client that cannot keep up is dropped and told so: loud, and it points at itself. On the
 /// filtered port everything works: the game plays, your own items arrive, and you simply never see
 /// anybody else's finds and conclude the multiworld is dead. That failure is silent and gives its
 /// victim no reason to suspect the address they pasted.
 ///
 /// So a room shows one address and puts the other behind a click, with wording of its own on each
-/// side — never the same position holding different values, which is what makes this a per-room
+/// side, never the same position holding different values, which is what makes this a per-room
 /// decision an organizer makes once rather than a control a viewer toggles.
 ///
 /// The threshold is 200 slots, where a game client starts drowning in other players' item traffic.
@@ -264,7 +264,7 @@ impl PrimaryPort {
 /// This is a second question on top of [`may_see_tracker`], not a replacement for it. That one
 /// decides whether `/journal/<id>` answers at all; this decides what it answers with. Both are
 /// needed because the two capabilities have genuinely different shapes: a tracker shows progress,
-/// and the journal's file carries `chat` — every line anybody typed in the room — so a room can
+/// and the journal's file carries `chat` (every line anybody typed in the room) so a room can
 /// reasonably want its tracker public and its conversation not, or want both wide open, and neither
 /// answer is right for every room.
 ///
@@ -274,7 +274,7 @@ impl PrimaryPort {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JournalPolicy {
     /// Staff only. A non-organizer gets the same `404` an unknown feed id gets, so the refusal
-    /// discloses nothing — including whether the room has a journal worth asking about.
+    /// discloses nothing, including whether the room has a journal worth asking about.
     Disabled,
     /// `check` and `gap`. Everything else is withheld **and counted**, so the page can say the
     /// history is incomplete without saying what is in it. No download: the file is where the
@@ -314,13 +314,13 @@ pub enum DesiredState {
     ///
     /// To the orchestrator this is [`Self::Stopped`] exactly: the room comes down, keeps its port
     /// reservation and keeps its state directory. Nothing about a closed room is reclaimed
-    /// differently, which is the point — closing is what an organizer does to a room they intend to
+    /// differently, which is the point: closing is what an organizer does to a room they intend to
     /// come back to.
     ///
     /// The whole difference is an authorization one, and it lives in the web tier. Any visitor may
     /// start an `idle` room, because a room that idles out and returns on a URL hit is the design;
-    /// only an organizer or an admin may start a closed one. The page still renders for everybody —
-    /// patches, tracker, roster — it just does not offer them the door.
+    /// only an organizer or an admin may start a closed one. The page still renders for everybody
+    /// (patches, tracker, roster). It just does not offer them the door.
     ///
     /// **A closed room is never a running room, and that invariant is why this is a variant here
     /// rather than a flag beside `desired_state`.** A separate column would allow "closed and
@@ -329,7 +329,7 @@ pub enum DesiredState {
     /// saying "closed" about a room people were playing in. Making it a wish, mutually exclusive
     /// with `Running` by construction, means that state cannot be spelled.
     ///
-    /// The cost is that reopening clears it — an organizer who starts a closed room has reopened
+    /// The cost is that reopening clears it: an organizer who starts a closed room has reopened
     /// it, and it stays open until closed again. That is what the button says it does.
     Closed,
     Deleted,
@@ -373,14 +373,14 @@ impl DesiredState {
 ///
 /// Deliberately a different type from [`DesiredState`] rather than one enum with a flag. A room
 /// that *wants* to run and a room that *is* running are different facts, and the whole
-/// reconciler rests on being able to compare them — collapsing them into one value is how a
+/// reconciler rests on being able to compare them: collapsing them into one value is how a
 /// level-triggered loop turns back into an edge-triggered one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoomState {
     /// The row exists; the state directory may not. One of the two states where D3's invariant
     /// does not hold, and it is transient and orchestrator-owned.
     Provisioning,
-    /// The directory exists, no Deployment. Where a torn-down room rests — **holding its port
+    /// The directory exists, no Deployment. Where a torn-down room rests, **holding its port
     /// reservation**, which is what lets it come back on the same address.
     Idle,
     /// Port allocated, objects created, no ready replica yet.
@@ -394,7 +394,7 @@ pub enum RoomState {
     Failed,
     /// The other state where the directory may not exist.
     Deleting,
-    /// `provisioned_at` is set and the directory is gone. **Never auto-repaired** — recreating it
+    /// `provisioned_at` is set and the directory is gone. **Never auto-repaired**: recreating it
     /// would replace saved progress with an empty room and look like a successful start.
     IntegrityFault,
 }
@@ -432,7 +432,7 @@ impl RoomState {
     /// Serving players, or close enough that taking its port would be felt.
     ///
     /// This is D4: the allocator refuses to reclaim a live room's pair. Reclaiming one takes the
-    /// port out from under connected clients, and Cilium does not report that as an error — the
+    /// port out from under connected clients, and Cilium does not report that as an error: the
     /// room simply answers on an address nobody was told about.
     pub fn is_live(self) -> bool {
         matches!(self, Self::Starting | Self::Running | Self::Degraded)
@@ -464,12 +464,12 @@ pub struct NewRoom {
     ///
     /// The creation form deliberately does not ask. A spoiler is the one thing on a room whose
     /// disclosure cannot be taken back, and it is not a decision worth making on the way past on a
-    /// page somebody sees once — so a new room starts at the tightest setting that anybody can
+    /// page somebody sees once, so a new room starts at the tightest setting that anybody can
     /// still reach, and widening it is a deliberate visit to the room's options.
     ///
     /// **This no longer branches on `race_mode`, which used to yield `never` for a race.** `never`
     /// means nobody at all, an organizer included, and that is a defensible choice an organizer can
-    /// still make — but it is a poor thing to be given silently, because the person it locks out is
+    /// still make, but it is a poor thing to be given silently, because the person it locks out is
     /// the one who would need the file to settle a dispute.
     pub spoiler_policy: Option<SpoilerPolicy>,
     /// Whether participants may annotate their slots on this room's tracker. **Off unless asked
@@ -491,7 +491,7 @@ pub struct NewRoom {
     /// seed holds and a player has not earned yet; this guards a record of things the room's own
     /// participants said and did in front of each other. The feed link is rendered on the room page
     /// to everyone the tracker is, so in practice the people holding it are the people holding the
-    /// room link — and withholding the history from them by default protects nobody while making
+    /// room link, and withholding the history from them by default protects nobody while making
     /// the ordinary case need a setting change.
     pub journal_policy: Option<JournalPolicy>,
     pub wants_filtered: bool,
@@ -560,7 +560,7 @@ pub struct Room {
     pub spoiler_policy: SpoilerPolicy,
     pub tracker_id: TrackerId,
     /// The feed's URL segment. Independent of both [`RoomId`] and [`TrackerId`], so a feed link
-    /// hands over neither the room nor its tracker — see the migration that added it.
+    /// hands over neither the room nor its tracker. See the migration that added it.
     pub journal_id: JournalId,
     pub tracker_policy: TrackerPolicy,
     /// How much of the journal a non-organizer gets, once `tracker_policy` has let them reach it.
@@ -583,7 +583,7 @@ pub struct Room {
     ///
     /// A request writes this and returns; the observed state does not move until the orchestrator
     /// reaches the room. Timing a transition from `state_changed_at` therefore starts the counter
-    /// at however long the room had been sitting in the state it is leaving — "stopping, 35
+    /// at however long the room had been sitting in the state it is leaving: "stopping, 35
     /// minutes" one second after somebody clicked Stop.
     pub desired_at: chrono::DateTime<chrono::Utc>,
     pub advertised_host: Option<String>,
@@ -598,7 +598,7 @@ pub struct Room {
     /// lets a page follow it.
     ///
     /// Opaque on purpose. Puna stores no gameplay options of its own, so giving this a Rust shape
-    /// would be Puna claiming a schema it does not own — and a rule pahoa adds later would be
+    /// would be Puna claiming a schema it does not own, and a rule pahoa adds later would be
     /// invisible until Puna shipped for it. [`gameplay_option_rows`] renders whatever is there.
     ///
     /// `None` means nobody has managed to ask, which is not the same as a room with no rules.
@@ -624,7 +624,7 @@ impl Room {
     ///
     /// **One answer for two surfaces**, which is the whole reason it is a method rather than a
     /// comparison written twice: the room page decides which address to show with it, and the patch
-    /// download decides which port to embed with it. Those two disagreeing is not a rendering bug —
+    /// download decides which port to embed with it. Those two disagreeing is not a rendering bug:
     /// it is a player told to use one port and handed a file that connects to the other, on the
     /// setting whose entire purpose is keeping game clients off the feed that drowns them.
     ///
@@ -769,12 +769,12 @@ impl From<RoomRow> for Room {
 /// for it. So everything in the document is rendered, whatever it is called.
 ///
 /// Values are flattened rather than pretty-printed because pahoa already emits modes as words
-/// rather than bitmasks — `"release_mode": "auto"` — so a string wants its quotes stripped and a
+/// rather than bitmasks (`"release_mode": "auto"`) so a string wants its quotes stripped and a
 /// number wants nothing done to it. Anything with structure has none today and is rendered as
 /// compact JSON rather than dropped, on the same reasoning: an unfamiliar shape is still evidence,
 /// where a blank cell is a page quietly deciding not to say.
 ///
-/// **Sorted by key**, so the order does not depend on `serde_json`'s feature flags — without
+/// **Sorted by key**, so the order does not depend on `serde_json`'s feature flags: without
 /// `preserve_order` a `Map` is a `BTreeMap` and this is already true, which is exactly why it is
 /// worth stating rather than relying on. A page whose rows reshuffle between builds is one nobody
 /// can scan twice.
@@ -1008,8 +1008,8 @@ async fn copy_slots(
 /// The credentials a room's pod needs, deliberately kept OUT of [`Room`].
 ///
 /// `Room` is what the web tier hands to templates, and a template has no way to prove it did not
-/// render a field it was given. So the admin token -- which is the only control on a mutating,
-/// internet-reachable API -- is not in it, and reaching these costs a separate, greppable call.
+/// render a field it was given. So the admin token (which is the only control on a mutating,
+/// internet-reachable API) is not in it, and reaching these costs a separate, greppable call.
 /// Same reasoning as `SlotView` in the web tier.
 #[derive(Debug, Clone)]
 pub struct RoomSecrets {
@@ -1023,7 +1023,7 @@ pub struct RoomSecrets {
 ///
 /// **The options page needs the checkbox's state and has no business holding the value.**
 /// [`secrets`] exists to make reaching a credential a separate, greppable call, and answering
-/// "is one set" by fetching one and testing it for `Some` would walk straight past that — the
+/// "is one set" by fetching one and testing it for `Some` would walk straight past that: the
 /// value would then be in the rendering context of a page, which is the shape
 /// `no_template_renders_a_credential_off_the_room` forbids.
 pub async fn has_server_password(
@@ -1074,7 +1074,7 @@ pub async fn secrets(
 /// The feed's whole entry point, and the reason it has an id of its own: nothing about
 /// `/journal/<id>` is derivable from the room, so a link handed to a stream chat gives that chat the
 /// feed and nothing else. Same shape as resolving a tracker id, and deliberately a *separate* space
-/// from it — holding one must not produce the other.
+/// from it: holding one must not produce the other.
 pub async fn by_journal_id(
     conn: &mut AsyncPgConnection,
     journal: JournalId,
@@ -1200,7 +1200,7 @@ pub async fn request_state(
 ///
 /// **The producer for a contract that has had none.** `secret_synced_at IS NULL` has meant "this
 /// room's Secret no longer matches the database" since the sweep was written, and the sweep has
-/// been reading it and re-applying on that basis — but nothing ever set it, so the hourly interval
+/// been reading it and re-applying on that basis, but nothing ever set it, so the hourly interval
 /// was doing all the work and the contract was documentation.
 ///
 /// Set it whenever a credential changes and the room is not being restarted anyway. A restart does
@@ -1218,7 +1218,7 @@ pub async fn mark_secret_stale(
 
 /// Give a room in the shared-password mode a new shared password.
 ///
-/// Returns the new value, or `None` when the room is not in that mode — which the caller renders as
+/// Returns the new value, or `None` when the room is not in that mode, which the caller renders as
 /// a refusal rather than silently doing nothing, because "rotate" on a room with no shared password
 /// is a question with no answer rather than a no-op.
 ///
@@ -1228,12 +1228,12 @@ pub async fn mark_secret_stale(
 /// `POST /admin/v1/slots/<n>/password`, so it costs no restart. There is no equivalent for the
 /// room-wide one and there will not be: pahoa declined a live setter outright, on the grounds that
 /// it persists no password, so a change it cannot persist reverts at the next start whoever ran it.
-/// The rule they extracted is worth keeping because it predicts the whole surface — **a setter is
+/// The rule they extracted is worth keeping because it predicts the whole surface: **a setter is
 /// honest exactly where the save is authoritative.** Gameplay options persist, so they got one.
 /// Passwords deliberately do not: keeping them out of `room.save` is what stops a stale on-disk
 /// value shadowing the configured one, which is the same reason the environment outranks the seed.
 ///
-/// So the room learns this the only way it can, by starting again — which is why the caller pairs
+/// So the room learns this the only way it can, by starting again, which is why the caller pairs
 /// this with [`crate::model::fleet::request_redeploy`] for a room that is up, and why the UI has to
 /// say so before it is pressed. A stopped room needs nothing: its next start renders the Secret
 /// from the column.
@@ -1278,7 +1278,7 @@ pub const MAX_NAME_CHARS: usize = 120;
 
 /// Trim a proposed room name and decide whether it is usable.
 ///
-/// **One definition, three callers** — create, clone and rename. They had two between them (an
+/// **One definition, three callers**: create, clone and rename. They had two between them (an
 /// `is_empty` check written twice, no length rule anywhere), and three answers to "is this a valid
 /// room name" is how a name that one path accepts becomes one another path cannot store.
 pub fn validate_name(raw: &str) -> Result<String, NameError> {
@@ -1301,7 +1301,7 @@ pub fn validate_name(raw: &str) -> Result<String, NameError> {
 ///
 /// The caller records the previous name in the event row, and already holds it: `RoomAccess` loaded
 /// the whole `Room` to authorize the request. Returning it from here would mean either a second
-/// read or a `RETURNING` clause, and `RETURNING` sees the row it just wrote — the old value is not
+/// read or a `RETURNING` clause, and `RETURNING` sees the row it just wrote: the old value is not
 /// available on this side of the statement at all.
 pub async fn rename(
     conn: &mut AsyncPgConnection,
@@ -1319,7 +1319,7 @@ pub async fn rename(
 /// Associate a room with the lobby room its seed was rolled in.
 ///
 /// Provenance **and** the switch that turns on the unclaimed-slots warning: the room page asks
-/// "does this room come from a lobby room, and are there still slots nobody owns?" — so this column
+/// "does this room come from a lobby room, and are there still slots nobody owns?", so this column
 /// being set is what makes an unmatched slot worth mentioning rather than an ordinary unclaimed one.
 ///
 /// Deliberately does **not** move `rooms.source`. That column says how the GENERATION arrived, and
@@ -1341,7 +1341,7 @@ pub async fn set_lobby_room(
 /// Change a room's password mode.
 ///
 /// **Every transition is a restart**, because pahoa reads the mode from the environment at startup
-/// and its live rotation route `404`s outside `per_slot` mode -- it changes passwords *within* a
+/// and its live rotation route `404`s outside `per_slot` mode: it changes passwords *within* a
 /// mode and cannot create one. The caller marks the Secret stale and bounces the room; this
 /// function only moves the database to the new state.
 ///
@@ -1349,7 +1349,7 @@ pub async fn set_lobby_room(
 ///
 ///   * `-> per_slot` generates a password for **every** slot. A partial map locks players out.
 ///   * `-> none` / `-> room` sets every slot password to NULL, and the caller must then render
-///     **no `PAHOA_SLOT_PASSWORDS` key at all** rather than `{}` -- an empty map is per-slot mode
+///     **no `PAHOA_SLOT_PASSWORDS` key at all** rather than `{}`: an empty map is per-slot mode
 ///     with nobody holding a key, which is a room nobody can join.
 ///
 /// Switching away is not reversible: the old passwords are gone, which the UI states before
@@ -1402,7 +1402,7 @@ pub async fn set_slot_auth(
 /// a gate or a rendering decision that lives entirely in the web tier: nothing here reaches the
 /// room, moves `spec_hash`, or queues a redeploy, so the options page can put them under one button
 /// and promise that pressing it disconnects nobody. That promise is the whole reason the page has
-/// two forms — see [`set_slot_auth`] for the other kind.
+/// two forms. See [`set_slot_auth`] for the other kind.
 #[derive(Debug, Clone, Copy)]
 pub struct LiveOptions {
     pub tracker_policy: TrackerPolicy,
@@ -1411,7 +1411,7 @@ pub struct LiveOptions {
     pub primary_port: PrimaryPort,
     /// **Live like the rest, even though it guards the least recoverable thing here.**
     /// `may_see_spoiler` is asked per request, so widening this discloses the file to its new
-    /// audience the moment it is saved — which is exactly why the creation form does not offer it
+    /// audience the moment it is saved, which is exactly why the creation form does not offer it
     /// and this page states the consequence next to each option.
     pub spoiler_policy: SpoilerPolicy,
     /// Whether participants may annotate their slots on the tracker.
@@ -1460,7 +1460,7 @@ pub async fn set_live_options(
 ///
 /// **A restart, like every other credential the room reads from its environment.** pahoa takes
 /// `PAHOA_SERVER_PASSWORD` at startup and persists nothing, which is exactly what makes rotation
-/// trustworthy — so the caller marks the Secret stale and bounces the room.
+/// trustworthy, so the caller marks the Secret stale and bounces the room.
 ///
 /// `None` clears it, which turns `!admin login` off entirely rather than leaving a password nobody
 /// remembers setting.
@@ -1481,7 +1481,7 @@ pub async fn set_server_password(
 ///
 /// **Not a restart, and the form says so.** Every other control in that section changes something
 /// pahoa reads at startup; this one changes nothing the room can see at all. The journal is a file
-/// on a volume Puna mounts read-only, the gate is Puna's own, and it applies to the next request —
+/// on a volume Puna mounts read-only, the gate is Puna's own, and it applies to the next request,
 /// including one on a socket already open, since every frame is filtered as it is sent rather than
 /// at connect.
 pub async fn set_journal_policy(
@@ -1500,7 +1500,7 @@ pub async fn set_journal_policy(
 /// Open a new room from an existing room's generation.
 ///
 /// A fresh playthrough, not a copy of one: new id, its own port reservation, its own empty state
-/// directory. What carries over is the *people* -- the roster, and slot ownership if asked --
+/// directory. What carries over is the *people* (the roster, and slot ownership if asked)
 /// while **every password and claim token is regenerated**, so the same players keep their slots
 /// without re-claiming and no old credential survives into the new room.
 ///
@@ -1610,20 +1610,20 @@ pub async fn clone_room(
 ///
 /// It returned every room sharing the generation, to anybody who opened the page. Generations are
 /// **content-addressed and deduplicated**, so two organizers who upload the same zip land on one
-/// `generations` row and their rooms become each other's siblings — strangers, sharing nothing but
+/// `generations` row and their rooms become each other's siblings: strangers, sharing nothing but
 /// a seed somebody else also happened to have. The page then handed each of them the other's room
 /// name and **id**, and a room id is a capability: `/room/<id>` is public, its holder can start an
 /// idle room, read the roster, and download patches from an `open` room.
 ///
-/// That is the disclosure `generation_uploads` already closed one layer down — telling a second
-/// uploader "these contents were already on file" told them another account had their seed — with
+/// That is the disclosure `generation_uploads` already closed one layer down (telling a second
+/// uploader "these contents were already on file" told them another account had their seed) with
 /// the room named and linked this time.
 ///
 /// ## Organizer, not staff, and that is deliberate
 ///
 /// Membership is per room: **an organizer may run two rooms from one seed with different helpers on
 /// each.** So a helper on this room is not entitled to learn that the other one exists, let alone
-/// reach it — their trust is in this room, granted by an organizer who made a separate decision
+/// reach it: their trust is in this room, granted by an organizer who made a separate decision
 /// about the other. Only an organizer of the sibling itself sees it.
 ///
 /// **The function cannot leak whoever calls it wrong.** Every row it can return is a room the named
@@ -1680,7 +1680,7 @@ mod tests {
     ///
     /// `primary_port` is the organizer's choice; `wants_filtered` is whether the room publishes a
     /// second listener at all. Only the first appears on any form, so the second reads as a fact
-    /// about the default rather than a condition — and a room with no filtered listener that "leads
+    /// about the default rather than a condition, and a room with no filtered listener that "leads
     /// with filtered" would advertise a port nothing is bound to *and* write it into every patch.
     ///
     /// Two callers, deliberately one rule: the room page picks which address to show with it, and
@@ -1795,7 +1795,7 @@ mod tests {
     }
 
     /// Holding a slot's tracker id must not become a way to read the multiworld's, so the two
-    /// questions are answered by the same policy against the same room -- the id that got you here
+    /// questions are answered by the same policy against the same room: the id that got you here
     /// is not an input.
     #[test]
     fn a_slots_tracker_id_grants_nothing_extra() {
@@ -1855,8 +1855,8 @@ mod tests {
 
     /// Nothing to say, said as nothing: a page renders its own sentence rather than an empty table.
     ///
-    /// The three inputs are genuinely different situations — a room that has never run, a room on
-    /// an image too old to answer, and a document that is not the object shape — and all three mean
+    /// The three inputs are genuinely different situations (a room that has never run, a room on
+    /// an image too old to answer, and a document that is not the object shape) and all three mean
     /// "nobody knows", so all three produce no rows rather than a partial or a panicking read.
     #[test]
     fn nothing_reported_is_no_rows_rather_than_a_guess() {
@@ -1868,7 +1868,7 @@ mod tests {
     /// The states a port pair cannot be reclaimed from.
     ///
     /// Spelled out rather than derived, so widening `is_live` has to be a deliberate edit here
-    /// too — this is the predicate standing between a busy room and having its port taken away.
+    /// too: this is the predicate standing between a busy room and having its port taken away.
     #[test]
     fn exactly_three_states_are_live() {
         let live: Vec<&str> = RoomState::ALL

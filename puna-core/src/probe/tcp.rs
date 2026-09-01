@@ -1,14 +1,14 @@
 //! The fallback: can this room's port be opened, and nothing else.
 //!
 //! **Not a transitional stage.** pahoa has shipped the whole admin surface, so this exists for one
-//! case — a room pinned to an image older than that — and the trait exists so that case is
+//! case (a room pinned to an image older than that) and the trait exists so that case is
 //! expressible rather than because both were expected.
 //!
 //! It is still a meaningful signal: pahoa binds its listener only *after* the save is restored, so
 //! an open port means the room is actually up rather than merely scheduled.
 //!
 //! What it deliberately does not do is invent numbers. A connect that succeeds yields a
-//! [`RoomStatus`] that is entirely `None` — "it is up, and I cannot tell you anything else" — rather
+//! [`RoomStatus`] that is entirely `None` ("it is up, and I cannot tell you anything else") rather
 //! than zeros, which would render as a room with no players and no activity. A caller reads
 //! [`ProbeCapabilities`] and hides those columns instead.
 
@@ -150,7 +150,7 @@ mod tests {
         }
     }
 
-    /// An open port is "up, and I cannot tell you more" — **not** a room with zero players. Zeros
+    /// An open port is "up, and I cannot tell you more", **not** a room with zero players. Zeros
     /// here would render as a real reading of an idle room, which is the one thing a probe that
     /// knows nothing must not claim.
     #[tokio::test]

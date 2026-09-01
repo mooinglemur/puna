@@ -9,7 +9,7 @@
 //! ## The room's filter and a slot's are INDEPENDENT
 //!
 //! pahoa's rule: a slot's ruleset **replaces** the room's rather than adding to it. Puna keeps that
-//! rather than hiding it behind a maintained union — two authorities, one per scope — and its only
+//! rather than hiding it behind a maintained union (two authorities, one per scope) and its only
 //! job across the boundary is to *say what the effective set would be*. That is
 //! [`Effective::of`], and it is the whole of Puna's cleverness here.
 //!
@@ -26,7 +26,7 @@
 //! Worth stating loudly rather than assuming, because the two readings are equally natural and
 //! nothing on screen distinguishes them: a label built on the wrong one produces filters that do
 //! the opposite of what was asked, at the setting an operator is least likely to re-check. Taken
-//! from pahoa's `Filter::drops`, which is the authority -- `dropped` iff `roll() < p` -- rather
+//! from pahoa's `Filter::drops`, which is the authority (`dropped` iff `roll() < p`) rather
 //! than from prose either side. [`Rule::describe`] spells out the effect instead of printing the
 //! number and hoping.
 //!
@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// **`FromSlot` / `ToSlot`, never in/out.** Those are relative and nobody remembers to what: a
 /// server author reads "inbound" as arriving at the room, an organizer reads it as what a player is
-/// sending, and the two are opposites — so a rule read backwards is a filter that silently does
+/// sending, and the two are opposites, so a rule read backwards is a filter that silently does
 /// nothing. pahoa asked for these words to be carried rather than translated, and they are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -61,7 +61,7 @@ impl Direction {
 
     /// The API's word, glossed. The word stays; the ambiguity does not.
     ///
-    /// **"a slot", not "this slot"**, because one picker is rendered at three scopes — a room's
+    /// **"a slot", not "this slot"**, because one picker is rendered at three scopes: a room's
     /// filter, one slot's, and the bulk panel's. The gloss exists to say which end of the wire a
     /// direction names, and it does that without claiming a subject the page it is on may not have.
     /// [`Rule::describe`] is where the subject belongs, and it takes one.
@@ -124,7 +124,7 @@ impl Kind {
     /// The wire spelling is snake_case because that is what pahoa's filter API takes, and it is the
     /// wrong thing to show: an organizer reaching for a filter knows these as `PrintJSON` and
     /// `SetReply` from the network protocol document and from every client's log, and `print_json`
-    /// is a name only this API uses. Transcribed from `ServerPacket`/`ClientPacket` — note
+    /// is a name only this API uses. Transcribed from `ServerPacket`/`ClientPacket`, and note
     /// **`PrintJSON`**, which is the one that is not plain PascalCase.
     pub fn label(self) -> &'static str {
         match self {
@@ -141,11 +141,11 @@ impl Kind {
     /// **Whether this kind travels this way at all**, transcribed from pahoa's `Kind::travels`.
     ///
     /// Most of these are one-way: a `Set` is something a slot sends and a `PrintJSON` is something
-    /// it receives, so only a `Bounce` — the relay, which exists in both directions — can be either.
+    /// it receives, so only a `Bounce` (the relay, which exists in both directions) can be either.
     ///
     /// pahoa refuses the impossible pairing rather than storing a rule that never fires, and its
     /// reason is the one that matters here too: **a rule that cannot match looks exactly like a
-    /// filter that is not working.** Which is precisely what happened — a `from_slot` `PrintJSON`
+    /// filter that is not working.** Which is precisely what happened: a `from_slot` `PrintJSON`
     /// rule for chat was accepted by Puna, stored, pushed, and refused by the room with a `400`,
     /// while the page went on showing it as the room's filter.
     pub fn travels(self, direction: Direction) -> bool {
@@ -159,7 +159,7 @@ impl Kind {
     /// The same answer as [`Kind::travels`], space-separated, for a markup attribute.
     ///
     /// **Written out rather than built from `directions()`**, because a `&'static str` for a
-    /// computed value costs either a leak or an allocation on a path that runs per request — and
+    /// computed value costs either a leak or an allocation on a path that runs per request, and
     /// `vocabulary()` runs on every page view. `travels_text_agrees_with_travels` is what keeps the
     /// two in step, so this being a second copy is checked rather than trusted.
     pub fn travels_text(self) -> &'static str {
@@ -211,7 +211,7 @@ impl Kind {
 /// what gets shown either way.
 ///
 /// Each entry is `(wire name, the packet's own name, why)`. The middle one is what a page shows,
-/// for the reason [`Kind::label`] gives — these are read beside the kinds that ARE offered, and one
+/// for the reason [`Kind::label`] gives: these are read beside the kinds that ARE offered, and one
 /// list in two spellings reads as two different vocabularies.
 pub const REFUSED_KINDS: &[(&str, &str, &str)] = &[
     (
@@ -240,7 +240,7 @@ pub const REFUSED_KINDS: &[(&str, &str, &str)] = &[
 
 /// **Bounce tags an operator is likely to want**, as suggestions and nothing more.
 ///
-/// The set is genuinely open — a bounce carries whatever tags its sender chose, and pahoa's own
+/// The set is genuinely open: a bounce carries whatever tags its sender chose, and pahoa's own
 /// comment calls the list "a convention rather than a schema, with `TrapLink` already the second
 /// entry and not the last". So this is autocomplete, never validation: a tag typed by hand and not
 /// on this list is an ordinary rule, because the next link type will exist before this constant
@@ -253,7 +253,7 @@ pub const BOUNCE_TAGS: &[&str] = &["DeathLink", "TrapLink", "RingLink"];
 /// **`print_json` subtypes, which unlike tags ARE a closed set.**
 ///
 /// Transcribed from pahoa's `PrintJsonType` (`crates/pahoa-proto/src/server.rs`), whose `as_text`
-/// is documented as "the wire spelling, which is also what a filter rule's `subtype` names" — so
+/// is documented as "the wire spelling, which is also what a filter rule's `subtype` names", so
 /// this is the same list the room matches against, in the same spelling.
 ///
 /// Still offered as suggestions rather than a picker: pahoa matches case-insensitively and a value
@@ -279,14 +279,14 @@ pub const PRINT_JSON_SUBTYPES: &[&str] = &[
 
 /// One rule: what to drop, which way, and how often.
 ///
-/// **`PartialEq` but not `Eq`**, because `p` is a float. That is why [`Matcher`] exists separately —
+/// **`PartialEq` but not `Eq`**, because `p` is a float. That is why [`Matcher`] exists separately:
 /// identity here is the matcher, not the whole rule, and a set keyed on something un-`Eq` would be
 /// awkward for no gain.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Rule {
     pub direction: Direction,
     pub kind: Kind,
-    /// Narrows a `bounce`. Matched case-insensitively, and a bounce matches on **any** of its tags —
+    /// Narrows a `bounce`. Matched case-insensitively, and a bounce matches on **any** of its tags:
     /// a real one carries `["AP", "DeathLink"]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
@@ -302,7 +302,7 @@ pub struct Rule {
 /// Who a rule's sentence is about, which is decided by the scope reading it rather than by the rule.
 ///
 /// The same stored rule is described on two pages. On a slot's, `this slot` is exact. On the
-/// **room's**, it is wrong in the way that matters — the page is about a rule applying to everybody,
+/// **room's**, it is wrong in the way that matters: the page is about a rule applying to everybody,
 /// and a sentence saying "sent by this slot" over a room-wide rule reads as though one slot were
 /// singled out. The room's page names its own exceptions underneath, in the "does not reach these
 /// slots" warning, so `any slot` is not an overclaim there.
@@ -326,7 +326,7 @@ impl Subject {
 /// A rule's identity: everything but `p`.
 ///
 /// **Rules are a set keyed on this, not an ordered list**, which is pahoa's design and what makes
-/// its `PATCH` and `DELETE` answerable — a `DELETE` names a matcher and does not need to know what
+/// its `PATCH` and `DELETE` answerable: a `DELETE` names a matcher and does not need to know what
 /// `p` was set to. Puna keys on the same thing so the two agree about what "the same rule" means.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Matcher {
@@ -348,7 +348,7 @@ impl Rule {
         }
     }
 
-    /// How specific this rule is. **The most specific wins**, per pahoa — a rule naming a `tag` or
+    /// How specific this rule is. **The most specific wins**, per pahoa: a rule naming a `tag` or
     /// `subtype` beats one naming only a kind, which is what lets a blanket thin and an exemption
     /// coexist in either order.
     pub fn specificity(&self) -> u8 {
@@ -357,7 +357,7 @@ impl Rule {
 
     /// The effect, in words, rather than the number.
     ///
-    /// **`p` is the drop probability**, so `p: 0.75` leaves a quarter getting through — the exact
+    /// **`p` is the drop probability**, so `p: 0.75` leaves a quarter getting through: the exact
     /// reading pahoa's own example comment contradicts. Printing "p = 0.75" invites the reader to
     /// supply whichever meaning they arrived with; saying what survives does not.
     /// **The packet's own name**, not the wire spelling, for the reason [`Kind::label`] gives.
@@ -431,7 +431,7 @@ impl Rule {
     }
 }
 
-/// A slot's relationship to the room's filter — the three states, as a type.
+/// A slot's relationship to the room's filter: the three states, as a type.
 ///
 /// **The absent ruleset and the empty one are different**, and holding them in one `Option<Vec<_>>`
 /// is how they get confused: `[]` says *filtered by nothing even though the room filters*, which is
@@ -467,7 +467,7 @@ impl SlotFilter {
         }
     }
 
-    /// Whether this slot differs from the room — which is what a roster chip marks.
+    /// Whether this slot differs from the room, which is what a roster chip marks.
     ///
     /// **Not "is filtered".** With a room filter in force every slot is filtered, so a chip meaning
     /// that lands on every row and distinguishes nothing. What is worth a mark is a slot the room's
@@ -660,7 +660,7 @@ pub async fn slot_filter(
 /// Every slot that has a state of its own, in slot order.
 ///
 /// **This is also the room-filter warning.** Editing the room's filter does not reach any slot in
-/// this list, because each has replaced or opted out of it — so the same query answers "what does
+/// this list, because each has replaced or opted out of it, so the same query answers "what does
 /// the roster chip say" and "who will this change miss", and the two cannot disagree.
 ///
 /// **One query for the whole roster**, because the alternative is a read per row on a page that may
@@ -889,7 +889,7 @@ mod tests {
     }
 
     /// **The pairing that shipped broken.** A chat filter was written as `from_slot` `PrintJSON`,
-    /// which Puna accepted and stored and pahoa answered `400` to — so the room page showed a
+    /// which Puna accepted and stored and pahoa answered `400` to, so the room page showed a
     /// filter the room had never taken, and every chat line went on getting through.
     ///
     /// Transcribed from pahoa's `Kind::travels`, which is the authority. The table is written out

@@ -1,7 +1,7 @@
 //! Postgres-backed tests for who holds a reference to a generation.
 //!
-//! Deduplication is content-addressed and global — two people uploading one zip get one row and one
-//! copy of the bytes — while a *reference* is per person. Every property here sits on that seam,
+//! Deduplication is content-addressed and global (two people uploading one zip get one row and one
+//! copy of the bytes) while a *reference* is per person. Every property here sits on that seam,
 //! and two of them are not merely correctness:
 //!
 //!   * **A second uploader must not learn the seed was already here.** The signal the page renders
@@ -100,7 +100,7 @@ async fn uploading_your_own_zip_twice_is_one_reference_and_you_are_told() {
 /// **The disclosure property.** Bob uploads a zip Alice already uploaded: he gets a reference, and
 /// the answer he is shown is indistinguishable from a first upload of a seed nobody had.
 ///
-/// If this ever reads `false` for Bob, the page tells him another account holds the same seed —
+/// If this ever reads `false` for Bob, the page tells him another account holds the same seed,
 /// which is exactly what the reference table was introduced to stop.
 #[tokio::test]
 async fn a_second_uploader_gains_a_reference_and_learns_nothing() {
@@ -154,7 +154,7 @@ async fn a_second_uploader_gains_a_reference_and_learns_nothing() {
 /// The listing carries the READER's upload time, not the generation's.
 ///
 /// Asserted by making them provably different: the generation and Alice's reference are backdated,
-/// Bob's is not. Rendering `generation.created_at` here would date Bob's entry to Alice's day —
+/// Bob's is not. Rendering `generation.created_at` here would date Bob's entry to Alice's day:
 /// wrong on its face, and a disclosure that the seed predates him.
 #[tokio::test]
 async fn each_uploader_sees_their_own_upload_time() {
@@ -211,7 +211,7 @@ async fn each_uploader_sees_their_own_upload_time() {
 /// A repeat upload keeps the original `uploaded_at`.
 ///
 /// Re-uploading is the same act, not a newer one. Touching the timestamp would jump the entry to
-/// the top of the reader's listing for no reason they could see — and would make the ordering
+/// the top of the reader's listing for no reason they could see, and would make the ordering
 /// depend on how many times somebody happened to re-upload.
 #[tokio::test]
 async fn re_uploading_does_not_move_your_entry() {

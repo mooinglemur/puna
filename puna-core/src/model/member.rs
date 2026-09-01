@@ -14,7 +14,7 @@
 //! from `community-ap-tools`'s `review/db.rs`, which does the same thing for the same reason.
 //!
 //! A global admin session short-circuits to the top in the web tier, so an administrator never
-//! needs a membership row -- and never gets one implicitly either, which keeps "who is staff on
+//! needs a membership row, and never gets one implicitly either, which keeps "who is staff on
 //! this room" an honest answer rather than a list that quietly omits the people who can act.
 //!
 //! ## The last organizer cannot be removed
@@ -22,7 +22,7 @@
 //! Enforced by a `BEFORE DELETE OR UPDATE` trigger in the migration, not here, because it spans
 //! rows and because a room with no organizer has nobody who can repair it. [`remove`] and
 //! [`set_role`] translate the trigger's `restrict_violation` into [`MemberError::LastOrganizer`]
-//! rather than surfacing a raw database error -- the constraint is a rule users hit, not a fault.
+//! rather than surfacing a raw database error: the constraint is a rule users hit, not a fault.
 
 use diesel::sql_types::{BigInt, Integer, Nullable, Text, Timestamptz, Uuid as SqlUuid};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
@@ -34,13 +34,13 @@ use crate::ids::RoomId;
 /// `Ord`, deliberately: `Helper < Organizer`, and every check is `>=`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RoomRole {
-    /// **Runs the room.** The whole console — hints, chat, countdowns, releases, collects, kicks,
-    /// item sends — plus the roster of *players*: releasing a slot, handing out a fresh claim
+    /// **Runs the room.** The whole console (hints, chat, countdowns, releases, collects, kicks,
+    /// item sends) plus the roster of *players*: releasing a slot, handing out a fresh claim
     /// link, rotating one slot's password.
     Helper,
     /// Everything a helper may do, plus the three things a helper may not: whether the room runs
     /// at all (start, stop, close), how it is configured (the password mode, which is a restart),
-    /// and **who is staff** — adding a member, demoting an organizer, minting an invite.
+    /// and **who is staff**: adding a member, demoting an organizer, minting an invite.
     ///
     /// The split is *the room versus the game inside it*. A helper is trusted with the multiworld
     /// and cannot change who is trusted with it.
@@ -89,7 +89,7 @@ pub enum MemberError {
 ///
 /// Matched on the message text, which is not ideal and is deliberate: the trigger raises SQLSTATE
 /// 23001 (`restrict_violation`), and diesel 2 has no `DatabaseErrorKind` variant for it, so it
-/// arrives as `Unknown` -- indistinguishable from every other unmapped database error. The message
+/// arrives as `Unknown`, indistinguishable from every other unmapped database error. The message
 /// is the only distinguishing feature there is.
 ///
 /// What keeps that honest is the Postgres-backed test `removing_the_last_organizer_is_refused`,
@@ -186,7 +186,7 @@ pub async fn list(
 
 /// Add someone, or change the role they already hold.
 ///
-/// The caller must have ensured a `users` row exists -- membership is foreign-keyed, unlike the
+/// The caller must have ensured a `users` row exists: membership is foreign-keyed, unlike the
 /// creator allowlist, because a member is someone a room's pages will name.
 pub async fn set_role(
     conn: &mut AsyncPgConnection,
@@ -252,8 +252,8 @@ pub struct Invite {
 /// How much of an invite token identifies a row, for a page that lists several.
 ///
 /// Eight of thirty-two: enough that an organizer can tell two of their own links apart, and short
-/// enough that the column is a label rather than a wall. Nothing resolves a prefix — it names a row
-/// on a page and never travels — so this is a display length rather than a namespace, and it does
+/// enough that the column is a label rather than a wall. Nothing resolves a prefix (it names a row
+/// on a page and never travels) so this is a display length rather than a namespace, and it does
 /// not have to grow with the number of invites a room has open.
 pub const INVITE_PREFIX_CHARS: usize = 8;
 
@@ -261,12 +261,12 @@ impl Invite {
     /// The first [`INVITE_PREFIX_CHARS`] of the token.
     ///
     /// **Characters, not bytes**, and `take` rather than a slice: `url_token`'s alphabet is ASCII
-    /// today, so the two agree — but a slice is what turns "somebody widened the alphabet" into a
+    /// today, so the two agree, but a slice is what turns "somebody widened the alphabet" into a
     /// panic on a page rather than a shorter label, and the panic is in the render of an
     /// organizer's own page.
     ///
     /// The whole token still reaches the markup, in the link and in what the copy control carries.
-    /// **This shortens what is READ, never what is sent** — a prefix somebody pasted to a helper
+    /// **This shortens what is READ, never what is sent**: a prefix somebody pasted to a helper
     /// would be an invitation that does not work, which is worse than a long one.
     pub fn prefix(&self) -> String {
         self.token.chars().take(INVITE_PREFIX_CHARS).collect()
@@ -366,7 +366,7 @@ pub async fn revoke_invite(
 ///
 /// The consuming `UPDATE` is the whole of the concurrency control. Two people following the last
 /// use of a link race on one row, and the conditional `uses_remaining > 0` in the `WHERE` means
-/// exactly one of them matches -- no `SELECT` then `UPDATE`, and therefore no window between them.
+/// exactly one of them matches: no `SELECT` then `UPDATE`, and therefore no window between them.
 ///
 /// **A redemption never lowers an existing role.** Someone who is already an organizer following a
 /// helper link stays an organizer, because a link is an offer of access and not an instruction to
@@ -383,7 +383,7 @@ pub struct InviteOffer {
     pub role: RoomRole,
 }
 
-/// Look up an invite without spending it. `None` when it never existed, has expired, or is spent —
+/// Look up an invite without spending it. `None` when it never existed, has expired, or is spent:
 /// the three cases a landing page has nothing useful to say about and no reason to distinguish.
 pub async fn offered_by_invite_token(
     conn: &mut AsyncPgConnection,
@@ -486,7 +486,7 @@ pub async fn redeem_invite(
 mod tests {
     use super::*;
 
-    /// The whole ladder, written as `held >= required` -- the expression every guard uses.
+    /// The whole ladder, written as `held >= required`: the expression every guard uses.
     ///
     /// Exhaustive rather than sampled because it is four cases, and because the one that matters
     /// is the single `false`: a helper must not satisfy an organizer requirement.

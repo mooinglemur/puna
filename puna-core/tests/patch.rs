@@ -1,8 +1,8 @@
 //! Address embedding against a real patch, taken out of a real generation zip.
 //!
 //! The unit tests in `artifact::patch` build their own archives, which means they test the code
-//! against its author's idea of what a patch looks like. This one takes the genuine article --
-//! whatever compression, member layout and manifest keys the game's own tooling produced -- and
+//! against its author's idea of what a patch looks like. This one takes the genuine article
+//! (whatever compression, member layout and manifest keys the game's own tooling produced) and
 //! asserts the only thing that must be true of it: **the server field changes and nothing else
 //! does.** A patch is a file a game will open, so "nothing else" is the whole contract.
 //!

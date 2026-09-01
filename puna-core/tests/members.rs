@@ -121,7 +121,7 @@ async fn removing_the_last_organizer_is_refused() {
 /// Deleting the room takes its members with it, which is not an orphaning.
 ///
 /// Worth its own test because the trigger has to distinguish the two, and getting it wrong makes
-/// rooms undeletable -- a failure that would only show up at the end of M5.
+/// rooms undeletable: a failure that would only show up at the end of M5.
 #[tokio::test]
 async fn deleting_a_room_does_not_trip_the_organizer_trigger() {
     with_db(|pool| async move {

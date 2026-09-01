@@ -1,7 +1,7 @@
 //! Per-slot identity, credential and claim.
 //!
 //! `room_slots` is **copied** from `generation_slots` at room creation rather than joined to it,
-//! so a room is independent of later generation housekeeping -- and so two rooms on one generation
+//! so a room is independent of later generation housekeeping, and so two rooms on one generation
 //! can have different owners, different passwords and different claim state, which they must,
 //! because they are two independent multiworlds.
 //!
@@ -10,7 +10,7 @@
 //! [`may_access`] answers "may this person see this slot's patch and password", and it is the only
 //! place that question is answered. A slot is visible to its `owner_id`, to anyone on the room's
 //! roster, and to global admins. **Nobody else, including other claimed players in the same room**
-//! -- a multiworld is not a shared trust boundary, and one player holding another's password would
+//! (a multiworld is not a shared trust boundary, and one player holding another's password would
 //! let them connect as them.
 //!
 //! ## Claiming matters even without passwords
@@ -23,8 +23,8 @@
 //!
 //! **Decided 2026-08-24, and the day upstream grows teams this is the note to find.**
 //!
-//! Archipelago's data model is team-aware throughout — `(team, slot)` keys everything the server
-//! owns, and `Connected` and `NetworkPlayer` both carry a team — but **nothing can generate a second
+//! Archipelago's data model is team-aware throughout: `(team, slot)` keys everything the server
+//! owns, and `Connected` and `NetworkPlayer` both carry a team. But **nothing can generate a second
 //! one**. Generation writes `{name: (0, player)}` unconditionally (`Main.py:337`), the server seeds
 //! `self.clients = {0: {}}` and never grows it (`MultiServer.py:521`), and pahoa now **refuses at
 //! load** a seed that names any other team rather than half-serving it. So team is provably 0 for
@@ -33,15 +33,15 @@
 //! pahoa asked Puna to key on the pair anyway, on the grounds that a caller assuming slot numbers
 //! are unique is what would have to be found and fixed everywhere later, and that carrying a
 //! constant costs nothing. **That is true on their side and not on ours**, which is why this is a
-//! note rather than a column: a label on a metric is free, while here it is four primary keys —
-//! `room_slots`, `generation_slots`, `room_slot_filters`, `generation_slot_locations` — plus every
+//! note rather than a column: a label on a metric is free, while here it is four primary keys
+//! (`room_slots`, `generation_slots`, `room_slot_filters`, `generation_slot_locations`) plus every
 //! query, route parameter and template that names a slot.
 //!
 //! **What to do if it ever changes.** The trigger is upstream Archipelago allowing generation to
 //! produce a second team; pahoa refusing such a seed is what makes that visible rather than
 //! silent, and `pahoa_*{team!="0"}` appearing in a scrape is the cheapest early warning. Then:
 //! every table above takes a team column, `SlotKey` becomes a pair, and the surfaces that render a
-//! slot number — the roster, the console, the filter editors, the tracker's slot views — have to
+//! slot number (the roster, the console, the filter editors, the tracker's slot views) have to
 //! say which team they mean. Until then the assumption is **stated here rather than implied
 //! everywhere**, which is the whole point of writing it down.
 //!
@@ -82,25 +82,25 @@ pub struct Slot {
     pub claimed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub tracker_id: TrackerId,
     /// Set when staff barred this slot from connecting, which is expressed by **omitting it from
-    /// `PAHOA_SLOT_PASSWORDS`** — a map pahoa fails closed on, so a missing slot is refused.
+    /// `PAHOA_SLOT_PASSWORDS`**: a map pahoa fails closed on, so a missing slot is refused.
     ///
     /// Independent of [`password`](Self::password), which is deliberately left in place: unlocking
     /// then restores the credential the holder already has rather than minting one somebody has to
     /// deliver. So a locked slot normally *has* a password and still cannot connect.
     pub locked_at: Option<chrono::DateTime<chrono::Utc>>,
     pub locked_by: Option<i64>,
-    /// How far along the slot's player says they are. **Self-reported and possibly stale** — the
+    /// How far along the slot's player says they are. **Self-reported and possibly stale**: the
     /// server knows how many locations are checked and cannot know whether somebody is stuck, which
     /// is the whole question this answers. Nothing derives from it.
     pub progression: crate::model::annotation::ProgressionStatus,
     /// A short line of context from the slot's owner, or from staff. **Untrusted text out of a form
-    /// and rendered on a polled page** — `textContent`, never `innerHTML`.
+    /// and rendered on a polled page**: `textContent`, never `innerHTML`.
     ///
     /// `None`, never `Some("")`: the column refuses an empty string, so clearing the box is a
     /// deletion rather than a second way to say nothing.
     pub note: Option<String>,
     pub annotated_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// Who last set either of the two above — the owner, or a staff member correcting it.
+    /// Who last set either of the two above: the owner, or a staff member correcting it.
     pub annotated_by: Option<i64>,
 }
 
@@ -215,7 +215,7 @@ pub async fn list(
 /// slot goes for the benefit of one table.
 ///
 /// Placeholder names are returned as they are stored. [`crate::model::user::is_placeholder`] is
-/// what tells them apart, and the caller decides what to render -- which is not this module's
+/// what tells them apart, and the caller decides what to render, which is not this module's
 /// business and is different in different places.
 pub async fn owner_names(
     conn: &mut AsyncPgConnection,
@@ -276,7 +276,7 @@ pub async fn owned_by(
 ///
 /// The **participant** half of the room page's two-tier rule: staff, or somebody playing here. It
 /// answers the same question the room page already derives from a full `list`, and exists because
-/// the lifecycle panel needs it on a path where loading every slot would be absurd — a 2000-slot
+/// the lifecycle panel needs it on a path where loading every slot would be absurd: a 2000-slot
 /// room's roster, fetched to decide whether to render one password.
 ///
 /// One indexed lookup, on `room_slots_owner_idx`.
@@ -314,11 +314,11 @@ pub async fn owns_a_slot(
 ///
 /// **`PatchPolicy::Open` is the reference implementation's behavior**: archipelago.gg lists every
 /// slot's patch on the room page and serves it to anyone holding the room's URL. Puna's own default
-/// is narrower, and the narrowing is real friction — a player has to sign in and claim before they
+/// is narrower, and the narrowing is real friction: a player has to sign in and claim before they
 /// can download the file they came for.
 ///
 /// The two policies are one decision because they are the same argument in both directions. A
-/// public patch must not carry a credential, and a patch that carries one must not be public — so
+/// public patch must not carry a credential, and a patch that carries one must not be public, so
 /// `Claimed` buys back the friction it costs by embedding the address *and* the password, and
 /// `Open` trades that away for the reference's convenience.
 ///
@@ -361,13 +361,13 @@ pub fn may_access(
 /// Claim a slot from its single-use link.
 ///
 /// One conditional `UPDATE`, so two people following the same link race on one row and exactly one
-/// matches -- the same shape as invite redemption, and for the same reason. Nulling the token in
+/// matches, the same shape as invite redemption, and for the same reason. Nulling the token in
 /// the `SET` is what makes it single-use: a second attempt finds no row with that token.
 /// What a claim link is offering, without spending it.
 ///
 /// **The read and the claim are separate operations, and that is not a convenience.** A claim
-/// token is single-use and [`claim`] consumes it, so anything that wants to *describe* a link —
-/// a landing page, and the chat client that unfurls it before a person has even clicked — must be
+/// token is single-use and [`claim`] consumes it, so anything that wants to *describe* a link
+/// (a landing page, and the chat client that unfurls it before a person has even clicked) must be
 /// able to ask without redeeming. A page that redeemed on `GET` would be spent by the first
 /// prefetch, and the recipient would arrive at a link that had already worked for somebody else.
 #[derive(Debug, Clone)]
@@ -487,7 +487,7 @@ pub async fn rotate_password(
 /// afterwards. The holder's password never changes and nobody has to be told anything.
 ///
 /// Locking an already-locked slot keeps the **original** timestamp and actor rather than rewriting
-/// history to whoever pressed last — the same rule `room::pin` follows, and for the same reason:
+/// history to whoever pressed last, the same rule `room::pin` follows, and for the same reason:
 /// the useful question is who first decided this and when.
 ///
 /// Returns whether the row moved, so a caller can tell a real change from a repeat and skip the
@@ -526,7 +526,7 @@ pub async fn set_locked(
 /// The map that becomes `PAHOA_SLOT_PASSWORDS`.
 ///
 /// **Complete or empty, never partial.** Under pahoa's fail-closed rule a slot missing from a
-/// non-empty map is refused, so a partial map is a room some players cannot join -- and the caller
+/// non-empty map is refused, so a partial map is a room some players cannot join, and the caller
 /// must render nothing at all rather than `{}`, which is a room *nobody* can join. Returning every
 /// row rather than only the non-null ones is what makes the completeness check possible: the caller
 /// can compare against `list` and refuse to build a Secret from a map with a hole in it.
@@ -557,7 +557,7 @@ pub async fn passwords(
 
 /// Claim slots on behalf of the accounts a lobby room named.
 ///
-/// **Guarded on `owner_id IS NULL`, per row, inside the statement** — not filtered by the caller.
+/// **Guarded on `owner_id IS NULL`, per row, inside the statement**, not filtered by the caller.
 /// The caller's plan is computed from a roster it read a moment ago and from a lobby answer that is
 /// older still, so a player who used their claim link in between must win. Deciding it here means
 /// the check and the write are one operation rather than two with a race between them.
@@ -565,7 +565,7 @@ pub async fn passwords(
 /// The claim token is cleared as [`claim`] clears it: the link has done its job, and leaving it live
 /// would let whoever it was sent to take a slot that now belongs to somebody.
 ///
-/// Returns how many slots were actually claimed, which is **not** necessarily `assignments.len()` —
+/// Returns how many slots were actually claimed, which is **not** necessarily `assignments.len()`:
 /// the difference is exactly the slots somebody else took first, and the caller reports it.
 pub async fn claim_for_owners(
     conn: &mut AsyncPgConnection,

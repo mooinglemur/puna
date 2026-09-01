@@ -5,7 +5,7 @@
 //! reading the column back into the process. Both of those are properties of a statement, so a
 //! database is the only place they can be asserted.
 //!
-//! Gated on `DATABASE_URL` / `PUNA_REQUIRE_DB_TESTS` only — nothing here needs a real seed.
+//! Gated on `DATABASE_URL` / `PUNA_REQUIRE_DB_TESTS` only: nothing here needs a real seed.
 
 mod common;
 
@@ -175,7 +175,7 @@ async fn an_oversized_document_is_refused_and_leaves_what_is_there() {
 ///
 /// Worth pinning because it is the one thing the caller gave up by not parsing: a room answering
 /// with something that is not JSON now fails here rather than at the fetch. The caller warns and
-/// serves the body anyway, which is right — the room is what said it — so the only symptom is a
+/// serves the body anyway, which is right (the room is what said it) so the only symptom is a
 /// tracker that never caches, and this is what says why.
 #[tokio::test]
 async fn a_body_that_is_not_json_fails_rather_than_being_cached() {
@@ -202,7 +202,7 @@ async fn a_body_that_is_not_json_fails_rather_than_being_cached() {
 /// the two are written under different rules:
 ///
 /// * the live document outgrows `PUNA_TRACKER_CACHE_MAX` partway through a run, so `store` refuses
-///   it and leaves the last copy that fit — pinned, forever;
+///   it and leaves the last copy that fit, pinned, forever;
 /// * the static document is small and never grows, so it stores successfully every five minutes and
 ///   stamped that shared timestamp `now()` every time.
 ///
@@ -210,7 +210,7 @@ async fn a_body_that_is_not_json_fails_rather_than_being_cached() {
 /// `stale: false` and an `as_of` of *now*. Measured on the dev cluster: a room whose own
 /// `pahoa_checks_total` was flat at 169,938 for half an hour served alternating documents reading
 /// 169,938 and 233 checks, both claiming to be current. The pinned copy is whatever the live
-/// document looked like the last time it fit, which for a room that fills quickly is very early —
+/// document looked like the last time it fit, which for a room that fills quickly is very early,
 /// so the reported symptom was a tracker showing every slot at zero on a finished room.
 ///
 /// Nothing above this layer could catch it. The document was valid, the room was healthy, the tier

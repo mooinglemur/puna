@@ -13,7 +13,7 @@
 //!
 //! That distinction is the whole reason this is not one `init()`. Registering everything
 //! everywhere made `puna-web` and `puna-tracker` export `puna_orchestrator_leader`,
-//! `puna_ports_bound` and the rest as permanent zeros -- values they have no way to compute and
+//! `puna_ports_bound` and the rest as permanent zeros: values they have no way to compute and
 //! no business asserting. Nothing was visibly broken while the orchestrator was the only scraped
 //! tier, and adding scrapes to the other two turned it into seven series per family where one is
 //! meaningful.
@@ -21,7 +21,7 @@
 //! **The damage is to alerting, and it is the quiet kind.** `sum(puna_orchestrator_leader) != 1`
 //! survives extra zeros, so it looked fine. `puna_ports_bound / puna_ports_capacity > 0.8` only
 //! survived because the web tier reported `0/0`, which is NaN, which fails the comparison and is
-//! dropped -- correct by accident, one plausible refactor away from `+Inf` and a page at 3am.
+//! dropped: correct by accident, one plausible refactor away from `+Inf` and a page at 3am.
 //! Alert expressions should not have to know which tiers happen to export a zero.
 //!
 //! ## Adding a family
@@ -33,7 +33,7 @@
 //!
 //! The residual risk this does not close: a tier that *touches* another component's family
 //! registers it on the spot, since that is what `LazyLock` does. The compile-time split is what
-//! actually prevents it -- `puna-core` has no `kube` and no reconcile loop, so there is no code in
+//! actually prevents it: `puna-core` has no `kube` and no reconcile loop, so there is no code in
 //! the web binary that could reach `K8S_REQUESTS` for a reason.
 
 pub mod proxy;
@@ -54,8 +54,8 @@ pub static REGISTRY: LazyLock<Registry> = LazyLock::new(Registry::new);
 ///
 /// `Web` and `Tracker` are the same binary under different `PUNA_ROLE` values, and today they
 /// register the same (empty) set beyond the shared families. They are still separate variants:
-/// they will diverge -- ingest and upload counters belong to one, proxy and cache counters to the
-/// other -- and modelling that now makes the divergence a table edit rather than a refactor.
+/// they will diverge (ingest and upload counters belong to one, proxy and cache counters to the
+/// other) and modelling that now makes the divergence a table edit rather than a refactor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Component {
     /// `puna-web` under `PUNA_ROLE=web`.
@@ -156,22 +156,22 @@ pub static PORT_RECLAIMS: LazyLock<IntCounter> = LazyLock::new(|| {
 ///
 /// **The rate is the whole signal, and it is deliberately left to an alert to interpret.** One
 /// external Service holding one port produces a single increment, because the room quarantines that
-/// pair and succeeds on the next one. A range misconfiguration — two environments drawing from one
-/// span — produces a sustained rate instead, as rooms walk pair after pair. Puna does not try to
+/// pair and succeeds on the next one. A range misconfiguration (two environments drawing from one
+/// span) produces a sustained rate instead, as rooms walk pair after pair. Puna does not try to
 /// tell those apart: it keeps looking for a working port either way and states what happened, and
 /// where the line between "bad luck" and "somebody mis-set `PUNA_PORT_RANGE`" falls is a threshold
 /// an operator can tune without a release.
 ///
 /// **Port collisions only.** A Service can be refused an address for reasons that have nothing to do
-/// with the port — no pool holds the configured IP, the `lb-pool` label is missing, the sharing key
-/// disagrees — and those are properties of the Service template, identical for every room in the
+/// with the port (no pool holds the configured IP, the `lb-pool` label is missing, the sharing key
+/// disagrees) and those are properties of the Service template, identical for every room in the
 /// environment. They are counted as `puna_room_starts_total{result="address_unsatisfiable"}` and
 /// **do not appear here**, which is what keeps this family, and the quarantine gauge beside it,
 /// meaning what their names say.
 ///
 /// `conflict` separates the two cases worth acting on differently. `external` is somebody else's
 /// Service and is operations; `internal` means the port is held by a Service Puna itself manages,
-/// which is a Puna bug — a leaked object the sweep should have collected — and deserves its own
+/// which is a Puna bug (a leaked object the sweep should have collected) and deserves its own
 /// alert rather than being averaged into the same number.
 ///
 /// Read alongside [`PORTS_QUARANTINED`], which is what shows the *fleet* cost: a sustained refusal
@@ -206,7 +206,7 @@ pub static PORT_IP_MISMATCH: LazyLock<IntCounter> = LazyLock::new(|| {
 ///
 /// Both from the slow lane rather than every tick: they are aggregates over a table that changes
 /// when somebody uploads, which is not thirty-second news. The bytes are the number to watch
-/// alongside the PVC alert — generations are content-addressed and shared, so this grows with
+/// alongside the PVC alert: generations are content-addressed and shared, so this grows with
 /// distinct seeds rather than with rooms.
 pub static GENERATIONS: LazyLock<IntGauge> =
     LazyLock::new(|| register!(IntGauge::new("puna_generations", "Indexed generations").unwrap()));
@@ -278,7 +278,7 @@ pub static RECONCILE_SECONDS: LazyLock<Histogram> = LazyLock::new(|| {
 ///
 /// **A counter rather than a "current mode" gauge**, and the reason is sampling: convergence runs in
 /// bursts a few seconds long, so a gauge read every scrape interval would miss almost all of them
-/// and report whatever happened to be true at the instant of the scrape. A counter loses nothing —
+/// and report whatever happened to be true at the instant of the scrape. A counter loses nothing:
 /// `rate(...{kind="converge"}[5m])` is exactly "how much convergence are we doing", and
 /// `rate(...{kind="reconcile"}[5m])` should sit at `1/PUNA_RECONCILE_INTERVAL` whenever the loop is
 /// healthy, which makes the starvation failure visible as a number rather than as an absence.
@@ -295,7 +295,7 @@ pub static RECONCILE_TICKS: LazyLock<IntCounterVec> = LazyLock::new(|| {
 /// Rooms the loop is waiting on, which is what decides the cadence.
 ///
 /// The instant-state gauge worth having, in place of a tick-mode one: it is meaningful at any
-/// sample point, and it shows a case `puna_rooms{state}` structurally cannot — **a room sitting in
+/// sample point, and it shows a case `puna_rooms{state}` structurally cannot: **a room sitting in
 /// `idle` while its previous Deployment drains**. That room's state says `idle`, which reads as
 /// resting, when it is in the middle of a restart.
 pub static ROOMS_CONVERGING: LazyLock<IntGauge> = LazyLock::new(|| {
@@ -367,7 +367,7 @@ macro_rules! room_gauge {
     };
 }
 
-/// **Sockets, not players.** One player commonly holds three — game client, text client, tracker —
+/// **Sockets, not players.** One player commonly holds three (game client, text client, tracker)
 /// so a dashboard that labels this "players online" is wrong, and an idle reaper built on it would
 /// never reap a room full of abandoned tracker tabs.
 ///
@@ -390,12 +390,12 @@ pub static ROOM_OUTBOUND_QUEUED_BYTES: LazyLock<IntGaugeVec> = room_gauge!(
     "Bytes queued for delivery to a room's clients"
 );
 
-/// What turns §7's `slots * 3 * 96KiB` memory request from a heuristic into a measurement — but
+/// What turns §7's `slots * 3 * 96KiB` memory request from a heuristic into a measurement, but
 /// only after a week of it, not from one reading.
 pub static ROOM_RESIDENT_BYTES: LazyLock<IntGaugeVec> =
     room_gauge!("puna_room_resident_bytes", "A room's resident set size");
 
-/// Seconds since any client last sent anything — chat, `Sync`, `Get`, a status update. `null` until
+/// Seconds since any client last sent anything: chat, `Sync`, `Get`, a status update. `null` until
 /// one has, which is absent here rather than zero.
 ///
 /// **Not the reaper's number**, despite what this comment said until 2026-08-21. It answers whether
@@ -410,7 +410,7 @@ pub static ROOM_IDLE_SECONDS: LazyLock<IntGaugeVec> = room_gauge!(
 /// Clients dropped for falling too far behind.
 ///
 /// **A counter fed by deltas, and that shape is forced.** pahoa reports a cumulative total, but
-/// `prometheus`'s `IntCounter` exposes only `inc`/`inc_by` — there is no `set`. Storing the total in
+/// `prometheus`'s `IntCounter` exposes only `inc`/`inc_by`, and there is no `set`. Storing the total in
 /// a gauge would fail M9's naming invariant both ways round: `..._total` on a gauge, or a counter's
 /// semantics behind a gauge's name. So [`publish_room`] keeps the last polled value and advances by
 /// the difference.
@@ -454,7 +454,7 @@ pub static ROOM_FILTERED_FROM_SLOTS: LazyLock<IntCounterVec> = LazyLock::new(|| 
 
 /// Messages dropped because a filter matched what a slot would **receive**.
 ///
-/// **Counted per RECIPIENT, not per broadcast** — one chat line filtered for forty slots is forty,
+/// **Counted per RECIPIENT, not per broadcast**: one chat line filtered for forty slots is forty,
 /// which pahoa states explicitly and which makes this the number worth watching. Their words:
 /// *a filter quietly discarding far more than an operator intended is the failure mode this feature
 /// introduces.* An alert belongs on its **rate**, not its value: the total only ever climbs, and a
@@ -473,7 +473,7 @@ pub static ROOM_FILTERED_TO_SLOTS: LazyLock<IntCounterVec> = LazyLock::new(|| {
     )
 });
 
-/// When the room's current Deployment was created — **how long this SPEC has been in force**.
+/// When the room's current Deployment was created: **how long this SPEC has been in force**.
 ///
 /// A unix instant, not an age, which is deliberate: a gauge counting upward has to be re-set on
 /// every scrape to stay true, where an instant is written once and `time() - x` is the age at
@@ -488,11 +488,11 @@ pub static ROOM_DEPLOYMENT_CREATED: LazyLock<IntGaugeVec> = room_gauge!(
     "Unix time the room's current Deployment was created: how long its spec has been in force"
 );
 
-/// When the room's **process** started — how long *this pahoa* has been serving.
+/// When the room's **process** started: how long *this pahoa* has been serving.
 ///
 /// **The pair is the point, and they are different questions.** The deployment age is how long the
 /// current spec has been in force; this is how long the thing answering right now has been up. They
-/// diverge when Kubernetes moved the pod — eviction, drain, preemption — or when the container
+/// diverge when Kubernetes moved the pod (eviction, drain, preemption) or when the container
 /// restarted in place, and either way **the room reloaded its save and every client reconnected**,
 /// which an organizer notices and Puna could not otherwise explain.
 ///
@@ -508,12 +508,12 @@ pub static ROOM_PROCESS_STARTED: LazyLock<IntGaugeVec> = room_gauge!(
 
 /// A room's name, as an **info metric**: always `1`, carrying the label.
 ///
-/// Every other series here is keyed by the room's uuid, which is correct — it is the identity, it
+/// Every other series here is keyed by the room's uuid, which is correct: it is the identity, it
 /// never changes, and a rename must not fork a counter into a new time series. It is also unusable
 /// on a dashboard, where the reader wants "Thursday Sync" and not `9f3c…`.
 ///
-/// This is the standard way out: one series per room joined at query time —
-/// `… * on(room) group_left(name) puna_room_info` — so the name reaches a legend or a variable
+/// This is the standard way out: one series per room joined at query time,
+/// `… * on(room) group_left(name) puna_room_info`, so the name reaches a legend or a variable
 /// without being carried on the ~28,000 series the proxy publishes, where a rename would fork every
 /// one of them.
 ///
@@ -535,7 +535,7 @@ pub static ROOM_INFO: LazyLock<IntGaugeVec> = LazyLock::new(|| {
 /// The name last published for each room, so a rename can retract the old series.
 ///
 /// **`remove_label_values` needs the FULL label set**, so removing `(room, name)` requires knowing
-/// the name that was published — which the caller no longer has once the room has been renamed.
+/// the name that was published, which the caller no longer has once the room has been renamed.
 /// Without this, renaming a room leaves its old name asserting `1` forever and the dropdown grows
 /// an entry for a room that no longer goes by it. Same trap `retain_rooms` exists for, one label
 /// deeper.
@@ -725,7 +725,7 @@ pub fn publish_room(room: &str, status: &crate::probe::RoomStatus) {
 /// removed, so without this every room that has ever run would leave behind a series asserting its
 /// last-known client count. A stale gauge reads as a live room, which is worse than no metric.
 ///
-/// Level-triggered on purpose — it reconciles the published set against the live set rather than
+/// Level-triggered on purpose: it reconciles the published set against the live set rather than
 /// hooking each transition. There are several ways a room stops being live (stopped, deleted,
 /// failed, vanished) and a hook per path is a hook somebody forgets.
 pub fn retain_rooms(live: &std::collections::HashSet<String>) {
@@ -799,7 +799,7 @@ pub static PROBE_CAPABILITY: LazyLock<IntGaugeVec> = LazyLock::new(|| {
 ///
 /// Duplicated from SQL on purpose so the gauge can publish a zero for each state at startup.
 /// Kept honest by `rooms_states_match_the_database` in the Postgres-backed suite, which reads
-/// `pg_enum` and compares -- adding a state to the migration without adding it here fails there.
+/// `pg_enum` and compares: adding a state to the migration without adding it here fails there.
 pub const ROOM_STATES: &[&str] = &[
     "provisioning",
     "idle",
@@ -824,14 +824,14 @@ pub const START_RESULTS: &[&str] = &[
 
 /// Who holds the port a refusal collided with, for [`PORT_REFUSALS`].
 ///
-/// **Seeded to zero so `internal` renders as a real zero.** That series should never move — it means
-/// Puna is holding a port against itself — and an alert on it is only trustworthy if the absence of
+/// **Seeded to zero so `internal` renders as a real zero.** That series should never move (it means
+/// Puna is holding a port against itself) and an alert on it is only trustworthy if the absence of
 /// the series and a genuine zero are distinguishable.
 pub const PORT_CONFLICTS: &[&str] = &["external", "internal"];
 
 /// The two cadences the reconcile loop runs at, for [`RECONCILE_TICKS`].
 ///
-/// **Seeded to zero, so "no convergence is happening" is a reading rather than an absence** — which
+/// **Seeded to zero, so "no convergence is happening" is a reading rather than an absence**, which
 /// matters more here than for most families, because a converge series that is simply missing looks
 /// identical to a loop that has stopped converging when it should be.
 ///
@@ -846,7 +846,7 @@ pub const TICK_KINDS: &[&str] = &["reconcile", "converge"];
 /// **One writer, one vocabulary.** This used to be a `const` list declared here, before any probe
 /// existed, guessing at `activity` and `client_count`; M11 then built the real capabilities under
 /// different names. Both wrote to the same gauge, so it carried the union and asserted `0` for two
-/// capabilities that no longer name anything -- next to the very series that disproved them.
+/// capabilities that no longer name anything, next to the very series that disproved them.
 ///
 /// Now the names come from [`crate::probe::ProbeCapabilities`] itself, and this is the only thing that writes
 /// them.
@@ -872,8 +872,8 @@ pub const WEB_FAMILIES: &[&str] = &[];
 
 /// Families only `puna-tracker` exports. Empty today.
 ///
-/// Upstream fetch counts and cache hit rates belong here -- the numbers that say whether the
-/// three cache layers are doing their job -- when there is something to attach them to.
+/// Upstream fetch counts and cache hit rates belong here (the numbers that say whether the
+/// three cache layers are doing their job) when there is something to attach them to.
 pub const TRACKER_FAMILIES: &[&str] = &[];
 
 /// Families only `puna-orchestrator` exports.
@@ -882,7 +882,7 @@ pub const TRACKER_FAMILIES: &[&str] = &[];
 /// registry: these are all computed by the reconcile loop or by the sweep, and no other process
 /// has the inputs to compute any of them. `puna_commands_total`, `puna_command_seconds` and
 /// `puna_probe_capability` have no producer yet (M11 and M12) and are listed here because that is
-/// where their producer will be -- the dispatcher and the probe are orchestrator-side.
+/// where their producer will be: the dispatcher and the probe are orchestrator-side.
 pub const ORCHESTRATOR_FAMILIES: &[&str] = &[
     "puna_rooms",
     "puna_room_starts_total",
@@ -932,7 +932,7 @@ pub const ORCHESTRATOR_FAMILIES: &[&str] = &[
 /// An orthogonal axis to the per-component tables, and a real one: a labeled family renders no
 /// `# TYPE` line at all while it has no children, so "registered" and "visible in `/metrics`" are
 /// different sets. Every name here is a `*Vec` whose label space is combinatorial and mostly
-/// uninteresting -- pre-seeding them would trade one confusion for a wall of permanent zeros, so
+/// uninteresting: pre-seeding them would trade one confusion for a wall of permanent zeros, so
 /// [`init`] deliberately leaves them empty.
 ///
 /// `diesel_query_seconds` is the one that is not a choice: it is labeled by query, so it cannot be
@@ -940,7 +940,7 @@ pub const ORCHESTRATOR_FAMILIES: &[&str] = &[
 /// which for the web tiers is the readiness probe.
 ///
 /// The distinction is worth encoding because it decides what a dashboard sees on a cold process,
-/// and because moving a family across it is a decision rather than an accident -- the scope tests
+/// and because moving a family across it is a decision rather than an accident: the scope tests
 /// fail either way round.
 pub const DEFERRED_FAMILIES: &[&str] = &[
     "diesel_query_seconds",
@@ -993,7 +993,7 @@ pub fn seeded_families(component: Component) -> Vec<&'static str> {
 ///
 /// The pre-instantiation is the point. A labeled family emits NOTHING until some label
 /// combination is touched, so a freshly started process would export no `puna_integrity_faults`
-/// series at all -- and a panel reading "no data" is ambiguous in exactly the case where 0 is the
+/// series at all, and a panel reading "no data" is ambiguous in exactly the case where 0 is the
 /// reassuring answer. Unlabeled gauges and histograms appear as soon as they are registered, so
 /// only the `*Vec` families need this.
 ///
@@ -1201,7 +1201,7 @@ mod tests {
 
     use crate::probe::{ActivityStatus, NetStatus, RoomStatus};
 
-    /// The room series are PROCESS-GLOBAL, and `retain_rooms` is a whole-fleet reconcile -- so a
+    /// The room series are PROCESS-GLOBAL, and `retain_rooms` is a whole-fleet reconcile, so a
     /// test that ends by clearing the fleet deletes the series of any test running beside it.
     /// Cargo runs these on parallel threads, so they take turns.
     ///
@@ -1232,7 +1232,7 @@ mod tests {
     /// The published value for a room, or `None` if it has no series at all.
     ///
     /// Read from the COLLECTED family rather than `get_metric_with_label_values`, which creates the
-    /// child if it is missing and so can never answer "is there a series" -- the exact question
+    /// child if it is missing and so can never answer "is there a series": the exact question
     /// both traps turn on.
     fn gauge(room: &str) -> Option<i64> {
         gauge_of(&ROOM_CLIENTS, room)
@@ -1253,7 +1253,7 @@ mod tests {
 
     /// **Trap one: a stale series reads as a live room.** A `GaugeVec` keyed by room keeps its
     /// children forever, so a room that has stopped would otherwise keep asserting its last client
-    /// count -- indefinitely, and indistinguishably from a room that really has three people in it.
+    /// count, indefinitely, and indistinguishably from a room that really has three people in it.
     #[test]
     fn a_room_that_stops_being_live_loses_its_series() {
         let _guard = exclusive();
@@ -1270,7 +1270,7 @@ mod tests {
         assert_eq!(gauge(room), None, "a stale gauge reads as a live room");
     }
 
-    /// A probe that cannot tell removes the series rather than publishing a zero -- the same
+    /// A probe that cannot tell removes the series rather than publishing a zero: the same
     /// null-is-not-zero rule the database columns follow. On a dashboard a zero is worse than a
     /// gap, because a gap looks like missing data and a zero looks like a reading.
     #[test]
@@ -1288,7 +1288,7 @@ mod tests {
     }
 
     /// **Trap two: a cumulative counter fed into `inc_by`.** pahoa reports a total and
-    /// `IntCounter` has no `set`, so this advances by the difference -- and a room restart, where
+    /// `IntCounter` has no `set`, so this advances by the difference, and a room restart, where
     /// the total goes BACKWARDS, must add the new total rather than underflow or stall.
     #[test]
     fn a_cumulative_counter_advances_by_its_delta_and_survives_a_room_restart() {
@@ -1327,7 +1327,7 @@ mod tests {
     /// They used to share one `i64` per room, because there was only one of them. Widening that to
     /// a struct is the kind of change that compiles either way: with a shared baseline, a room
     /// filtering steadily while dropping nobody for lag would credit the lag counter with the
-    /// filter's total — a counter climbing for a reason that has nothing to do with its name, on
+    /// filter's total: a counter climbing for a reason that has nothing to do with its name, on
     /// the one metric an operator reaches for when clients are being dropped.
     #[test]
     fn each_re_exported_counter_advances_on_its_own_baseline() {
@@ -1428,7 +1428,7 @@ mod tests {
 
     /// **The regression.** Two writers had two vocabularies, so the gauge carried their union and
     /// asserted `puna_probe_capability{capability="client_count"} 0` beside a populated
-    /// `puna_room_clients_connected` — a flat contradiction, live, for as long as both existed.
+    /// `puna_room_clients_connected`: a flat contradiction, live, for as long as both existed.
     ///
     /// Asserted on the RENDERED label set rather than on the constant, because comparing the
     /// constant to itself is what the old code would also have passed.
@@ -1485,7 +1485,7 @@ mod tests {
     ///
     /// A gauge counting upward would have to be re-set on every scrape to stay true; an instant is
     /// written once and `time() - x` is the age whenever somebody asks. The pair is what makes a pod
-    /// that moved distinguishable from a room that has simply been up a while — so the test asserts
+    /// that moved distinguishable from a room that has simply been up a while, so the test asserts
     /// they are independent, since a refactor that fed both from one reading would produce two
     /// series that agree by construction and answer only one question.
     #[test]
@@ -1525,7 +1525,7 @@ mod tests {
     /// **A rename must retract the old series**, and this is the whole reason `ROOM_NAMES` exists.
     ///
     /// `remove_label_values` needs the full label set, so retracting `(room, name)` needs the name
-    /// that was published — which the caller no longer has once the room has been renamed. Without
+    /// that was published, which the caller no longer has once the room has been renamed. Without
     /// the map, a renamed room asserts `1` under both names forever: the join then multiplies every
     /// series it touches, and a dropdown built from this grows an entry for a name nothing goes by.
     #[test]

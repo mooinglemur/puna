@@ -11,7 +11,7 @@ use diesel_async::{AsyncPgConnection, RunQueryDsl};
 /// What an account may do.
 ///
 /// **`Ord`, ascending by severity**, so a check reads `status >= Restricted` rather than listing
-/// variants — the same shape as [`crate::model::member::RoomRole`], and for the same reason: a rung
+/// variants, the same shape as [`crate::model::member::RoomRole`], and for the same reason: a rung
 /// added between two of these must not silently invert a comparison.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum UserStatus {
@@ -65,7 +65,7 @@ impl UserStatus {
 /// Record a user, or refresh their display name.
 ///
 /// Called on every login, because Discord usernames change and a stale one in an audit log is
-/// worse than useless -- it names the wrong person.
+/// worse than useless: it names the wrong person.
 pub async fn upsert(
     conn: &mut AsyncPgConnection,
     discord_id: i64,
@@ -90,7 +90,7 @@ pub async fn upsert(
 /// The stand-in username for somebody who has a row but has never logged in.
 ///
 /// `users.username` is `NOT NULL` and `room_slots.owner_id` references it, so a slot can only be
-/// owned by a row that exists -- which means a person the lobby push assigns a slot to, before they
+/// owned by a row that exists, which means a person the lobby push assigns a slot to, before they
 /// have ever signed in here, needs *something* in the column. This is that something.
 ///
 /// It sits beside [`ensure_exists`], which writes it, and [`is_placeholder`], which reads it back.
@@ -115,14 +115,14 @@ pub fn is_placeholder(username: &str) -> bool {
 ///
 /// **Built from the snowflake and never from a username**, which is the whole reason it is worth
 /// offering: typing a handle into Discord does not reliably reach anybody, and it reaches nobody at
-/// all for somebody who has never signed in here — the lobby-push case, where the id is all Puna
+/// all for somebody who has never signed in here: the lobby-push case, where the id is all Puna
 /// has. So this is defined for every owner, including one whose stored name is
 /// [`placeholder_username`].
 ///
 /// Two callers, which is why it is here rather than a `format!` at each: the tracker's owner column
 /// and the room page's roster. One string, so they cannot spell a ping two ways.
 ///
-/// **Deliberately not confusable with [`placeholder_username`]**, which is `<id>` — this is `<@id>`,
+/// **Deliberately not confusable with [`placeholder_username`]**, which is `<id>`: this is `<@id>`,
 /// and the `@` is what makes Discord resolve it. They live beside each other so the difference is
 /// read once rather than inferred later.
 pub fn mention(discord_id: i64) -> String {
@@ -146,7 +146,7 @@ pub async fn ensure_exists(
 /// One row of `/admin/users`.
 ///
 /// `status_note` and `status_changed_by` come along because the table's job is answering *why* an
-/// account is in the state it is in — a list of names and a colored tag with no reason attached is
+/// account is in the state it is in: a list of names and a colored tag with no reason attached is
 /// a list somebody has to ask about in Discord.
 #[derive(Debug, Clone, diesel::QueryableByName)]
 pub struct AdminUser {
@@ -207,7 +207,7 @@ pub async fn list(conn: &mut AsyncPgConnection) -> Result<Vec<AdminUser>, diesel
 
 /// This account's standing, for the request guards.
 ///
-/// `None` means there is no row at all, which for a session-bearing request should not happen --
+/// `None` means there is no row at all, which for a session-bearing request should not happen:
 /// login upserts one. The caller decides what to make of it rather than being handed a default,
 /// because "no such user" and "an ordinary user" are different answers and only one of them is
 /// worth logging.

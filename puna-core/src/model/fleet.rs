@@ -2,8 +2,8 @@
 //!
 //! ## Why this is a read model rather than a view on `Room`
 //!
-//! Every column here is *observed* — written onto the row by the orchestrator from the reads its
-//! reconcile tick already makes — because **the web tier cannot see the cluster**. It holds no
+//! Every column here is *observed* (written onto the row by the orchestrator from the reads its
+//! reconcile tick already makes) because **the web tier cannot see the cluster**. It holds no
 //! ServiceAccount token, which is the point of the two-binary split, so an admin page that wanted
 //! to ask Kubernetes what a pod is running could not. Instead the orchestrator writes what it sees
 //! and this reads the row.
@@ -11,8 +11,8 @@
 //! ## Drift is defined once, here
 //!
 //! Two questions have to agree: *which rooms does the table flag* and *which rooms does "redeploy
-//! everything drifted" act on*. Written twice — once in a template condition and once in a `WHERE`
-//! clause — they would drift apart themselves, and the failure is silent in the worst direction: a
+//! everything drifted" act on*. Written twice (once in a template condition and once in a `WHERE`
+//! clause) they would drift apart themselves, and the failure is silent in the worst direction: a
 //! button that acts on a set the operator was never shown. So [`FleetRoom::drift`] is the single
 //! definition, the table renders it, and the bulk action filters on it in Rust rather than in SQL.
 
@@ -27,12 +27,12 @@ use crate::ids::RoomId;
 /// Why a room disagrees with the spec it would render to now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Drift {
-    /// Running an image other than the fleet's configured one — the ordinary case after a
+    /// Running an image other than the fleet's configured one: the ordinary case after a
     /// `PUNA_PAHOA_IMAGE` bump, which deliberately does not disturb rooms that are already up.
     Image,
     /// The rest of the spec would render differently: a `slot_auth` change, a log level, a slot
     /// added to a per-slot room. Computed on the sweep's hourly lane, so it can lag by up to an
-    /// hour — which is why the two are distinguished rather than collapsed into one flag.
+    /// hour, which is why the two are distinguished rather than collapsed into one flag.
     Spec,
 }
 
@@ -47,7 +47,7 @@ impl Drift {
     /// The whole phrase, rather than a word the template completes.
     ///
     /// `askama.toml` sets `whitespace = "suppress"`, so `{{ kind }} drift` in markup renders
-    /// `imagedrift` -- the space is adjacent to a tag and is stripped. Keeping the full label on
+    /// `imagedrift`: the space is adjacent to a tag and is stripped. Keeping the full label on
     /// this side sidesteps that and makes the wording something a test can assert on.
     pub fn label(self) -> &'static str {
         match self {
@@ -61,7 +61,7 @@ impl Drift {
 ///
 /// **The split is on `desired_state`, not on `state`**, and that is the whole reason it is stable
 /// enough to hang a page on. A room whose Deployment vanished reads `idle` for a few seconds while
-/// the orchestrator puts it back — splitting on the observed state would move it into the "should
+/// the orchestrator puts it back: splitting on the observed state would move it into the "should
 /// be down" table and out again while somebody was looking at it. Whether a room *should* be down
 /// is a wish somebody expressed, and it only changes when they change it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,7 +124,7 @@ pub struct FleetRoom {
     pub desired_spec_hash: Option<String>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     pub redeploy_requested_at: Option<DateTime<Utc>>,
-    /// When a slot last registered a genuinely **new location check** — the number the reaper acts
+    /// When a slot last registered a genuinely **new location check**: the number the reaper acts
     /// on, and the reference server's own idle signal.
     ///
     /// **`None` is "nobody has ever checked anything here", not "just now."** A room whose
@@ -149,7 +149,7 @@ impl FleetRoom {
     /// Whether this room is running something other than what it would render to now.
     ///
     /// **Only a room with a Deployment can drift.** An idle room is not running anything, so it has
-    /// nothing to disagree with — it picks up the current spec whenever it next starts, which is
+    /// nothing to disagree with: it picks up the current spec whenever it next starts, which is
     /// the behavior that makes an image bump safe to land at any hour.
     pub fn drift(&self, fleet_image: Option<&str>) -> Option<Drift> {
         let running = self.running_image.as_deref()?;
@@ -174,7 +174,7 @@ impl FleetRoom {
         None
     }
 
-    /// How long the current spec has been in force, and how long *this* pahoa has been serving —
+    /// How long the current spec has been in force, and how long *this* pahoa has been serving,
     /// the second only when it is meaningfully younger.
     ///
     /// They diverge when Kubernetes moved the pod or the container restarted in place. Either way
@@ -193,10 +193,10 @@ impl FleetRoom {
     ///
     /// **Only for a running room**, and the restriction is not cosmetic: a stopped room's
     /// `last_activity_at` is whenever somebody last spoke *before it came down*, which grows
-    /// forever and would render every resting room as increasingly idle. Nothing is idling there --
+    /// forever and would render every resting room as increasingly idle. Nothing is idling there:
     /// it is already off.
     ///
-    /// Floored at `started_at`, matching the reaper exactly — including for a room nobody has ever
+    /// Floored at `started_at`, matching the reaper exactly, including for a room nobody has ever
     /// checked in. If the two disagreed the table would explain a decision the orchestrator did not
     /// make. **The later of the two, not the first present**: pahoa persists the check timer, so a
     /// room stopped for days reports days of check-idle the moment it returns.
@@ -219,7 +219,7 @@ pub struct Overview {
     /// How many rooms the scope left out because somebody stopped or closed them.
     ///
     /// Counted even when they are not loaded, because the collapsed heading has to say how much is
-    /// behind it — "Stopped and closed rooms" with no number is a control nobody opens, and this
+    /// behind it: "Stopped and closed rooms" with no number is a control nobody opens, and this
     /// list grows without bound.
     pub resting: i64,
 }
@@ -325,7 +325,7 @@ pub async fn request_redeploy(
 
 /// Pin or unpin a room, exempting it from the idle reaper.
 ///
-/// Returns whether the row moved, so the caller can tell "pinned" from "already pinned" — the whole
+/// Returns whether the row moved, so the caller can tell "pinned" from "already pinned": the whole
 /// question an operator has after pressing the control is whether anything changed.
 pub async fn set_pinned(
     conn: &mut AsyncPgConnection,
