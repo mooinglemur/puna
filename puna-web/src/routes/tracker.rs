@@ -2104,7 +2104,7 @@ mod tests {
         assert_eq!(
             one_slot.matches("table-search").count(),
             3,
-            "the slot view's filter count is wrong -- the one-row slot table should have none"
+            "the slot view's filter count is wrong: the one-row slot table should have none"
         );
 
         assert!(

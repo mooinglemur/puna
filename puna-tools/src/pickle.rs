@@ -11,21 +11,21 @@
 //! opcodes enumerated in its `reader.rs`, and its correctness condition is a round trip: whatever
 //! [`dumps`] writes, `pahoa_pickle::from_slice` must read back as the same [`PyObj`]. That is
 //! asserted in this module's own tests against the real reader rather than against a second
-//! opinion about what pickle means — which matters, because the reader is the thing that will
+//! opinion about what pickle means, which matters, because the reader is the thing that will
 //! actually consume the output in production.
 //!
 //! ## What it does not do, on purpose
 //!
 //! **No memoization.** Python's pickler emits `MEMOIZE` and back-references so a repeated object
 //! is written once; it must, because Python objects can form cycles. A `PyObj` tree cannot, so the
-//! writer emits every value inline and never `MEMOIZE`/`BINGET`. The cost is repeated strings —
-//! game names once per slot, class references once per instance — and zlib, which every
+//! writer emits every value inline and never `MEMOIZE`/`BINGET`. The cost is repeated strings
+//! (game names once per slot, class references once per instance) and zlib, which every
 //! `.archipelago` is wrapped in, removes almost all of it.
 //!
 //! **No `FRAME`.** It is a buffering hint for the reader and carries no meaning.
 //!
 //! **`REDUCE` for every instance**, never `NEWOBJ`. Python picks between them by whether the class
-//! defines `__getnewargs__` — namedtuples get `NEWOBJ`, by-value enums get `REDUCE` — and the
+//! defines `__getnewargs__` (namedtuples get `NEWOBJ`, by-value enums get `REDUCE`) and the
 //! reader collapses both to `PyObj::Instance` (`reader.rs:628`), so reproducing the distinction
 //! would be work in service of nothing.
 
@@ -136,7 +136,7 @@ fn write(out: &mut Vec<u8>, value: &PyObj) {
     }
 }
 
-/// `module`, then `name`, then `STACK_GLOBAL` — which pops them in the opposite order
+/// `module`, then `name`, then `STACK_GLOBAL`, which pops them in the opposite order
 /// (`reader.rs:STACK_GLOBAL`). Getting this backwards produces a class named `NetworkSlot.NetUtils`
 /// and an allowlist rejection that reads like a permissions problem.
 fn write_global(out: &mut Vec<u8>, class: &ClassId) {
@@ -175,7 +175,7 @@ fn write_tuple(out: &mut Vec<u8>, items: &[PyObj]) {
 ///
 /// `BININT1` and `BININT2` are **unsigned** and `BININT` is signed 32-bit; anything else needs
 /// `LONG1`, which carries a little-endian two's-complement body. Location and item ids in a
-/// synthetic seed sit above 2^31 on purpose — well outside real Archipelago ranges — so the
+/// synthetic seed sit above 2^31 on purpose (well outside real Archipelago ranges) so the
 /// `LONG1` path is the common one here rather than an edge case, which is why it is tested at the
 /// boundaries rather than assumed.
 fn write_int(out: &mut Vec<u8>, n: i64) {
@@ -330,7 +330,7 @@ mod tests {
     }
 
     /// A class the allowlist forbids must be refused by the READER, not smuggled past it. The
-    /// writer is deliberately not the thing enforcing this -- it writes what it is given, and the
+    /// writer is deliberately not the thing enforcing this: it writes what it is given, and the
     /// gate is the same one a real seed passes through.
     #[test]
     fn a_forbidden_class_is_refused_on_the_way_back_in() {

@@ -76,7 +76,7 @@ theirs to lose.</p>
 <div class="hint">{{ note }}</div>
 {% endif %}
 {# The verb matters: `changed_by` is only ever set by a standing change, so on an ACTIVE account it
-   means somebody restored it -- and a bare "by mooinglemur" under the word "active" reads as though
+   means somebody restored it, and a bare "by mooinglemur" under the word "active" reads as though
    they had done something unexplained. #}
 {% if let Some(who) = row.changed_by %}
 <div class="hint">{% if row.is_active %}restored{% else %}set{% endif +%} by {{+ who }}</div>
@@ -88,7 +88,7 @@ theirs to lose.</p>
 <td>
 {# The flex row goes on a DIV inside the cell, not on the cell. `display: flex` on a `<td>` removes
    it from table layout and the browser wraps it in an anonymous cell that the table's own padding
-   rule cannot reach -- which misaligned every glyph here against the columns beside them. #}
+   rule cannot reach, which misaligned every glyph here against the columns beside them. #}
 <div class="actions">
 {# Four glyphs, and the two that need a reason open an **overlay** rather than carrying a text field
    in the cell. Three inline reason inputs per row is what made this table unusable: each one is
@@ -98,15 +98,15 @@ theirs to lose.</p>
    JavaScript at all: the browser puts it in the **top layer**, so it neither reflows the table nor
    is clipped by the `overflow-x: auto` that makes the table a scroll container; Escape closes it;
    clicking away closes it; and opening one **closes any other**, so two half-filled sanctions can
-   never be open at once. `popovertarget` is the whole mechanism -- there is no script on this page
+   never be open at once. `popovertarget` is the whole mechanism: there is no script on this page
    beyond the clipboard and the sort.
 
    Only the transitions that mean something are offered: an active account gets no "restore", a
    banned one gets no "ban". A control that is visible and does nothing teaches people the tool is
    broken. #}
 {% if row.status != "active" %}
-{# Restoring needs no reason -- it CLEARS the note, because the note explained a sanction that no
-   longer applies -- so it is a direct submit rather than an overlay with an empty field in it. #}
+{# Restoring needs no reason: it CLEARS the note, because the note explained a sanction that no
+   longer applies, so it is a direct submit rather than an overlay with an empty field in it. #}
 <form method="post" action="/admin/users/status" class="inline">
 <input type="hidden" name="user_id" value="{{ row.id }}">
 <input type="hidden" name="status" value="active">

@@ -7,7 +7,7 @@
 <p class="hint"><a href="/admin">Back to administration</a></p>
 
 {# Delivered in a cookie and consumed by the read, so it shows once and a refresh clears it. It is
-   deliberately NOT in the query string -- see src/flash.rs. #}
+   deliberately NOT in the query string. See src/flash.rs. #}
 {% if let Some(shown) = notice %}
 <p class="{{ shown.class }}">{{ shown.message }}</p>
 {% endif %}
@@ -31,7 +31,7 @@ computed until it completes a tick.</p>
 <form method="post" action="/admin/rooms/redeploy-drifted" class="inline">
 {# Two sentences rather than one stitched from four `pluralize` calls, because the second half is
    not merely inflected: the pacing IS the warning when several rooms will bounce in sequence, and
-   for a single room it explains a schedule of one. Every `+` is load-bearing here regardless --
+   for a single room it explains a schedule of one. Every `+` is load-bearing here regardless:
    `askama.toml` sets `whitespace = "suppress"`, so a space beside a tag is gone unless asked for. #}
 {% if drifted == 1 %}
 <p class="warning">1 room is not running the configured spec. Redeploying it disconnects everybody
@@ -54,7 +54,7 @@ Redeploy all drifted rooms</button></p>
 </form>
 {% endif %}
 
-{# Sorting and filtering come from `table.js`, the same file the room page's slot table uses -- the
+{# Sorting and filtering come from `table.js`, the same file the room page's slot table uses: the
    conventions are `th[data-key]`, `[data-filters="<table id>"]` and a `data-value` where the sort
    key is not the rendered text. #}
 <p class="table-controls">
@@ -69,19 +69,19 @@ Redeploy all drifted rooms</button></p>
   <th data-key="name">Room</th><th data-key="state">State</th><th data-key="created">Created by</th>
   <th data-key="running">Running</th>
   {# The two ages are different events and the words for them are one letter apart in a hurry, so
-     each header says which one it is. **Deployed** moves when Puna redeploys the room -- the button
+     each header says which one it is. **Deployed** moves when Puna redeploys the room: the button
      in the last column. **Restarted** moves when Kubernetes replaces the pod underneath it, which
      Puna did not ask for and which is the whole reason this column exists. #}
   <th data-key="deployed" title="How long this spec has been in force. A redeploy resets it.">Deployed</th>
   <th data-key="restarted"
-      title="When the pod itself last restarted, which Puna did not ask for -- an eviction, a drain, or a container restart in place. Blank means it has not.">Restarted</th>
+      title="When the pod itself last restarted, which Puna did not ask for: an eviction, a drain, or a container restart in place. Blank means it has not.">Restarted</th>
   <th data-key="clients">Clients</th>
   {# The reaper's own number, beside the control that exempts a room from it. "Idle" means since a
-     slot last CHECKED A LOCATION -- the reference server's own idle signal, and the only one a room
+     slot last CHECKED A LOCATION: the reference server's own idle signal, and the only one a room
      full of people chatting will let go stale. Not since anybody connected (a tab left open
      overnight holds a socket and says nothing) and not since anybody spoke. #}
-  <th data-key="idle" title="Since a slot last checked a location -- not since anybody last connected or chatted. A room idle longer than the timeout is stopped, one room per reconcile tick.">Idle</th>
-  {# Not sortable -- see the note on the same column in admin/users.html. #}
+  <th data-key="idle" title="Since a slot last checked a location, not since anybody last connected or chatted. A room idle longer than the timeout is stopped, one room per reconcile tick.">Idle</th>
+  {# Not sortable. See the note on the same column in admin/users.html. #}
   <th>Actions</th>
 </tr>
 </thead>
@@ -115,7 +115,7 @@ Redeploy all drifted rooms</button></p>
 </td>
 <td{% if let Some(secs) = row.restarted_secs +%} data-value="{{ secs }}"{% endif %}{% if let Some(at) = row.restarted_at_ms +%} data-at="{{ at }}"{% endif %}>
   {# Shown only when the process is younger than its Deployment by more than a tick, which means
-     Kubernetes moved the pod or the container restarted in place -- the room reloaded its save and
+     Kubernetes moved the pod or the container restarted in place: the room reloaded its save and
      every client reconnected. Never is the healthy case. #}
   {% if let Some(age) = row.restarted_ago %}
   <span class="tag">{{ age +}} ago</span>
@@ -133,7 +133,7 @@ Redeploy all drifted rooms</button></p>
 {% else if let Some(idle) = row.idle %}
 {{ idle }}
 {% else %}
-{# Not running, so nothing is idling -- or Puna cannot currently see the room, in which case it is
+{# Not running, so nothing is idling, or Puna cannot currently see the room, in which case it is
    not reapable either. Both are honestly a dash rather than a zero. #}
 <span class="hint">&mdash;</span>
 {% endif %}
@@ -145,8 +145,8 @@ Redeploy all drifted rooms</button></p>
   <span class="tag">redeploy queued</span>
   {% else if row.running_image.is_some() %}
   <form method="post" action="/admin/rooms/{{ row.id }}/redeploy" class="inline">
-    {# A glyph BESIDE the word, not instead of it. The pairing with the pin below is deliberate --
-       see its note -- and turning this into a second icon-only control would flatten the one thing
+    {# A glyph BESIDE the word, not instead of it. The pairing with the pin below is deliberate
+       (see its note) and turning this into a second icon-only control would flatten the one thing
        that distinguishes "disconnects everybody" from "changes whether a timer applies". #}
     <button type="submit" class="with-icon">
 <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
@@ -172,7 +172,7 @@ Redeploy all drifted rooms</button></p>
      table. The pinned state is already stated in the Idle column, so the icon does not have to
      carry it. #}
   <form method="post" action="/admin/rooms/{{ row.id }}/pin?pinned={% if row.pinned %}false{% else %}true{% endif %}" class="inline">
-    {# `{%+` or the attributes run together as `class="pin"title="Unpin..."` -- suppression eats the
+    {# `{%+` or the attributes run together as `class="pin"title="Unpin..."`: suppression eats the
        newline before the tag, and nothing on screen would ever show it. #}
     <button type="submit" class="pin"
             {%+ if row.pinned %}title="Unpin: let the idle reaper take this room down again"
@@ -216,7 +216,7 @@ reconnect on their own once it is back.</p>
 
 {# **Loaded on demand, because this list only grows.** Every room anybody ever stopped stays in the
    database, so putting them in the table above would mean the page an operator opens during an
-   incident gets slower every week -- while answering a question about the rooms that are supposed
+   incident gets slower every week, while answering a question about the rooms that are supposed
    to be up.
 
    Split on `desired_state`, not on `state`: a room whose pod vanished reads `idle` for a few

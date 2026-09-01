@@ -1098,7 +1098,7 @@ mod tests {
 
         assert!(
             found >= 12,
-            "only {found} moderation controls found -- this lint is no longer looking at anything"
+            "only {found} moderation controls found: this lint is no longer looking at anything"
         );
     }
 
@@ -1590,7 +1590,7 @@ mod credential_tests {
             assert_eq!(stored.locked_by, Some(ACTOR));
             assert!(
                 stored.password.is_some(),
-                "locking must not disturb the credential -- the two stopped being the same thing"
+                "locking must not disturb the credential: the two stopped being the same thing"
             );
             assert!(
                 !secret_is_stale(&mut conn, room.id).await,

@@ -320,7 +320,7 @@ async fn assert_room_label_resolves(
         rooms == 0,
         "none of the {} in the cluster {} a room id under the configured label key, but this \
          database has {}. Refusing to start: every one of them would be treated as an orphan and \
-         deleted. If the room label key was just changed, change it back -- it is the Deployment's \
+         deleted. If the room label key was just changed, change it back: it is the Deployment's \
          immutable selector, so moving it needs every room recreated deliberately rather than by \
          restarting with a new value.",
         puna_core::text::count(deployments.len(), "room Deployment"),

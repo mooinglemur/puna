@@ -33,7 +33,7 @@
   --link: light-dark(#1a5fb4, #7cb0f0);
 
   /* Status colors, used by .notice / .warning / .error. Kept distinguishable without relying on
-     hue alone -- each also gets a left border, so a red-green colorblind reader still sees three
+     hue alone: each also gets a left border, so a red-green colorblind reader still sees three
      different things. */
   --accent: light-dark(#1a5fb4, #7cb0f0);
   --warn-fg: light-dark(#7a4c00, #f0c86a);
@@ -58,7 +58,7 @@
 /* The theme selector, in full.
  *
  * Because every color above goes through `light-dark()` and `color-scheme` is inherited, choosing
- * a theme is choosing this one property on the root -- there is no second palette, no
+ * a theme is choosing this one property on the root: there is no second palette, no
  * `prefers-color-scheme` block, and nothing that can fall out of step with the tokens.
  *
  * The bare `:root` keeps `light dark`, so a reader who has chosen nothing follows their system, as
@@ -110,7 +110,7 @@ a:hover { text-decoration: none; }
 /* --- viewing the site as somebody else -------------------------------------------------------
    Deliberately loud and full-bleed, unlike `.notice` and friends, which sit inside the measure and
    read as page content. This is not about the page: it is a statement that everything below is
-   somebody else's view, and it stays until the reader ends it. Warning colors rather than error --
+   somebody else's view, and it stays until the reader ends it. Warning colors rather than error:
    nothing is wrong, but nothing here is quite what it appears to be either. */
 .viewing-as {
   padding: 0.6rem 1rem;
@@ -152,8 +152,8 @@ a:hover { text-decoration: none; }
  *
  * `display: flex` on a table cell takes it out of table layout: the browser wraps it in an
  * ANONYMOUS table-cell, which the `th, td` padding rule above cannot reach. The visible result was
- * the actions sitting a dozen pixels off the baseline of every real cell beside them -- the eye
- * glyph most obviously, because it is the tallest -- and a row whose height the table no longer
+ * the actions sitting a dozen pixels off the baseline of every real cell beside them (the eye
+ * glyph most obviously, because it is the tallest) and a row whose height the table no longer
  * accounted for, which is what clipped the last line of the standing column. */
 td .actions {
   display: flex;
@@ -162,16 +162,16 @@ td .actions {
 }
 
 /* **The forms flex too, or the glyphs inside them sit higher than the ones beside them.**
-   A `<form>` here is a block, so its height is a LINE BOX -- font line-height plus space for
-   descenders -- while a bare `.act` button is a flex item sized to itself. `align-items: center`
+   A `<form>` here is a block, so its height is a LINE BOX (font line-height plus space for
+   descenders) while a bare `.act` button is a flex item sized to itself. `align-items: center`
    then centers two boxes of different heights, and the button inside the taller one rides its text
    baseline instead of its center. Flexing the form collapses it onto the button it contains, so
    every glyph in the row is measured the same way.
 
-   **`margin: 0` is not tidiness -- it is the other half of the same bug, and this rule CAUSED it.**
+   **`margin: 0` is not tidiness: it is the other half of the same bug, and this rule CAUSED it.**
    `form { margin: 0 0 1.25rem }` at the foot of this file applies to these forms like any other.
    It was inert while they were `display: inline`, because vertical margins do not apply to an
-   inline box -- and the `display: flex` above turns them back into block-level boxes, which
+   inline box, and the `display: flex` above turns them back into block-level boxes, which
    re-enables it. `align-items: center` then centers each form's MARGIN box, so every form-wrapped
    glyph floated about 10px above the bare buttons beside it: half the restored margin. Rows whose
    controls happened to be all-forms or all-buttons looked perfectly fine, which is what made it
@@ -196,21 +196,21 @@ td .actions form {
 .act:hover { color: var(--text); }
 .act:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* The two that are worth a moment's hesitation say so on hover, rather than being drawn in alarm
-   colors permanently -- a row of red glyphs beside every account reads as a page full of problems. */
+   colors permanently: a row of red glyphs beside every account reads as a page full of problems. */
 .act.danger:hover { color: var(--err-fg); }
 .act.restore:hover { color: var(--accent); }
 
 /* --- the sanction overlays -------------------------------------------------------------------
    A `popover`, which the browser puts in the TOP LAYER: it does not reflow the table it was opened
    from, and it is not clipped by the `overflow-x: auto` that makes every table here a scroll
-   container -- the same trap the copy confirmation hit, solved by the platform this time rather
+   container: the same trap the copy confirmation hit, solved by the platform this time rather
    than by hand. Escape and click-away close it, and opening one closes any other, all without a
    line of script. */
 [popover].sheet {
   width: min(30rem, calc(100vw - 2rem));
   /* **`white-space: normal`, because the top layer does not escape INHERITANCE.** The overlay is
      painted above the page and is positioned by the viewport, so it is easy to read it as detached
-     from the table -- but it is still a DOM descendant of the `<td>` it is declared in, and
+     from the table, but it is still a DOM descendant of the `<td>` it is declared in, and
      `th, td { white-space: nowrap }` therefore reaches it. Its paragraph refused to wrap, and the
      UA stylesheet's `overflow: auto` on `[popover]` turned that into a horizontal scrollbar inside
      the overlay with the explanation cut off mid-sentence. */
@@ -224,7 +224,7 @@ td .actions form {
 }
 
 [popover].sheet::backdrop {
-  /* Dimmed rather than clear, so it reads as "answer this first" -- which it is: the form behind it
+  /* Dimmed rather than clear, so it reads as "answer this first", which it is: the form behind it
      is a list of other people's accounts. */
   background: rgb(0 0 0 / 0.45);
 }
@@ -239,7 +239,7 @@ td .actions form {
   margin: 0.9rem 0 0;
 }
 
-/* **Where `popover` is not supported the overlays would render inline and always open** -- an
+/* **Where `popover` is not supported the overlays would render inline and always open**: an
    unknown attribute is simply ignored, so every reason form on the page would be visible at once
    and the table would be unreadable. Hidden outright there instead: the glyphs then do nothing,
    which is a dead control rather than a broken page, and the operator can still act from a browser
@@ -269,7 +269,7 @@ td .actions form {
 }
 
 /* Who this menu belongs to. The glyph controls outside carry the slot in `aria-label` alone, which
-   is assistive-tech only -- once an action is behind a menu, the menu is where a misclick is
+   is assistive-tech only: once an action is behind a menu, the menu is where a misclick is
    caught, so the target is on screen. */
 .mod-menu .hint {
   margin: 0 0 0.4rem;
@@ -300,7 +300,7 @@ td .actions form {
    A `<dialog>` rather than a `popover`, and the difference is the requirement rather than taste:
    `showModal()` makes the rest of the page inert, so an answer has to be dismissed before anything
    else can be touched. A popover light-dismisses on a stray click, which is precisely what a "did
-   this work?" answer must not do -- a granted hint and a refused one look identical once the box is
+   this work?" answer must not do: a granted hint and a refused one look identical once the box is
    gone.
 
    It borrows `.sheet` for its surface and adds only what a dialog needs: the UA stylesheet centers
@@ -325,7 +325,7 @@ dialog.moderate::backdrop {
 
 .moderate h2 { margin: 0 0 0.4rem; font-size: 1.1rem; }
 
-/* **Who the action is for**, and it has to be the second thing read after the verb -- a dialog that
+/* **Who the action is for**, and it has to be the second thing read after the verb: a dialog that
    says only "Hint an item" is one a misclick sails through. Given its own surface rather than set as
    prose so it reads as the subject of the sentence above it, and so it is still obvious in the
    spinner and answer stages, where there is no other context left on screen. */
@@ -354,7 +354,7 @@ dialog.moderate::backdrop {
 
 /* The answer, in the two voices this stylesheet already has: `.notice`'s accent for a room that
    said yes, `.warning`'s for a room that said no. Reusing them rather than inventing a third
-   palette is the point -- a refusal here should look like a refusal everywhere else on the site.
+   palette is the point: a refusal here should look like a refusal everywhere else on the site.
 
    A left border as well as a hue, following the rule `.notice`/`.warning`/`.error` set: color alone
    is not a distinction every reader can make, and "did this work" is the worst question to answer
@@ -398,7 +398,7 @@ dialog.moderate::backdrop {
 .theme button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* **Which button reads as active is decided by the attribute, not by script.** `theme.js` sets
-   `data-theme` before the first paint, so the highlight is correct in the first frame -- driving it
+   `data-theme` before the first paint, so the highlight is correct in the first frame: driving it
    from a class the script adds later would mean the control briefly disagreeing with the page it
    is describing. `:not([data-theme])` is the follow-the-system case, which is the absence of a
    stored choice rather than a value of its own. */
@@ -418,7 +418,7 @@ main {
   padding: 1.5rem 1rem 4rem;
 }
 
-/* Pages that are mostly TABLE rather than mostly prose opt out of the measure -- see base.html.
+/* Pages that are mostly TABLE rather than mostly prose opt out of the measure. See base.html.
    Still bounded, because a table stretched across a 2560px monitor is its own readability problem:
    the eye loses the row between the first column and the last. `max-width` simply stops binding on
    a narrower screen, so this changes nothing on a laptop or a phone and the table scrolls there
@@ -456,14 +456,14 @@ code {
    colon. What it actually produces is a selection that behaves like nothing else on the page:
    press to the left of a character and drag, and the selection vanishes; press to the right and it
    survives only until the pointer crosses back. That is the property doing it, not a bug in the
-   browser -- `all` makes the element an atom, so an anchor inside it has nowhere to anchor.
+   browser: `all` makes the element an atom, so an anchor inside it has nowhere to anchor.
 
    Copying is now an explicit control, which is better than a selection trick on its own terms: it
    takes one click instead of a click-drag-copy, it cannot take half the string, and it says it
    worked. The text is ordinary selectable text again for anyone who wants to select it. */
 /* No bottom margin: the wording that explains WHICH address this is follows immediately, and it is
    part of the same statement rather than the next one. The gap this used to hold now sits above the
-   password instead -- see `.address-password`. */
+   password instead. See `.address-password`. */
 .address { margin: 0; }
 
 .address code {
@@ -481,12 +481,12 @@ code {
    must not. */
 
 /* The shared room password, beside the address because it is the other half of getting in.
-   Deliberately the same treatment as the address it sits under -- monospace, boxed, one token that
-   must not break -- so the two things a player copies off this page look and behave alike. Its own
+   Deliberately the same treatment as the address it sits under (monospace, boxed, one token that
+   must not break) so the two things a player copies off this page look and behave alike. Its own
    selector rather than the `.address` class because that one is a TABLE and this is a line. */
 .address-password {
   /* The gap that used to sit under the address table sits here instead. It is the same value, moved:
-     the address and the sentence explaining it are one thing, and the password is the next thing --
+     the address and the sentence explaining it are one thing, and the password is the next thing:
      so the space belongs at the break rather than in the middle of the first half. */
   margin: 1.25rem 0 0.35rem;
   display: flex;
@@ -519,7 +519,7 @@ code {
 
 /* --- copy to clipboard ---------------------------------------------------------------------------
    Hidden until `room.js` has confirmed the clipboard is actually reachable. `navigator.clipboard`
-   needs a secure context, so on plain HTTP the API is simply absent -- and a copy button that
+   needs a secure context, so on plain HTTP the API is simply absent, and a copy button that
    silently does nothing is worse than no button, because the address looks copied. The script adds
    `js-copy` to <html> only when it can really copy.
 
@@ -542,7 +542,7 @@ code {
 }
 
 /* A button that is really a link: an in-table action, styled to sit beside the words it acts on
-   rather than as a control competing with them. Still a <button> in a <form>, because it POSTs --
+   rather than as a control competing with them. Still a <button> in a <form>, because it POSTs:
    `release` changes the roster and must not be reachable by following a link. */
 .linklike {
   padding: 0;
@@ -556,7 +556,7 @@ code {
 
 .linklike:hover { text-decoration: none; }
 
-/* Rotate a slot's password. Same shape as `.copy` -- a glyph beside the value it acts on -- and
+/* Rotate a slot's password. Same shape as `.copy` (a glyph beside the value it acts on) and
    unlike `.copy` it needs no scripting, so it is not hidden behind `js-copy`. */
 .cycle {
   display: inline-flex;
@@ -584,12 +584,12 @@ code.stale {
 .js-copy .copy:hover { color: var(--text); border-color: var(--border); }
 .js-copy .copy:focus-visible { color: var(--text); border-color: var(--accent); }
 
-/* The confirmation. Small, anchored to the button that caused it, and gone on its own -- a message
+/* The confirmation. Small, anchored to the button that caused it, and gone on its own: a message
    that has to be dismissed would be more ceremony than the action it is confirming.
 
    --- IT FLOATS, AND IT HAS TO ---------------------------------------------------------------------
    Rendered in the flow first, which was wrong twice over: it took layout space, so the cell and the
-   whole table jumped wider for a second and back -- and the global `table` rule sets
+   whole table jumped wider for a second and back, and the global `table` rule sets
    `overflow-x: auto`, which makes the table a scroll container that CLIPS any absolutely positioned
    descendant. So this is `fixed`, appended to <body>, and positioned from the button's rect by
    `room.js`. That also sidesteps every question about which ancestor happens to be a containing
@@ -626,16 +626,16 @@ code.stale {
   .copied { transition: none; }
 }
 
-/* The two links out of the room -- the tracker and the feed.
+/* The two links out of the room: the tracker and the feed.
  *
  * **The top margin is what separates them from the panel above**, which ends in an `.inline` form
- * (the rotate-password control), and an inline form generates no block margin at all -- so with a
+ * (the rotate-password control), and an inline form generates no block margin at all, so with a
  * top of zero the first of these butted straight up against it as though it were another line of
  * the password block.
  *
  * Same value top and bottom, which is what makes the run evenly spaced rather than two-and-one:
  * adjacent margins collapse, so this pair keeps the 1.25rem it already had between them and only
- * the FIRST of them gains anything -- whichever one that turns out to be, since a room may show
+ * the FIRST of them gains anything, whichever one that turns out to be, since a room may show
  * either link without the other. */
 .tracker { margin: 1.25rem 0; }
 
@@ -689,7 +689,7 @@ code.stale {
 
 /* --- THE SPINNER, and what it is allowed to mean ------------------------------------------------
    Decoration beside the sentence, never instead of it. A spinner alone cannot tell "coming up" from
-   "stuck", which is exactly the distinction somebody watching a cold start needs -- so the panel
+   "stuck", which is exactly the distinction somebody watching a cold start needs, so the panel
    always carries the room's own words and an elapsed count, and this sits in front of them.
 
    `aria-hidden` in the markup: it says nothing a screen reader cannot get from the text beside it,
@@ -766,7 +766,7 @@ p.error {
 }
 
 /* A slot staff have barred from connecting. Warning colors rather than error, and the same
-   reasoning `.tag.drift` gives: it is a state somebody chose, not a fault -- but unlike drift it is
+   reasoning `.tag.drift` gives: it is a state somebody chose, not a fault, but unlike drift it is
    a state a player is currently experiencing, so it gets the stronger of the two quiet hues.
 
    This chip is the primary signal, not a decoration on one: the lock and unlock glyphs in the
@@ -779,7 +779,7 @@ p.error {
 
 /* A room running something other than its current spec. Deliberately NOT `.tag.warning`: the
    warning colors belong to the block-level notice and combining them here would inherit its
-   padding and background. Drift is a fact to notice, not a fault -- it is the ordinary state
+   padding and background. Drift is a fact to notice, not a fault: it is the ordinary state
    after an image bump, which does not disturb rooms that are already up. */
 .tag.drift {
   color: var(--warn-fg);
@@ -788,13 +788,13 @@ p.error {
 
 /* --- tables ------------------------------------------------------------------------------------- */
 
-/* The slot table is the one element that can exceed the measure -- a room can carry a long game
+/* The slot table is the one element that can exceed the measure: a room can carry a long game
    name and six columns. It scrolls itself rather than widening the page. */
 /* **The wrapper scrolls, not the table**, and that is a correction rather than a preference.
  *
  * This rule used to say `display: block; overflow-x: auto` on the `<table>` itself. Two bugs came
  * out of it. First, `overflow-x: auto` on an element whose `overflow-y` is `visible` forces the
- * other axis to `auto` as well -- that is the overflow spec, not a browser quirk -- so every table
+ * other axis to `auto` as well (that is the overflow spec, not a browser quirk) so every table
  * here was a VERTICAL scroll container nobody asked for, and any content exceeding its box by a
  * fraction of a pixel drew a scrollbar down the side of the page. Second, blockifying a table makes
  * the table box inside it shrink to its content, so `width: 100%` sized the wrapper and left the
@@ -806,14 +806,14 @@ p.error {
   overflow-x: auto;
   /* **`hidden`, and it has to be stated.** Leaving `overflow-y` alone does NOT leave it `visible`:
      the spec computes `visible` to `auto` whenever the other axis scrolls, which is the whole bug
-     this wrapper was introduced to fix -- reintroduced one element outwards if it is not said here.
+     this wrapper was introduced to fix: reintroduced one element outwards if it is not said here.
      A table never wants to scroll vertically; the page does that.
      The height is `auto` and therefore already fits, so this only ever suppresses the scrollbar
      sub-pixel rounding produces: row heights land on fractions of a pixel with collapsed borders and
      0.45rem padding, `scrollHeight` rounds up, `clientHeight` rounds down, and one pixel of phantom
      overflow draws a bar down the side of the page. */
   overflow-y: hidden;
-  /* Room for a focus ring, which `:focus-visible` draws 2px OUTSIDE the control -- on a link in the
+  /* Room for a focus ring, which `:focus-visible` draws 2px OUTSIDE the control: on a link in the
      first or last row `hidden` would clip it, and this file does not remove focus rings anywhere.
      Canceled by the negative margin, so nothing on the page moves. */
   padding-block: 4px;
@@ -845,7 +845,7 @@ th {
    two columns allowed to wrap rather than stretch the table.
 
    **Wrapping is the first answer to an over-wide table, and `.scroll-x` is the second.** What makes
-   these tables exceed the page is `white-space: nowrap` above, not the number of columns -- so the
+   these tables exceed the page is `white-space: nowrap` above, not the number of columns, so the
    columns whose content is prose give way, and the ones holding something that must not break
    mid-token keep it. A wrapped `host:port` or password is worse than a scrollbar; a wrapped game
    name is not. The wrapper still exists because at phone width even a fully wrapped table does not
@@ -862,7 +862,7 @@ th {
 .moderation .actions { flex-wrap: wrap; }
 
 /* On the cell, because the controls are links rather than a form: `td .actions` above only reaches
-   the flex row, and this is the cell's own constraint. Bounded so the wrap actually happens --
+   the flex row, and this is the cell's own constraint. Bounded so the wrap actually happens:
    without a max the flex row is content-sized and never has a reason to break. */
 .slots td.moderation {
   white-space: normal;
@@ -877,7 +877,7 @@ tbody tr:hover { background: var(--surface); }
    the border is what stops it looking like a slot called "Total".
 
    Not sticky. It belongs to the end of the table, and the tracker's location and item tables already
-   scroll inside themselves against a sticky HEAD -- a second sticky edge in the same scrollport is
+   scroll inside themselves against a sticky HEAD: a second sticky edge in the same scrollport is
    how `position: sticky` starts resolving against a box nobody expected. */
 tfoot td {
   border-bottom: none;
@@ -903,7 +903,7 @@ tfoot .label {
 
 /* --- the tracker's own scroll wrapper ------------------------------------------------------------
    `overflow: auto` rather than `overflow-x: auto`, and the shorthand is the point: it names BOTH
-   axes, which is the rule `.scroll-x` learned the hard way -- setting one axis silently computes the
+   axes, which is the rule `.scroll-x` learned the hard way: setting one axis silently computes the
    other from `visible` to `auto`, so half-declaring it is how a table gets a scrollbar nobody asked
    for. Here both axes are wanted, so saying both is also honest.
 
@@ -913,19 +913,19 @@ tfoot .label {
 
 /* **The two tables whose length nobody chose.** A slot's world can hold thousands of locations and
    its item list grows all game, so these scroll inside themselves rather than making the page
-   thousands of rows tall. Everything else on the site is bounded by something a person decided --
-   a room's slot count, an admin's fleet -- and is left to the page. */
+   thousands of rows tall. Everything else on the site is bounded by something a person decided
+   (a room's slot count, an admin's fleet) and is left to the page. */
 .table-scroll.bounded { max-height: min(60vh, 40rem); }
 
 /* **Locations gets half.** It is the longest table on the site and the least often read line by
-   line -- a slot's world runs to thousands of entries, and what somebody wants from it is a search
+   line: a slot's world runs to thousands of entries, and what somebody wants from it is a search
    result or a sense of how much is left, not a wall. Items sits above it and is read in order, so
    it keeps the full height. */
 .table-block[data-view="locations"] .table-scroll.bounded { max-height: min(30vh, 20rem); }
 
 /* The header stays put while the rows move under it, which is the whole reason a bounded table is
    usable at all: a location list scrolled 400 rows deep is meaningless without its columns.
-   Resolves against `.table-scroll`, which is why these tables have ONE wrapper -- see the note in
+   Resolves against `.table-scroll`, which is why these tables have ONE wrapper. See the note in
    tracker/show.html.
 
    `background` because a sticky cell is painted over by whatever scrolls beneath it otherwise, and
@@ -954,7 +954,7 @@ summary { cursor: pointer; }
 
 /* The search box and any toggles beside it, on one line until the viewport says otherwise. */
 /* A button carrying a glyph beside its word, rather than instead of it.
-   `inline-flex` so the two are centered against each other -- left as inline content the svg sits on
+   `inline-flex` so the two are centered against each other: left as inline content the svg sits on
    the text baseline and rides a little low. An explicit class rather than `button:has(svg)`, so a
    browser without `:has()` gets the same layout instead of the fallback. */
 .with-icon {
@@ -965,8 +965,8 @@ summary { cursor: pointer; }
 
 /* Hidden until `table.js` reveals it, the same gate `.theme` and `.copy` sit behind and for the same
    reason: filtering is entirely that file's doing, so without it the box is a text field somebody
-   types into while nothing happens. The sort arrows need no gate -- script draws them, so they are
-   genuinely absent -- but a search input is plain markup and would look perfectly usable. */
+   types into while nothing happens. The sort arrows need no gate (script draws them, so they are
+   genuinely absent) but a search input is plain markup and would look perfectly usable. */
 .table-controls { display: none; }
 
 .js-tables .table-controls {
@@ -1032,7 +1032,7 @@ summary { cursor: pointer; }
 }
 .titlebar > h1 { margin-bottom: 0; }
 
-/* The disclosure triangle is off because the pencil IS the affordance -- a triangle beside it
+/* The disclosure triangle is off because the pencil IS the affordance: a triangle beside it
    would be two controls drawn for one. `display: inline-flex` restores a marker box that
    `list-style: none` alone leaves behind in WebKit, which is what `::-webkit-details-marker` is
    for. */
@@ -1052,7 +1052,7 @@ summary { cursor: pointer; }
    toggled by JavaScript would be a second source of truth for the same thing.
 
    `:has()` is the whole mechanism, and it degrades the right way: where it is unsupported the
-   heading stays put and the form opens beside it, which is the older behavior -- worse, not
+   heading stays put and the form opens beside it, which is the older behavior: worse, not
    broken. */
 .titlebar:has(.rename[open]) > h1 { display: none; }
 
@@ -1063,13 +1063,13 @@ summary { cursor: pointer; }
 /* **The chip keeps its place while the title is being edited.**
 
    Closed, the titlebar reads `<h1>` · chip · pencil. Open, the heading and the pencil are hidden and
-   the form takes their place -- but the form is ONE flex item, so everything inside it landed on the
+   the form takes their place, but the form is ONE flex item, so everything inside it landed on the
    far side of the chip and the order came out chip · field · confirm. The chip had swapped sides
    with the thing it sits beside, which reads as the page rearranging itself around a rename.
 
    `display: contents` flattens the `<details>` and its `<form>` so the field and the two controls
    become titlebar flex items in their own right; `order: -1` then lifts the field ahead of the
-   chip. Result: field · chip · confirm · cancel -- the closed order with the heading swapped for
+   chip. Result: field · chip · confirm · cancel, the closed order with the heading swapped for
    the field, which is what the swap is supposed to look like.
 
    Scoped to `[open]` so the closed state keeps a real `<form>` box. The one cost is that a
@@ -1082,7 +1082,7 @@ summary { cursor: pointer; }
 .titlebar:has(.rename[open]) .rename input[type="text"] { order: -1; }
 
 /* Flattening moves these from the form's `align-items: center` to the titlebar's `baseline`, and a
-   glyph-only button has no text baseline to align on -- it would sit on its own box bottom and ride
+   glyph-only button has no text baseline to align on: it would sit on its own box bottom and ride
    low beside the field. Centering restores exactly what they had inside the form. */
 .titlebar:has(.rename[open]) .rename input[type="text"],
 .titlebar:has(.rename[open]) .rename form button,
@@ -1093,7 +1093,7 @@ summary { cursor: pointer; }
   align-items: center;
   gap: 0.35rem;
   /* **Not tidiness.** `form { margin: 0 0 1.25rem }` below is inert on an inline form and comes back
-     the moment `display: flex` makes this one block-level -- so opening the rename field grew the
+     the moment `display: flex` makes this one block-level, so opening the rename field grew the
      titlebar by 20px and pushed the whole page down with it, which is precisely the thing this
      control is built NOT to do. Found by the lint in tests/templates.rs, after the same mistake
      shipped on `/admin/users`. */
@@ -1152,7 +1152,7 @@ th[data-key]::after {
 th[data-sort="asc"]::after { content: " ▲"; }
 th[data-sort="desc"]::after { content: " ▼"; }
 
-/* A checked location or a found hint. Dimmed rather than hidden -- the point of the table is that
+/* A checked location or a found hint. Dimmed rather than hidden: the point of the table is that
    both halves are visible, which is the thing the reference tracker cannot show. */
 .table-block tbody tr.done td:first-child { color: var(--muted); }
 
@@ -1260,7 +1260,7 @@ button:hover { border-color: var(--muted); }
 .pane-list-right { grid-area: right-list; }
 
 /* **An explicit height, not `size`.** `size` counts rows, and an empty `<select multiple>` has none
-   to count -- so the staged list rendered visibly shorter than the populated one until the first
+   to count, so the staged list rendered visibly shorter than the populated one until the first
    slot arrived in it, which reads as the widget being broken rather than empty. Both lists are the
    same box whatever is in them. `size` stays in the markup as the answer without a stylesheet. */
 .panes select {
@@ -1314,7 +1314,7 @@ button:hover { border-color: var(--muted); }
 /* --- a batch's answer -----------------------------------------------------------------------------
    **Three buckets, three colors, and `refused` is deliberately not the failure color.** A refusal is
    the room answering no, which for a bulk goal over a sync that has already finished is the correct
-   answer for every row -- painting those red is how the count that matters stops being read. */
+   answer for every row: painting those red is how the count that matters stops being read. */
 .batch-summary { margin: 0.5rem 0 1rem; }
 
 .tally {
@@ -1339,14 +1339,14 @@ button:hover { border-color: var(--muted); }
   border-color: light-dark(#7a4c00, #f0c86a);
 }
 
-/* Rules read as sentences rather than as data, because that is what `describe()` produces -- the
+/* Rules read as sentences rather than as data, because that is what `describe()` produces: the
    effect in words, never the bare probability. */
 .rules { margin: 0.3rem 0 0.9rem; padding-left: 1.2rem; }
 .rules li { margin-bottom: 0.2rem; }
 
 /* --- the filter editor -------------------------------------------------------------------------
    **The scope belongs to the heading.** The room name is the boldest thing on the page and a
-   reader's eye stops there, so a slot named only in the dimmed line underneath gets skipped -- as
+   reader's eye stops there, so a slot named only in the dimmed line underneath gets skipped, as
    it was, by somebody who read the whole page and still did not know which slot they had open. It
    sits inside the `<h1>` so the document keeps one top-level heading, and it is set at `h2` size
    because that is the weight of the section headings it has to compete with. */
@@ -1429,8 +1429,8 @@ h1 .scope {
    against both grounds it can sit on (#ffffff / #fbfbfa in light, #1e2127 / #16181c in dark).
 
    **BK and Soft BK are two reds, and that is the one pairing worth defending.** They are separated
-   by lightness as well as hue -- 1.77:1 between them in light and 1.51:1 in dark, deep red against
-   orange-red -- so they are not distinguishable by hue alone, which is the limitation `.journal`'s
+   by lightness as well as hue (1.77:1 between them in light and 1.51:1 in dark, deep red against
+   orange-red) so they are not distinguishable by hue alone, which is the limitation `.journal`'s
    own comment had to concede for progression and trap. And the chip carries its WORD: the tint is
    the second signal here, never the only one, which is the same rule `.notice`/`.warning`/`.error`
    follow with their left borders.
@@ -1498,7 +1498,7 @@ h1 .scope {
    click to keep it open so the text can be selected, click away to dismiss.
 
    The button is deliberately small and quiet. It sits inside a table cell next to a name, and a note
-   is context rather than a warning -- a control that drew the eye would make every annotated row
+   is context rather than a warning: a control that drew the eye would make every annotated row
    look like it needed attention. */
 .note-icon {
   padding: 0 0.15rem;
@@ -1513,7 +1513,7 @@ h1 .scope {
 .note-icon:hover { color: var(--text); }
 
 /* **`fixed`, and it has to be.** Every table on this page is inside `.scroll-x`, which makes it a
-   scroll container -- an absolutely positioned descendant would be clipped by it, which is the trap
+   scroll container: an absolutely positioned descendant would be clipped by it, which is the trap
    M18's copy confirmation already hit. Fixed also sidesteps every question about which ancestor
    happens to be a containing block.
 
@@ -1545,7 +1545,7 @@ h1 .scope {
    which of twelve boxes belonged to the command you had chosen, and a column of forms with no
    boundary between them would reintroduce exactly that ambiguity at the scale of a whole page.
 
-   The card is a border and nothing heavier -- no shadow, no tinted ground. These are not floating
+   The card is a border and nothing heavier: no shadow, no tinted ground. These are not floating
    above anything and there are fifteen of them; a page of raised panels reads as fifteen alerts. */
 .cmd {
   margin: 0 0 1rem;
@@ -1562,7 +1562,7 @@ h1 .scope {
 .cmd > .hint { margin: 0 0 0.7rem; max-width: 62rem; }
 
 /* `flex-end` rather than `center`: a label sits above its control, so these are boxes of different
-   heights whose BOTTOMS are the line the eye follows -- a slot picker with a one-word label beside
+   heights whose BOTTOMS are the line the eye follows: a slot picker with a one-word label beside
    an item box with a one-word label, and between them a checkbox with no label above it at all.
    Centring them staircases the inputs, which is the same mistake M22b found in the users table. */
 .cmd .fields {
@@ -1600,7 +1600,7 @@ h1 .scope {
 
 .cmd fieldset legend { padding: 0 0.3rem; color: var(--muted); font-size: 0.9rem; }
 
-/* One choice per line, and each carries its own consequence in words -- which is the whole reason
+/* One choice per line, and each carries its own consequence in words, which is the whole reason
    these are radios rather than a `<select>`, where a warning is only readable once the list is
    open. Full-width text, so a two-line explanation stays under its own button. */
 .cmd fieldset label {
@@ -1626,7 +1626,7 @@ h1 .scope {
 .gameplay-options td:first-child { white-space: nowrap; }
 
 /* **The command the roster sent us to.** The link carries `#cmd-<kind>`, which scrolls, and
-   `?kind=<kind>`, which is what marks it -- so a browser that declines to scroll, or a link opened
+   `?kind=<kind>`, which is what marks it, so a browser that declines to scroll, or a link opened
    without its fragment, still lands somewhere that says which form is the one.
 
    An accent border on both sides rather than a tinted ground: `.notice` and `.warning` own tinted
@@ -1639,10 +1639,10 @@ h1 .scope {
 /* --- the room's feed ------------------------------------------------------------------------------
    A terminal, deliberately: this is Archipelago's own item feed and players read it in a client that
    looks like this. Fixed width, and the item colors are the protocol's `flags` rather than
-   decoration -- progression, useful and trap are what a reader is scanning for.
+   decoration: progression, useful and trap are what a reader is scanning for.
 
    **It follows the theme, in both directions.** An earlier version of this block pinned the ground
-   dark in light mode and argued that a console is a console -- which is a real argument and is not
+   dark in light mode and argued that a console is a console, which is a real argument and is not
    the one that decides it: a reader who has asked the site for light mode has asked for it, and one
    page answering "no, not here" is the site overriding a preference it offered. Nor is the dark
    palette usable on a bright display in daylight, which is the case light mode exists for.
@@ -1655,7 +1655,7 @@ h1 .scope {
 
    **Progression and trap are separated by hue alone, and that is a real limitation rather than a
    claim not worth making.** An earlier version of this comment asserted a lightness gap as well;
-   there is none -- pure purple and pure red land within 0.3% luminance of each other on white, and
+   there is none: pure purple and pure red land within 0.3% luminance of each other on white, and
    the same is true of the two in dark. So a reader with red-green or blue-yellow deficiency may see
    them as one color. What carries the distinction instead is the item's own name and the rarity of
    traps; if that turns out not to be enough, the fix is a marker on the trap rows rather than a
@@ -1681,14 +1681,14 @@ h1 .scope {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   font-size: 0.9rem;
   line-height: 1.55;
-  /* **The height comes from the page, not from here** -- see `.feed-page` below, which makes this
+  /* **The height comes from the page, not from here**. See `.feed-page` below, which makes this
      the one growing element between the header and the footer so the feed ends exactly where the
      window does. It used to be `min(70vh, 42rem)`, which is a guess about how tall everything above
      it happens to be: 70vh plus a heading, a download line, a status line and the backfill control
      is more than a viewport, so the page acquired a scrollbar of its own and the reader got two
      nested ones.
 
-     The floor is what a short window gets instead of a sliver -- there the page does scroll, which
+     The floor is what a short window gets instead of a sliver: there the page does scroll, which
      is the right trade at that size.
 
      `overflow-y` is named explicitly beside `overflow-x` for the reason the lint enforces: setting
@@ -1716,7 +1716,7 @@ h1 .scope {
 .journal .where { color: var(--feed-where); }
 
 /* The item classes, from `flags`. Chosen to stay apart from each other for the common forms of
-   color blindness -- the two most likely to be confused, progression and trap, differ in lightness
+   color blindness: the two most likely to be confused, progression and trap, differ in lightness
    as well as hue, so the distinction survives being seen as one color. */
 .journal .item { color: var(--feed-item); }
 .journal .item.progression { color: var(--feed-progression); }
@@ -1729,7 +1729,7 @@ h1 .scope {
 
 /* A name the SENDING CLIENT supplied, beside the name the room authenticated.
  *
- * It earns its place because one slot can be a group of people -- Archipelago's Minecraft world
+ * It earns its place because one slot can be a group of people: Archipelago's Minecraft world
  * puts several accounts behind a single server that holds the slot, and this is the only field
  * saying which of them died. But nothing validates it, so it must not look like the identity next
  * to it: dimmed rather than `--feed-who`, and underlined the way a footnote is, which is what the
@@ -1749,7 +1749,7 @@ h1 .scope {
 }
 
 /* The day heading. A feed shows times of day, so without this a journal spanning a week reads as
-   one where the clock runs backwards -- which is exactly how it looked before it existed. Centered
+   one where the clock runs backwards, which is exactly how it looked before it existed. Centered
    rules rather than a left-aligned line, because it separates rather than belonging to either side.
    The date is the reader's own, from `PunaTime.day`. */
 .journal .daybreak {
@@ -1791,7 +1791,7 @@ h1 .scope {
  *
  * **The feed is the page, so the feed is what gets the leftover room.** Every other page here is a
  * document that ends somewhere and scrolls if it is long; this one is a fixed frame onto a stream
- * that never ends, and a second scrollbar on the document around it is purely in the way -- the
+ * that never ends, and a second scrollbar on the document around it is purely in the way: the
  * outer one moves the frame off the screen while the inner one is where the records actually are.
  *
  * So the body becomes the column: topbar, banner, main, footer, with `main` taking the slack and
@@ -1800,14 +1800,14 @@ h1 .scope {
  * **`height`, NOT `min-height`, and the first version of this got that wrong.** `min-height` is the
  * sticky-footer idiom and it is the wrong tool here, because the two cases are opposites: a sticky
  * footer needs a short page to GROW, and this needs a long one to be CAPPED. `min-height` states a
- * floor and no ceiling, so the flex container has no definite size to distribute -- nothing is ever
+ * floor and no ceiling, so the flex container has no definite size to distribute: nothing is ever
  * forced to shrink, `.journal` (which no longer carries a height of its own) grows with every record
  * it appends, and the whole document scrolls. That is exactly the failure this section exists to
  * remove, reintroduced by the mechanism meant to fix it.
  *
  * `height` makes the size definite, so the free space is a real number, `main` shrinks into it
  * (hence `min-height: 0` below) and the feed ends where the window does. A window too short for the
- * feed's own floor overflows and the page scrolls -- deliberately, since `body` keeps `overflow:
+ * feed's own floor overflows and the page scrolls, deliberately, since `body` keeps `overflow:
  * visible` and clipping the footer would be worse than a scrollbar at that size.
  *
  * `100dvh` is the point of the pair: on a phone `100vh` is the tallest the viewport ever gets, so
@@ -1820,7 +1820,7 @@ h1 .scope {
   height: 100dvh;
 }
 
-/* `width` and `box-sizing` are NOT tidiness here -- they are what keeps the measure. `main` centers
+/* `width` and `box-sizing` are NOT tidiness here: they are what keeps the measure. `main` centers
  * itself with `margin: 0 auto`, and an auto cross-axis margin on a flex item overrides the default
  * stretch: the element would size to fit its content instead of to the measure, so the feed would
  * be as wide as its longest line and the page would reflow every time a long location scrolled by.
@@ -1834,7 +1834,7 @@ h1 .scope {
 
 .feed-page main {
   flex: 1;
-  /* Without this, a flex item refuses to shrink below its content -- so the feed's own floor would
+  /* Without this, a flex item refuses to shrink below its content, so the feed's own floor would
      push `main` past the window and put back the scrollbar this exists to remove. */
   min-height: 0;
   display: flex;
@@ -1846,7 +1846,7 @@ h1 .scope {
 }
 
 /* **Flex items do not collapse their margins**, so leaving these alone would silently DOUBLE the
-   space between every pair of lines above the feed -- and take it out of the feed, which is the one
+   space between every pair of lines above the feed, and take it out of the feed, which is the one
    element paying for it. One uniform gap instead, from the container. */
 .feed-page main > * {
   margin-top: 0;
@@ -1858,7 +1858,7 @@ h1 .scope {
 /* ---- the room-creation panel ------------------------------------------------
  *
  * Visually its own thing on a page that is otherwise a description of a seed, because it is the
- * one part of that page that DOES something -- and what it does is set five policies a room then
+ * one part of that page that DOES something, and what it does is set five policies a room then
  * lives with, three of which cost a restart to change afterwards. So it is laid out as labelled
  * rows rather than a line of controls: each choice gets its own row, its own set of options and
  * room for a sentence saying what the option means.

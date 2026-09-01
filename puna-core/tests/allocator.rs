@@ -498,7 +498,7 @@ async fn narrowing_the_range_moves_a_live_room_rather_than_refusing() {
         );
         assert!(
             !common::redeploy_requested(&mut conn, idle).await,
-            "an idle room needs no restart -- there is nothing to move"
+            "an idle room needs no restart: there is nothing to move"
         );
 
         // And the room that has to move gets a port inside the new range.

@@ -5,15 +5,15 @@
 
    `feed-page`: this one also opts out of being a DOCUMENT. It is a frame onto a stream, so the
    stylesheet sizes the feed to whatever the window has left rather than to a guess, and the page
-   itself never scrolls. **Losing this class is silent** -- the feed would simply grow with its
-   records until the page did nothing but scroll -- so `tests/templates.rs` holds the two files
+   itself never scrolls. **Losing this class is silent**: the feed would simply grow with its
+   records until the page did nothing but scroll, so `tests/templates.rs` holds the two files
    together. #}
 {% block layout %}wide feed-page{% endblock %}
 {% block content %}
 
 {# **NOTHING here links to the room**, exactly as the tracker page does not. This URL carries the
    feed's own id precisely so it can be handed to an audience the organizers did not choose, and a
-   "back to the room" link would hand over the room with it -- the capability escaping through the
+   "back to the room" link would hand over the room with it: the capability escaping through the
    markup rather than through the address bar. The room's NAME is fine and is what tells a reader
    which feed they are watching; it is already on the public room page and names nothing navigable.
 
@@ -23,7 +23,7 @@
 <p class="hint">Everything found in this room, as it happens, and the goals and releases behind
 it.</p>
 
-{# **The file goes to whoever is entitled to every record in it** -- an organizer, or anybody at
+{# **The file goes to whoever is entitled to every record in it**: an organizer, or anybody at
    all on a room whose feed policy is `full`. Serving it to a viewer the socket is filtering would
    hand over precisely what was filtered, since the file is where those records live, which is why
    the two move together. The route refuses regardless; this only decides whether to offer a link
@@ -45,7 +45,7 @@ runs.</span>
    `journal.js` replaces its text as the connection changes. Without script it stays exactly as it
    is, which is the honest description of what a scriptless browser is going to get. #}
 {# The FEED's id, not the room's. `journal.js` builds its socket URL from this, so putting the room
-   id here would leak it into the page's markup for every viewer -- the exact thing the separate id
+   id here would leak it into the page's markup for every viewer: the exact thing the separate id
    exists to prevent, arriving through a data attribute instead of an href. #}
 {# The dot is a SECOND signal, never the only one: the message beside it always says the same thing
    in words. A state carried by hue alone is unreadable to a color-blind reader and invisible to a
@@ -67,7 +67,7 @@ nothing.{% endif %}</p>
    screen reader interrupting itself for each one would make the page unusable for the reader it is
    meant to help. Polite lets it finish a sentence first. #}
 {# Server-rendered and hidden until the socket has replayed, because until then there is nothing to
-   load earlier THAN -- the control needs a boundary from the first frame before it can ask for
+   load earlier THAN: the control needs a boundary from the first frame before it can ask for
    anything. `journal.js` reveals it and updates its label as the walk goes back. #}
 <p class="feed-controls">
 <button type="button" id="journal-earlier" hidden>Load the whole feed</button>

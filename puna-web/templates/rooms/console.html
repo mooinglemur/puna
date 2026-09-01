@@ -9,7 +9,7 @@
    release into somebody else's game.
 
    **A macro because it appears eleven times.** `slots` and `preselect_slot` are passed rather than
-   read off the template, which is what askama macros can see -- and passing them keeps the macro
+   read off the template, which is what askama macros can see, and passing them keeps the macro
    honest about what it depends on. It sits out here rather than beside its callers because askama
    allows a macro only at the top level, never inside a `{% raw %}{% block %}{% endraw %}`.
 
@@ -34,7 +34,7 @@
 {% if room_state != "running" %}
 {# Stated rather than enforced by hiding the forms: a command against a stopped room is REJECTED
    with a readable reason, and that is a better answer than a form that does nothing. Deliberately
-   no auto-start -- a hint that silently provisions a pod is surprising. #}
+   no auto-start: a hint that silently provisions a pod is surprising. #}
 <p class="warning">This room is {{+ room_state }}. Commands need a running room; start it from the
 room page first.</p>
 {% endif %}
@@ -47,7 +47,7 @@ below when it finishes.</p>
 {% if uncertain %}
 {# The one answer that is neither yes nor no, and it is deliberately not dressed up as either. The
    room started while the change was being written, so the pod may have read the old password map
-   or the new one -- and "it takes effect at the next start" would be false by construction, since
+   or the new one, and "it takes effect at the next start" would be false by construction, since
    the start it refers to is the one that just happened. #}
 <p class="warning">The room started while this was being applied, so it may not be in force yet. The
 change is recorded. Check the slot now that the room is up, and run it again if it did not take.</p>
@@ -62,13 +62,13 @@ effect the next time it starts.</p>
 {% endif %}
 
 {# **The answer stays at the top of the page rather than beside the form that produced it.** A run
-   redirects here and lands at the top, so this is where it is seen without scrolling -- and putting
+   redirects here and lands at the top, so this is where it is seen without scrolling, and putting
    it back beside its form would mean either a fragment on the redirect, which scrolls the answer
    off, or fifteen copies of this block each testing `result.kind`. The history table below carries
    the same rows for anything older. #}
 {% if let Some(result) = outcome %}
 <div class="{% if result.succeeded %}notice{% else %}warning{% endif %}">
-<p><strong>{{ result.kind }}</strong> &mdash; {{+ result.state }}</p>
+<p><strong>{{ result.kind }}</strong>: {{+ result.state }}</p>
 {% for line in result.lines %}
 <p>{{ line }}</p>
 {% endfor %}
@@ -88,7 +88,7 @@ effect the next time it starts.</p>
      command ignores, so `build()`'s "which field is missing" errors are a backstop rather than the
      normal way of finding out.
    * **`required` can finally mean something.** On the old shared form every field had to be
-     optional, because every field was absent for most commands -- so the browser could never catch
+     optional, because every field was absent for most commands, so the browser could never catch
      an empty box and the round trip was the only validation. Per form, the browser refuses before
      anything is queued. `alias` is the one deliberate exception: empty is how an alias is cleared.
    * **The submit button says the verb.** Fifteen buttons all reading "Run" is fifteen identical
@@ -139,7 +139,7 @@ has got. Changes nothing.</p>
 
    This is also the anchor the options page links to, rather than the form beneath it: a browser
    scrolls a fragment to the top of the viewport, so anchoring at the form would put the values just
-   above the fold -- and the values are what somebody arriving from that link came to see. #}
+   above the fold, and the values are what somebody arriving from that link came to see. #}
 <section class="panel" id="room-options">
 <h3>The room's rules</h3>
 <p class="hint">These come from the room itself rather than from what this site started it with,
@@ -150,10 +150,10 @@ restores them over anything passed at startup.</p>
 
 {% if is_organizer %}
 {# **The one command a helper may not run**, and the only one that changes the room rather than a
-   game inside it -- see `RoomCommand::required_role`. Hidden rather than disabled: a visible
+   game inside it. See `RoomCommand::required_role`. Hidden rather than disabled: a visible
    control that refuses teaches people the tool is broken. The route re-checks regardless.
 
-   `the_console_offers_option_to_organizers_and_everything_else_to_helpers` pins both halves -- that
+   `the_console_offers_option_to_organizers_and_everything_else_to_helpers` pins both halves, and that
    this is the only organizer-tier command, and that this gate is the one immediately above it. #}
 <form class="cmd{{ self.chosen("option") }}" id="cmd-option" method="post"
       action="/room/{{ room_id }}/command">
@@ -169,7 +169,7 @@ restores what you set here rather than what the room was started with.</p>
 <div class="fields">
 {# The eight pahoa will set, transcribed from its `SETTABLE` table. A picker rather than a text box
    because an unknown name is a refusal, and the value stays free text because the eight take three
-   different kinds -- a number, a mode word, a boolean. **The two passwords are absent**: pahoa
+   different kinds: a number, a mode word, a boolean. **The two passwords are absent**: pahoa
    recognizes and refuses them by name, since the save carries no secret and a live change would
    revert at the next restart. Where a room is configured is on the room page. #}
 <label>Option
@@ -200,11 +200,11 @@ restores what you set here rather than what the room was started with.</p>
 These are the same commands with the slot picked by hand.</p>
 
 {# **Items and locations are separate boxes on purpose**, here and in the roster's dialog. pahoa
-   matches EXACTLY rather than fuzzily -- the caller is a program, so a near miss should be a
-   visible error rather than a silent decision to act on something else -- and the two are looked up
+   matches EXACTLY rather than fuzzily (the caller is a program, so a near miss should be a
+   visible error rather than a silent decision to act on something else) and the two are looked up
    in different tables, so one "name" box would offer the wrong suggestions half the time. #}
 {# `force` grants the hint outright and spends nothing. The default charges the slot's own points as
-   `!hint` would, and MAY GRANT FEWER THAN ASKED OR NONE -- so the room's answer is the truth, not
+   `!hint` would, and MAY GRANT FEWER THAN ASKED OR NONE, so the room's answer is the truth, not
    this checkbox, which is why the result above is rendered verbatim. #}
 <form class="cmd{{ self.chosen("hint") }}" id="cmd-hint" method="post"
       action="/room/{{ room_id }}/command">
@@ -255,12 +255,12 @@ found it. This cannot be undone.</p>
 
 {# **`send_multiple` is not a command of its own**, and was: it is this one with a number beside it,
    so it is the Copies field rather than a second form describing the same act. `build()` sends one
-   copy as `send_item` and several as `send_multiple`, which is the split pahoa draws -- the folding
+   copy as `send_item` and several as `send_multiple`, which is the split pahoa draws: the folding
    is in the asking, not on the wire.
 
    Copies **defaults to one**, which is the only default on this page that fills in a value rather
    than leaving a choice open. Every copy is queued on both of a slot's item streams and replayed
-   from index zero on each reconnect, so pahoa caps it at 100 and so does the form -- but the
+   from index zero on each reconnect, so pahoa caps it at 100 and so does the form, but the
    direction of a mistake is what makes the default safe here: one copy is the least this command
    can do, so a lost field under-sends rather than flooding a game. #}
 <form class="cmd{{ self.chosen("send_item") }}" id="cmd-send_item" method="post"
@@ -303,7 +303,7 @@ game moves forward, and this cannot be undone.</p>
 
 {# **Radios rather than a dropdown, and this is the one where it is not only about the toggle.**
    Every choice here carries a warning, and in a `<select>` a warning is only readable once the list
-   is open -- so the two that pahoa accepts and nobody should want (`connected`, `unknown`) looked
+   is open, so the two that pahoa accepts and nobody should want (`connected`, `unknown`) looked
    exactly like the two that are ordinary, and `goal` looked like both.
 
    **No default**, which radios express and a dropdown could only approximate with a blank first
@@ -333,7 +333,7 @@ connect or disconnect.</label>
 </form>
 
 {# Sets somebody ELSE's alias, which `!alias` cannot. **Empty clears it**, which is why this is the
-   one text field on the page that is not `required` -- and why the label has to say so, since a
+   one text field on the page that is not `required`, and why the label has to say so, since a
    submit with nothing typed is otherwise indistinguishable from a slip. #}
 <form class="cmd{{ self.chosen("alias") }}" id="cmd-alias" method="post"
       action="/room/{{ room_id }}/command">
@@ -376,7 +376,7 @@ which may still permit releasing. This forbids nothing.</label>
 </form>
 
 {# **Offered in every password mode**, since pahoa's own `lock` verb replaced the trick of
-   withholding a slot from the per-slot password map -- which needed that mode to exist at all.
+   withholding a slot from the per-slot password map, which needed that mode to exist at all.
 
    It bars the next login and disconnects nobody, which is the opposite of what a lock sounds like.
    An operator dealing with a griefer wants lock and THEN kick, in that order: kicking first leaves
@@ -400,7 +400,7 @@ password is unchanged.</label>
 </form>
 
 {# **A disconnect, not a ban.** Every socket the slot holds closes, the reason is delivered as chat,
-   and the client may reconnect immediately -- most do, automatically, within seconds. Measured: a
+   and the client may reconnect immediately: most do, automatically, within seconds. Measured: a
    kick here took the room from 4 connections to 5. The description says so because the alternative
    is somebody pressing it twice and concluding the console is broken. #}
 <form class="cmd{{ self.chosen("kick") }}" id="cmd-kick" method="post"

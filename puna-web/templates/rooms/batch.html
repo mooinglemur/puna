@@ -18,7 +18,7 @@
    **Refused is not failed.** A refusal is a completed command whose answer was no: the room
    understood it and declined, which for a bulk `set_status` over a sync where some slots have
    already goaled is the correct answer for every one of them. A failure is a command that did not
-   get an answer at all -- transport, a rate limit, a room that is down, or a command Puna generated
+   get an answer at all: transport, a rate limit, a room that is down, or a command Puna generated
    that pahoa could not parse.
 
    Collapsing the two would put thirty expected refusals in the same red count as one genuine fault,

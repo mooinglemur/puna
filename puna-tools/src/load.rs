@@ -5,7 +5,7 @@
 //!
 //! ## The protocol structs are local, and that is not laziness
 //!
-//! `pahoa-proto` has all of these — and in the wrong directions. Its `ClientPacket` is
+//! `pahoa-proto` has all of these, and in the wrong directions. Its `ClientPacket` is
 //! `Deserialize` (the server reads it) and its `ServerPacket` is `Serialize` (the server writes
 //! it), which is exactly the opposite of what a client needs, so borrowing them would mean
 //! fighting the derives to save forty lines.
@@ -30,7 +30,7 @@ use tokio::sync::Barrier;
 /// Archipelago's `ClientStatus::Goal`.
 const STATUS_GOAL: u8 = 30;
 
-/// Receive items, receive starting inventory, receive from own world — everything.
+/// Receive items, receive starting inventory, receive from own world: everything.
 ///
 /// **The default is 7 on purpose.** Checks flowing *from* slots make other slots' items flow *to*
 /// them, and that return direction is the firehose the filtered feed exists for and the one the
@@ -41,7 +41,7 @@ pub const ITEMS_HANDLING_ALL: u8 = 0b111;
 ///
 /// **0.6.7 because that is what upstream has actually released.** pahoa is moving its own
 /// `SERVER_VERSION` to the same value until 0.6.8 ships, and the two are not independent: a room
-/// running `compatibility = 0` — tournament mode — refuses any client whose version is not
+/// running `compatibility = 0` (tournament mode) refuses any client whose version is not
 /// **exactly** the server's (`pahoa-room/src/room.rs:505`, `IncompatibleVersion`). Under the
 /// default `compatibility = 2` only the seed's floor applies, which is `MIN_CLIENT_VERSION` = 0.5.0
 /// for any generator at or past 0.6.2.
@@ -50,7 +50,7 @@ pub const ITEMS_HANDLING_ALL: u8 = 0b111;
 /// floor is what keeps it usable everywhere else. The floor half is asserted against the pinned
 /// crate rather than trusted; see `the_client_version_clears_pahoas_floor`. Once pahoa's move
 /// lands and the pin catches up, this is a candidate for reading `pahoa_room::SERVER_VERSION`
-/// directly — a fact from the same rev beats a number transcribed from another repository.
+/// directly: a fact from the same rev beats a number transcribed from another repository.
 const CLIENT_VERSION: (u32, u32, u32) = (0, 6, 7);
 
 /// How long a rate holds on average. Bursts happen inside it; the average comes out over it.
@@ -59,7 +59,7 @@ const WINDOW: Duration = Duration::from_secs(10);
 /// Sub-intervals a window is dealt across.
 const TICKS_PER_WINDOW: u32 = 10;
 
-/// How long a connected slot waits for the others **when there is no ramp** — see [`schedule`],
+/// How long a connected slot waits for the others **when there is no ramp**. See [`schedule`],
 /// which is where the gate does or does not exist.
 ///
 /// The grace is there because one slot that cannot connect must not hold the rest: a bare barrier
@@ -83,10 +83,10 @@ const RECONNECT_MAX: Duration = Duration::from_secs(30);
 /// Every drop used to end that slot for the rest of the run, which quietly changed what was being
 /// measured: 545 of 2000 gone means every later number is per-1455, and the room was serving a
 /// population that only ever shrank. A room shedding load is *supposed* to see the shed clients come
-/// back — that is the interesting half of backpressure, and none of it was being exercised.
+/// back: that is the interesting half of backpressure, and none of it was being exercised.
 ///
 /// **Jittered, and that is not decoration.** The event that drops connections drops many at once: a
-/// goal cascade shed 545 in twelve seconds. Undelayed, all 545 redial in the same instant — the
+/// goal cascade shed 545 in twelve seconds. Undelayed, all 545 redial in the same instant: the
 /// connect storm [`schedule`] exists to avoid, aimed at a room that has just demonstrated it is
 /// already at its limit. Equal jitter (half the window fixed, half uniform) spreads them without
 /// letting the first retry land at zero.
@@ -104,7 +104,7 @@ pub fn reconnect_delay(attempt: u32, rng: &mut impl Rng) -> Duration {
 ///
 /// Polled rather than notified because `finished` is a bare flag shared with the progress watcher,
 /// and a bare `sleep` of the full backoff would hold the process open for up to
-/// [`RECONNECT_MAX`] after the last goal — a tool that appears to hang at the end of a run it has
+/// [`RECONNECT_MAX`] after the last goal: a tool that appears to hang at the end of a run it has
 /// already finished.
 async fn hold(delay: Duration, finished: &AtomicBool) -> bool {
     let deadline = Instant::now() + delay;
@@ -128,7 +128,7 @@ enum Ended {
 
 /// What to do after one session ended.
 enum Retry {
-    /// Dial again — the wait has already been served.
+    /// Dial again. The wait has already been served.
     Again,
     /// The run is over, or it ended while waiting.
     Stop,
@@ -140,7 +140,7 @@ enum Retry {
 /// that a connection always comes back if the room dropped it before we were done, and the tool is
 /// in no position to decide which refusals are permanent: a room mid-restart refuses for a few
 /// seconds and then does not, and a room that refuses forever is answered by the backoff reaching
-/// its 30-second ceiling — a slot knocking politely rather than hammering.
+/// its 30-second ceiling: a slot knocking politely rather than hammering.
 ///
 /// The logging is loud once and quiet after, because at two thousand connections a warning per
 /// attempt is a wall of text that hides the first one. The first loss of a stable connection is the
@@ -148,7 +148,7 @@ enum Retry {
 ///
 /// **A free function taking the state rather than a `reconnecting(|| session())` combinator**,
 /// which is what this was first. `AsyncFnMut` puts no `Send` bound on the future it returns, so a
-/// closure borrowing the slot's own state — which is the entire point of the loop — produced
+/// closure borrowing the slot's own state (which is the entire point of the loop) produced
 /// *"implementation of `Send` is not general enough"* at every `tokio::spawn`: an error in the
 /// caller, about lifetimes, naming nothing that is actually wrong. The loop is six lines at each of
 /// the two call sites and they cannot drift, because everything that decides anything is here.
@@ -190,7 +190,7 @@ async fn retry(
 
 /// The backoff's own rng: `Send`, and separate from a slot's seeded traffic rng.
 ///
-/// Separate so a reconnect does not consume draws the traffic shape depends on — `--seed`
+/// Separate so a reconnect does not consume draws the traffic shape depends on: `--seed`
 /// reproducibility is already lost the moment a drop happens, and the failure path should not take
 /// more of it than the failure did. `ThreadRng` would do neither: it is not `Send`, and this is held
 /// across an await inside a spawned task.
@@ -219,7 +219,7 @@ impl Backoff {
     /// **Not "reset whenever the handshake succeeded"**, which is the obvious rule and is wrong for
     /// the case this exists for. A room shedding load accepts a connection and drops it again
     /// moments later; resetting on the accept would put that slot into a 500 ms redial loop against
-    /// a room that has just said it cannot cope — a load tool converting a shed into a storm. A
+    /// a room that has just said it cannot cope: a load tool converting a shed into a storm. A
     /// session shorter than the longest backoff was not a stable connection, so it escalates.
     fn held(&mut self, lasted: Duration) {
         if lasted >= RECONNECT_MAX {
@@ -253,13 +253,13 @@ pub struct Config {
 
 /// What a connection is pretending to be.
 ///
-/// **One player commonly holds three sockets** — the game client, a text client and a tracker —
+/// **One player commonly holds three sockets** (the game client, a text client and a tracker)
 /// which is why `clients_connected` counts sockets rather than players, and why a load run with one
 /// connection per slot understates a real room's fan-out by roughly a third of what it should be.
 ///
 /// The difference is entirely **tags**. `TextOnly` and `Tracker` are Archipelago's non-game tags
 /// (`MultiServer.py:956`): carried together with an empty `game`, they skip the game and per-slot
-/// version checks (`Client::ignores_game`), and they make the connection `no_locations` — pahoa
+/// version checks (`Client::ignores_game`), and they make the connection `no_locations`: pahoa
 /// refuses a check or a goal from one by name. So these two connect, consume the firehose and
 /// answer heartbeats, which is exactly the job.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -307,7 +307,7 @@ pub struct SlotPlan {
     /// **`None` for a spectator**, which owns no locations and can never goal. An `Option` rather
     /// than a sentinel because the two states behave differently in three places and a magic id
     /// made them look like one: a spectator connects with nothing to check, and the first version
-    /// of this read that as "already finished" and counted it — reporting `goaled 14/12` on a
+    /// of this read that as "already finished" and counted it, reporting `goaled 14/12` on a
     /// twelve-player room, and ending runs on a quorum that included slots which could not play.
     pub goal_item: Option<i64>,
 }
@@ -318,7 +318,7 @@ pub struct Totals {
     pub checks_sent: AtomicU64,
     pub items_received: AtomicU64,
     pub goaled: AtomicU64,
-    /// Slots connected **right now** — it goes down again.
+    /// Slots connected **right now**, so it goes down again.
     ///
     /// **It only ever went up, and that hid a room dropping most of the run.** A run that lost 165
     /// of its 200 slots printed `connected 200` on every line afterwards, so the progress display
@@ -329,7 +329,7 @@ pub struct Totals {
     /// **Times a connection was lost**, not connections that are gone.
     ///
     /// The distinction arrived with reconnection: a drop is now an event rather than an ending, so
-    /// this accumulates and `connected` recovers. Read the two together — `drops` says how hard the
+    /// this accumulates and `connected` recovers. Read the two together: `drops` says how hard the
     /// room was shedding, `connected` says how much of the population is there now, and neither
     /// answers the other's question.
     pub drops: AtomicU64,
@@ -338,7 +338,7 @@ pub struct Totals {
     /// **`drops - reconnects` is how many are down right now**, and that is the only way to ask the
     /// question after the run: `connected` is zero once the tasks have been joined, because every
     /// connection closed cleanly on the way out. Both counters move only on the unclean path, so
-    /// the subtraction cannot drift — a clean ending touches neither.
+    /// the subtraction cannot drift: a clean ending touches neither.
     pub reconnects: AtomicU64,
     /// Connections opened, counting every redial.
     ///
@@ -370,8 +370,8 @@ impl<'a> Connection<'a> {
     /// `been_up` is whether this connection has ever been established before, and it is set here.
     ///
     /// **Not "is this the first attempt", which is what it was and which counted `back` higher than
-    /// `drops`.** A slot whose opening dial fails and whose second succeeds has not *re*connected —
-    /// it has connected, late — but the attempt counter had already moved off its first value, so
+    /// `drops`.** A slot whose opening dial fails and whose second succeeds has not *re*connected
+    /// (it has connected, late) but the attempt counter had already moved off its first value, so
     /// the guard was created looking like a recovery from a drop that never happened. Observed as
     /// `(drops 20436, back 20437)` on a 2000-connection run: one number that must bound the other,
     /// exceeding it by exactly the number of slots that stumbled on their way in.
@@ -391,7 +391,7 @@ impl<'a> Connection<'a> {
         }
     }
 
-    /// The run ended and this slot let go of its own accord — not a drop.
+    /// The run ended and this slot let go of its own accord, not a drop.
     fn closing(&mut self) {
         self.cleanly = true;
     }
@@ -410,7 +410,7 @@ impl Drop for Connection<'_> {
 ///
 /// **The point of the struct is that these three outlive a socket and `remaining` does not.** A
 /// reconnect re-derives what is left to check from the room's own `Connected`, exactly as a resumed
-/// run does — the room is authoritative and the tool's idea of the list is not. What cannot be
+/// run does: the room is authoritative and the tool's idea of the list is not. What cannot be
 /// re-derived is what this slot has already *told the run*, and counting any of it twice corrupts
 /// the numbers the run exists to produce.
 #[derive(Default)]
@@ -428,7 +428,7 @@ struct Session {
     /// How many items this slot has contributed to [`Totals::items_received`].
     ///
     /// **A reconnect replays the slot's entire item history from index zero**, which is how a
-    /// resumed slot learns it already won — so the replay after a drop is everything already
+    /// resumed slot learns it already won, so the replay after a drop is everything already
     /// counted, plus whatever arrived while the connection was down. Adding it whole would inflate
     /// the run's item total by a slot's history per drop, and that total is the one number checkable
     /// against the room's own tracker. See [`Session::absorb_replay`].
@@ -443,8 +443,8 @@ struct Session {
 impl Session {
     /// Count the connect-time replay, without counting any of it twice.
     ///
-    /// Returns how many were newly counted. The replay is a prefix-superset of what has been seen —
-    /// the room replays from index zero every time — so the new items are whatever is past the
+    /// Returns how many were newly counted. The replay is a prefix-superset of what has been seen
+    /// (the room replays from index zero every time) so the new items are whatever is past the
     /// high-water mark.
     fn absorb_replay(&mut self, replayed: usize, totals: &Totals) -> usize {
         let fresh = replayed.saturating_sub(self.items_counted);
@@ -472,7 +472,7 @@ impl Session {
     }
 }
 
-/// When one slot dials, and — only when everybody dials at once — how long it waits for the rest.
+/// When one slot dials, and, only when everybody dials at once, how long it waits for the rest.
 #[derive(Debug, Clone, Copy)]
 pub struct Schedule {
     pub connect_at: Instant,
@@ -486,20 +486,20 @@ pub struct Schedule {
 /// not the room: the pod peaked at 0.015 cores against a 2-core limit with zero throttled periods,
 /// and every drop landed in the one two-minute bucket where the connections were arriving. Each
 /// arrival fans out to everybody already connected *and* replays the newcomer's whole item history,
-/// so the cost of filling a room all at once grows with the square of its size — outbound queued
+/// so the cost of filling a room all at once grows with the square of its size: outbound queued
 /// bytes reached 31.7 MiB against a 64 MiB budget shared across every connection.
 ///
 /// A ramp is also simply what a room looks like: players arrive over minutes, not in one frame. So
-/// the default is a ramp and the storm is the thing that has to be asked for — `0`, which is kept
+/// the default is a ramp and the storm is the thing that has to be asked for: `0`, which is kept
 /// because reproducing the storm deliberately is a legitimate measurement rather than a mistake.
 ///
 /// **A ramp replaces the start gate rather than sitting in front of it**, which is Troy's call and
-/// the right one. The gate — everybody connects, nobody checks until the last one is in — was
+/// the right one. The gate (everybody connects, nobody checks until the last one is in) was
 /// written before the ramp existed, to stop a run being measured through a staircase of arrivals.
 /// A ramp *is* a staircase, deliberately, so keeping both bought two bad things and nothing else:
 /// a dead period the length of the ramp (**6.7 minutes at 2000 slots**, during which the tool looks
 /// stuck), and then a synchronized start with every slot beginning its first window in the same
-/// instant — the herd shape [`tick_phase`] exists to break up.
+/// instant: the herd shape [`tick_phase`] exists to break up.
 ///
 /// Without the gate, load builds with the population, which is what a room filling up actually
 /// looks like.
@@ -593,7 +593,7 @@ enum Inbound {
 /// Deal one window's budget across its ticks.
 ///
 /// A flat check every `1/rate` seconds is the one traffic shape a real room never produces, and it
-/// is the shape that makes a queue look healthy — nothing ever arrives together, so nothing ever
+/// is the shape that makes a queue look healthy: nothing ever arrives together, so nothing ever
 /// queues. So the rate holds **on average over the window** and swings hard inside it.
 ///
 /// Weights are `(-ln U)^k` normalized, which is a Dirichlet draw in one line: `k = 1` is the
@@ -653,13 +653,13 @@ struct Pace {
 /// How many checks this window gets, from the rate's own running total.
 ///
 /// **A window's budget is a whole number of checks, and rounding it away silently stopped the tool
-/// dead.** `--rate 0.01` is one check per slot every hundred seconds — a perfectly reasonable soak
-/// — and against a ten-second window that is a budget of `0.1`, which rounded to **zero**. Every
+/// dead.** `--rate 0.01` is one check per slot every hundred seconds, a perfectly reasonable soak,
+/// and against a ten-second window that is a budget of `0.1`, which rounded to **zero**. Every
 /// tick then wanted nothing, forever: the slots connected, the connections stayed up, the progress
 /// line counted `checks 0`, and nothing anywhere explained why. Every rate below 0.05 did this.
 ///
 /// Computed as *how many are owed by now, minus how many have been handed out* rather than by
-/// accumulating a remainder — which is the same idea with a bug in it: adding `0.1` ten times gives
+/// accumulating a remainder, which is the same idea with a bug in it: adding `0.1` ten times gives
 /// `0.9999999999999999`, so the first check of a 0.01 run would arrive a window late and every
 /// hundredth one after that would slip again. One multiplication against the window count cannot
 /// drift.
@@ -682,7 +682,7 @@ fn tick_phase(rng: &mut impl Rng, tick_len: Duration) -> Duration {
 
 /// Install ring as the process-wide rustls provider.
 ///
-/// **Explicit rather than inferred**, and tolerant of somebody having got there first — the same
+/// **Explicit rather than inferred**, and tolerant of somebody having got there first: the same
 /// shape the vendored `db.rs` uses in `puna-core`, and for the same reason: `install_default`
 /// returns `Err` when a default already exists, so `expect`ing it turns a harmless second call
 /// into a crash.
@@ -697,12 +697,12 @@ pub fn install_crypto_provider() {
 /// Where to dial, from what the operator typed.
 ///
 /// **`wss://` unless a scheme says otherwise**, so the ordinary form is `host:port` and gets TLS
-/// with the certificate verified against that host — a Puna room is reached by its advertised
+/// with the certificate verified against that host, since a Puna room is reached by its advertised
 /// hostname, which is the one name on its certificate.
 ///
 /// A written-out `ws://` is honored, which is what makes a locally-run pahoa testable: with no
 /// `--tls-cert` it serves plaintext, and there is no cert to verify. That is a different thing from
-/// a flag that turns verification *off*, which this deliberately does not have — the scheme says
+/// a flag that turns verification *off*, which this deliberately does not have: the scheme says
 /// plainly what the connection is, in the command line and in the shell history.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoint {
@@ -738,7 +738,7 @@ impl Endpoint {
 
 /// Either transport, behind one type.
 ///
-/// `Client` is generic over its stream, so plaintext and TLS are different types — and every
+/// `Client` is generic over its stream, so plaintext and TLS are different types, and every
 /// function below would otherwise have to be generic too, or exist twice. Boxing costs one indirect
 /// call per socket read, which is nothing beside a TLS record or the JSON behind it.
 ///
@@ -754,7 +754,7 @@ type Socket = pahoa_net::ws::client::Client<Box<dyn Stream>>;
 ///
 /// The offer is the whole reason this goes through pahoa's client rather than a WebSocket crate:
 /// `tungstenite` rejects a frame with RSV1 set outright, so a load run through it is a population
-/// the room can share no compression with — 1.2 GB delivered on one measured run, every byte of it
+/// the room can share no compression with: 1.2 GB delivered on one measured run, every byte of it
 /// uncompressed, which is a worst case rather than a measurement of anything players would do.
 ///
 /// TLS is terminated here and verified against **the name the operator typed**, which is the name
@@ -793,7 +793,7 @@ async fn connect(endpoint: &Endpoint) -> Result<Socket> {
 /// What is left to check, reconciled against what the room says is already done.
 ///
 /// **The room decides, not the seed.** A tool that sent every location out of the multidata would
-/// replay thousands of checks a part-played room answers by ignoring — load that measures nothing
+/// replay thousands of checks a part-played room answers by ignoring: load that measures nothing
 /// while hiding the real rate, and the reason a run cannot simply be restarted from the file.
 ///
 /// `missing_locations` should already exclude `checked_locations`; subtracting anyway costs one
@@ -844,7 +844,7 @@ async fn dial(config: &Config, plan: &SlotPlan, role: Role, totals: &Totals) -> 
 /// Hold one non-playing connection open, consuming everything the room sends it.
 ///
 /// **This is what makes a load run's fan-out honest.** A room's outbound cost is per *connection*,
-/// and a real player holds up to three — so a run with one socket per slot measures a third of the
+/// and a real player holds up to three, so a run with one socket per slot measures a third of the
 /// delivery a full room would do, while every rate that looks per-player is really per-socket.
 ///
 /// It sends nothing after `Connect` and that is not laziness: a `TextOnly` or `Tracker` connection
@@ -995,7 +995,7 @@ pub async fn play(
     clippy::too_many_arguments,
     reason = "every one of these is state that outlives the socket, which is the whole point of \
               splitting a session out of `play`. A context struct would group them and would make \
-              the thing that matters -- which of them survive a reconnect and which do not -- \
+              the thing that matters (which of them survive a reconnect and which do not) \
               harder to see rather than easier."
 )]
 async fn play_once(
@@ -1180,7 +1180,7 @@ async fn play_once(
     tokio::pin!(tick_at);
 
     loop {
-        // **Not "this slot goaled"** -- a spectator never does, and gating on it would leave every
+        // **Not "this slot goaled"**: a spectator never does, and gating on it would leave every
         // watching connection hanging after the players had finished and the run was over.
         if finished.load(Ordering::Relaxed) {
             break;
@@ -1223,7 +1223,7 @@ async fn play_once(
                 let want = window[tick] as usize;
                 tick += 1;
 
-                // Released on goal, so there is nothing left worth checking -- but the connection
+                // Released on goal, so there is nothing left worth checking, but the connection
                 // stays up and the loop keeps draining and answering pings.
                 if !session.goaled && want > 0 && !session.remaining.is_empty() {
                     let mut packets = Vec::new();
@@ -1270,7 +1270,7 @@ async fn play_once(
 /// Handle one message. Returns whether this call is the one that goaled the slot.
 ///
 /// **Pings are answered by `Client::recv` itself**, on the socket it owns, so a goaled slot that
-/// has stopped writing still answers — which is exactly the window where a room would otherwise
+/// has stopped writing still answers, which is exactly the window where a room would otherwise
 /// stop hearing from it. Earlier this file did it by hand because tungstenite queues a pong and
 /// flushes it on the *next write*, which a silent client never makes.
 async fn pump(
@@ -1326,7 +1326,7 @@ async fn wait_for_room_info(socket: &mut Socket) -> Result<()> {
 /// What connecting told us: what is left to check, and whatever was already waiting.
 struct Connected {
     remaining: Vec<i64>,
-    /// Item ids delivered as part of connecting — the room's replay of this slot's history.
+    /// Item ids delivered as part of connecting: the room's replay of this slot's history.
     replayed: Vec<i64>,
 }
 
@@ -1334,7 +1334,7 @@ struct Connected {
 ///
 /// This is what makes the tool restartable: a run stopped and started again against a part-played
 /// room picks up where the room is rather than replaying thousands of checks it has already seen,
-/// which the room answers by ignoring — load that measures nothing while hiding the real rate.
+/// which the room answers by ignoring: load that measures nothing while hiding the real rate.
 ///
 /// **The whole batch is read, not just up to `Connected`**, and that is a fix rather than a
 /// nicety. The room answers a connect with `Connected` *and* the slot's item history, commonly in
@@ -1342,14 +1342,14 @@ struct Connected {
 /// merely cosmetic and one not:
 ///
 /// - The tool under-reported items. Measured against a room's own tracker: slots 4, 5 and 6 of a
-///   six-player run were short by exactly 1, 2 and 3 — the count rising with connect order,
+///   six-player run were short by exactly 1, 2 and 3, the count rising with connect order,
 ///   because a ramped slot that dials later has more already waiting for it. 234 of 240.
 /// - **A resumed slot could miss its own Goal.** Point the tool at a part-played room where this
 ///   slot's Goal has already been found, and the Goal arrives in precisely this replay: dropped,
 ///   the slot never notices it has finished, keeps checking a world it has already won, and the
 ///   run waits for a goal that has already happened.
 ///
-/// It was invisible until the start gate went away — with everybody waiting for the last connect,
+/// It was invisible until the start gate went away: with everybody waiting for the last connect,
 /// nothing had been checked yet and every replay was empty.
 async fn handshake(socket: &mut Socket, plan: &SlotPlan) -> Result<Connected> {
     let mut replayed = Vec::new();
@@ -1367,7 +1367,7 @@ async fn handshake(socket: &mut Socket, plan: &SlotPlan) -> Result<Connected> {
                 } => {
                     if slot != plan.slot {
                         bail!(
-                            "connected as slot {slot} but expected {} -- is this the right seed?",
+                            "connected as slot {slot} but expected {}: is this the right seed?",
                             plan.slot
                         );
                     }
@@ -1415,7 +1415,7 @@ mod tests {
     ///
     /// **The ceiling is the load-bearing half.** A room that refuses forever is answered by every
     /// slot knocking at 30-second intervals; without the cap, `RECONNECT_BASE << attempt` overflows
-    /// a `u32` shift at 32 — a panic in debug and, in release, a wrap to a one-nanosecond backoff,
+    /// a `u32` shift at 32: a panic in debug and, in release, a wrap to a one-nanosecond backoff,
     /// which is a two-thousand-connection redial storm produced by an integer.
     #[test]
     fn the_backoff_doubles_up_to_a_ceiling() {
@@ -1447,7 +1447,7 @@ mod tests {
     /// **Jittered, because the connections a room sheds are shed together.**
     ///
     /// A goal cascade dropped 545 of 2000 in twelve seconds. Undelayed or fixed-delay, all 545
-    /// redial in the same instant — the connect storm `schedule` exists to prevent, aimed at a room
+    /// redial in the same instant: the connect storm `schedule` exists to prevent, aimed at a room
     /// that has just demonstrated it is at its limit.
     #[test]
     fn the_backoff_does_not_land_every_slot_on_one_instant() {
@@ -1463,7 +1463,7 @@ mod tests {
 
     /// **A session that did not last is not a connection that worked.**
     ///
-    /// The obvious rule — reset once the handshake succeeds — is wrong for the case the backoff
+    /// The obvious rule (reset once the handshake succeeds) is wrong for the case the backoff
     /// exists for: a room shedding load accepts and drops again moments later, and resetting on the
     /// accept puts that slot into a 500 ms redial loop against a room that has just said it cannot
     /// cope. That is a load tool turning a shed into a storm.
@@ -1495,10 +1495,10 @@ mod tests {
     /// question and agrees with the right one everywhere except here: a slot whose opening dial
     /// fails and whose second succeeds arrives *late*, having never been up, and was counted as a
     /// return from a drop that never happened. Seen on a 2000-connection run as
-    /// `(drops 20436, back 20437)` — a bound violated by exactly the number of slots that stumbled.
+    /// `(drops 20436, back 20437)`: a bound violated by exactly the number of slots that stumbled.
     ///
     /// It matters past the display: `drops - reconnects` is what the summary reports as never having
-    /// come back, and a negative difference saturates to zero — so a run that really did end a
+    /// come back, and a negative difference saturates to zero, so a run that really did end a
     /// connection short would have said every connection was up.
     #[test]
     fn a_late_arrival_is_not_a_reconnection() {
@@ -1509,7 +1509,7 @@ mod tests {
         let back = || totals.reconnects.load(Ordering::Relaxed);
 
         // Two dials that failed before establishing anything. There is no guard to construct, so
-        // neither counter moves -- and, the point, the slot has still never been up.
+        // neither counter moves, and, the point, the slot has still never been up.
 
         // Now it lands for the first time: an arrival, not a return.
         let late = Connection::opened(&totals, &mut been_up);
@@ -1538,7 +1538,7 @@ mod tests {
     /// **A reconnect replays the slot's whole item history, and it must not be counted twice.**
     ///
     /// `totals.items_received` is the one number checkable against the room's own tracker, so
-    /// adding a slot's history per drop would inflate exactly the figure a run is verified by --
+    /// adding a slot's history per drop would inflate exactly the figure a run is verified by,
     /// and it would inflate it *more* the worse the run went, which is the direction that hides a
     /// problem rather than showing one.
     #[test]
@@ -1563,7 +1563,7 @@ mod tests {
     /// **The run's goal tally moves once per slot, and the run's end depends on it.**
     ///
     /// `totals.goaled >= players` is what ends a run, so a slot that counted itself again after a
-    /// reconnect would stop the run with somebody still playing — a truncated measurement that
+    /// reconnect would stop the run with somebody still playing: a truncated measurement that
     /// reports as a complete one.
     #[test]
     fn a_slot_counts_its_goal_once_across_reconnects() {
@@ -1576,7 +1576,7 @@ mod tests {
 
     /// **The budget is spent exactly, at every jitter setting.** The whole promise of the window is
     /// that the average comes out true, so a rounding drift would make the tool quietly send fewer
-    /// checks than asked for -- and a load tool that lies about its own rate is worse than none.
+    /// checks than asked for, and a load tool that lies about its own rate is worse than none.
     #[test]
     fn a_window_spends_its_budget_exactly() {
         for jitter in [0.0, 0.25, 0.5, 1.0] {
@@ -1618,7 +1618,7 @@ mod tests {
     /// no unit test that could reach it and no symptom that names it.
     ///
     /// pahoa is the only side that pings (Archipelago's own clients set `ping_interval=None`), at
-    /// 20 s with 20 s more to answer — so 40 s of silence is a connection the room closes. The
+    /// 20 s with 20 s more to answer, so 40 s of silence is a connection the room closes. The
     /// default ramp for 200 slots is 39.8 s, which puts the first slot to arrive **exactly on that
     /// boundary**, and from this side the death appears as a TLS EOF that names nothing.
     ///
@@ -1647,7 +1647,7 @@ mod tests {
 
     /// **The floor comes from the pinned crate, not from a comment.** pahoa refuses a client below
     /// `MIN_CLIENT_VERSION` for any seed from a generator at or past 0.6.2, and the failure is a
-    /// refusal on every slot at once — worth catching when the pin moves rather than in a run.
+    /// refusal on every slot at once, worth catching when the pin moves rather than in a run.
     ///
     /// The *other* constraint cannot be asserted here and is stated instead: a room with
     /// `compatibility = 0` demands an exact match with pahoa's own `SERVER_VERSION`, which lives in
@@ -1693,7 +1693,7 @@ mod tests {
     }
 
     /// **Slots must not share a tick grid.** The gate releases them together, so without a phase
-    /// every slot's clock starts in the same instant and stays there — and the whole per-slot rate
+    /// every slot's clock starts in the same instant and stays there, and the whole per-slot rate
     /// design collapses into one synchronized waveform, which is the traffic shape a real room
     /// never produces and the one that makes a harness measure itself.
     #[test]
@@ -1723,7 +1723,7 @@ mod tests {
 
     /// **A source lint, because the test above cannot see whether anything CALLS it.**
     ///
-    /// Deleting the phase from `play` leaves every unit test green — `tick_phase` still returns a
+    /// Deleting the phase from `play` leaves every unit test green: `tick_phase` still returns a
     /// good spread, nothing else in the file changes, and the only symptom is two hundred slots
     /// back on one grid, visible solely as a traffic shape on somebody else's dashboard. Same shape
     /// as every other "a thing that is entirely its call site" in this repository, so it gets the
@@ -1844,7 +1844,7 @@ mod tests {
     /// time this was pointed at a real room.
     ///
     /// `tokio-tungstenite` brings rustls in with no provider feature, and this crate does not
-    /// depend on `puna-core` — the thing that enables `rustls/ring` everywhere else — so rustls
+    /// depend on `puna-core` (the thing that enables `rustls/ring` everywhere else) so rustls
     /// compiled for these binaries could not infer a default and `ClientConfig::builder()`
     /// panicked at the first handshake. Every unit test passed, clippy passed, and the repository's
     /// `aws-lc` grep passed, because that check proves there is no *second* provider and says
@@ -1872,7 +1872,7 @@ mod tests {
     /// TLS by default, and plaintext only when the command line says so in as many words.
     ///
     /// **The host is kept as typed, not resolved**, because it is both the name verified against
-    /// the certificate and the `Host:` header — a room carries exactly one name and it is the one
+    /// the certificate and the `Host:` header: a room carries exactly one name and it is the one
     /// the operator wrote.
     #[test]
     fn a_room_address_gets_tls_unless_a_scheme_says_otherwise() {
@@ -1900,7 +1900,7 @@ mod tests {
         );
 
         // A room is host:port. Anything else is a typo worth naming rather than a default worth
-        // guessing -- picking 443 for a room address would dial the web tier.
+        // guessing: picking 443 for a room address would dial the web tier.
         assert!(Endpoint::parse("mw.ionium.us").is_err());
         assert!(Endpoint::parse("https://mw.ionium.us:45000").is_err());
         assert!(Endpoint::parse("mw.ionium.us:sixty").is_err());

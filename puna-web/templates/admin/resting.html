@@ -7,15 +7,15 @@
 
    Deliberately fewer columns than the active table: an image, a deployment age and a client count
    are all facts about a running pod, and none of these rooms has one. What is left is what still
-   answers a question -- who made it, and how it came to be down. #}
-{# **This list only grows**, which is the whole reason the section loads on demand -- and it is the
+   answers a question: who made it, and how it came to be down. #}
+{# **This list only grows**, which is the whole reason the section loads on demand, and it is the
    same reason it needs a filter more than the active table does: every room anybody ever stopped is
    in here, so finding one by name is the only realistic way in once an environment has been running
    a while.
 
    `table.js` looks its box up with a document-wide `[data-filters="<id>"]`, and `ondemand.js`
    inserts this fragment BEFORE it calls `scan`, so a box that arrives with the table wires itself.
-   Hidden until that file loads -- see `.table-controls`. #}
+   Hidden until that file loads. See `.table-controls`. #}
 <p class="table-controls">
 <input type="search" class="table-search" data-filters="resting-rooms"
        placeholder="Filter stopped and closed rooms" aria-label="Filter stopped and closed rooms">

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {# **`<page>: <room>`, and the page name leads on every room-scoped tab.** A browser truncates a
-   title from the right, so the half that survives has to be the half that says which page this is --
+   title from the right, so the half that survives has to be the half that says which page this is:
    the older `<room> &mdash; tracker` shape spent its first twenty characters on the thing every one
    of a room's tabs has in common. #}
 {% block title %}Room: {{+ room.name }}{% endblock %}
@@ -17,7 +17,7 @@
 
    Editing IN PLACE is the stylesheet's doing, not the script's: `.titlebar:has(.rename[open])`
    hides the heading and the pencil while the form is open, so the field lands where the title was.
-   Where `:has()` is unsupported the heading simply stays and the field appears beside it -- the
+   Where `:has()` is unsupported the heading simply stays and the field appears beside it: the
    older behavior, which is worse and not broken.
 
    The submit button is FIRST inside the form on purpose: Enter in a text field activates the
@@ -78,7 +78,7 @@
 </div>
 
 {# Whatever redirected here had to say. Every Flash in routes/rooms.rs lands on this page or the
-   options page, and neither read one until 2026-08-28 -- so "Saved", the rename confirmation and
+   options page, and neither read one until 2026-08-28, so "Saved", the rename confirmation and
    every lobby-import result were written into a cookie and dropped by the page they were for. #}
 {% if let Some(notice) = notice %}
 <p class="{{ notice.class }}">{{ notice.message }}</p>
@@ -89,7 +89,7 @@
 {% include "rooms/panel.html" %}
 
 {# OUTSIDE the state branch on purpose. The tracker serves its last cached document with an "as of"
-   banner while the room is down, which for an async is most of the time -- so this is exactly when
+   banner while the room is down, which for an async is most of the time, so this is exactly when
    a player wants it, and gating it on `running` would hide a page that works. #}
 {# **Two conditions, because the feed answers two gates and the tracker answers one.** Both flags
    are computed in the route from the same functions the target routes call, so this page cannot
@@ -97,7 +97,7 @@
    tracker and a `disabled` journal is an ordinary configuration, so these genuinely differ.
 
    The tracker answers "where is everybody up to"; the history answers "what just happened". They
-   sit together because a reader who wants one usually wants to know the other exists -- the history
+   sit together because a reader who wants one usually wants to know the other exists: the history
    in particular was unreachable except by typing its URL until this line, which is the third time
    in this project something correct and gated turned out to have no door. #}
 {% if can_see_tracker %}
@@ -122,7 +122,7 @@
    It is DERIVED (see the route) and carries no dismiss flag: it goes away when those slots are
    claimed rather than when somebody clicks it away and forgets. #}
 {# `is_staff` as well as the count, and the second gate is not redundant. The route already decides
-   this -- it passes `None` to anybody who is not staff -- but the field is an ordinary count rather
+   this (it passes `None` to anybody who is not staff) but the field is an ordinary count rather
    than a type that carries its own audience, so a later caller filling it in for everybody would
    publish how many of this room's slots are unowned on a page anybody can open. Two cheap gates on
    one fact, where one of them is a template that cannot prove what it did not render. #}
@@ -147,7 +147,7 @@ fix an association pointed at the wrong lobby room.</p>
 
 <h2>Slots</h2>
 {# Filter and sort come from `table.js`, which reorders the rows the server already sent rather than
-   rendering any. Without scripting the arrows are absent, because script draws them -- and the box
+   rendering any. Without scripting the arrows are absent, because script draws them, and the box
    is HIDDEN rather than absent, since it is plain markup and would otherwise sit there looking
    usable while typing into it did nothing. `table.js` puts `js-tables` on <html>; the stylesheet
    reveals it from there, the same gate `.theme` and `.copy` sit behind.
@@ -178,7 +178,7 @@ fix an association pointed at the wrong lobby room.</p>
 <tbody>
 {% for slot in slots %}
 <tr{% if slot.is_mine +%} data-mine{% endif %}>
-{# The number IS the link to this slot's tracker, where the viewer is allowed one -- and it sorts as
+{# The number IS the link to this slot's tracker, where the viewer is allowed one, and it sorts as
    a number regardless, from `data-value`. #}
 <td data-value="{{ slot.slot_number }}">
 {% if can_see_tracker %}
@@ -189,14 +189,14 @@ fix an association pointed at the wrong lobby room.</p>
 </td>
 <td>{{ slot.player_name }}
 {# **The state, said in a word.** The lock and unlock glyphs in the moderation column differ by one
-   arc and are not tellable apart at a glance while scanning a roster -- so the column that answers
+   arc and are not tellable apart at a glance while scanning a roster, so the column that answers
    "who is shut out?" is this one, and the glyph over there is only the control that changes it.
    Staff-only, because `slot_views` decides `is_locked` from the viewer's role: this page is public,
    and whether somebody has been barred is not a fact for everyone holding the link. #}
 {% if slot.is_locked %}<span class="tag locked">locked</span>{% endif %}
 {# **Divergence from the room's filter, not "is filtered".** A room filter applies to every slot, so
    a chip meaning that would be on every row and say nothing about any of them. `title` carries the
-   effective rules, which is the "at a glance" Troy asked for -- and the link is where they get
+   effective rules, which is the "at a glance" Troy asked for, and the link is where they get
    changed. #}
 {% if let Some(chip) = slot.filter_chip %}<a class="tag filter" href="/room/{{ room.id }}/slot/{{ slot.slot_number }}/filter"
    title="{{ slot.filter_summary }}">{{ chip }}</a>{% endif %}</td>
@@ -208,7 +208,7 @@ fix an association pointed at the wrong lobby room.</p>
 {% if slot.is_mine %}
 <strong>you</strong>
 {% else if slot.owner_never_logged_in %}
-{# A row exists -- the lobby push assigned the slot -- but nobody has signed in under it yet, so the
+{# A row exists (the lobby push assigned the slot) but nobody has signed in under it yet, so the
    only thing stored is a stand-in. Showing that would show a raw Discord id to people with no use
    for one, and read as a bug. #}
 <span class="hint">never logged in</span>
@@ -220,7 +220,7 @@ fix an association pointed at the wrong lobby room.</p>
 claimed
 {% else if let Some(token) = slot.claim_token %}
 {# Staff only: this link is the CAPABILITY, so it is not shown to ordinary visitors. The copy
-   control takes the whole URL -- a claim link is a thing you send somebody, not a thing you read
+   control takes the whole URL: a claim link is a thing you send somebody, not a thing you read
    out.
 
    **`data-claim` makes this a one-click claim rather than a navigation.** `room.js` posts it and
@@ -228,7 +228,7 @@ claimed
    at the slot and has nothing to be told about it.
 
    The `href` is the fallback and is a real page rather than a dead end: without scripting the click
-   lands on `/claim/<token>`, which describes the slot and asks. That page is not only a fallback --
+   lands on `/claim/<token>`, which describes the slot and asks. That page is not only a fallback:
    it is what a chat client unfurls when this link is sent to somebody, which is the case the link
    mostly exists for. #}
 <a href="/claim/{{ token }}" data-claim="/claim/{{ token }}"
@@ -243,12 +243,12 @@ claimed
 {% else %}
 unclaimed
 {% endif %}
-{# **A ping, for staff, on every branch above that has a holder** -- including "you" and "never
+{# **A ping, for staff, on every branch above that has a holder**, including "you" and "never
    logged in", which is the one this exists for: the lobby named an account, nobody has a handle to
    type, and `<@id>` is the only thing that reaches them.
 
    Outside the branches rather than repeated inside three of them, because `owner_mention` is `None`
-   for an unclaimed slot and for anybody who is not staff -- so one control, gated once, in the route
+   for an unclaimed slot and for anybody who is not staff, so one control, gated once, in the route
    where the gate can be proved.
 
    **Independent of the enhanced tracker**, deliberately: that feature's owner column carries ping
@@ -269,7 +269,7 @@ unclaimed
    stays connected, and the console's `kick` is the separate decision that says so.
 
    A person-minus rather than a trash can, a reload or a red X. The column shows a person and this
-   removes them; the other three say destroy, retry and error, and it is none of those -- the slot
+   removes them; the other three say destroy, retry and error, and it is none of those: the slot
    survives, keeps its password and its progress, and comes back with a fresh claim link. #}
 {% if slot.can_release %}
 <form method="post" action="/room/{{ room.id }}/slot/{{ slot.slot_number }}/release" class="inline">
@@ -288,7 +288,7 @@ unclaimed
 </td>
 {% if room.slot_auth == puna_core::model::room::SlotAuth::PerSlot %}
 {# The password itself, in the same monospace treatment as the address and with the same copy
-   control -- it is the other thing on this page somebody pastes into a client. `slot_views`
+   control: it is the other thing on this page somebody pastes into a client. `slot_views`
    decided whether this viewer gets a value at all; the markup only asks whether there is one. #}
 <td>
 {% if let Some(password) = slot.password %}
@@ -305,9 +305,9 @@ unclaimed
 <span class="hint">&mdash;</span>
 {% endif %}
 {# Staff, on every slot: rotating one slot's password is a credential change WITHIN a mode, which is
-   running the room rather than configuring it -- a password pasted into the wrong channel should
+   running the room rather than configuring it: a password pasted into the wrong channel should
    not have to wait for an organizer. Changing the MODE is a room restart and stays below.
-   A running room gets it live -- the orchestrator writes the Secret and then tells the room -- and
+   A running room gets it live (the orchestrator writes the Secret and then tells the room) and
    a stopped one simply has it stored. `data-rotates` marks the row's password cell for the
    strike-through, since the value on screen is stale the moment this succeeds. #}
 {% if is_staff %}
@@ -327,7 +327,7 @@ unclaimed
 </td>
 {% endif %}
 {# The patch already carries this room's address, so it is ready to open rather than something to
-   configure -- and it carries the right one even while the room is down, because the port
+   configure, and it carries the right one even while the room is down, because the port
    reservation outlives the pod. #}
 <td>
 {% if slot.has_patch %}
@@ -347,7 +347,7 @@ unclaimed
    `moderation.js` upgrades it into a dialog on the page. Three things fall out of that shape:
 
    * **It works with no scripting**, landing on a page that has the same command, the same slot and
-     every field it needs. The alternative -- a form per action per row -- degrades no better and
+     every field it needs. The alternative (a form per action per row) degrades no better and
      costs a `<form>` and a popover on every one of a room's slots, which for a 200-slot room is
      over a thousand elements rendered so that six of them might be opened.
    * **The route is the same either way.** `POST /room/<id>/command` answers a redirect to a form
@@ -362,7 +362,7 @@ unclaimed
    confirmation that says only "Hint an item" is one a misclick sails straight through, and the two
    controls that do NOT confirm have nothing but this to show who they acted on.
 
-   The game is here too because the item and location suggestions are scoped to it -- naming it is
+   The game is here too because the item and location suggestions are scoped to it: naming it is
    what stops "why is my item not in the list" being a mystery. Both values are already rendered in
    visible columns of this same row, so nothing is disclosed that was not already. #}
 <td class="moderation" data-player="{{ slot.player_name }}" data-game="{{ slot.game }}">
@@ -384,12 +384,12 @@ unclaimed
 </svg>
 </a>
 {% else %}
-{# A SHUT padlock. **Bars the next login and disconnects nobody** -- the obvious reading of a lock
+{# A SHUT padlock. **Bars the next login and disconnects nobody**: the obvious reading of a lock
    is that it ejects somebody, and it does not. An administrator dealing with a griefer wants lock
    THEN kick, in that order: kicking first leaves a window in which they simply reconnect. #}
 <a class="act" data-command="lock" data-locked="true" data-slot="{{ slot.slot_number }}"
    href="/room/{{ room.id }}/console?kind=lock&amp;slot={{ slot.slot_number }}#cmd-lock"
-   title="Lock: bar the next login. Nobody is disconnected -- kick does that. Lock first, then kick."
+   title="Lock: bar the next login. Nobody is disconnected; kick does that. Lock first, then kick."
    aria-label="Lock slot {{+ slot.slot_number }}">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <rect x="3.2" y="7" width="9.6" height="7" rx="1.4" fill="none" stroke="currentColor"/>
@@ -398,7 +398,7 @@ unclaimed
 </a>
 {% endif %}
 
-{# An arrow leaving a doorway. **A disconnect, not a ban** -- the client may reconnect at once, and
+{# An arrow leaving a doorway. **A disconnect, not a ban**: the client may reconnect at once, and
    most do automatically within seconds, so the tooltip says so rather than letting somebody press
    it twice and conclude the console is broken. #}
 <a class="act" data-command="kick" data-slot="{{ slot.slot_number }}"
@@ -466,18 +466,18 @@ unclaimed
 {# --- everything else, behind one control -------------------------------------------------------
    **A menu rather than more glyphs**, and it is now what makes the row extensible rather than
    merely tidy: the per-slot filters live here, and so do the three actions that were reachable only
-   from the console -- the alias and both directions of the release exemption. Those are
+   from the console: the alias and both directions of the release exemption. Those are
    configuration with values and words rather than one-click verbs, and a row of icons has nowhere
    to put them. Seven glyphs outside is already two rows.
 
    Release and collect moved in here rather than staying outside. They are the two that move items
-   in bulk, they are the two an operator reaches for least often, and neither is a snap decision --
+   in bulk, they are the two an operator reaches for least often, and neither is a snap decision:
    so they belong behind a deliberate opening, next to the other bulk actions, rather than one
    stray click from the lock.
 
    **A `popover`, not the `<dialog>` below.** The menu is a choice, so light dismiss and Escape are
    what it wants; the dialog is an ANSWER, which must be read before the page is usable again. The
-   platform gives this one the top layer -- so it escapes `.scroll-x`'s clipping -- plus mutual
+   platform gives this one the top layer (so it escapes `.scroll-x`'s clipping) plus mutual
    exclusion, so two rows' menus cannot be open at once, with no script at all. #}
 <button type="button" class="act more" popovertarget="more-{{ slot.slot_number }}"
         title="More actions: release, collect, declare finished, alias, release exemption, filters"
@@ -509,7 +509,7 @@ unclaimed
 </a>
 
 {# The same tray with the arrow going OUT: send this slot's remaining items to whoever they belong
-   to. The mirror of collect, and the pairing is the point -- one gathers in, one sends out. #}
+   to. The mirror of collect, and the pairing is the point: one gathers in, one sends out. #}
 <a class="act" data-command="release" data-slot="{{ slot.slot_number }}"
    href="/room/{{ room.id }}/console?kind=release&amp;slot={{ slot.slot_number }}#cmd-release"
    title="Release: send this slot's remaining items to the players they belong to.">
@@ -524,8 +524,8 @@ unclaimed
 {# A flag: this world is finished. **The status rides on the control**, the way `data-locked` does
    on the lock, so the command stays one verb rather than becoming five.
 
-   Irreversible in a way nothing else in this column is -- upstream refuses every status change
-   away from goal, so not even the player can take it back -- and it may empty their world through
+   Irreversible in a way nothing else in this column is (upstream refuses every status change
+   away from goal, so not even the player can take it back) and it may empty their world through
    the room's auto-release rule. Both facts are in the confirmation rather than only here. #}
 <a class="act" data-command="set_status" data-status="goal" data-slot="{{ slot.slot_number }}"
    href="/room/{{ room.id }}/console?kind=set_status&amp;slot={{ slot.slot_number }}#cmd-set_status"
@@ -541,7 +541,7 @@ unclaimed
    down: this sets somebody ELSE's alias, which `!alias` only lets a player do for themselves.
 
    **Empty clears it**, which is why this one confirms despite being the least consequential thing
-   in the menu -- the dialog is where that can be said, and a control that silently wiped a name
+   in the menu: the dialog is where that can be said, and a control that silently wiped a name
    somebody chose would be a small mystery nobody could retrace. pahoa truncates to 16 characters
    and so does the field. #}
 <a class="act" data-command="alias" data-slot="{{ slot.slot_number }}"
@@ -556,7 +556,7 @@ unclaimed
 </a>
 
 {# --- the release exemption, both directions -----------------------------------------------------
-   **Two entries for one command**, carrying the direction on the control the way the lock does --
+   **Two entries for one command**, carrying the direction on the control the way the lock does:
    and unlike the lock, both are offered at once, because the exemption lives in the room rather
    than in Puna and this page cannot know which way a slot currently sits.
 
@@ -633,7 +633,7 @@ unclaimed
 
    Every field is rendered here and hidden; the script chooses which apply to the command. Building
    the markup in JavaScript instead would put the question of what each command asks for in a file
-   with no type checking, a second time -- and `build()` in console.rs is already the answer.
+   with no type checking, a second time, and `build()` in console.rs is already the answer.
 
    Absent this file the dialog is never opened and never shown: the links go to the console, which
    has the same commands and the same fields. #}
@@ -678,7 +678,7 @@ unclaimed
 <datalist id="mod-names"></datalist>
 
 {# **Copies is what `send_multiple` became.** It was its own command and its own console entry, and
-   it is one decision with a number in it rather than two acts -- so it sits beside the item, and
+   it is one decision with a number in it rather than two acts, so it sits beside the item, and
    `build()` picks the verb from the count.
 
    `value="1"` is the field's default in the HTML sense as well as the visible one, which is what
@@ -689,7 +689,7 @@ unclaimed
 <input type="number" id="mod-amount" name="amount" min="1" max="100" value="1">
 </p>
 
-{# **Empty clears the alias**, so this field is meaningful blank -- the one text box here that is.
+{# **Empty clears the alias**, so this field is meaningful blank: the one text box here that is.
    `build()` does not filter it for blankness for that reason, and the placeholder says so, because
    a submit with nothing typed is otherwise indistinguishable from a mistake. #}
 <p data-mod-field="alias">
@@ -700,7 +700,7 @@ unclaimed
 
 {# `force` grants outright and spends nothing. The default charges the slot's own points as `!hint`
    would and MAY GRANT FEWER THAN ASKED OR NONE, so the room's answer is the truth rather than this
-   box -- which is why the result below renders `output` verbatim. #}
+   box, which is why the result below renders `output` verbatim. #}
 <p data-mod-field="force">
 <label class="inline"><input type="checkbox" name="force" value="true"> Force: grant it
 without spending this slot's points</label>
@@ -735,13 +735,13 @@ without spending this slot's points</label>
 
 {% if is_staff %}
 {# **Open, since the options moved out of it.** It was collapsed because it was longer than
-   everything above it and a player never needs any of it -- but what made it long was two forms
+   everything above it and a player never needs any of it, but what made it long was two forms
    full of policy controls, and those now live on their own page. What is left is a short list of
    links plus the lifecycle buttons, which is not worth a click to reach, and a staff member on this
    page is usually here to use one of them. #}
 <h2>Manage</h2>
 <ul>
-{# `is_staff` is the helper floor, which is exactly the console's own guard -- so this link is
+{# `is_staff` is the helper floor, which is exactly the console's own guard, so this link is
    never offered to somebody the route would refuse. The console itself shows only the commands
    the viewer's tier can run. #}
 <li><a href="/room/{{ room.id }}/console">Console</a>: hints, releases, announcements</li>
@@ -749,7 +749,7 @@ without spending this slot's points</label>
    sorts means something different after a re-sort, which is the failure the panel exists to avoid. #}
 <li><a href="/room/{{ room.id }}/bulk">Bulk actions</a>: one action across many slots</li>
 {% if is_organizer %}
-{# Organizer-only, because a room-wide filter configures the room and persists into its save -- the
+{# Organizer-only, because a room-wide filter configures the room and persists into its save: the
    `option` argument. A SLOT's filter is a helper's, and is reached from the roster chip. #}
 <li><a href="/room/{{ room.id }}/filter">Room filter</a>: drop or thin traffic for everyone</li>
 {# Where the password mode and the feed policy went. They were two forms in this section; on their

@@ -169,7 +169,7 @@ room is not restarted.</p>
 <label for="lobby_url">Lobby room</label>
 <div class="choices">
 {# The current association is prefilled so re-running is one click, and so that an organizer can
-   SEE which lobby room this points at -- which is the only way to notice it points at the wrong
+   SEE which lobby room this points at, which is the only way to notice it points at the wrong
    one. A bare id rather than a link, because the id is what Puna stores; pasting a full URL over
    it works just as well. #}
 <input type="text" id="lobby_url" name="lobby_url"
@@ -184,7 +184,7 @@ This room is already associated; saving again re-runs the import.
 </div>
 
 {# **Says what it will not do, because that is the surprising half.** The obvious fear about a
-   button that assigns owners is that it will take a slot off somebody -- so the sentence names the
+   button that assigns owners is that it will take a slot off somebody, so the sentence names the
    two things it never touches, and they are enforced in `lobby::plan` and in the SQL rather than
    promised here. #}
 <p class="hint"><strong>Only slots that nobody owns are touched.</strong> A slot somebody has
@@ -200,7 +200,7 @@ Safe to run more than once.</p>
 
 <section class="panel create-room">
 <h2>Restarts the room</h2>
-{# The cost is stated once, here, rather than under each control -- and it is stated in the terms
+{# The cost is stated once, here, rather than under each control, and it is stated in the terms
    somebody feels: a minute of downtime and everybody reconnecting, not "the pod is recreated".
    Which of the two sentences applies depends on whether the room is up, because "it restarts now"
    is simply false for a stopped room and would make an organizer wait for something that is not
@@ -273,7 +273,7 @@ it on the room page; unticking it turns <code>!admin</code> off entirely.</p>
    guess. The link is what makes that honest: the values are here, the place to change them is one
    click away, and the anchor lands on the same values with the control underneath them.
 
-   Last on the page, because it is reference rather than a control -- and because the two sections
+   Last on the page, because it is reference rather than a control, and because the two sections
    above are ordered by consequence, which this one has none of. #}
 <section class="panel">
 <h2>Archipelago room options</h2>

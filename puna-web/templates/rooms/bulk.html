@@ -40,7 +40,7 @@ The room page's per-slot controls work without it.</p>
 {# --- the two panes ---------------------------------------------------------------------------
    **The left list is every slot; the right is the staged set.** `>>` moves what is highlighted on
    the left to the right and `<<` sends it back, so the right pane is a set somebody built rather
-   than a filter that happens to match -- which is the whole reason this is not the roster, where a
+   than a filter that happens to match, which is the whole reason this is not the roster, where a
    re-sort would silently change what a selection meant.
 
    Only the RIGHT list's options are named `slots`, and only they are submitted: a `<select multiple>`
@@ -123,7 +123,7 @@ The room page's per-slot controls work without it.</p>
    Each is a submit carrying its own name, so the button pressed IS the action and there is no
    separate dropdown to disagree with it.
 
-   The destructive ones confirm, and the confirmation names the count -- a control whose blast
+   The destructive ones confirm, and the confirmation names the count: a control whose blast
    radius is "everything staged" should say how many that is in the sentence you click. #}
 <fieldset class="bulk-actions">
 <legend>Apply to Target Slots</legend>
@@ -170,7 +170,7 @@ The room page's per-slot controls work without it.</p>
    ruleset built here and one built there are the same thing.
 
    It REPLACES whatever each staged slot had rather than merging, so every one of them ends up
-   identical -- which is what "identically per affected slot" means and is the only outcome a bulk
+   identical, which is what "identically per affected slot" means and is the only outcome a bulk
    action can honestly promise, since adding to each would leave them in different end states
    depending on where they started.
 
@@ -182,7 +182,7 @@ The room page's per-slot controls work without it.</p>
 {% include "rooms/_rule_table.html" %}
 {% if room_filters %}
 {# Both directions of the replacement hazard, shown only when a room filter exists to be lost or
-   gained -- the same rule the per-slot editor follows, because a warning that is always there is
+   gained: the same rule the per-slot editor follows, because a warning that is always there is
    not read. #}
 <p class="warning">This room has a filter of its own. Rules here, and
 <strong>Exempt from every filter</strong>, stop it reaching the staged slots;

@@ -11,7 +11,7 @@
 <thead><tr><th>Seed</th><th>Slots</th><th>Games</th><th>Uploaded</th></tr></thead>
 <tbody>
 {# `upload.uploaded_at`, NOT `generation.created_at`. They are the same moment for whoever uploaded
-   a seed first and different for anyone who uploaded it afterwards -- so the generation's date
+   a seed first and different for anyone who uploaded it afterwards, so the generation's date
    under a column headed "Uploaded" would date your entry to a day you had nothing to do with, and
    tell you the seed predates your upload. #}
 {% for upload in generations %}

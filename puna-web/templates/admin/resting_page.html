@@ -1,7 +1,7 @@
 {# The stopped-and-closed table as a page of its own.
 
    Exists for the `<noscript>` link on `/admin/rooms`: that section fills itself by `fetch`, so with
-   scripting off it would be an empty box with a heading. Everything here is the include -- the
+   scripting off it would be an empty box with a heading. Everything here is the include: the
    table is defined once, in `resting.html`, and this only supplies the chrome. #}
 {% extends "base.html" %}
 {% block title %}Stopped rooms: {{+ base.site_name +}} admin{% endblock %}

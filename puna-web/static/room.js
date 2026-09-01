@@ -1,14 +1,14 @@
 // The room page's lifecycle panel: submit without a reload, then watch.
 //
 // A cold start is an image pull plus a save restored from a network filesystem, and a restart
-// crosses two reconcile passes -- so both are tens of seconds of a visible state. This turns that
+// crosses two reconcile passes, so both are tens of seconds of a visible state. This turns that
 // into a page that says what is happening rather than one somebody refreshes by hand.
 //
 // ## It renders nothing
 //
 // Every panel this swaps in was rendered by `rooms/panel.html`, fetched from `/room/<id>/panel`.
 // Building the markup here instead would mean two sets of branches deciding what a room's state
-// looks like and who is offered a control -- and the one that drifts is the one nobody reviews, so
+// looks like and who is offered a control, and the one that drifts is the one nobody reviews, so
 // the page would go on working while telling somebody the wrong thing about their room.
 //
 // ## Two endpoints, on purpose
@@ -116,7 +116,7 @@
   }
 
   // Replace the panel with freshly rendered markup. `outerHTML` rather than `innerHTML` so the
-  // wrapper's own data attributes come along -- they are what the next poll compares against.
+  // wrapper's own data attributes come along: they are what the next poll compares against.
   function swap(markup) {
     var next = document.createElement("div");
     next.innerHTML = markup;
@@ -139,7 +139,7 @@
   }
 
   // A spinner with no claim attached. Shown between a click and the first answer, when the only
-  // honest thing to say is that the request is in flight -- naming a state here would mean
+  // honest thing to say is that the request is in flight: naming a state here would mean
   // guessing at one the server has not confirmed, and guessing wrong in the direction of
   // reassurance is how a page tells somebody their room is starting when it was refused.
   function working(label) {
@@ -204,7 +204,7 @@
         schedule();
       })
       .catch(function () {
-        // A failed poll is not a failed room -- a redeploy of the web tier looks exactly like this.
+        // A failed poll is not a failed room: a redeploy of the web tier looks exactly like this.
         // Keep going on the slow cadence rather than declaring anything.
         schedule();
       });
@@ -254,19 +254,19 @@
       credentials: "same-origin",
       // --- DO NOT FOLLOW THE REDIRECT, for two reasons ------------------------------------------
       // These routes answer 303 to the room page, which is right for a form post and pure waste
-      // here: the panel is refetched below regardless, so following it renders the whole page --
-      // slots, generation, siblings -- to throw it away, on every click.
+      // here: the panel is refetched below regardless, so following it renders the whole page
+      // (slots, generation, siblings) to throw it away, on every click.
       //
       // The second reason is the one that matters. That followed request is a GET of the room page,
       // and `GET /room/<id>` starts an idle room on navigation (D8). The `Navigation` guard sorts a
-      // real navigation from a background fetch by `Sec-Fetch-Mode` -- but it deliberately falls
+      // real navigation from a background fetch by `Sec-Fetch-Mode`, but it deliberately falls
       // back to the `Accept` header alone when that header is ABSENT, so a browser that does not
       // send it would have every Stop immediately restart the room it just stopped. No browser new
       // enough to run this file omits the header, which makes it a hazard that would never show up
       // in testing and would be very hard to believe when reported.
       //
       // `manual` makes a 3xx an opaque response: unreadable, and never followed. Anything that is
-      // not a redirect -- a 403 from a closed room -- still arrives normally.
+      // not a redirect (a 403 from a closed room) still arrives normally.
       redirect: "manual",
     })
       .then(function (response) {
@@ -295,7 +295,7 @@
   // channel to display it, and a reload already has it. Struck-through says "this is no longer the
   // password" without pretending to know what is.
   //
-  // The form still POSTs normally without this -- the redirect reloads the page and shows the new
+  // The form still POSTs normally without this: the redirect reloads the page and shows the new
   // value, which is the same destination by a slower road.
   document.addEventListener("submit", function (event) {
     var form = event.target.closest("form[data-rotates]");
@@ -330,7 +330,7 @@
   // --- RENAMING THE ROOM ------------------------------------------------------------------------
   // The swap itself is CSS: `.titlebar:has(.rename[open])` hides the heading, so the field lands
   // where the title was with nothing running. What is added here is the part a stylesheet cannot
-  // do -- putting the cursor in the field, and getting out without a page load.
+  // do: putting the cursor in the field, and getting out without a page load.
   //
   // Every piece degrades: unscripted, the pencil still opens the form, Enter still submits it
   // because it is a form, and the X is a link back to the room, which arrives with the form closed.
@@ -360,8 +360,8 @@
 
     rename.addEventListener("click", function (event) {
       if (!event.target.closest(".cancel")) return;
-      // Without this the link navigates to the room page, which is the unscripted cancel and works
-      // -- it is just a round trip to arrive back where we already are.
+      // Without this the link navigates to the room page, which is the unscripted cancel and works:
+      // it is just a round trip to arrive back where we already are.
       event.preventDefault();
       closeRename();
     });

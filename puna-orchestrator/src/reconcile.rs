@@ -819,7 +819,7 @@ async fn detect_integrity_faults(
         tracing::error!(
             room = %row.id,
             "INTEGRITY FAULT: provisioned_at is set but the room directory is missing. This is \
-             not auto-repaired -- recreating it would replace saved progress with an empty room."
+             not auto-repaired: recreating it would replace saved progress with an empty room."
         );
 
         diesel::sql_query(

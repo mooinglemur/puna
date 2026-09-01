@@ -6,7 +6,7 @@
 //!
 //! ## Why three lists for locations rather than one
 //!
-//! A location name is `<regional> <physical> <noun>` — *"Overworld Blue Goomba"*. Three small lists
+//! A location name is `<regional> <physical> <noun>`: *"Overworld Blue Goomba"*. Three small lists
 //! multiply into [`LOCATION_SPACE`] distinct names, which is what lets even a twelve-slot seed draw
 //! a varied set rather than the same first N entries every time. One long list would give a small
 //! generation the same names on every run, and the whole point of varying them is that a bug which
@@ -491,7 +491,7 @@ pub const HANDLES: &[&str] = &[
 /// Distinct location names, drawn at random from the three lists.
 ///
 /// **Sampling without replacement**, because a duplicate location name in one game is a datapackage
-/// whose `location_name_to_id` silently holds fewer entries than there are locations — the ids
+/// whose `location_name_to_id` silently holds fewer entries than there are locations: the ids
 /// would still be unique, so the seed would load and the tracker would show two different checks
 /// under one name.
 ///
@@ -545,7 +545,7 @@ pub fn locations(n: usize, rng: &mut impl Rng) -> Vec<String> {
 /// Distinct ordinary item names. [`GOAL_ITEM`] is added by the caller and is not among these.
 ///
 /// The hundred base names come first, shuffled; past that they are qualified with a physical
-/// adjective (*"Frosted Hookshot"*), and past **that** with a number. Distinct **names**, note —
+/// adjective (*"Frosted Hookshot"*), and past **that** with a number. Distinct **names**, note:
 /// nothing stops the same name being placed many times, which is the normal shape of an item pool
 /// and the reason Super Mario 64 has 120 Power Stars.
 pub fn items(n: usize, rng: &mut impl Rng) -> Vec<String> {

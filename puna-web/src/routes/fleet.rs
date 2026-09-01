@@ -551,7 +551,7 @@ mod tests {
         );
         assert!(
             html.contains("redeploy queued"),
-            "a room with a request in flight says so -- and this is what gives the check below \
+            "a room with a request in flight says so, and this is what gives the check below \
              something to check"
         );
         assert!(
@@ -785,7 +785,7 @@ mod tests {
         let quiet = page(None).render().expect("renders");
         assert!(
             !quiet.contains("class=\"notice\""),
-            "no notice when nothing was queued -- which is what a refresh must look like"
+            "no notice when nothing was queued, which is what a refresh must look like"
         );
 
         let warned = page(Some(Notice {

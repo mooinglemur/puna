@@ -53,7 +53,7 @@ fn a_whitespace_preserving_tag_has_whitespace_to_preserve() {
                     None => {}
                     Some(c) if c.is_whitespace() => {}
                     Some(c) => offenders.push(format!(
-                        "{}:{}: `{}{{{{+` preserves nothing -- add the space or drop the `+`",
+                        "{}:{}: `{}{{{{+` preserves nothing: add the space or drop the `+`",
                         path.file_name().unwrap_or_default().to_string_lossy(),
                         number + 1,
                         c
@@ -133,7 +133,7 @@ fn whitespace_between_text_and_a_tag_is_preserved_explicitly() {
             }
             if let Some(line) = line_of(&source, at) {
                 offenders.push(format!(
-                    "{name}:{line}: text before `{opener}` loses its space -- write `{opener}+`"
+                    "{name}:{line}: text before `{opener}` loses its space: write `{opener}+`"
                 ));
             }
         }
@@ -153,7 +153,7 @@ fn whitespace_between_text_and_a_tag_is_preserved_explicitly() {
             }
             if let Some(line) = line_of(&source, end) {
                 offenders.push(format!(
-                    "{name}:{line}: text after `{closer}` loses its space -- write `+{closer}`"
+                    "{name}:{line}: text after `{closer}` loses its space: write `+{closer}`"
                 ));
             }
         }
@@ -227,7 +227,7 @@ fn a_glyph_only_control_names_itself_twice() {
     // this assertion prints, not by guessing.
     assert!(
         examined >= 29,
-        "only {examined} glyph-only controls found -- this lint is no longer looking at anything"
+        "only {examined} glyph-only controls found: this lint is no longer looking at anything"
     );
     assert!(
         offenders.is_empty(),
@@ -572,7 +572,7 @@ fn viewing_as_somebody_is_read_only_at_the_base_guard() {
     assert!(
         base.contains("view_as.is_some()") && base.contains("Method::Get"),
         "the base session guard no longer refuses writes while viewing as somebody: a write route \
-         taking a plain `Session` -- POST /room/<id>/start does -- would be reachable"
+         taking a plain `Session` (POST /room/<id>/start does) would be reachable"
     );
 
     // `LoggedInSession` must go THROUGH that guard rather than around it. Calling the sync
@@ -1368,7 +1368,7 @@ fn a_patch_embeds_the_port_the_room_leads_with() {
     assert!(
         code.contains("leads_with_filtered()"),
         "the patch route no longer asks which port the room leads with, so a filtered room's \
-         patches carry the full port -- the one that drowns the clients the setting exists for"
+         patches carry the full port: the one that drowns the clients the setting exists for"
     );
     assert!(
         code.contains("base_port + 1"),
@@ -1432,7 +1432,7 @@ fn the_text_summary_is_served_only_to_a_world_open_tracker() {
     assert!(
         !body.contains("access("),
         "summary_text resolves through `access`, which admits a `members` room to anyone the room \
-         knows -- this route answers without a session, so it must gate on the ROOM alone: {body}"
+         knows, since this route answers without a session, so it must gate on the ROOM alone: {body}"
     );
 
     // The signature, not the body: a `Session` here would make the answer viewer-dependent, and the
@@ -1440,7 +1440,7 @@ fn the_text_summary_is_served_only_to_a_world_open_tracker() {
     let signature = body.split(')').next().unwrap_or_default();
     assert!(
         !signature.contains("Session"),
-        "summary_text takes a session, so its answer can vary by viewer -- while still being served \
+        "summary_text takes a session, so its answer can vary by viewer, while still being served \
          `public` to any shared cache in front of it: {signature}"
     );
     assert!(
@@ -1501,7 +1501,7 @@ fn the_feed_page_is_sized_to_the_window() {
         .expect("a `.journal` rule");
     assert!(
         !journal.contains("height: min(") && !journal.contains("\n  height:"),
-        "`.journal` sets its own height again. The page supplies it -- a fixed value here is a \
+        "`.journal` sets its own height again. The page supplies it: a fixed value here is a \
          guess about what sits above the feed, and everything above it can change: {journal}"
     );
 
@@ -1532,7 +1532,7 @@ fn the_feed_page_is_sized_to_the_window() {
     // somebody scrolling a busy feed.
     assert!(
         page.contains("height: 100vh") && !page.contains("min-height: 100"),
-        "`.feed-page` sizes itself with `min-height`, which states a floor and no ceiling -- so the \
+        "`.feed-page` sizes itself with `min-height`, which states a floor and no ceiling, so the \
          feed is never capped and the page scrolls instead of the feed: {page}"
     );
 
@@ -1624,7 +1624,7 @@ fn a_disabled_journal_is_refused_where_the_room_is_resolved() {
     );
     assert!(
         body.contains("ok_or_else"),
-        "readable() reads the journal policy without refusing on it -- a `disabled` room must 404, \
+        "readable() reads the journal policy without refusing on it: a `disabled` room must 404, \
          never fall back to a narrower feed"
     );
 }
@@ -1675,7 +1675,7 @@ fn no_template_renders_a_credential_off_the_room() {
             assert!(
                 !code.contains(forbidden),
                 "{}: renders `{forbidden}` directly. Credentials reach a template through a field \
-                 the route gated -- see `room_password_for` -- because a condition in markup cannot \
+                 the route gated (see `room_password_for`) because a condition in markup cannot \
                  prove what it did not render.",
                 label(&path)
             );
@@ -1727,7 +1727,7 @@ fn only_localtime_js_decides_how_an_instant_is_spelled() {
         assert!(
             !code_only(&script).contains(".toLocale"),
             "{}: formats an instant with `.toLocale*` rather than `PunaTime.absolute`. A \
-             locale-ordered date with no zone cannot say how stale something is -- see \
+             locale-ordered date with no zone cannot say how stale something is. See \
              static/localtime.js, which is the one place that decides this.",
             path.file_name().and_then(|n| n.to_str()).unwrap_or("?")
         );
@@ -1790,7 +1790,7 @@ fn every_popover_button_points_at_a_popover_that_exists() {
 
     assert!(
         pairs >= 4,
-        "only {pairs} popover buttons found -- this lint is no longer looking at anything"
+        "only {pairs} popover buttons found: this lint is no longer looking at anything"
     );
     assert!(
         offenders.is_empty(),
@@ -1863,7 +1863,7 @@ fn every_table_scrolls_inside_a_wrapper() {
 
     assert!(
         tables >= 19,
-        "only {tables} tables found -- this lint is no longer looking at anything"
+        "only {tables} tables found: this lint is no longer looking at anything"
     );
     assert!(
         offenders.is_empty(),
@@ -1909,7 +1909,7 @@ fn a_rule_that_scrolls_one_axis_names_the_other() {
 
     assert!(
         scrollers >= 1,
-        "no overflow-x rules found -- this lint is no longer looking at anything"
+        "no overflow-x rules found: this lint is no longer looking at anything"
     );
     assert!(
         offenders.is_empty(),
@@ -2017,7 +2017,7 @@ fn a_client_error_never_carries_a_converted_error_chain() {
 
     assert!(
         examined >= 20,
-        "only {examined} client errors found -- this lint is no longer looking at anything"
+        "only {examined} client errors found: this lint is no longer looking at anything"
     );
     assert!(
         offenders.is_empty(),
@@ -2077,7 +2077,7 @@ fn a_form_made_into_a_block_resets_the_margin_this_stylesheet_gives_every_form()
 
     assert!(
         examined >= 1,
-        "no block-level form rules found -- this lint is no longer looking at anything"
+        "no block-level form rules found: this lint is no longer looking at anything"
     );
     assert!(
         offenders.is_empty(),
@@ -2157,7 +2157,7 @@ fn a_checkbox_posts_something_its_rust_type_can_parse() {
                 }
                 assert!(
                     ROCKET_TRUE.contains(&value),
-                    "the {name:?} checkbox posts {value:?}, which Rocket's `bool` refuses -- \
+                    "the {name:?} checkbox posts {value:?}, which Rocket's `bool` refuses: \
                      ticking it fails the entire form, and only then. Use one of {ROCKET_TRUE:?}, \
                      or make the field an Option<String> as {NOT_A_BOOL:?} are."
                 );
@@ -2167,7 +2167,7 @@ fn a_checkbox_posts_something_its_rust_type_can_parse() {
 
     assert!(
         checked >= 8,
-        "only {checked} checkboxes found -- this lint is no longer looking at anything"
+        "only {checked} checkboxes found: this lint is no longer looking at anything"
     );
 }
 
@@ -2305,7 +2305,7 @@ fn a_tab_names_its_page_before_the_room_it_belongs_to() {
 
     assert!(
         titles >= 20 && with_a_room >= 9,
-        "read {titles} titles and {with_a_room} that name a room -- this lint is no longer looking \
+        "read {titles} titles and {with_a_room} that name a room: this lint is no longer looking \
          at anything"
     );
 }
@@ -2401,7 +2401,7 @@ fn every_sort_override_names_a_column_that_exists() {
 
     assert!(
         keys.len() >= 2,
-        "read {} sort overrides out of tracker.js -- this lint is no longer looking at anything",
+        "read {} sort overrides out of tracker.js: this lint is no longer looking at anything",
         keys.len()
     );
     for key in keys {
@@ -2644,7 +2644,7 @@ fn the_bulk_panel_offers_exactly_the_actions_its_route_implements() {
 
     assert!(
         declared.len() >= 5,
-        "only {} actions parsed out of ACTIONS -- this lint is no longer looking at anything: \
+        "only {} actions parsed out of ACTIONS: this lint is no longer looking at anything, \
          {declared:?}",
         declared.len()
     );
@@ -2706,7 +2706,7 @@ fn the_moderation_dialog_renders_every_hook_its_script_reaches_for() {
 
     assert!(
         wanted.len() >= 8,
-        "only {} hooks found in moderation.js -- this lint is no longer looking at anything: {wanted:?}",
+        "only {} hooks found in moderation.js: this lint is no longer looking at anything, {wanted:?}",
         wanted.len()
     );
 
@@ -2756,7 +2756,7 @@ fn the_rule_table_renders_every_hook_and_field_name_its_readers_expect() {
 
     assert!(
         wanted.len() >= 8,
-        "only {} hooks found in filters.js -- this lint is no longer looking at anything: {wanted:?}",
+        "only {} hooks found in filters.js: this lint is no longer looking at anything, {wanted:?}",
         wanted.len()
     );
 
@@ -2940,7 +2940,7 @@ fn a_filter_box_is_hidden_until_the_script_that_drives_it_arrives() {
 
     assert!(
         boxes >= 3,
-        "only {boxes} filter boxes found -- this lint is no longer looking at anything"
+        "only {boxes} filter boxes found: this lint is no longer looking at anything"
     );
 }
 
@@ -3007,7 +3007,7 @@ fn a_copy_control_is_hidden_until_the_script_that_drives_it_arrives() {
     // one of these: it loads `copy.js` for that reason and says so in its own comment.
     assert!(
         pages >= 3,
-        "only {pages} pages render a copy control -- this lint is no longer looking at anything"
+        "only {pages} pages render a copy control: this lint is no longer looking at anything"
     );
 }
 
@@ -3061,7 +3061,7 @@ fn a_shorthand_duration_carries_the_instant_behind_it() {
 
     assert!(
         stamped >= 5,
-        "only {stamped} timestamped cells found -- this lint is no longer looking at anything"
+        "only {stamped} timestamped cells found: this lint is no longer looking at anything"
     );
 }
 

@@ -40,7 +40,7 @@
   // sends items or hints into somebody's game and cannot be taken back, so it asks first.
   var COMMANDS = {
     // The two that skip the confirmation still need a title and a target, because the dialog they
-    // DO get -- the spinner, then the answer -- is the only thing that says who was acted on.
+    // DO get (the spinner, then the answer) is the only thing that says who was acted on.
     lock: { confirm: false, title: "Lock", working: "Locking" },
     kick: { confirm: false, title: "Kick", working: "Kicking" },
     hint: {
@@ -207,7 +207,7 @@
     form.querySelector("[data-mod-explain]").textContent = spec.explain || "";
 
     // **Who this is for.** Read from the control's own cell rather than passed around, so it cannot
-    // describe one row while acting on another -- the failure it exists to prevent.
+    // describe one row while acting on another: the failure it exists to prevent.
     var cell = link.closest("[data-player]");
     var target = dialog.querySelector("[data-mod-target]");
     if (target) {
@@ -341,7 +341,7 @@
     active = spec;
 
     // **Close the menu this came from before opening the modal.** A `popover` does not light-dismiss
-    // for a `<dialog>` opening over it, so it would sit in the top layer underneath -- visible
+    // for a `<dialog>` opening over it, so it would sit in the top layer underneath, visible
     // through nothing, but still there when the dialog closes, over a page that has just reloaded
     // its own state. Guarded because most controls are not in a menu at all.
     var menu = link.closest("[popover]");
@@ -371,7 +371,7 @@
     if (event.target.closest("[data-mod-cancel]")) dialog.close();
     if (event.target.closest("[data-mod-dismiss]")) {
       dialog.close();
-      // The row's own state may have moved -- a lock flips the control, a release changes nothing
+      // The row's own state may have moved: a lock flips the control, a release changes nothing
       // visible but the history does. Reloading is the honest way to show it, and it happens after
       // the operator has read the answer rather than underneath them.
       location.reload();

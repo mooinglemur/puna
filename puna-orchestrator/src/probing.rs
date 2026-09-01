@@ -565,12 +565,12 @@ mod db_tests {
             assert_eq!(row.probe_kind.as_deref(), Some("tcp"));
             assert_eq!(
                 row.process_started_at, None,
-                "a probe that cannot say when the process started writes NULL, not `now()` -- a \
+                "a probe that cannot say when the process started writes NULL, not `now()`: a \
                  defaulted timestamp here would report every room as freshly restarted"
             );
             assert!(
                 row.probed_at.is_some(),
-                "the attempt is stamped even when it learned nothing -- that is how an operator \
+                "the attempt is stamped even when it learned nothing: that is how an operator \
                  tells 'no data' from 'not asked'"
             );
 

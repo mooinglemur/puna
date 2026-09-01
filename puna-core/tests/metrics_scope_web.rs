@@ -41,7 +41,7 @@ fn the_web_tier_exports_shared_families_and_nothing_it_cannot_compute() {
 
     assert_eq!(
         rendered, expected,
-        "puna-web's registry does not match families(Component::Web) -- a family was forced \
+        "puna-web's registry does not match families(Component::Web): a family was forced \
          without being listed, or listed without being forced"
     );
 

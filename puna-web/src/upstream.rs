@@ -214,7 +214,7 @@ mod tests {
         );
         assert!(
             !code.contains("serde_json"),
-            "nothing on this path needs a document's structure -- only a slot scope does, and that \
+            "nothing on this path needs a document's structure: only a slot scope does, and that \
              lives in routes::tracker::project"
         );
     }

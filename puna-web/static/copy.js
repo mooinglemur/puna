@@ -2,7 +2,7 @@
 //
 // Its own file because it is not room-specific: the room page copies an address, a slot password
 // and a claim link; `/admin/users` copies a Discord id. It lived inside `room.js`, which returns
-// early when the page has no room panel -- so loading that file elsewhere for the clipboard would
+// early when the page has no room panel, so loading that file elsewhere for the clipboard would
 // have produced a copy button that silently did nothing, which is precisely the failure the
 // feature detection below exists to prevent, arriving by a different road.
 //
@@ -13,7 +13,7 @@
   "use strict";
 
   // Feature-detected before the controls are revealed, not after they are clicked.
-  // `navigator.clipboard` requires a secure context, so on plain HTTP it is simply absent -- and a
+  // `navigator.clipboard` requires a secure context, so on plain HTTP it is simply absent, and a
   // copy button that silently does nothing is worse than no button, because the address looks
   // copied and the paste is whatever was there before.
   //
@@ -38,7 +38,7 @@
   //
   // NOT inserted beside the button, which is where this started: an element in the flow takes
   // layout space, so the cell and the whole table jumped wider for a second and back. And it could
-  // not simply be made `absolute` either -- the global `table` rule sets `overflow-x: auto`, so the
+  // not simply be made `absolute` either: the global `table` rule sets `overflow-x: auto`, so the
   // table is a scroll container and would clip it. `fixed` off <body> avoids both, and avoids
   // having to know which ancestor is a containing block.
   function confirmCopy(button, message, failed) {
@@ -55,7 +55,7 @@
     var rect = button.getBoundingClientRect();
     confirmation.style.left = rect.left + rect.width / 2 + "px";
     // Above by default. Flipped below when the button sits too near the top of the viewport for the
-    // tooltip to fit -- a confirmation rendered off-screen is the same as none, and this is the one
+    // tooltip to fit: a confirmation rendered off-screen is the same as none, and this is the one
     // case where somebody would go on to paste something they never copied.
     if (rect.top < 44) {
       confirmation.classList.add("below");
@@ -65,7 +65,7 @@
     }
 
     // Positioned once rather than tracked. Over a second and a bit that is right for everything
-    // except scrolling, where the anchor moves and the tooltip would not -- so scrolling takes it
+    // except scrolling, where the anchor moves and the tooltip would not, so scrolling takes it
     // away instead of leaving it floating over nothing.
     window.addEventListener("scroll", dismissConfirmation, { passive: true });
 
@@ -88,7 +88,7 @@
     event.preventDefault();
 
     // A value beginning with `/` is a path this page rendered, and what somebody wants on their
-    // clipboard is the whole link -- a claim URL is a thing you send to a person, not something
+    // clipboard is the whole link: a claim URL is a thing you send to a person, not something
     // they retype. Anything else is copied verbatim: an address is `host:port` and must not be
     // mangled into a URL.
     var text = button.dataset.copy;
@@ -98,7 +98,7 @@
         confirmCopy(button, "Copied to clipboard");
       },
       function () {
-        // The API exists and refused -- a permissions policy, or a click the browser did not count
+        // The API exists and refused: a permissions policy, or a click the browser did not count
         // as a user gesture. Say so rather than claiming success: the address is still right there
         // to select by hand, and this is the case where somebody would otherwise paste the wrong
         // thing into a game client and wonder why it will not connect.

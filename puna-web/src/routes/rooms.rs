@@ -3798,7 +3798,7 @@ pub(crate) mod tests {
         assert!(
             filtered > disclosure,
             "the filtered address is on screen beside the standard one, so it can be copied by \
-             somebody who read neither label -- which fails silently"
+             somebody who read neither label, which fails silently"
         );
 
         // The summary names the symptom rather than the feature, so the person with the problem
@@ -4074,7 +4074,7 @@ pub(crate) mod tests {
         assert!(!may_start(&closed, None), "a visitor must be refused");
         assert!(
             !may_start(&closed, Some(RoomRole::Helper)),
-            "a helper is not an organizer -- closing is an organizer's decision to undo"
+            "a helper is not an organizer: closing is an organizer's decision to undo"
         );
         assert!(may_start(&closed, Some(RoomRole::Organizer)));
     }

@@ -1,6 +1,6 @@
 // Fill a `<details>` from the server the first time it is opened.
 //
-// For a section whose contents grow without bound and which most visits do not need -- today that
+// For a section whose contents grow without bound and which most visits do not need: today that
 // is `/admin/rooms`'s list of stopped and closed rooms, which every room anybody ever stopped joins
 // and never leaves. Loading it with the page would make the page an operator opens during an
 // incident slower every week, to answer a question they did not ask.

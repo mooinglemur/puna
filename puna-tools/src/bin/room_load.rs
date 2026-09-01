@@ -30,7 +30,7 @@ room-load: synthetic check traffic against a running Puna room
   --clients-per-slot N  sockets per slot, 1-3: the game client, then
                      a text client, then a tracker. The extra two
                      only consume the firehose and answer
-                     heartbeats -- which is what a real player's
+                     heartbeats, which is what a real player's
                      three clients do, and what makes the room's
                      fan-out realistic                              (default 1)
   --rate N           checks per second PER SLOT. The room's offered
@@ -47,7 +47,7 @@ room-load: synthetic check traffic against a running Puna room
   --help
 
 Every slot stops checking the moment it receives its own Goal item and holds the connection open.
-The seed sets release_mode=auto, so a slot that goals releases the rest of its world -- which is
+The seed sets release_mode=auto, so a slot that goals releases the rest of its world, which is
 what keeps the other slots' Goals reachable and lets the run reach an end.
 
 Connections are opened on a ramp rather than all at once, because a room fills over minutes and
@@ -281,7 +281,7 @@ async fn main() -> Result<()> {
     println!(
         "  {deflated} of {opened} connections opened negotiated permessage-deflate{}",
         if deflated == 0 {
-            " -- the room compressed nothing for us, so outbound bytes are a worst case"
+            ": the room compressed nothing for us, so outbound bytes are a worst case"
         } else {
             ""
         }
@@ -322,14 +322,14 @@ async fn main() -> Result<()> {
 /// Print progress, and decide when the run is over.
 ///
 /// **The linger is the interesting part of the run, not politeness.** When the last player goals,
-/// auto-release empties every unfinished world at once — the biggest `to_slot` burst a room ever
+/// auto-release empties every unfinished world at once: the biggest `to_slot` burst a room ever
 /// produces. Closing at the moment of the last goal would measure everything except it.
 async fn watch(
     totals: Arc<Totals>,
     finished: Arc<AtomicBool>,
     config: Arc<Config>,
     players: u64,
-    // Connections the run means to hold -- slots times `--clients-per-slot`, not players.
+    // Connections the run means to hold: slots times `--clients-per-slot`, not players.
     sockets: u64,
     first_check: Duration,
 ) {
@@ -429,7 +429,7 @@ fn read_generation(path: &str) -> Result<(Vec<SlotPlan>, usize)> {
     archive.by_name(&name)?.read_to_end(&mut raw)?;
     let data = MultiData::parse(&raw).map_err(|e| anyhow::anyhow!("{path}: {e}"))?;
 
-    // The Goal id is per GAME -- two slots playing one game share it, and the item's receiver is
+    // The Goal id is per GAME: two slots playing one game share it, and the item's receiver is
     // what makes an arrival theirs.
     let goal_of = |game: &str| {
         data.embedded_datapackage
@@ -460,7 +460,7 @@ fn read_generation(path: &str) -> Result<(Vec<SlotPlan>, usize)> {
         .find(|p| p.goal_item.is_none() && data.slot_info[&p.slot].slot_type == SlotType::Player)
     {
         bail!(
-            "slot {} plays {} which has no {GOAL_ITEM} item -- this seed was not built by \
+            "slot {} plays {} which has no {GOAL_ITEM} item: this seed was not built by \
              make-generation, and a run against it could never end",
             orphan.slot,
             orphan.game
@@ -514,7 +514,7 @@ fn select(spec: &str, plans: &[SlotPlan]) -> Result<BTreeSet<u32>> {
     }
     let known: BTreeSet<u32> = plans.iter().map(|p| p.slot).collect();
     // Naming a slot the seed does not have is a typo worth reporting, not silently playing the
-    // rest -- a run that quietly played eight of the nine slots asked for would look like a room
+    // rest: a run that quietly played eight of the nine slots asked for would look like a room
     // that was slower than it is.
     if let Some(missing) = wanted.difference(&known).next() {
         bail!("this generation has no slot {missing}");

@@ -1,7 +1,7 @@
 //! Building a multiworld seed: the `PyObj` tree, and the zip Puna ingests.
 //!
 //! The shape here was transcribed from a real generation (`AP_51201905219311909307`) by unpickling
-//! it, not inferred from Archipelago's source — so what this writes is what a generator writes,
+//! it, not inferred from Archipelago's source, so what this writes is what a generator writes,
 //! and the two class instances it contains are the only two `pahoa_pickle`'s allowlist permits.
 //!
 //! ## The pool is dealt, not scattered
@@ -12,13 +12,13 @@
 //!
 //! That is the real algorithm rather than an imitation of it, and doing it properly is what makes
 //! the Goal placement fall out instead of being special-cased: each slot's Goal lands wherever the
-//! shuffle puts it — its own world or anybody else's — exactly one exists per slot, and no
+//! shuffle puts it (its own world or anybody else's) exactly one exists per slot, and no
 //! placement can be left over or short. Drawing ordinary items with replacement is likewise the
 //! normal shape of an item pool: Super Mario 64 ships 120 `Power Star`s.
 //!
 //! ## `release_mode: "auto"`, which is what lets a room finish
 //!
-//! A slot that goals stops checking, so its remaining locations would strand every item in them —
+//! A slot that goals stops checking, so its remaining locations would strand every item in them,
 //! including, potentially, another slot's Goal. Auto-release empties that world on goal instead, so
 //! goals cascade: nobody has goaled at the start so everybody is checking, the first Goal found
 //! triggers a release, and inductively every Goal reaches its owner. Without it a load run can
@@ -61,7 +61,7 @@ const PROGRESSION_SHARE: f64 = 0.25;
 /// The generator version claimed in the seed.
 ///
 /// Must be at or past Archipelago's `LEGACY_GENERATOR_CUTOFF` (0.6.2), below which pahoa applies a
-/// much older client floor — a synthetic seed claiming to be ancient would quietly accept clients
+/// much older client floor: a synthetic seed claiming to be ancient would quietly accept clients
 /// this tool would never send.
 ///
 /// **0.6.7, because that is the newest version upstream has actually released.** A synthetic seed
@@ -83,7 +83,7 @@ pub struct Spec {
     pub spectators: usize,
     /// How many distinct games the players are spread across, round-robin.
     pub games: usize,
-    /// Checks per player slot — and, minus one, the size of each game's ordinary item table.
+    /// Checks per player slot, and, minus one, the size of each game's ordinary item table.
     pub locations: usize,
     pub seed: u64,
 }
@@ -292,7 +292,7 @@ fn multidata(
         .collect::<Vec<_>>();
 
     // **Every slot 1..=N gets a key, spectators included.** pahoa counts DECLARED slot ids, so a
-    // spectator with no entry is what "slot ids are not contiguous" means -- the case that nearly
+    // spectator with no entry is what "slot ids are not contiguous" means: the case that nearly
     // broke every real seed when validation was switched on.
     let locations = (0..total_slots)
         .map(|i| {
@@ -409,14 +409,14 @@ fn multidata(
 ///
 /// - `MultiServer.py:934-935` builds `RoomInfo.datapackage_checksums` and **omits a game whose
 ///   package has no checksum**. pahoa mirrors it (`pahoa-multidata/src/datapackage.rs:262`).
-/// - `CommonClient.py:652` — `if game not in remote_data_package_checksums: continue` — so the
+/// - `CommonClient.py:652` (`if game not in remote_data_package_checksums: continue`) so the
 ///   client never sends `GetDataPackage` for that game, and every item and location it renders is
 ///   a bare id. Note the *next* line: a checksum present but empty **does** trigger a fetch, so
 ///   the failure needs the key to be missing entirely, which is exactly what we produced.
 ///
 /// Computed as upstream computes it (`worlds/AutoWorld.py:697`): sha1 over `NetUtils.encode` of
 /// the package with the four keys **in alphabetical order** and no checksum in it. Nothing
-/// verifies the value at play time — a client compares it for equality and caches under it — so
+/// verifies the value at play time (a client compares it for equality and caches under it) so
 /// what matters is that it is derived from the content: regenerate a seed with the same game name
 /// and different tables and the checksum moves, where a fixed string would leave every client
 /// serving names from its cache of the *old* seed. Matching upstream's algorithm exactly is what
@@ -448,7 +448,7 @@ fn game_package(items: &[(&str, i64)], locations: &[(&str, i64)]) -> PyObj {
 /// `sha1(NetUtils.encode(package))`, over the same tables [`game_package`] writes.
 ///
 /// `NetUtils.encode` is `json.dumps` with `separators=(',', ':')` and `ensure_ascii=False`, so the
-/// canonical form is compact JSON with no escaping beyond JSON's own — which is what
+/// canonical form is compact JSON with no escaping beyond JSON's own, which is what
 /// `serde_json::to_string` produces for a string. Built by hand rather than through a
 /// `serde_json::Value`, because a `Value`'s map sorts its keys and these tables must hash in the
 /// order they are written.
@@ -478,14 +478,14 @@ fn data_package_checksum(items: &[(&str, i64)], locations: &[(&str, i64)]) -> St
 
 /// The options the room adopts, because Puna passes `--use-embedded-options`.
 ///
-/// `release_mode: "auto"` is the one that matters — see the module docs — and pahoa only accepts
+/// `release_mode: "auto"` is the one that matters (see the module docs) and pahoa only accepts
 /// either value because it round-trips: `from_text` is a substring test that lands anything
 /// unrecognized on `disabled`, so `serve.rs`'s `permission` trusts a word only when
 /// `as_text(from_text(w)) == w`. `"auto"` and `"disabled"` both do.
 ///
 /// **`collect_mode: "disabled"`**, where pahoa's own default is `auto`. Under auto, a slot that
 /// goals is immediately handed every outstanding item addressed to it, wherever those items still
-/// sit — so the goal cascade delivers twice over, once by the release that empties the goaled
+/// sit, so the goal cascade delivers twice over, once by the release that empties the goaled
 /// slot's world and again by the collect that fills it. Off, an item reaches a slot only when
 /// somebody actually checks or releases the location holding it, which is the traffic a load run
 /// is meant to be measuring. **It does not affect termination**: a slot goals on receiving its Goal
@@ -517,7 +517,7 @@ fn str_(s: &str) -> PyObj {
 
 /// The rules `pahoa_multidata::MultiData::validate` enforces, checked before anything is written.
 ///
-/// Duplicating them here is not distrust of that function — the tests round-trip through it — it is
+/// Duplicating them here is not distrust of that function (the tests round-trip through it) it is
 /// that a violation caught at the point of construction says *which* slot, where the same failure
 /// found at upload time says only that the seed will not load.
 fn check_invariants(
@@ -668,8 +668,8 @@ mod tests {
     ///
     /// The expected value is not invented here: it is
     /// `sha1(NetUtils.encode(package).encode()).hexdigest()` run against the reference
-    /// implementation for this exact package, which also confirmed the canonical form —
-    /// `{"item_name_groups":{},"item_name_to_id":{"Goal":9100000000001,...` — is compact JSON in
+    /// implementation for this exact package, which also confirmed the canonical form
+    /// (`{"item_name_groups":{},"item_name_to_id":{"Goal":9100000000001,...`) is compact JSON in
     /// the written order. A checksum that merely *existed* would fix the reported symptom; one
     /// that matches is what lets a zip from this tool through `WebHostLib/upload.py`, which
     /// recomputes it and refuses a mismatch.
@@ -707,7 +707,7 @@ mod tests {
     ///
     /// This is the assertion the field failure needed. A client adds `Archipelago` to the relevant
     /// games unconditionally (`CommonClient.py:648`), so the generic package skipping this would
-    /// leave the reserved ids — `Nothing`, `Cheat Console`, `Server` — rendering as numbers on a
+    /// leave the reserved ids (`Nothing`, `Cheat Console`, `Server`) rendering as numbers on a
     /// room whose own games resolved perfectly.
     #[test]
     fn every_game_in_the_datapackage_can_be_asked_for_by_checksum() {
@@ -793,7 +793,7 @@ mod tests {
 
         // The Goal id of each game, read back out of the datapackage rather than recomputed.
         // Played games only. `Archipelago` is the spectator pseudo-game and carries an empty
-        // package on purpose -- a spectator has no Goal because it can never finish.
+        // package on purpose: a spectator has no Goal because it can never finish.
         let goal_ids: BTreeMap<&str, i64> = data
             .embedded_datapackage
             .iter()
@@ -818,7 +818,7 @@ mod tests {
         assert_eq!(found, vec![1; s.players], "goal placements per slot");
     }
 
-    /// Items repeat, which is the normal shape of a pool — 120 Power Stars — and the thing a naive
+    /// Items repeat, which is the normal shape of a pool (120 Power Stars) and the thing a naive
     /// "one of each" generator would get wrong.
     #[test]
     fn items_are_drawn_with_replacement() {
@@ -836,7 +836,7 @@ mod tests {
         );
     }
 
-    /// `--seed` reproduces a run exactly, and two seeds do not collide — which is what makes a
+    /// `--seed` reproduces a run exactly, and two seeds do not collide, which is what makes a
     /// small generation varied between runs and a reported failure reproducible after one.
     #[test]
     fn the_seed_reproduces_a_run_and_different_seeds_differ() {
@@ -857,15 +857,15 @@ mod tests {
     /// **Nothing in the zip is stamped with the wall clock**, which the assertion above can only
     /// catch by luck.
     ///
-    /// `SimpleFileOptions::default()` writes *now* into every entry — `default_for_write()`, under
-    /// the `time` feature this graph enables — and DOS time has two-second resolution. So two builds
+    /// `SimpleFileOptions::default()` writes *now* into every entry (`default_for_write()`, under
+    /// the `time` feature this graph enables) and DOS time has two-second resolution. So two builds
     /// of one seed differ only when they straddle a boundary, which is a coin weighted by how long
     /// a build takes: it flaked **once in fifty** nightly runs and passes every time anybody runs it
     /// by hand.
     ///
     /// The consequence is bigger than the flake. **Puna content-addresses generations by the sha256
     /// of this file**, so a clock-stamped zip makes `--seed 42` ingest as a different generation
-    /// every time — defeating the deduplication that reproducing a run exists to give.
+    /// every time, defeating the deduplication that reproducing a run exists to give.
     ///
     /// Asserted on the stored timestamp rather than by building twice across a real boundary: that
     /// version reproduces the bug faithfully and costs two seconds of every test run, and this one
@@ -920,7 +920,7 @@ mod tests {
     }
 
     /// **Every mode word this writes must survive pahoa's round-trip check**, which is what stops
-    /// `from_text`'s substring matching turning a near-miss into silence — anything it does not
+    /// `from_text`'s substring matching turning a near-miss into silence: anything it does not
     /// recognize lands on `disabled`, so a seed with `"of"` for `"off"` would quietly turn releases
     /// off and the run would never end.
     #[test]

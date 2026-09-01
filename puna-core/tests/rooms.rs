@@ -900,7 +900,7 @@ async fn renaming_a_room_touches_nothing_but_the_name() {
         assert_eq!(
             spec.spec_hash.as_deref(),
             Some("hash-1"),
-            "a rename must not move the spec hash -- that would restart the room"
+            "a rename must not move the spec hash: that would restart the room"
         );
         assert_eq!(
             spec.redeploy_requested_at, None,
@@ -1070,7 +1070,7 @@ async fn a_sanction_withholds_and_never_deletes() {
         assert!(!UserStatus::Restricted.may_create());
         assert!(
             UserStatus::Restricted.may_act(),
-            "restricted still plays -- that is the entire point of the middle rung"
+            "restricted still plays: that is the entire point of the middle rung"
         );
         assert!(!UserStatus::Banned.may_create() && !UserStatus::Banned.may_act());
 
@@ -1221,7 +1221,7 @@ async fn locking_a_slot_withholds_it_without_disturbing_its_password() {
         assert_eq!(locked.locked_by, Some(OWNER));
         assert_eq!(
             locked.password, before.password,
-            "locking must not touch the credential -- unlocking restores what the holder has"
+            "locking must not touch the credential: unlocking restores what the holder has"
         );
 
         // Nobody else is disturbed: this is one slot's door, not the room's.

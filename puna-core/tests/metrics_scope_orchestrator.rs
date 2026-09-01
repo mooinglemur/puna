@@ -29,7 +29,7 @@ fn the_orchestrator_exports_exactly_the_families_it_owns() {
 
     assert_eq!(
         rendered, expected,
-        "the orchestrator's registry does not match families(Component::Orchestrator) -- a \
+        "the orchestrator's registry does not match families(Component::Orchestrator): a \
          family was forced without being listed, or listed without being forced"
     );
 }

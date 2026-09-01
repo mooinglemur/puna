@@ -1,8 +1,8 @@
 // The tracker's tables, rendered in the browser.
 //
 // Puna digests the room's documents server-side (`/api/puna/tracker/<id>/<view>`) and this fetches
-// the result. The reason is bandwidth first -- a room's live document is measured at 2.7 MB for 185
-// slots and almost none of it is what a table shows -- and capability second: the multiworld view
+// the result. The reason is bandwidth first (a room's live document is measured at 2.7 MB for 185
+// slots and almost none of it is what a table shows) and capability second: the multiworld view
 // is never sent another slot's raw data, because no endpoint would serve it.
 //
 // What the browser buys with that: a search box over every table and sortable columns, neither of
@@ -23,8 +23,8 @@
   const slotQuery = root.dataset.slot ? `?slot=${encodeURIComponent(root.dataset.slot)}` : "";
 
   // **Which tracker this is**, and it namespaces every remembered preference. The hints table is on
-  // both pages and its toggle is a different question on each -- "what am I still waiting for"
-  // against "what is outstanding anywhere" -- so sharing one key would make choosing on one page
+  // both pages and its toggle is a different question on each ("what am I still waiting for"
+  // against "what is outstanding anywhere") so sharing one key would make choosing on one page
   // silently change the other.
   const pageType = root.dataset.slot ? "slot" : "room";
 
@@ -37,7 +37,7 @@
   // --- how each view's rows become cells --------------------------------------------------------
   //
   // One entry per table. `cells` returns an array of either a string or a {text, class, href}, in
-  // the same order as the server-rendered <th>s -- which is what keeps the header and the body from
+  // the same order as the server-rendered <th>s, which is what keeps the header and the body from
   // drifting apart without a template engine to tie them together.
 
   const dash = { text: "—", class: "hint" };
@@ -66,7 +66,7 @@
       class: contact.handle ? null : "hint",
       // A Discord mention rather than the handle: `<@id>` is what actually pings, and typing a
       // handle into Discord does not reliably reach anybody. Copied through the shared `.copy`
-      // control, so it is revealed only where the clipboard is actually reachable -- on plain HTTP
+      // control, so it is revealed only where the clipboard is actually reachable: on plain HTTP
       // there is no clipboard and a button that silently did nothing would be worse than none.
       copy: { value: contact.mention, label: `Copy a mention for ${contact.handle || "this player"}` },
       tag: r.owner.ping,
@@ -74,12 +74,12 @@
   }
 
   // What the "Held by" column sorts on, derived from the cell so it can only ever order by what a
-  // reader can see -- the same rule filtering follows.
+  // reader can see: the same rule filtering follows.
   //
   // **It needs an entry in `sortValues` at all**, and that is the interesting part: a bare
   // `data-key` looks the row's field up, and `owner` is an OBJECT. Every claimed row stringified to
   // `[object Object]` and compared equal, so the column did nothing but drift the unclaimed rows to
-  // the end -- with an arrow drawn over it saying it had sorted. The template's own note claimed it
+  // the end, with an arrow drawn over it saying it had sorted. The template's own note claimed it
   // sorted by handle for as long as it did not.
   //
   // `copy` is present exactly where a contact is, which is exactly where the cell shows a name
@@ -97,7 +97,7 @@
         String(r.slot),
         // **`=== false`, not a falsy check**, and the difference is the whole point of the field
         // being absent rather than `false` for a viewer who may not know. `claimed` is omitted
-        // entirely unless the reader is the room's staff or holds a slot in it -- so `r.claimed ?`
+        // entirely unless the reader is the room's staff or holds a slot in it, so `r.claimed ?`
         // would read `undefined` as "not claimed" and tag every slot `unclaimed` for exactly the
         // anonymous audience the server just declined to tell.
         {
@@ -106,11 +106,11 @@
           annotation: r.note,
           // **Decided by the server, never by comparing ids here.** `editable` is absent unless the
           // viewer holds this slot or runs the room, so the client never learns whose slot is whose
-          // and the route re-checks regardless -- the control is a courtesy, the guard is the rule.
+          // and the route re-checks regardless: the control is a courtesy, the guard is the rule.
           edit: r.editable ? { slot: r.slot, name: r.name, progression: r.progression, note: r.note } : null,
         },
         // **Built only where the header exists.** `annotations` comes from the same server-rendered
-        // flag the `<th>` does, rather than from whether `r.owner` happens to be present -- a row
+        // flag the `<th>` does, rather than from whether `r.owner` happens to be present: a row
         // for an unclaimed slot carries no owner either, so inferring the column from the field
         // would drop a cell on those rows and shift every column after it.
         ...(annotations ? [ownerCell(r)] : []),
@@ -250,7 +250,7 @@
     return rows.reduce((running, row) => running + (row[key] || 0), 0);
   }
 
-  // `null` is NEVER, and never is not 1970 -- rendering an epoch date is the classic way to make an
+  // `null` is NEVER, and never is not 1970: rendering an epoch date is the classic way to make an
   // untouched slot look like an abandoned one. The server sends an age it computed, so a skewed
   // client clock cannot produce a negative one; this adds the time since that response arrived, so
   // the column keeps ticking between polls without a fetch.
@@ -267,7 +267,7 @@
             : `${Math.floor(minutes / 1440)}d ago`;
 
     // **The exact moment, behind the shorthand.** `lastResponseAt` is when this document arrived
-    // and `msAgo` is how old the event was THEN, so their difference is the instant itself -- and
+    // and `msAgo` is how old the event was THEN, so their difference is the instant itself, and
     // it does not drift as the page sits open, unlike the age above it.
     //
     // Computed here rather than swept afterwards because these cells are rebuilt on every render;
@@ -313,7 +313,7 @@
       this.empty = section.querySelector(".empty");
       this.search = section.querySelector(".table-search");
       this.toggle = section.querySelector("[data-toggle]");
-      // Read AFTER `toggles.js` has restored it -- both files are `defer`, so they run in document
+      // Read AFTER `toggles.js` has restored it: both files are `defer`, so they run in document
       // order and the box is already in its remembered state by the time this asks.
       this.toggled = !!(this.toggle && this.toggle.checked);
       // Namespaced by page type, so the hints table's sort on a slot page is not the multiworld's.
@@ -324,7 +324,7 @@
 
       const state = readState();
       this.query = state.get(`${this.view}.q`) || "";
-      // **The fragment wins where it has an opinion**, because that is what a shared link carries --
+      // **The fragment wins where it has an opinion**, because that is what a shared link carries:
       // somebody sending "look at this sorted by checks" must not have it overridden by whatever
       // the recipient last chose. Absent one, the remembered sort applies, which is what makes a
       // fresh visit pick up where the reader left off rather than at the server's order.
@@ -408,7 +408,7 @@
       const sort = this.sort ? `${this.sort.key}:${this.sort.dir}` : "";
       setOrDelete(params, `${this.view}.sort`, sort);
       // Both: the fragment so the view can be shared, the store so it survives arriving without one.
-      // Only the SORT is remembered -- a search box that refilled itself on every visit would hide
+      // Only the SORT is remembered: a search box that refilled itself on every visit would hide
       // rows for a reason the reader has long forgotten typing, and unlike a sort that is not
       // visible at a glance.
       if (window.PunaToggles) window.PunaToggles.remember(this.sortKey, sort);
@@ -444,7 +444,7 @@
       // were current. Same rows, different meaning, and the wrong one is not visibly wrong.
       let rows = this.rows;
       if (this.toggled) {
-        // A view declares one or the other, never both today -- but applying collapse first would
+        // A view declares one or the other, never both today, but applying collapse first would
         // be the right order if one ever did: fold duplicates, then drop what is finished.
         if (this.config.collapse) rows = collapse(rows, this.config.collapse);
         if (this.config.exclude) rows = rows.filter((row) => !this.config.exclude(row));
@@ -452,7 +452,7 @@
 
       if (needle) {
         // Matched against the RENDERED cells, not the raw fields, so what you can see is what you
-        // can search -- "progression", "never", "12 / 216" all work, and a field the table does not
+        // can search: "progression", "never", "12 / 216" all work, and a field the table does not
         // show cannot match something invisible.
         rows = rows.filter((row) =>
           this.config
@@ -467,7 +467,7 @@
       if (this.sort) {
         const { key, dir } = this.sort;
         const type = this.typeOf(key);
-        // A column may sort by something other than the field it displays -- see `sortValues`.
+        // A column may sort by something other than the field it displays. See `sortValues`.
         const valueOf =
           (this.config.sortValues && this.config.sortValues[key]) || ((row) => row[key]);
         // `dir` goes IN rather than negating what comes out: `compare` keeps the nulls at the end
@@ -484,7 +484,7 @@
     renderSummary(rows) {
       if (!this.tfoot || !this.config.summary) return;
       // Hidden while there is nothing to summarize, so a table waiting on its first fetch shows no
-      // row rather than a line of zeros -- which reads as a finished multiworld holding nothing.
+      // row rather than a line of zeros, which reads as a finished multiworld holding nothing.
       this.tfoot.hidden = rows.length === 0;
       if (!rows.length) return;
 
@@ -682,7 +682,7 @@
 
     const rect = button.getBoundingClientRect();
     pop.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - pop.offsetWidth - 8))}px`;
-    // Below the icon, flipping above when there is no room -- a panel rendered off-screen is the
+    // Below the icon, flipping above when there is no room: a panel rendered off-screen is the
     // same as no panel.
     const below = rect.bottom + 6;
     pop.style.top =
@@ -714,7 +714,7 @@
       else showNote(button, true);
       return;
     }
-    // Anywhere else dismisses -- except inside the panel itself, where a click is somebody starting
+    // Anywhere else dismisses, except inside the panel itself, where a click is somebody starting
     // to select the text they opened it to copy.
     if (!panel || !event.target.closest?.(".note-pop")) hideNote(true);
   });
@@ -727,7 +727,7 @@
   // One row per `key`, keeping the row with the highest `recency` and counting how many there were.
   //
   // The count rides on a COPY rather than being written onto the row, because `this.rows` is the
-  // fetched data and is re-collapsed on every render -- mutating it would accumulate counts across
+  // fetched data and is re-collapsed on every render: mutating it would accumulate counts across
   // renders and survive the toggle being turned back off.
   function collapse(rows, config) {
     if (!config) return rows;
@@ -751,12 +751,12 @@
 
   function cellText(cell) {
     const value = typeof cell === "string" ? { text: cell } : cell;
-    // Every rendered piece, in render order -- filtering matches what is on screen, so a count the
+    // Every rendered piece, in render order: filtering matches what is on screen, so a count the
     // reader can see has to be searchable and one they cannot must not be.
     //
     // **A note is deliberately absent**, and it is the one judgment call here. Its text is behind a
     // hover, so searching it would match rows for a reason the reader cannot see on the page in
-    // front of them -- which is exactly the rule this function follows everywhere else. The handle
+    // front of them, which is exactly the rule this function follows everywhere else. The handle
     // and the ping chip *are* rendered, so they are searchable, which is what makes "show me
     // everybody who is happy to be pinged" work.
     const tags = [].concat(value.tag || [])
@@ -771,7 +771,7 @@
   //
   // Nulls last in both directions: an untouched slot belongs at the end of "least recently seen"
   // and at the end of "most recently seen" alike, because it has no answer either way. A caller
-  // negating the returned number negates that too, so the nulls led on every descending sort --
+  // negating the returned number negates that too, so the nulls led on every descending sort:
   // which is what shipped, for as long as this comment claimed otherwise. It affected the two
   // columns whose null rule was written down deliberately, `last seen` and `checks`, and it is the
   // rule "held by" was built on top of.
@@ -805,15 +805,15 @@
   //   * poll only while the tab is in the FOREGROUND and the interval has elapsed;
   //   * if the tab is foregrounded after the interval would have expired, refresh IMMEDIATELY.
   //
-  // A background tab therefore costs nothing at all -- which matters for a page people leave open
-  // for days -- and coming back to one never shows stale numbers while a timer runs down.
+  // A background tab therefore costs nothing at all, which matters for a page people leave open
+  // for days, and coming back to one never shows stale numbers while a timer runs down.
   //
   // The interval comes from the server (`next_poll_ms`), derived from the document's own cache
   // window: asking faster than that cannot produce new data, and only the server knows what it is.
 
   // **The controls are revealed here, exactly as `table.js` does it for the server-rendered
-  // tables.** The class means "filtering and sorting are live on this page", not "table.js loaded"
-  // -- and this file drives its own, so it has to say so too.
+  // tables.** The class means "filtering and sorting are live on this page", not "table.js loaded",
+  // and this file drives its own, so it has to say so too.
   //
   // Saying otherwise is what hid the items filter and its toggle: the stylesheet gates
   // `.table-controls` on the class, `table.js` was the only thing setting it, and the tracker does
@@ -846,7 +846,7 @@
     //
     // **Through `PunaTime.absolute`, not `toLocaleString`.** This banner exists to say how stale the
     // document is, and a bare `toLocaleString` renders `24/08/2026, 06.07.58` for one reader and
-    // `8/24/2026, 6:07:58 AM` for another with no zone on either -- so the one fact it is here to
+    // `8/24/2026, 6:07:58 AM` for another with no zone on either, so the one fact it is here to
     // convey is the one an ambiguous date cannot carry. That matters more on the tracker than
     // anywhere else in Puna, because this is the page built to be shared with an audience the
     // organizers do not choose. Same reasoning `localtime.js` already carries, and the same fixed

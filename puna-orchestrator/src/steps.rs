@@ -2205,7 +2205,7 @@ mod db_tests {
             assert_eq!(
                 pending_redeploy(&mut conn, room).await,
                 None,
-                "a start satisfies a request too -- there was nothing to recreate"
+                "a start satisfies a request too: there was nothing to recreate"
             );
         })
         .await;

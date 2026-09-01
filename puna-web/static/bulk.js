@@ -41,7 +41,7 @@
 
   function move(from, to) {
     // Collected before moving: `selectedOptions` is live, so removing an option while walking it
-    // skips the next one -- the classic way a "move all" quietly moves half.
+    // skips the next one: the classic way a "move all" quietly moves half.
     var picked = Array.prototype.slice.call(from.selectedOptions);
     picked.forEach(function (option) {
       option.selected = false;
@@ -63,7 +63,7 @@
   }
 
   // **Replaces the highlight rather than adding to it.** To build "game X and game Y", apply X,
-  // stage it, then apply Y -- which is why there is no separate clear control: applying anything
+  // stage it, then apply Y, which is why there is no separate clear control: applying anything
   // clears what came before.
   function matches(option, kind, needle) {
     if (kind === "unclaimed") return option.dataset.claimed !== "true";
@@ -90,7 +90,7 @@
     });
 
     // Said out loud, because a selection spread across two lists of hundreds is not something a
-    // glance confirms -- and "Apply selection" doing nothing looks identical to it matching zero.
+    // glance confirms, and "Apply selection" doing nothing looks identical to it matching zero.
     report(
       total === 0
         ? "Nothing matched, so nothing is selected."

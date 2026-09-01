@@ -9,7 +9,7 @@
    **Never rendered from Puna's own configuration**, which is the rule §7 states and the reason this
    file reads `gameplay_options` and nothing else. pahoa persists these into `room.save` and takes
    them from the snapshot on restore, so once a room has saved once its copy outranks whatever Puna
-   passed at startup -- including an `!admin /option` change made an hour ago. A room up for a week
+   passed at startup, including an `!admin /option` change made an hour ago. A room up for a week
    may legitimately disagree with its own pod spec, and that is correct rather than drift.
 
    The caller supplies `gameplay_options` (already flattened by `room::gameplay_option_rows`) and
@@ -17,12 +17,12 @@
 {% if gameplay_options.is_empty() %}
 {# Absent is not empty, and the sentence has to carry that: a room with no rules is not a thing that
    exists, so a blank table here would say something false. What this means is that nobody has
-   managed to ask -- a room that has never run, or one on an image too old to answer. #}
+   managed to ask: a room that has never run, or one on an image too old to answer. #}
 <p class="hint">This room has not reported its rules yet. They arrive the first time it is running
 and this site can reach it.</p>
 {% else %}
 {% if let Some(at) = gameplay_options_at %}
-{# **Stated rather than implied, because a stopped room keeps its last reading** -- which is the
+{# **Stated rather than implied, because a stopped room keeps its last reading**, which is the
    whole reason these are stored instead of asked for on each page load. An async room is down most
    of its life and its rules are still worth knowing; what would not be honest is presenting a
    week-old answer as the current one. #}

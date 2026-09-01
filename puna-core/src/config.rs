@@ -303,7 +303,7 @@ fn parse_port_range(key: &str) -> anyhow::Result<(u16, u16)> {
     anyhow::ensure!(low < high, "{key}: the lower bound must be below the upper");
     anyhow::ensure!(
         low % 2 == 0,
-        "{key}: the range must start on an EVEN port -- each room takes a pair, and the lower of \
+        "{key}: the range must start on an EVEN port: each room takes a pair, and the lower of \
          the two is the one advertised. Got {low}."
     );
     anyhow::ensure!(

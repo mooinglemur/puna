@@ -1,10 +1,10 @@
 {# The shell every page extends.
 
-   askama.toml sets whitespace = "suppress", which strips whitespace adjacent to EVERY tag --
+   askama.toml sets whitespace = "suppress", which strips whitespace adjacent to EVERY tag:
    including a single significant space before an expression. `role: {{ role }}` renders as
    `role:value`.
 
-   `+` PRESERVES whitespace; it does not INSERT any. So the fix is `role: {{+ role }}` -- the space
+   `+` PRESERVES whitespace; it does not INSERT any. So the fix is `role: {{+ role }}`, and the space
    stays in the source and the `+` stops it being eaten. Writing `role:{{+ role }}` looks like it
    does the same thing and silently renders `role:value`, which is how every one of these templates
    was wrong until 2026-08-20. `tests/templates.rs` now fails on that shape. #}
@@ -31,7 +31,7 @@
 <link rel="stylesheet" href="/static/css/puna.css?v={{ base.static_version }}">
 {# **No `defer`, and that is the whole point of it being here rather than at the foot with the
    others.** It sets `color-scheme` on <html> from the reader's stored choice, and it has to do that
-   before the first paint -- deferred, the page would paint in the system theme and snap to the
+   before the first paint: deferred, the page would paint in the system theme and snap to the
    chosen one, which is a white flash on every navigation for somebody who picked dark. Inline
    would also work and would need `unsafe-inline` the day a CSP is added. See static/theme.js. #}
 <script src="/static/theme.js?v={{ base.static_version }}"></script>
@@ -57,7 +57,7 @@
 <a href="/auth/login">log in with Discord</a>
 {% endif %}
 
-{# Three states, not two: light, dark, and following the system -- which is the default and is a
+{# Three states, not two: light, dark, and following the system, which is the default and is a
    real choice rather than the absence of one, so it gets a control like the other two.
 
    Rendered on every page and hidden until `theme.js` reveals it, because without scripting it
@@ -80,7 +80,7 @@
       stroke-linejoin="round"/>
 </svg>
 </button>
-{# A display, because "the system" is the device rather than a time of day -- a half-filled circle
+{# A display, because "the system" is the device rather than a time of day: a half-filled circle
    is the other common choice and reads as a contrast control instead. #}
 <button type="button" data-set="system" aria-pressed="false"
         title="Follow the system theme" aria-label="Follow the system theme">
@@ -93,7 +93,7 @@
 </nav>
 </header>
 {# **On every page, because the whole state is that the site looks like somebody else's.** A notice
-   only where the control lives would be missing exactly where it matters -- three clicks deep,
+   only where the control lives would be missing exactly where it matters: three clicks deep,
    wondering why an organizer cannot see their own console.
 
    It says READ-ONLY because that is enforced rather than promised: `Session`'s request guard

@@ -2,18 +2,18 @@
 //
 // **The entire mechanism is `color-scheme` on <html>.** `puna.css` puts every color through
 // `light-dark()` on a custom property, and `light-dark()` resolves against the used value of
-// `color-scheme` -- which is inherited, so setting it once on the root decides the whole page.
+// `color-scheme`, which is inherited, so setting it once on the root decides the whole page.
 // There is no second palette here, no `prefers-color-scheme` block, and nothing to keep in step:
 // the stylesheet already answered this question and this only chooses which of its two answers is
 // in force.
 //
-//   (absent)            -> color-scheme: light dark   -- follow the system
+//   (absent)            -> color-scheme: light dark   (follow the system)
 //   data-theme=light    -> color-scheme: light
 //   data-theme=dark     -> color-scheme: dark
 //
 // **Loaded from <head> WITHOUT `defer`, which is deliberate and is the only reason this file is
 // separate from the rest.** A deferred script runs after the document is parsed, so the page would
-// paint in the system theme and then snap to the reader's choice -- a white flash on every
+// paint in the system theme and then snap to the reader's choice: a white flash on every
 // navigation for somebody who chose dark. It has to run before first paint, and the alternative,
 // an inline <script>, would need `unsafe-inline` the day a Content-Security-Policy is added.
 // Blocking on a tiny same-origin cached file is the cheaper side of that trade.
@@ -34,7 +34,7 @@
       var value = localStorage.getItem(KEY);
       return CHOICES.indexOf(value) === -1 ? null : value;
     } catch (e) {
-      // Storage can throw rather than return null -- Safari's private mode, or a browser with
+      // Storage can throw rather than return null: Safari's private mode, or a browser with
       // cookies blocked for the origin. The theme still works for the life of the page.
       return null;
     }
@@ -47,7 +47,7 @@
 
   // Phase one, before anything paints.
   apply(stored());
-  // Reveals the control. Without scripting it cannot work, so it is not shown -- the same reason
+  // Reveals the control. Without scripting it cannot work, so it is not shown: the same reason
   // and the same shape as `js-copy` for the clipboard buttons.
   document.documentElement.classList.add("js-theme");
 

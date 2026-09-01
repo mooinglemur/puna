@@ -28,7 +28,7 @@ fn the_tracker_tier_exports_shared_families_and_nothing_it_cannot_compute() {
 
     assert_eq!(
         rendered, expected,
-        "puna-tracker's registry does not match families(Component::Tracker) -- a family was \
+        "puna-tracker's registry does not match families(Component::Tracker): a family was \
          forced without being listed, or listed without being forced"
     );
 

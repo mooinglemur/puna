@@ -1,12 +1,12 @@
 //! A very small `--key value` parser, shared by both tools.
 //!
 //! Hand-rolled rather than `clap`, which would be the obvious reach and is a real dependency for
-//! two dev binaries nobody deploys. The repository has no argument parser at all today — every
-//! shipped tier takes its configuration from the environment — so adding one to the graph for this
+//! two dev binaries nobody deploys. The repository has no argument parser at all today (every
+//! shipped tier takes its configuration from the environment) so adding one to the graph for this
 //! would be the largest thing in the change by some distance.
 //!
 //! What it gives up is worth naming: no abbreviations, no `-x` short forms, no subcommands. What it
-//! keeps is the part that matters for a tool run by hand — **an unknown flag is an error naming
+//! keeps is the part that matters for a tool run by hand: **an unknown flag is an error naming
 //! itself**, rather than being ignored while somebody wonders why `--slots 200` did nothing.
 
 use anyhow::{Result, bail};

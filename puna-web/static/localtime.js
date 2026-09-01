@@ -1,6 +1,6 @@
 // Absolute timestamps, in the reader's own timezone, behind the shorthand ages.
 //
-// Every duration on this site is rendered short and relative -- "40m", "6d 2h", "3h ago" -- because
+// Every duration on this site is rendered short and relative ("40m", "6d 2h", "3h ago") because
 // that is what answers the question being asked while scanning a table. What it cannot answer is
 // *which* moment, and that is the question somebody has once they have found the row they care
 // about: correlating with a log line, a Discord message, or another operator's account of events.
@@ -19,8 +19,8 @@
 // the shorthand it already renders; `tracker.js` sets it on the cells it builds itself, calling
 // `absolute()` directly rather than going through the sweep.
 //
-// Elements are stamped ONCE. The instant does not change -- only the shorthand does, as time passes
-// -- so there is nothing to keep current.
+// Elements are stamped ONCE. The instant does not change (only the shorthand does, as time passes)
+// so there is nothing to keep current.
 (function () {
   "use strict";
 
@@ -42,7 +42,7 @@
   // there is an abbreviation, and `UTC+2` or `GMT+1` where the locale has none.
   //
   // **Both forms are surfaced as they come.** An earlier version rejected anything containing a
-  // digit and substituted `+0200`, on the theory that `UTC+2` is an offset wearing a name. It is --
+  // digit and substituted `+0200`, on the theory that `UTC+2` is an offset wearing a name. It is:
   // and it is the platform's own answer for that reader, which is more use to them than a
   // four-digit form their locale never shows them. Whether a zone has a short name is a property of
   // where they are, not something worth normalizing away.
@@ -94,7 +94,7 @@
   //
   // Exposed because not every such element is in the document at load: `/admin/rooms` fetches its
   // stopped-and-closed table when the section is opened, and `room.js` replaces the whole lifecycle
-  // panel on every state change. `data-at-done` is the idempotence -- re-stamping is harmless but
+  // panel on every state change. `data-at-done` is the idempotence: re-stamping is harmless but
   // walking the same rows on every swap is not free on a long table.
   function stamp(root) {
     (root || document).querySelectorAll("[data-at]").forEach(function (el) {

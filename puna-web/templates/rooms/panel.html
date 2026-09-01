@@ -1,7 +1,7 @@
 {# The room's lifecycle panel: what it is doing, and the one control that changes it.
 
    **Rendered here and nowhere else.** `show.html` includes it for the first paint, and
-   `GET /room/<id>/panel` renders the same file for every subsequent one -- so `room.js` swaps
+   `GET /room/<id>/panel` renders the same file for every subsequent one, so `room.js` swaps
    server-rendered markup rather than building its own. A second renderer in JavaScript would be a
    second set of branches to keep in step with these, and the one that drifts is the one nobody
    looks at: the page would keep working while telling somebody the wrong thing about their room.
@@ -9,8 +9,8 @@
    The wrapper carries the state it was rendered from, which is what lets the poller tell a changed
    panel from an unchanged one without parsing any of it. #}
 {# `data-working` is the poller's whole stop condition. It is published from here rather than
-   recomputed in JavaScript from a list of state names, because that list already exists twice --
-   in the planner and in `is_working` -- and a third copy in a file nobody type-checks is the one
+   recomputed in JavaScript from a list of state names, because that list already exists twice
+   (in the planner and in `is_working`) and a third copy in a file nobody type-checks is the one
    that would drift. #}
 <div class="panel" data-room="{{ room.id }}" data-state="{{ room.state }}"
      data-desired="{{ room.desired_state }}" data-working="{% if is_working %}1{% else %}0{% endif %}">
@@ -29,7 +29,7 @@
 {% macro address_row(host, port) %}
 <tr>
 <td><code>{{ host }}:{{ port }}</code>
-{# Rendered by the server but INERT until `room.js` proves the clipboard is actually reachable --
+{# Rendered by the server but INERT until `room.js` proves the clipboard is actually reachable:
    it needs a secure context, so a button shown unconditionally would be a dead control on plain
    HTTP. The script adds a class to <html> and the stylesheet reveals these; see `.copy`. #}
 <button type="button" class="copy" data-copy="{{ host }}:{{ port }}"
@@ -37,7 +37,7 @@
            tooltip a pointer user gets, `aria-label` is the name a screen reader announces. A glyph
            with no text needs each one, and `aria-label` alone renders nothing on hover at all. #}
         title="Copy this address"
-        {# `{{+` or the label reads "Copymw.example:40000" -- suppression eats the space even inside
+        {# `{{+` or the label reads "Copymw.example:40000": suppression eats the space even inside
            an attribute, where nothing on screen would ever show it. #}
         aria-label="Copy {{+ host }}:{{ port }}">
 <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
@@ -50,12 +50,12 @@
 {% endmacro %}
 
 {# **`is_working` FIRST, before any steady state.** It covers a request the orchestrator has not
-   reached yet as well as one it is carrying out -- so the panel shows the transition from the
+   reached yet as well as one it is carrying out, so the panel shows the transition from the
    moment somebody asks for it, rather than handing back the display they just clicked away from
    and changing it again seconds later when the observed state finally moves. See `is_working`.
 
    The elapsed time and the plain-language line are what separate "coming up" from "stuck", which a
-   spinner alone cannot say -- so the spinner is decoration beside them and never the whole
+   spinner alone cannot say, so the spinner is decoration beside them and never the whole
    message. #}
 {% if is_working %}
 <div class="notice working">
@@ -71,12 +71,12 @@
    that never stops asking. #}
 <noscript><meta http-equiv="refresh" content="5"></noscript>
 
-{# The address is the thing players came for, so it leads -- and **only one address does.**
+{# The address is the thing players came for, so it leads, and **only one address does.**
 
    The two ports are one room, and the wrong choice fails ASYMMETRICALLY. Take the full port when
    your client cannot keep up and the room drops the connection and says so: loud, and it points at
-   itself. Take the filtered port by accident and everything works -- the game plays, your own items
-   arrive -- you simply never see anybody else's finds, and conclude the multiworld is dead. That
+   itself. Take the filtered port by accident and everything works (the game plays, your own items
+   arrive) and you simply never see anybody else's finds, and conclude the multiworld is dead. That
    failure is silent and gives its victim no reason to suspect the address they pasted.
 
    So one goes behind a deliberate click. Merely de-emphasising it would not do: a muted second URL
@@ -85,7 +85,7 @@
 
    **WHICH one leads is `room.primary_port`, and this comment used to argue that could never be.**
    The old objection was that swapping "would put different values in the same position at different
-   times, with nothing on screen saying which one you have" -- and it holds exactly against a
+   times, with nothing on screen saying which one you have", and it holds exactly against a
    control a VIEWER toggles. This is not that. It is chosen once by the organizer, from the seed's
    slot count, and fixed for the room's life; and each branch below carries its own wording, so the
    leading address always says what it is. A 500-slot sync whose players are told to use the full
@@ -155,7 +155,7 @@ why it is not the address above.</p>
 {% if let Some(filtered) = room.advertised_filtered_port %}
 {# The summary names the SYMPTOM, not the feature. "Don't want the full item feed?" asks somebody to
    already know what the item feed is; a player whose client is stuttering in a 200-slot async does
-   not think in those words. They think "it keeps dropping me" -- so that is what the line says, and
+   not think in those words. They think "it keeps dropping me", so that is what the line says, and
    nobody without the problem opens it. #}
 <details class="alt-address">
 <summary><strong>Client lagging or dropping out?</strong> There is a second address.</summary>
@@ -210,7 +210,7 @@ start an empty room in its place.</p>
 {# The shared room password, below the state chain rather than inside the `running` arm.
 
    **It began inside it, and that was the original bug one branch over.** A room that is not up
-   showed no password, no requirement and no control -- and rotating on a stopped room answered
+   showed no password, no requirement and no control, and rotating on a stopped room answered
    "the room will use it the next time it starts" while showing nothing, which is the same defect
    this whole change exists to remove. Idle is most of an async's life, patches are already
    downloadable there, and somebody getting ready to join a room that is down is exactly who needs
@@ -223,7 +223,7 @@ start an empty room in its place.</p>
    It follows the address rather than sitting beside it because it is the other half of "how do I
    get in" and somebody copying one wants the other in the same breath.
 
-   Rendered only when `room_password` is `Some`, which the ROUTE decides -- participants and staff,
+   Rendered only when `room_password` is `Some`, which the ROUTE decides: participants and staff,
    and only in the shared-password mode. The template deliberately does not test `room.slot_auth`
    or reach for `room.password`, both of which are in scope here: `room` is the whole `Room` and it
    carries the value, so a condition around it would put an authorization decision in markup that
@@ -247,14 +247,14 @@ start an empty room in its place.</p>
 </p>
 <p class="hint">Everyone joining this room needs it. Your client asks for it when you connect.
 {%+ if is_organizer %}
-{# **A restart, unlike the per-slot rotation in the roster** -- pahoa reads this one from the
+{# **A restart, unlike the per-slot rotation in the roster**: pahoa reads this one from the
    environment at startup and has no live setter for it, deliberately, so the room learns a new
    shared password by starting again.
 
    The cost is in the VISIBLE sentence rather than a confirm dialog, because this page has no such
    mechanism: `data-confirm` is read by `bulk.js`, which the room page does not load, so the
    attribute here would be a confirmation that never appears. Stop and Close disconnect everyone
-   from this same panel with no dialog either -- the convention is that the words carry it.
+   from this same panel with no dialog either: the convention is that the words carry it.
 
    Organizer, where rotating one slot is a helper's: this is the room's configuration and it takes
    the room down, which is the line M20 drew. #}

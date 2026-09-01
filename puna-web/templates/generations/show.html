@@ -21,8 +21,8 @@ before rather than a second copy of it.</p>
 </dl>
 
 {# Collapsed so the creation form is the first thing below the facts rather than the thing under a
-   200-row table. The roster is reference material -- it is what the seed contains, which somebody
-   has usually just generated and already knows -- while the form is what this page is FOR.
+   200-row table. The roster is reference material (it is what the seed contains, which somebody
+   has usually just generated and already knows) while the form is what this page is FOR.
 
    `<details class="manage">` is this codebase's fold, the same one the room page's staff section
    and `/admin/rooms` use, so it needs no script and gets the existing summary styling. The count
@@ -55,14 +55,14 @@ before rather than a second copy of it.</p>
 {# **Its own panel, laid out as rows of choices rather than a line of controls.**
 
    Every setting here is one a room is stuck with until somebody changes it deliberately, and three
-   of them cost a restart to change afterwards -- so the form's job is to make somebody *choose*
+   of them cost a restart to change afterwards, so the form's job is to make somebody *choose*
    rather than to be quick to get past. The table-ish shape is what gives each choice its own row,
    its own explanation, and enough room to say what the option means in words.
 
    The hints under each group are rendered for EVERY option and revealed one at a time by
    `options-form.js`, which the room's own options page shares. Server-rendered rather than built
    in script so the page explains itself with
-   nothing loaded -- unscripted, all of them show, which is verbose and never wrong. #}
+   nothing loaded: unscripted, all of them show, which is verbose and never wrong. #}
 <section class="panel create-room">
 <h2>Open a room from this seed</h2>
 <p class="hint">One generation can back any number of rooms. They are independent multiworlds
@@ -189,7 +189,7 @@ and is listed on the room page. If you skip this now, the room's options page ca
 {% endif %}
 
 {# **Last, deliberately.** It is the only choice here about how the room PRESENTS itself rather
-   than about who may do what, and it is the one with a recommendation already made for you --
+   than about who may do what, and it is the one with a recommendation already made for you:
    preselected from this seed's slot count, so the common answer needs no thought. #}
 <div class="field" data-hints="primary_port">
 <span class="label">Primary room port</span>
@@ -197,7 +197,7 @@ and is listed on the room page. If you skip this now, the room's options page ca
 <label><input type="radio" name="primary_port" value="full"{% if primary_port_default == puna_core::model::room::PrimaryPort::Full +%} checked{% endif %}> Full</label>
 <label><input type="radio" name="primary_port" value="filtered"{% if primary_port_default == puna_core::model::room::PrimaryPort::Filtered +%} checked{% endif %}> Filtered</label>
 {# Patches are named in both branches rather than only under `filtered`, because the fact worth
-   knowing is that they follow this choice at all -- and somebody reading only the option they are
+   knowing is that they follow this choice at all, and somebody reading only the option they are
    about to pick should not have to open the other one to learn that. #}
 <p class="hint" data-for="full">The room page leads with the full feed port, and patches are built
 with it. The right choice for all but the largest syncs. The filtered port stays available behind a

@@ -967,7 +967,7 @@ mod tests {
         for slots in [1, 4, 200, 256, 500, 2000, 6000, 200_000] {
             assert!(
                 storm(slots) <= (i64::from(slots) * 16).max(4096),
-                "{slots} slots: the reconnect term ({}) now binds -- the comment above this \
+                "{slots} slots: the reconnect term ({}) now binds, and the comment above this \
                  assertion is stale and the sizing has changed shape",
                 storm(slots)
             );
@@ -1097,7 +1097,7 @@ mod tests {
             assert!(
                 limit - budget >= base,
                 "{slots} slots: a limit of {limit} over a budget of {budget} leaves \
-                 {} for a base of {base} -- the room is killed before its own cap binds",
+                 {} for a base of {base}: the room is killed before its own cap binds",
                 limit - budget
             );
 

@@ -174,7 +174,7 @@ pub async fn mode(
         tracing::warn!(
             key,
             "no settings row for this gate; treating it as disabled. The migration seeds both \
-             gates, so a missing row means one was deleted -- repair it from /admin/gates."
+             gates, so a missing row means one was deleted. Repair it from /admin/gates."
         );
         return Ok(GateMode::Disabled);
     };

@@ -1,7 +1,7 @@
 // Filter and sort for a table the SERVER rendered.
 //
 // The tracker's tables get this from `tracker.js`, which sorts a JSON array and re-renders the
-// rows. That machinery does not transfer: it owns its data, and this owns nothing -- the rows are
+// rows. That machinery does not transfer: it owns its data, and this owns nothing, since the rows are
 // markup that arrived complete, and everything here is a reordering of elements that already exist.
 // Same conventions, though, deliberately: `th[data-key]` headers, a `.table-search` box, and the
 // `data-sort` attribute the stylesheet draws arrows from. One look, whichever file drew it.
@@ -96,7 +96,7 @@
       var needle = search ? search.value.trim().toLowerCase() : "";
       var mineOnly = !!(onlyMine && onlyMine.checked);
       original.forEach(function (row) {
-        // Matched against the RENDERED text, so what you can see is what you can search -- and a
+        // Matched against the RENDERED text, so what you can see is what you can search, and a
         // value the table does not show cannot match invisibly.
         var matches = needle === "" || row.textContent.toLowerCase().includes(needle);
         var mine = !mineOnly || row.dataset.mine !== undefined;
@@ -112,7 +112,7 @@
   //
   // Exposed because not every table is in the document at load: `/admin/rooms` fetches its
   // stopped-and-closed table when the section is opened, and a table that arrived late would
-  // otherwise render its sort arrows over headers that do nothing -- an affordance that lies,
+  // otherwise render its sort arrows over headers that do nothing: an affordance that lies,
   // which is worse than no affordance. `data-wired` is the idempotence: scanning twice would
   // attach two click handlers to each header and make every sort a double-toggle.
   function scan(root) {
@@ -128,7 +128,7 @@
   // **The filter boxes are revealed here, not rendered visible.** They do nothing without this
   // file: the sort arrows are drawn by script and are simply absent with scripting off, but a
   // `<input type="search">` is plain markup and would sit there looking usable while typing into it
-  // did nothing -- which is worse than no control, and is the reason `.theme` and `.copy` are both
+  // did nothing, which is worse than no control, and is the reason `.theme` and `.copy` are both
   // gated the same way. The comment claiming the box was "simply absent" was wrong for as long as
   // it stood.
   document.documentElement.classList.add("js-tables");
