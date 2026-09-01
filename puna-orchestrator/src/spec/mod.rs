@@ -6,7 +6,7 @@
 //! ## The paths below are shared on purpose
 //!
 //! `--save-dir` and the `volumeMount` that makes it exist are one fact stated twice, and a
-//! disagreement between them is not a startup error — it is a room that comes up, serves players,
+//! disagreement between them is not a startup error: it is a room that comes up, serves players,
 //! and persists nothing. Same for the certificate: pahoa reads `--tls-cert` from a path only the
 //! Secret volume provides. So the argv and the manifest read the same constants rather than
 //! matching string literals.
@@ -23,7 +23,7 @@ use puna_core::ids::RoomId;
 
 /// The cluster-wide values a room's manifest needs and no room chooses.
 ///
-/// One namespace, one public address, one certificate, one volume — a room differs from its
+/// One namespace, one public address, one certificate, one volume: a room differs from its
 /// neighbors only by id and port. Kept apart from [`crate::cluster::RoomSpec`] for that reason:
 /// these are **not** in the spec hash, because a change to any of them is an operator editing the
 /// orchestrator's own Deployment, and hashing them would recreate every room in the namespace at
@@ -48,7 +48,7 @@ pub struct Site {
 // fields is exactly the shape that silently swaps two of them, which is also why [`Naming`] is its
 // own struct rather than four more of them here.
 
-/// `app.kubernetes.io/managed-by=puna` — what makes an object Puna's to reason about.
+/// `app.kubernetes.io/managed-by=puna`: what makes an object Puna's to reason about.
 ///
 /// Every list is selected on it, so "orphan" can mean "ours, with no room" rather than "somebody
 /// else's". An object created without it is invisible to the sweep and will never be collected.
@@ -61,7 +61,7 @@ pub const NAME: &str = "pahoa";
 ///
 /// **These are the cluster's words, not Puna's**, which is why they arrive as configuration. Every
 /// one of them is a prefixed key under a domain the operator owns, and two of them are read by
-/// things outside this repository entirely — an address-pool selector and an L2 announcement policy
+/// things outside this repository entirely: an address-pool selector and an L2 announcement policy
 /// both match on their own copies of these strings.
 ///
 /// A struct rather than four more fields on [`Site`], for the reason stated there: same-typed
@@ -72,7 +72,7 @@ pub struct Naming {
     /// The room id label. **This one is identity**: it is written onto every object, read back to
     /// answer *which room is this*, and used as the Deployment's `spec.selector`.
     ///
-    /// A UUID is 36 characters and a label value allows 63, so the id goes in whole — truncating or
+    /// A UUID is 36 characters and a label value allows 63, so the id goes in whole: truncating or
     /// hashing it later would collide silently rather than fail.
     ///
     /// Changing the value on a live deployment is not a configuration change. `spec.selector` is
@@ -85,7 +85,7 @@ pub struct Naming {
     /// Which LoadBalancer address pool a Service draws from, and the value that asks for it.
     ///
     /// **Required on room Services**, not decorative. A cluster is expected to carry more than one
-    /// address pool, with the internal one selecting anything that does not ask for the public one —
+    /// address pool, with the internal one selecting anything that does not ask for the public one,
     /// so an unlabeled Service is not merely unlabeled, it is allocated a private address from which
     /// the room is unreachable, while otherwise looking entirely healthy.
     ///
@@ -101,7 +101,7 @@ pub struct Naming {
     /// this is Puna talking to itself and nothing else should match on it.
     ///
     /// Changing it makes every live Deployment's fingerprint unreadable, which reads as a differing
-    /// hash and recreates the fleet — paced, but a real bounce.
+    /// hash and recreates the fleet: paced, but a real bounce.
     pub spec_hash_annotation: String,
 }
 
@@ -141,7 +141,7 @@ impl Naming {
 /// A constant rather than a literal at each end because the reader must not settle for
 /// `containers[0]`: a mesh or a logging sidecar injected by a future admission webhook would take
 /// that slot, and the table would then report the sidecar's image as the room's. Matching by name
-/// degrades to `None` -- "cannot tell" -- instead of to a confident wrong answer.
+/// degrades to `None` ("cannot tell") instead of to a confident wrong answer.
 pub const ROOM_CONTAINER: &str = "pahoa";
 
 /// The room pods' ServiceAccount, which exists to have **no token mounted**. That is the mechanical
@@ -160,24 +160,24 @@ pub fn managed_selector() -> String {
 pub const SAVE_DIR: &str = "/var/lib/pahoa";
 
 // The journal is `history.jsonl` inside SAVE_DIR, and Puna never names that path: pahoa derives it
-// from `--save-dir` itself. The constant lands with its reader -- the organizer download, which
+// from `--save-dir` itself. The constant lands with its reader: the organizer download, which
 // reaches it as `rooms/<id>/history.jsonl` on the volume rather than at the container's path.
 
-/// The seed, copied in at provisioning so a room is self-contained — generation retention can never
+/// The seed, copied in at provisioning so a room is self-contained: generation retention can never
 /// make an existing room unstartable.
 pub const SEED_PATH: &str = "/var/lib/pahoa/seed.archipelago";
 
 // There is deliberately no `/shared` mount and no data package snapshot path.
 //
-// Rooms briefly took `--snapshot=/shared/datapackage.json`, which carried `hint_blacklist` -- the
+// Rooms briefly took `--snapshot=/shared/datapackage.json`, which carried `hint_blacklist`: the
 // one thing the reference server reads from installed apworlds and that is never serialized into a
 // multidata. Pahoa now compiles that table into the binary (`pahoa-multidata/src/hint_blacklist.rs`)
 // and has REMOVED the option, so there is nothing to mount and sending the flag is a hard `exit 1`.
 //
-// Everything else a room needs -- names, ids, name groups, checksums -- was always in the seed.
+// Everything else a room needs (names, ids, name groups, checksums) was always in the seed.
 
 /// Where the room certificate is mounted. One Certificate for the single name every room shares,
-/// which differs only by port — and pahoa reloads it in place, so a renewal needs no restart.
+/// which differs only by port, and pahoa reloads it in place, so a renewal needs no restart.
 pub const TLS_DIR: &str = "/etc/pahoa/tls";
 pub const TLS_CERT_PATH: &str = "/etc/pahoa/tls/tls.crt";
 pub const TLS_KEY_PATH: &str = "/etc/pahoa/tls/tls.key";
@@ -229,7 +229,7 @@ mod tests {
         assert!(labels[&naming.room_key].len() <= 63);
 
         // Anything else is an orphan rather than a room, including a label that is present and not
-        // a uuid -- guessing would attach a live pod to the wrong row.
+        // a uuid: guessing would attach a live pod to the wrong row.
         assert_eq!(naming.room_of(&BTreeMap::new()), None);
         assert_eq!(
             naming.room_of(&BTreeMap::from([(

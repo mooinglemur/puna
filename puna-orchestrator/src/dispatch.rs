@@ -2,7 +2,7 @@
 //!
 //! **A dedicated task, deliberately not folded into the 30-second reconcile tick.** Somebody
 //! pressing a button expects an answer in under a second, and the tick's cadence is chosen for
-//! converging a fleet — the two cannot share a rhythm. They share nothing but the connection pool.
+//! converging a fleet, and the two cannot share a rhythm. They share nothing but the connection pool.
 //!
 //! ## Level-triggered, like everything else here
 //!
@@ -14,7 +14,7 @@
 //! ## What must be terminal, and why
 //!
 //! Every outcome writes a terminal state. A command left `pending` after a refusal would be
-//! re-claimed on the next pass and re-run forever — and under pahoa's ten-failures-per-minute
+//! re-claimed on the next pass and re-run forever, and under pahoa's ten-failures-per-minute
 //! limit, a loop locks Puna out of the room for the rest of the window, with the lockout applying
 //! to the correct token too. [`Disposition`] is the type that keeps that decision in one place.
 //!
@@ -39,7 +39,7 @@ use crate::probing::Prober;
 
 /// The backstop poll, for a notification that never arrived.
 ///
-/// Short because it is a latency floor for a button press when `LISTEN` is down, not a sweep — the
+/// Short because it is a latency floor for a button press when `LISTEN` is down, not a sweep: the
 /// query it runs finds nothing almost every time and costs an index scan.
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -133,7 +133,7 @@ impl Dispatcher {
             .await
             {
                 // The row stays `running` and the stale sweep will fail it. Worse than answering,
-                // better than losing the record -- and a waiter times out rather than hanging.
+                // better than losing the record, and a waiter times out rather than hanging.
                 tracing::error!(command = %claimed.id, error = ?e, "could not record a command result");
                 return;
             }
@@ -156,7 +156,7 @@ impl Dispatcher {
     /// Push an already-rotated slot password: **Secret first, then the running room.**
     ///
     /// That order is the whole content of this function, and §4 is emphatic about why. The room's
-    /// password endpoint changes the live process and **persists nothing** -- deliberately, because
+    /// password endpoint changes the live process and **persists nothing**, deliberately, because
     /// that is what stops a stale on-disk value shadowing the configured one. So a change pushed
     /// only to the room reverts the next time it starts, handing a player a password that worked
     /// until the room bounced.
@@ -172,7 +172,7 @@ impl Dispatcher {
     /// a ruleset on the queue row could be stale by the time it is claimed, and would then be a
     /// second source of truth that the room believes over the one the UI shows.
     ///
-    /// `PUT` or `DELETE` per [`puna_core::probe::RoomProbe::set_filter`] — and for a slot the two
+    /// `PUT` or `DELETE` per [`puna_core::probe::RoomProbe::set_filter`], and for a slot the two
     /// are different states rather than one with an empty value, which `SlotFilter::to_stored`
     /// decides. Getting that backwards leaves a slot exempt from a filter it was meant to inherit.
     async fn push_filter(
@@ -288,7 +288,7 @@ impl Dispatcher {
             ));
         }
 
-        // **Read from the row, not carried through the queue** -- which is what keeps a credential
+        // **Read from the row, not carried through the queue**, which is what keeps a credential
         // out of the audit trail.
         let Some(password) = slots
             .iter()
@@ -362,7 +362,7 @@ impl Dispatcher {
         let endpoint = self.prober.endpoint(claimed.room_id, reachable.base_port);
 
         // **Handled before the passthrough, because it is not a pahoa command.** Serialized into an
-        // `/admin/v1/command` body it would be a `400` -- pahoa's set is the other fifteen, and this
+        // `/admin/v1/command` body it would be a `400`: pahoa's set is the other fifteen, and this
         // is its slot-password endpoint wearing a queue row.
         if let puna_core::model::command::RoomCommand::RotatePassword { slot } = claimed.command {
             return self
@@ -377,7 +377,7 @@ impl Dispatcher {
         }
 
         // **Also before the passthrough, and for the same reason.** A filter is a REST resource on
-        // pahoa, not one of its verbs -- and this variant carries no rules at all, only a scope, so
+        // pahoa, not one of its verbs, and this variant carries no rules at all, only a scope, so
         // what it actually does is read Puna's own tables and assert them. That is what makes the
         // audit row and the stored ruleset unable to disagree.
         if let puna_core::model::command::RoomCommand::ApplyFilters { slot } = claimed.command {
@@ -422,7 +422,7 @@ impl Dispatcher {
                 };
 
                 if disposition == Disposition::Malformed {
-                    // A `400` means the typed set and pahoa's parser have drifted -- Puna generated
+                    // A `400` means the typed set and pahoa's parser have drifted: Puna generated
                     // a body the room could not read. That is a bug on this side, not a caller's,
                     // so it is loud rather than a line in a console pane.
                     tracing::error!(
@@ -455,7 +455,7 @@ impl Dispatcher {
                 .ok()?;
 
         // `running` only. A `degraded` room has no ready replica, so a command would land on a pod
-        // that is restarting -- rejected with "not running" is the honest answer, and the console
+        // that is restarting, and rejected with "not running" is the honest answer, and the console
         // shows the room's real state beside it.
         if rows.into_iter().next()?.state != "running" {
             return None;
@@ -489,14 +489,14 @@ mod tests {
     /// the failure is not a panic: it is a `400` from pahoa, logged as "the room could not
     /// understand a command Puna generated", which is true and points at the wrong thing entirely.
     ///
-    /// `RotatePassword` is not one of pahoa's fifteen commands — it is its slot-password endpoint
+    /// `RotatePassword` is not one of pahoa's fifteen commands: it is its slot-password endpoint
     /// traveling on this queue. Serialized into an `/admin/v1/command` body it is a shape the room
     /// has no parser for, so the intercept above is what makes it work at all, and its position is
     /// the whole of that.
     ///
     /// **`LockSlot` was the second such command and must NOT be intercepted any more.** pahoa
     /// shipped `lock`, so it is an ordinary passthrough; a branch for it here would divert it to
-    /// the slot-password endpoint, which would clear or set a password rather than lock anything —
+    /// the slot-password endpoint, which would clear or set a password rather than lock anything:
     /// a control that reports success and does something else entirely. Asserted in both
     /// directions, because this is the change that removes it and nothing else would notice it
     /// coming back.
@@ -509,13 +509,13 @@ mod tests {
 
         // The `if let` itself, not any mention of the variant. Anchoring on the bare type name
         // matched the doc comment on the `cluster` field forty lines above the intercept, so the
-        // lint passed with the intercept deleted -- which is the exact failure a lint is for, found
+        // lint passed with the intercept deleted, which is the exact failure a lint is for, found
         // by mutating it.
         let intercept = source
             .find("if let puna_core::model::command::RoomCommand::RotatePassword")
             .expect("the dispatcher no longer intercepts the rotation command");
         // **The second Puna-only command, and the same hazard.** A filter is a REST resource on
-        // pahoa, so `apply_filters` sent to `/admin/v1/command` is a `400` -- which the dispatcher
+        // pahoa, so `apply_filters` sent to `/admin/v1/command` is a `400`, which the dispatcher
         // reports as "the room could not understand a command Puna generated", true and pointing at
         // entirely the wrong thing.
         let filters = source

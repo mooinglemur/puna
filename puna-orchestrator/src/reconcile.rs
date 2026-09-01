@@ -1,7 +1,7 @@
 //! The reconcile tick.
 //!
 //! **The sweep IS the reconcile loop.** One level-triggered pass that reads the world, diffs it
-//! against the desired state, and applies -- rather than an edge-triggered worker plus a reconciler
+//! against the desired state, and applies, rather than an edge-triggered worker plus a reconciler
 //! to catch the edges it missed. Two loops over one room is the shape that produces bugs nobody can
 //! reproduce, so there is one.
 //!
@@ -16,7 +16,7 @@
 //!
 //! The first three are [`crate::plan`], which is pure; the fourth is [`crate::steps`]. What stays
 //! here is the part that is neither: reading the world, and the two filesystem checks where **a
-//! failed read must not be mistaken for an answer** — a `readdir` that fails is not "every room's
+//! failed read must not be mistaken for an answer**: a `readdir` that fails is not "every room's
 //! directory is missing".
 //!
 //! ## Actions are applied one at a time
@@ -24,7 +24,7 @@
 //! The design allows eight concurrently. It is sequential here because the action list is short by
 //! construction: a healthy room plans **no action at all**, so a namespace of three hundred running
 //! rooms produces an empty list and a tick that is three list calls and one query. Concurrency is
-//! worth adding when a measurement says a tick is too slow, not before — and every action takes a
+//! worth adding when a measurement says a tick is too slow, not before, and every action takes a
 //! per-room advisory lock, so the change is safe to make later.
 
 use std::sync::Arc;
@@ -61,7 +61,7 @@ pub struct TickReport {
     pub actions: usize,
     pub skipped_locked: usize,
     pub errors: usize,
-    /// Directories with no row. **Counted, never removed** -- see `report_orphan_dirs`.
+    /// Directories with no row. **Counted, never removed**. See `report_orphan_dirs`.
     pub orphan_dirs: usize,
     pub integrity_faults: usize,
     /// Deployments removed because their room no longer exists, on their second sighting.
@@ -131,7 +131,7 @@ pub struct Reconciler {
 impl Reconciler {
     /// The prober is shared with [`crate::dispatch::Dispatcher`] rather than built here: a stop
     /// and a console command must reach a room the same way, and two `Prober`s would also mean two
-    /// rate-limit backoff tables — so a `429` seen by one would not stop the other walking into it.
+    /// rate-limit backoff tables, so a `429` seen by one would not stop the other walking into it.
     pub fn new(
         config: &OrchestratorConfig,
         pool: Pool,
@@ -180,7 +180,7 @@ impl Reconciler {
         let full = kind == plan::TickKind::Reconcile;
         // **Full passes only.** A convergence pass is a strict subset of the work, so folding both
         // into one histogram would drag the distribution toward the cheap case and make "is a tick
-        // slow" unanswerable -- which is the only question this metric exists to answer.
+        // slow" unanswerable, which is the only question this metric exists to answer.
         let _timer = full.then(|| puna_core::metrics::RECONCILE_SECONDS.start_timer());
         puna_core::metrics::RECONCILE_TICKS
             .with_label_values(&[kind.as_str()])
@@ -194,7 +194,7 @@ impl Reconciler {
         }
 
         // Three calls regardless of room count, served from the watch cache. Read before the rooms
-        // are loaded so a room created in between reads as "not there yet" rather than as vanished --
+        // are loaded so a room created in between reads as "not there yet" rather than as vanished,
         // which the planner's grace period covers either way.
         let snapshot = match self.cluster.snapshot().await {
             Ok(snapshot) => snapshot,
@@ -302,7 +302,7 @@ impl Reconciler {
         //
         // The orphan rule is the other: it takes two consecutive *passes* plus 120 seconds, so
         // counting convergence passes would let a two-strike rule fire inside six seconds. It is
-        // safe here only because the sweeper never runs on a convergence pass -- the same hazard
+        // safe here only because the sweeper never runs on a convergence pass: the same hazard
         // `plan` bars `NotReady` for.
         if !full {
             return Ok(report);
@@ -314,7 +314,7 @@ impl Reconciler {
         report.orphan_dirs = report_orphan_dirs(&mut conn, &self.layout).await?;
 
         // Everything that is about the world rather than one room: objects nothing owns, Secrets
-        // that have drifted, the LRU touch, and -- once an hour -- the trash.
+        // that have drifted, the LRU touch, and, once an hour, the trash.
         let swept = self
             .sweeper
             .run(
@@ -335,7 +335,7 @@ impl Reconciler {
         report.trash_removed = swept.trash_removed;
 
         // **Last, and never able to fail the tick.** A room that will not answer its admin API may
-        // still be serving a multiworld perfectly, so this only refreshes numbers -- it moves no
+        // still be serving a multiworld perfectly, so this only refreshes numbers: it moves no
         // room's state and returns no error. Put after the sweep so a slow room cannot delay
         // anything that actually converges the world.
         self.prober.publish_capabilities();
@@ -397,7 +397,7 @@ async fn load_views(
         #[diesel(sql_type = Nullable<Timestamptz>)]
         pinned_at: Option<chrono::DateTime<chrono::Utc>>,
         // The three columns the idle question is answered from. All nullable, and the combination
-        // is what decides whether it is answerable at all -- see `idle_since` below.
+        // is what decides whether it is answerable at all. See `idle_since` below.
         #[diesel(sql_type = Nullable<Timestamptz>)]
         started_at: Option<chrono::DateTime<chrono::Utc>>,
         #[diesel(sql_type = Nullable<Timestamptz>)]
@@ -484,8 +484,8 @@ async fn load_views(
 /// When this room was last *played*, or `None` if that cannot be answered.
 ///
 /// **Played, not merely occupied**, and the difference is the whole point of pahoa's P23. There are
-/// two activity timers on that surface: `last_client_message_at` moves on any packet — chat,
-/// `Sync`, `Get` — so a room where everybody is talking and nobody is playing keeps it fresh
+/// two activity timers on that surface: `last_client_message_at` moves on any packet (chat,
+/// `Sync`, `Get`) so a room where everybody is talking and nobody is playing keeps it fresh
 /// forever; `last_check_at` moves only when a slot registers a genuinely new location check, which
 /// is what the reference server's own auto-shutdown measures (`MultiServer.py:2671-2682`). This
 /// prefers the second and falls back to the first only for rooms whose image cannot report it.
@@ -494,32 +494,32 @@ async fn load_views(
 /// acts on the result and every way of being wrong here costs somebody their session:
 ///
 ///   1. **No probe has ever succeeded**, or the last one is older than [`PROBE_FRESH_FOR`]. A
-///      stale row is indistinguishable from a quiet room -- both say "nobody has spoken since X"
-///      -- and the difference is whether Puna has been listening. An unreachable room whose
+///      stale row is indistinguishable from a quiet room (both say "nobody has spoken since X")
+///      and the difference is whether Puna has been listening. An unreachable room whose
 ///      players are perfectly happy would otherwise look like the emptiest room in the fleet and
 ///      be reaped first, because the reaper takes the longest-idle candidate.
 ///   2. **The probe is the TCP fallback**, which reports reachability and nothing else. It leaves
 ///      `last_activity_at` untouched, so the column would hold whatever the last HTTPS probe wrote
-///      -- or nothing at all -- and neither is an answer about now.
+///      (or nothing at all) and neither is an answer about now.
 ///   3. **The room has no `started_at`.** Nothing to measure from.
 ///
 /// **`last_activity_at` is deliberately not consulted here, and reinstating it would be a
 /// regression rather than a safety net.** It moves on any packet, so a room where everybody is
-/// chatting and nobody is playing would never reap -- which is the state this whole signal exists
+/// chatting and nobody is playing would never reap, which is the state this whole signal exists
 /// to distinguish. The column is still written, and still shown on the room page and the admin
 /// table, where "somebody is connected and talking" is worth knowing on its own.
 ///
 /// Where the probe IS fresh and capable, a `NULL` `last_activity_at` is a real answer rather than a
 /// gap: pahoa reports `null` until a client has spoken, so a room nobody has ever joined is
-/// measured from when it started. That is the clearest reap candidate there is -- somebody opened
-/// a room and walked away -- and treating it as unanswerable would exempt it forever.
+/// measured from when it started. That is the clearest reap candidate there is (somebody opened
+/// a room and walked away) and treating it as unanswerable would exempt it forever.
 ///
 /// **`started_at` is a FLOOR, not a fallback, and the difference is what stops a start/reap loop.**
 /// Taking the later of the two means a room can never be reaped for less time than it has been up,
 /// whatever the activity column says.
 ///
 /// It costs nothing today, because pahoa's `last_client_message_at` is a process-global
-/// `AtomicU64` that is never saved -- a restarted room reports `null` until somebody speaks, so the
+/// `AtomicU64` that is never saved: a restarted room reports `null` until somebody speaks, so the
 /// activity reading can never be older than the start. **It stops costing nothing the moment P23
 /// lands.** pahoa's per-slot check timer IS persisted (`save.rs`, restored in `room.rs`), so a room
 /// reaped on Monday and started again on Thursday comes back reporting a check from Monday. Read as
@@ -542,7 +542,7 @@ fn idle_since(
         return None;
     }
     // The LATER of the two, not the first that is present. See the note above: pahoa PERSISTS the
-    // check timer, so a room reaped on Monday and started on Thursday reports Monday -- and read as
+    // check timer, so a room reaped on Monday and started on Thursday reports Monday, and read as
     // a fallback that is three days idle on a room thirty seconds old.
     [row.last_check_at(), row.started_at()]
         .into_iter()
@@ -590,7 +590,7 @@ impl IdleFacts for Idle {
 ///
 /// **Only rooms in `failed` that are still waiting**, and the narrowness is the design rather than
 /// an optimization. Rendering a spec costs a room's row, its secrets, its slot list and its
-/// reservation — four queries — so doing it for every room on every tick would put a per-room cost
+/// reservation (four queries) so doing it for every room on every tick would put a per-room cost
 /// on every pass to answer a question exactly one state asks. A room whose backoff has already
 /// expired is skipped too: it is about to be retried regardless, so the answer could not change
 /// anything.
@@ -619,8 +619,8 @@ async fn attach_desired_spec_hashes(
 
 /// Copy what the cluster says each room is running onto its row.
 ///
-/// **The web tier cannot see the cluster** -- it holds no ServiceAccount token, which is the point
-/// of the split -- so the admin table's observed columns can only come from here, written by the
+/// **The web tier cannot see the cluster** (it holds no ServiceAccount token, which is the point
+/// of the split) so the admin table's observed columns can only come from here, written by the
 /// process that already lists every Deployment on every tick. No new API call, no new permission,
 /// no new object type.
 ///
@@ -650,7 +650,7 @@ async fn record_observed(
     }
     // Published from the same reading that writes the column, so the admin table and the dashboard
     // cannot disagree about how long a room's spec has been in force. A room whose Deployment is
-    // gone is not cleared here -- `clear_deployment` owns that, and `retain_rooms` sweeps the
+    // gone is not cleared here: `clear_deployment` owns that, and `retain_rooms` sweeps the
     // series either way.
     for (room, created_at) in ids.iter().zip(&created) {
         puna_core::metrics::publish_room_deployment(&room.to_string(), Some(*created_at));
@@ -698,7 +698,7 @@ async fn publish_fleet_image(
 
     diesel::sql_query(
         // Bound as text and cast, the way every other environment-scoped statement in this
-        // workspace does it -- `Environment` has no `ToSql` for the enum type.
+        // workspace does it: `Environment` has no `ToSql` for the enum type.
         "INSERT INTO fleet (environment, pahoa_image)
               VALUES ($1::puna_environment, $2)
          ON CONFLICT (environment) DO UPDATE
@@ -716,7 +716,7 @@ async fn publish_fleet_image(
 /// `puna_rooms{state}`, from the same read the planner used.
 ///
 /// Every state is reset first, so a state that has just emptied publishes a zero rather than keeping
-/// its last value forever -- a gauge that only ever goes up is worse than no gauge.
+/// its last value forever: a gauge that only ever goes up is worse than no gauge.
 fn publish_room_states(views: &[RoomView]) {
     for state in puna_core::metrics::ROOM_STATES {
         puna_core::metrics::ROOMS.with_label_values(&[state]).set(0);
@@ -732,7 +732,7 @@ fn publish_room_states(views: &[RoomView]) {
 ///
 /// **Reported, never deleted.** A directory with no row is either a bug or a database restored from
 /// an older backup, and in the second case the directory holds the only copy of a player's progress
-/// -- deleting it would destroy exactly the state that could repair the room.
+/// and deleting it would destroy exactly the state that could repair the room.
 /// `PUNA_ORPHAN_DELETE_AFTER` exists in the design and defaults to disabled for this reason.
 async fn report_orphan_dirs(
     conn: &mut diesel_async::AsyncPgConnection,
@@ -784,7 +784,7 @@ async fn report_orphan_dirs(
 /// instead of a retry.
 ///
 /// Deliberately not part of [`crate::plan`]: it is a filesystem property, and handing the planner a
-/// third view of the world whose *absence* -- a failed `readdir` -- would read as every room being
+/// third view of the world whose *absence* (a failed `readdir`) would read as every room being
 /// faulted at once is not a trade worth making.
 async fn detect_integrity_faults(
     conn: &mut diesel_async::AsyncPgConnection,
@@ -894,7 +894,7 @@ mod db_tests {
     ///
     /// The row already records what Puna believes it started a room with. Recording that again
     /// under a different name would produce a table that agrees with itself and cannot show the one
-    /// state it exists for — a pod running something other than what was asked for.
+    /// state it exists for: a pod running something other than what was asked for.
     #[tokio::test]
     async fn the_observed_image_is_what_the_cluster_reports() {
         testdb::with_db(|pool| async move {
@@ -1015,7 +1015,7 @@ mod db_tests {
     ///
     /// The reaper takes the LONGEST-idle candidate, so a room that reads as "idle forever" is
     /// reaped first. Each `None` below is a room that would read exactly that way if the gap were
-    /// papered over with a default — and in every case the room may be full of people.
+    /// papered over with a default, and in every case the room may be full of people.
     #[test]
     fn an_unanswerable_idle_question_is_none_rather_than_ancient() {
         let spoke = at(-10);
@@ -1048,7 +1048,7 @@ mod db_tests {
             "a room never successfully probed was given an idle time"
         );
 
-        // 2. The last probe is stale. The columns still say "nobody has spoken since X" -- they
+        // 2. The last probe is stale. The columns still say "nobody has spoken since X": they
         //    just have not been refreshed, and the room may be busy and unreachable.
         assert_eq!(
             idle_since(
@@ -1086,7 +1086,7 @@ mod db_tests {
     /// End to end, across both halves, because that is where this property lives: `idle_since`
     /// supplies the fallback and `should_reap` applies the clock, and each was asserted on its own.
     /// Separately correct, they could still compose into "a room with no activity is reaped
-    /// immediately" — if the fallback returned the epoch, or `now`, or if the threshold were
+    /// immediately": if the fallback returned the epoch, or `now`, or if the threshold were
     /// applied only to real activity. Nothing about that would have failed a test.
     ///
     /// It matters because a freshly started room legitimately has no activity: pahoa reports null
@@ -1139,7 +1139,7 @@ mod db_tests {
     /// **The reaper reads the CHECK timer, which is the whole point of pahoa's P23.**
     ///
     /// A room full of people talking and nobody playing keeps `last_client_message_at` fresh
-    /// forever — it moves on any packet — so reaping on it means never reaping the rooms this
+    /// forever (it moves on any packet) so reaping on it means never reaping the rooms this
     /// exists for. `last_check_at` moves only on a genuinely new location check, which is what the
     /// reference server's own auto-shutdown measures.
     ///
@@ -1166,9 +1166,9 @@ mod db_tests {
 
     /// **A stale activity reading can never make a freshly started room overdue.**
     ///
-    /// This is the case that arrives with pahoa's P23. Its per-slot check timer is *persisted* --
+    /// This is the case that arrives with pahoa's P23. Its per-slot check timer is *persisted*,
     /// unlike `last_client_message_at`, which is a process-global `AtomicU64` that resets on every
-    /// start -- so a room reaped on Monday and started again on Thursday comes back reporting a
+    /// start, so a room reaped on Monday and started again on Thursday comes back reporting a
     /// check from Monday.
     ///
     /// Read as a fallback (`activity.or(started)`) that is three days idle on a room thirty seconds
@@ -1194,7 +1194,7 @@ mod db_tests {
         );
     }
 
-    /// A room nobody has ever joined is measured from when it started — which is a real answer,
+    /// A room nobody has ever joined is measured from when it started, which is a real answer,
     /// not a gap.
     ///
     /// pahoa reports `null` activity until a client speaks, so this is the shape of "somebody

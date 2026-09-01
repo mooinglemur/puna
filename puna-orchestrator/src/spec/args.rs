@@ -4,7 +4,7 @@
 //! anything Puna does: an unknown *or repeated* option is a hard `exit 1`. So a typo here is a room
 //! that never starts, diagnosable only from a container log that says one line and stops. The
 //! failure pahoa's own parser exists to prevent is worth restating, because it is the shape this
-//! module guards against too — a misspelled `--save-dirr` used to be silently ignored, and started
+//! module guards against too: a misspelled `--save-dirr` used to be silently ignored, and started
 //! a room that persisted nothing.
 //!
 //! Three guards, in increasing order of how much they buy:
@@ -13,13 +13,13 @@
 //!      value-or-flag decision is checked against it, so a spelling that pahoa would reject fails
 //!      in a unit test instead of in a pod.
 //!   2. [`ArgBuilder`] refuses a repeated option, which is the other half of pahoa's `exit 1`.
-//!   3. [`NEVER_ARGV`] refuses options that would *work* and be wrong — a password in argv, a
+//!   3. [`NEVER_ARGV`] refuses options that would *work* and be wrong: a password in argv, a
 //!      plaintext listener, a gameplay option the room's own save will overrule. Each carries its
 //!      reason, so adding one back is a decision with the argument attached rather than an edit.
 //!
 //! All three panic rather than returning an error, deliberately: every input is a constant chosen in
 //! this file, so a failure is a bug in this file and cannot be triggered by data. A `Result` here
-//! would have no honest caller — a room whose argv is malformed must not be created, and there is
+//! would have no honest caller: a room whose argv is malformed must not be created, and there is
 //! nothing else to do about it.
 //!
 //! **Aliases are deliberately not transcribed.** Pahoa accepts the reference server's underscored
@@ -89,7 +89,7 @@ pub const PAHOA_SERVE_OPTS: &[Opt] = &[
 /// The room's save is authoritative for every gameplay option.
 ///
 /// `save::encode_options` persists them and `Room::restore` takes them from the snapshot, so a flag
-/// here describes how a room *started* and is overruled from the first save onward — including by an
+/// here describes how a room *started* and is overruled from the first save onward, including by an
 /// organizer's live `!admin /option`, which is legitimate. Puna deliberately stores no gameplay
 /// option to pass, and a room-settings UI would have to write through to the running room rather
 /// than to a column the next restart ignores.
@@ -99,7 +99,7 @@ const SAVE_AUTHORITATIVE: &str = "the room's save is authoritative for gameplay 
 
 /// Options that pahoa accepts, that Puna must never send, with the reason attached.
 ///
-/// Not a test — a refusal in the builder, so the argument has to be answered before the flag can be
+/// Not a test but a refusal in the builder, so the argument has to be answered before the flag can be
 /// added rather than after somebody deletes an assertion.
 const NEVER_ARGV: &[(&str, &str)] = &[
     (
@@ -136,7 +136,7 @@ const NEVER_ARGV: &[(&str, &str)] = &[
 ///
 /// Verified in pahoa: it parses, binds `[::]` and accepts v4-mapped IPv4, with a regression test
 /// that skips rather than fails where IPv6 is unavailable. The residual dependency is the kernel's
-/// `net.ipv6.bindv6only=0` — the Linux default, but a sysctl, and flipping it makes a room silently
+/// `net.ipv6.bindv6only=0`: the Linux default, but a sysctl, and flipping it makes a room silently
 /// stop answering IPv4. That belongs in a cluster preflight, not here.
 const BIND_ADDRESS: &str = "::";
 
@@ -244,13 +244,13 @@ pub fn serve(spec: &RoomSpec) -> Vec<String> {
     // **Set, not left to pahoa's own heuristic, and that is the point.**
     //
     // pahoa derives this from `slot_info.len()` with the identical expression `spec::room` used to
-    // transcribe -- two independent computations of one number from one input, with nothing
+    // transcribe: two independent computations of one number from one input, with nothing
     // checking they agree. The number decides how much the room may queue, and Puna's memory limit
     // is sized around it, so a drift between the two is not a disagreement about a constant: it is
     // a container limit provisioned for a queue the room no longer has. That failure is an OOM
     // kill, which is the least diagnosable thing a room can do.
     //
-    // Passing it makes Puna's value authoritative and the relationship checkable in one place --
+    // Passing it makes Puna's value authoritative and the relationship checkable in one place:
     // see `room::memory_limit_bytes`, whose test asserts the room can always reach this cap before
     // the kernel reaches the room.
     //
@@ -266,7 +266,7 @@ pub fn serve(spec: &RoomSpec) -> Vec<String> {
     // The fan-out, for the same reason and one more.
     //
     // pahoa derives both from the seed when they are absent, and its derivation is the one
-    // `spec::room` transcribes -- so passing them changes nothing about how the room runs. What it
+    // `spec::room` transcribes, so passing them changes nothing about how the room runs. What it
     // changes is who owns the number the CONTAINER is sized against: the shard inboxes reserve
     // `shards × depth × 72` bytes at startup, and that memory sits **outside**
     // `--outbound-budget`'s accounting entirely, because the budget is charged only once a shard
@@ -277,7 +277,7 @@ pub fn serve(spec: &RoomSpec) -> Vec<String> {
     // So `memory_limit_bytes` adds a term for it, and this is what makes that term a fact rather
     // than a guess about another repository's defaults.
     //
-    // Both are BOUNDED on pahoa's side rather than merely floored -- 1..=32 and 4096..=65536 -- on
+    // Both are BOUNDED on pahoa's side rather than merely floored (1..=32 and 4096..=65536) on
     // the grounds that these are numbers an orchestrator renders from a template, so a slipped
     // decimal should refuse to start rather than spawn a thousand shards. `spec::room` clamps to
     // the same ranges, so a value that would be refused is unrepresentable here.
@@ -304,7 +304,7 @@ pub fn serve(spec: &RoomSpec) -> Vec<String> {
         // room's own directory needs none of that.
         //
         // Two consequences for Puna. It needs `--save-dir`, which is above and always passed. And
-        // **it grows monotonically and pahoa never prunes it** -- about 264 bytes per check, so
+        // **it grows monotonically and pahoa never prunes it**: about 264 bytes per check, so
         // ~6 MB for a 96-slot seed and ~90 MB for a 2000-slot one, on a volume whose quota is
         // shared across every room. This is the file that will find that quota first.
         .flag("--journal");
@@ -347,13 +347,13 @@ mod tests {
                 "--bind=::",
                 "--port=40000",
                 "--filtered-port=40001",
-                // **MiB, not bytes** -- 96 slots sits on pahoa's own 64 MiB floor. Passed rather
+                // **MiB, not bytes**: 96 slots sits on pahoa's own 64 MiB floor. Passed rather
                 // than left to the room to derive, so the memory limit is sized against the number
                 // actually in use. A number here in the millions is this option's unit being got
                 // wrong again; see `room::outbound_budget_mib`.
                 "--outbound-budget=64",
                 // 96 slots is 288 expected connections, so one shard per 512 lands on the floor of
-                // 2 and the depth on its own floor of 4096 -- the sizing every room ran at before
+                // 2 and the depth on its own floor of 4096: the sizing every room ran at before
                 // either knob existed. These grow only for rooms big enough to need them.
                 "--shards=2",
                 "--shard-queue-depth=4096",
@@ -433,7 +433,7 @@ mod tests {
     }
 
     /// Every room, unconditionally. A room started without it has a history with a hole in it that
-    /// nothing can fill in afterwards — the events are gone, not merely unrecorded.
+    /// nothing can fill in afterwards: the events are gone, not merely unrecorded.
     #[test]
     fn the_journal_is_always_on() {
         let mut spec = spec();
@@ -445,7 +445,7 @@ mod tests {
         spec.use_embedded_options = false;
         assert!(serve(&spec).contains(&"--journal".to_string()));
 
-        // A flag, not a value option -- pahoa refuses a value on it.
+        // A flag, not a value option: pahoa refuses a value on it.
         assert!(!serve(&spec).iter().any(|a| a.starts_with("--journal=")));
     }
 
@@ -455,8 +455,8 @@ mod tests {
     /// `--snapshot=/shared/datapackage.json` unconditionally while nothing had ever written that
     /// file; pahoa opened the path, failed, and every room in the environment crashlooped behind a
     /// startup banner that looked completely healthy. Puna made the flag conditional. Pahoa then
-    /// removed the option outright -- `hint_blacklist`, the only thing that file carried which was
-    /// not already in the seed, is compiled into the binary now -- so the flag went from
+    /// removed the option outright (`hint_blacklist`, the only thing that file carried which was
+    /// not already in the seed, is compiled into the binary now) so the flag went from
     /// "resolved or fatal" to "unknown option, and therefore fatal" with no state in between where
     /// sending it is safe.
     ///
@@ -474,7 +474,7 @@ mod tests {
             "nothing should reference a data package file: {argv:?}"
         );
 
-        // The neighbors it sat between are untouched -- this was a removal, not a reshuffle.
+        // The neighbors it sat between are untouched: this was a removal, not a reshuffle.
         assert!(argv.contains(&format!("--save-dir={SAVE_DIR}")));
         assert!(argv.contains(&"--journal".to_string()));
         assert!(argv.contains(&SEED_PATH.to_string()));
@@ -563,7 +563,7 @@ mod tests {
         ArgBuilder::new("serve").value("--release-mode", "auto-enabled");
     }
 
-    /// Everything refused is something pahoa would otherwise accept -- a refusal for an option that
+    /// Everything refused is something pahoa would otherwise accept: a refusal for an option that
     /// does not exist would be a comment pretending to be a guard.
     #[test]
     fn every_forbidden_option_is_a_real_one() {

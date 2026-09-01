@@ -42,7 +42,7 @@ const LEADER_RETRY: Duration = Duration::from_secs(5);
 /// The channel the web tier pokes when it writes `desired_state`.
 const WAKE_CHANNEL: &str = "puna_wake";
 
-/// A burst of writes -- an organizer starting six rooms -- should cost one tick, not six.
+/// A burst of writes (an organizer starting six rooms) should cost one tick, not six.
 const NOTIFY_DEBOUNCE: Duration = Duration::from_millis(200);
 
 #[tokio::main]
@@ -82,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(health::State::default());
     state.set_interval(config.reconcile_interval);
     // Published immediately, as a zero, so a parked replica shows up in
-    // `sum(puna_orchestrator_leader)` rather than being absent from it -- absent and zero look the
+    // `sum(puna_orchestrator_leader)` rather than being absent from it: absent and zero look the
     // same in a graph and mean very different things.
     state.set_leader(false);
 
@@ -186,21 +186,21 @@ async fn reconcile_until_lost(
     config: &OrchestratorConfig,
     wake: &Arc<Notify>,
 ) -> anyhow::Result<()> {
-    // Constructed once, here, immediately after taking the lock -- which is the only place it is
+    // Constructed once, here, immediately after taking the lock, which is the only place it is
     // legitimate. Replacing `assume_leader` with a constructor taking `&LeaderLock` is the last
     // step that turns this token from an assertion into proof; see `puna_core::model`.
     let orchestrator = Orchestrator::assume_leader();
 
     // --- TWO CADENCES, ONE LOOP -----------------------------------------------------------------
     // A full pass every `reconcile_interval`, and a short convergence pass in between **while a
-    // room is mid-transition**. A restart crosses two passes -- one stops the room, one starts it --
+    // room is mid-transition**. A restart crosses two passes (one stops the room, one starts it)
     // so at the full interval alone that gap is most of a room's downtime, and none of it is the
     // pod. The convergence pass plans and applies exactly as the full one does; what it skips is
     // everything about the fleet rather than about the room in flight.
     //
     // **`last_reconcile`, NOT the last tick of any kind.** Stamping every pass would let a run of
-    // convergence passes push the deadline forward indefinitely, so a fleet-wide restart -- which
-    // converges continuously for as long as it takes -- would starve the sweep, the probe and the
+    // convergence passes push the deadline forward indefinitely, so a fleet-wide restart (which
+    // converges continuously for as long as it takes) would starve the sweep, the probe and the
     // hourly lane for the whole rollout. Only a full pass moves this.
     let mut last_reconcile = tokio::time::Instant::now() - config.reconcile_interval;
 
@@ -220,7 +220,7 @@ async fn reconcile_until_lost(
         let report = match reconciler.tick(lock, orchestrator, kind).await {
             Ok(report) => {
                 // **Readiness tracks FULL passes only.** `/readyz` means the whole contract is
-                // being met, and a convergence pass meets part of it -- so counting one would let a
+                // being met, and a convergence pass meets part of it, so counting one would let a
                 // loop that had somehow stopped doing full passes report itself healthy while the
                 // sweep, the probe and the hourly lane were all silently stopped. It cannot
                 // false-fail: the scheduler caps the next wake at the full pass's own deadline, so
@@ -229,7 +229,7 @@ async fn reconcile_until_lost(
                     state.mark_ticked();
                 }
                 // A pass over a stable namespace reports only its room count, which is not news.
-                // Anything actually happening is -- and a convergence pass that plans nothing is
+                // Anything actually happening is, and a convergence pass that plans nothing is
                 // the quiet case this cadence exists to produce, so it stays quiet.
                 if report.actions > 0 || report.errors > 0 || report.integrity_faults > 0 {
                     tracing::info!(?report, "reconciled");
@@ -237,7 +237,7 @@ async fn reconcile_until_lost(
                 Some(report)
             }
             // A failed tick is not fatal. The loop is level-triggered, so the next pass sees the
-            // same world and tries again -- and dropping the lock here would hand leadership to a
+            // same world and tries again, and dropping the lock here would hand leadership to a
             // process that would hit the same error, turning one bad tick into a rolling outage.
             Err(e) => {
                 tracing::error!(error = ?e, "reconcile tick failed");
@@ -254,7 +254,7 @@ async fn reconcile_until_lost(
         let converging = report.is_some_and(|r| r.wants_convergence());
         let next_full = last_reconcile + config.reconcile_interval;
         let next = if converging {
-            // `min`, so a long run of convergence cannot push the full pass past its interval --
+            // `min`, so a long run of convergence cannot push the full pass past its interval:
             // the same starvation `last_reconcile` prevents, arriving through the scheduler
             // instead of through the stamp.
             next_full.min(tokio::time::Instant::now() + config.converge_interval)
@@ -294,12 +294,12 @@ async fn assert_environment(
 /// **The failure this exists for is a fleet deletion carried out by the garbage collector.** The
 /// room label is identity: every object is read back through it to answer *which room is this*, and
 /// an object that does not answer is, by the sweep's definition, an orphan. Change the key and every
-/// existing Deployment stops resolving at once — two strikes and two minutes later they are all
+/// existing Deployment stops resolving at once: two strikes and two minutes later they are all
 /// removed, with players still connected, by the one code path in the system whose job is deleting
 /// things nobody owns.
 ///
 /// (It would not even succeed. The label is the Deployment's `spec.selector`, which Kubernetes will
-/// not let you update — so the recreate that followed would fail too. The point is that the deletion
+/// not let you update, so the recreate that followed would fail too. The point is that the deletion
 /// happens first.)
 ///
 /// The signature is specific rather than paranoid: refuse only when there are managed Deployments,
@@ -333,7 +333,7 @@ async fn assert_room_label_resolves(
 /// Write the configured port range into the database and reconcile the reservation rows to it.
 ///
 /// The range is a property of the deployment's network rather than of Puna, so it arrives as
-/// configuration — but the database is what enforces it, both through the trigger on
+/// configuration, but the database is what enforces it, both through the trigger on
 /// `port_reservations` and by simply not having rows for ports outside it. This is what puts the
 /// configured value there.
 async fn assert_port_range(

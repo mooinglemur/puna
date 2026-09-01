@@ -5,7 +5,7 @@
 //! That one lives in an integration-test module, and **a binary crate cannot reach one**: the
 //! orchestrator's tests are `#[cfg(test)]` modules inside the binary, so they link the crate's own
 //! source rather than a library. Sharing it would mean moving it into `puna-core` behind a feature
-//! and having `puna-core` dev-depend on itself to compile its own tests — more machinery than the
+//! and having `puna-core` dev-depend on itself to compile its own tests: more machinery than the
 //! seventy lines it would save, and the fixtures differ anyway: these want rooms with ports, uids
 //! and spec hashes, which no `puna-core` test has an opinion about.
 //!

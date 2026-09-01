@@ -13,7 +13,7 @@
 //!   * **`{}` is a room nobody can join.** Per-slot mode with nobody holding a key. So the
 //!     variable must be *absent* outside `per_slot` mode, not present and empty.
 //!   * **A partial map locks players out.** So `per_slot` mode requires a password on every
-//!     connectable slot -- spectators included, which is exactly the gap that would have been
+//!     connectable slot, spectators included, which is exactly the gap that would have been
 //!     easy to leave.
 //!
 //! [`build`] returns [`SecretError`] rather than a Secret in either case. That is deliberate: a
@@ -21,7 +21,7 @@
 //! the wrong door open is not.
 //!
 //! Built ahead of its caller: `ensure_room_running` applies this at M7. The tests are the reason
-//! it lands now rather than then -- the fail-closed property is worth pinning while the reasoning
+//! it lands now rather than then: the fail-closed property is worth pinning while the reasoning
 //! behind it is fresh, and `expect` rather than `allow` means the attribute itself warns once
 //! something starts calling `build`.
 use std::collections::BTreeMap;
@@ -45,7 +45,7 @@ pub enum SecretError {
 
     /// `per_slot` mode on a room with no slots at all.
     ///
-    /// Would render `{}`, which pahoa reads as "per-slot mode, nobody holds a key" -- a locked
+    /// Would render `{}`, which pahoa reads as "per-slot mode, nobody holds a key": a locked
     /// room rather than an unconfigured one.
     #[error("room is in per-slot password mode but has no slots; that would lock the whole room")]
     NoSlots,
@@ -66,7 +66,7 @@ pub type SecretData = BTreeMap<String, String>;
 
 /// Build the environment for one room.
 ///
-/// `slots` must be every slot of the room, not a filtered subset -- the completeness check is the
+/// `slots` must be every slot of the room, not a filtered subset: the completeness check is the
 /// point, and filtering before the call would defeat it.
 pub fn build(
     room: &Room,
@@ -76,7 +76,7 @@ pub fn build(
     let mut data = SecretData::new();
 
     // Always. Pahoa refuses to start on a token under 32 bytes, and answers 404 rather than 401
-    // when none is configured -- which is how Puna diagnoses a Secret that failed to render.
+    // when none is configured, which is how Puna diagnoses a Secret that failed to render.
     data.insert("PAHOA_ADMIN_TOKEN".to_string(), secrets.admin_token.clone());
 
     match room.slot_auth {
@@ -103,7 +103,7 @@ pub fn build(
             // **A missing password is always the accident**, again. It briefly was not: while Puna
             // expressed a lock by withholding a slot from this map, an omission could be either a
             // mistake or a decision, and this filter had to tell them apart. pahoa shipped a native
-            // `lock` verb, so the map is back to meaning one thing -- who holds a credential -- and
+            // `lock` verb, so the map is back to meaning one thing (who holds a credential) and
             // access control is not smuggled through it.
             let missing: Vec<i32> = slots
                 .iter()
@@ -277,7 +277,7 @@ mod tests {
     /// The failure this module exists for.
     ///
     /// A map built from a player-filtered slot list leaves the spectator without a password. Under
-    /// pahoa's fail-closed rule that is a spectator who cannot connect -- and before round two it
+    /// pahoa's fail-closed rule that is a spectator who cannot connect, and before round two it
     /// would have been the one slot that could connect without one.
     #[test]
     fn a_missing_slot_password_refuses_the_build() {

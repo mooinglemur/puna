@@ -1,12 +1,12 @@
 //! Asking every live room how it is, once a tick.
 //!
-//! This is the only thing that can answer "how many clients, how long idle" — the Kubernetes view
+//! This is the only thing that can answer "how many clients, how long idle": the Kubernetes view
 //! stops at "the pod is ready", which a room with nobody in it satisfies just as well as a busy one.
 //!
 //! ## Why the orchestrator polls rather than Prometheus scraping each room
 //!
 //! Settled at M11. pahoa serves `/admin/v1/metrics` bearer-gated and this cluster discovers
-//! ServiceMonitors from every namespace, so a ServiceMonitor per room would work — and was rejected
+//! ServiceMonitors from every namespace, so a ServiceMonitor per room would work, and was rejected
 //! for three reasons, the first deciding. **Prometheus config churn would be driven by player
 //! behavior**: every ServiceMonitor add or delete regenerates the whole scrape config, and Puna's
 //! rooms churn precisely because the design is that they idle out and come back on a URL hit. That
@@ -15,7 +15,7 @@
 //!
 //! The second reason is this module's own hazard, so it is worth stating here: pahoa rate-limits
 //! authentication failures to **10 a minute per room, and the lockout applies to the correct token
-//! too** — deliberately, so it cannot be used as an oracle. A second credential-holder scraping
+//! too**, deliberately, so it cannot be used as an oracle. A second credential-holder scraping
 //! twice a minute could lock the orchestrator out of its own rooms, and it would present as "the
 //! console stopped working" with nothing pointing at monitoring.
 //!
@@ -49,7 +49,7 @@ const CONCURRENCY: usize = 8;
 /// How long a rate-limited room is left alone when it did not say.
 ///
 /// pahoa's limiter is per minute, so a minute is the honest default for a `429` with no
-/// `Retry-After` — and erring long is right here, because the failure mode of erring short is
+/// `Retry-After`, and erring long is right here, because the failure mode of erring short is
 /// extending the lockout that is already in force.
 const DEFAULT_BACKOFF: Duration = Duration::from_secs(60);
 
@@ -141,7 +141,7 @@ impl Prober {
 
         // **Reconcile the published series against the live set, every tick.** A `GaugeVec` keyed
         // by room keeps a series forever unless it is removed, so without this every room that ever
-        // ran would leave one behind asserting its last client count -- and a stale gauge reads as a
+        // ran would leave one behind asserting its last client count, and a stale gauge reads as a
         // live room, which is worse than no metric. Done here rather than on each transition
         // because there are four ways to stop being live and a hook per path is one somebody
         // forgets. Rooms that are live but backing off keep their series: they are still rooms.
@@ -224,7 +224,7 @@ impl Prober {
                 Err(e) => {
                     // A probe failure is not a room failure. A room that will not answer its admin
                     // API may still be serving a multiworld perfectly, so this NEVER moves the
-                    // room's state -- it only leaves the numbers unrefreshed, which the `probed_at`
+                    // room's state: it only leaves the numbers unrefreshed, which the `probed_at`
                     // stamp makes visible.
                     tracing::debug!(%room, error = %e, "a room did not answer the probe");
                 }
@@ -238,7 +238,7 @@ impl Prober {
     ///
     /// **A room that did not answer loses its proxied series**, which is the same rule the gauges
     /// follow and matters more here: these are keyed by `(room, slot, cmd, …)`, so a room left
-    /// behind does not strand one stale reading but every series it ever had — and a counter frozen
+    /// behind does not strand one stale reading but every series it ever had, and a counter frozen
     /// at its last value reads as a room that has gone completely quiet rather than one Puna cannot
     /// reach.
     fn absorb_exposition(&self, room: RoomId, exposition: Exposition) {
@@ -307,7 +307,7 @@ impl Prober {
 /// Rooms worth asking: up, with a port, and with a token to ask with.
 ///
 /// `starting` is deliberately absent. A room that has not reached ready has nothing to report and
-/// would answer with a connection refused, which is noise rather than information — readiness is
+/// would answer with a connection refused, which is noise rather than information: readiness is
 /// the Deployment's job and the planner already reads it.
 async fn live_rooms(
     conn: &mut AsyncPgConnection,
@@ -398,11 +398,11 @@ async fn record(
     // what makes a reschedule or an in-place container restart visible: the spec has been in force
     // since `deployment_created_at`, but the process only since here, and a gap means the room
     // reloaded its save and every client reconnected. `None` follows the same rule as everything
-    // else on this row -- cannot tell, never zero.
+    // else on this row: cannot tell, never zero.
     .bind::<Nullable<Timestamptz>, _>(status.started_at)
     .bind::<Nullable<Timestamptz>, _>(status.activity.last_check_at)
     // Serialized here and cast back in the statement rather than bound as `Jsonb`, so this crate
-    // needs no opinion about the document's shape -- which is the same reason the column is JSONB
+    // needs no opinion about the document's shape, which is the same reason the column is JSONB
     // and not eight columns. A value that will not serialize is written as NULL rather than
     // failing the probe pass: the rules are a diagnostic, and losing the whole reading over one
     // unrenderable field would take the client count and the activity clock down with it.
@@ -533,7 +533,7 @@ mod db_tests {
     }
 
     /// **The contract these columns exist for: `None` writes NULL, never zero.** A probe that
-    /// cannot tell must not be indistinguishable from a room nobody is in — which is exactly what a
+    /// cannot tell must not be indistinguishable from a room nobody is in, which is exactly what a
     /// `COALESCE(..., 0)` or a defaulted struct field would produce, and it would look like a real
     /// reading forever after.
     #[tokio::test]
@@ -622,7 +622,7 @@ mod db_tests {
     /// The second half is the decision worth pinning, because keeping the last reading is the
     /// obvious alternative and reads as generous. It is not: a room reporting no options is a room
     /// Puna cannot ask, and holding a previous answer would survive an image **downgrade** and
-    /// describe rules that may have changed since — silently, and on a page whose whole purpose is
+    /// describe rules that may have changed since, silently, and on a page whose whole purpose is
     /// to be believed. `probed_at` moves either way, so a page can always say how old a reading is;
     /// nothing anywhere can say how old a kept one would be.
     #[tokio::test]
@@ -670,7 +670,7 @@ mod db_tests {
             assert_eq!(stored["release_mode"], "auto");
             assert_eq!(stored["hint_cost"], 10);
 
-            // Now a probe that reached the room and learned nothing about its rules -- the TCP
+            // Now a probe that reached the room and learned nothing about its rules: the TCP
             // fallback, or a room on an image that predates the field.
             record(&mut conn, room, &RoomStatus::default(), "tcp")
                 .await

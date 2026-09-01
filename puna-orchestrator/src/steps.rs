@@ -1,15 +1,15 @@
 //! Executing one [`Step`], against the database and the cluster.
 //!
 //! The planner decided; [`crate::apply`] knows the cluster ordering; this is where the two meet the
-//! room's row. Every function here writes **observed** columns — `state`, `advertised_*`,
-//! `deployment_uid`, `spec_hash` — which is why they all take the [`Orchestrator`] token.
+//! room's row. Every function here writes **observed** columns (`state`, `advertised_*`,
+//! `deployment_uid`, `spec_hash`) which is why they all take the [`Orchestrator`] token.
 //!
 //! ## The advisory lock covers the row, not the cluster call
 //!
 //! Each step takes `pg_try_advisory_xact_lock` on the room's `lock_key` for its database work and
 //! releases it at commit, so a cluster call is made with no lock held. That is deliberate and it is
 //! what §2 already argues: **the lock is a simplicity property, not a correctness one.** Every
-//! mutation survives a brief double-run on its own — `create` treats `AlreadyExists` as success, the
+//! mutation survives a brief double-run on its own: `create` treats `AlreadyExists` as success, the
 //! allocator hands a room back its own pair, a Secret apply is idempotent, and pahoa's `flock` is the
 //! last backstop against two pods serving one room. Holding a transaction open across a
 //! multi-second cluster call to buy a property the design does not need would cost a pooled
@@ -38,7 +38,7 @@ pub struct Context<'a> {
     pub layout: &'a Layout,
     pub site: &'a Site,
     pub environment: Environment,
-    /// The DNS name rooms are advertised on — also the name on the room certificate, which is what
+    /// The DNS name rooms are advertised on, and also the name on the room certificate, which is what
     /// makes it load-bearing rather than cosmetic.
     pub advertise_host: &'a str,
     pub orchestrator: Orchestrator,
@@ -74,8 +74,8 @@ pub enum Outcome {
 
 /// How long a mis-allocated port pair is left alone.
 ///
-/// The collision is necessarily with something Puna did not create — Puna's own uniqueness is
-/// database-enforced — so an hour is a guess at how long somebody else's object lives, and the
+/// The collision is necessarily with something Puna did not create (Puna's own uniqueness is
+/// database-enforced) so an hour is a guess at how long somebody else's object lives, and the
 /// reservation is not scarce.
 const QUARANTINE: chrono::TimeDelta = chrono::TimeDelta::hours(1);
 
@@ -195,7 +195,7 @@ async fn generation_sha(
 struct StartInputs {
     save_interval_secs: i32,
     use_embedded_options: bool,
-    /// `generations.slots` — **every** slot, groups included, because pahoa sizes its outbound
+    /// `generations.slots`: **every** slot, groups included, because pahoa sizes its outbound
     /// budget from `slot_info.len()` and the connectable count would under-request memory.
     slot_count: i32,
 }
@@ -261,7 +261,7 @@ async fn start(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
         // recording against a row that may not exist.
         Ok(None) => return Ok(Outcome::Done),
         // Fail closed, loudly. An incomplete `PAHOA_SLOT_PASSWORDS` is a room nobody can join, so
-        // the builder refuses and the room lands in `failed` with the slots named -- which is
+        // the builder refuses and the room lands in `failed` with the slots named, which is
         // recoverable, where a room serving with the wrong door open is not.
         Err(e) => {
             fail(ctx, action, &e.to_string()).await?;
@@ -304,7 +304,7 @@ async fn start(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
             .await?;
 
             // A room that has just been started IS running its current spec, so any request that
-            // was waiting on it is satisfied -- including one made while it sat idle, where there
+            // was waiting on it is satisfied, including one made while it sat idle, where there
             // was no Deployment to recreate.
             clear_redeploy_request(&mut conn, id).await?;
 
@@ -320,7 +320,7 @@ async fn start(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
 
         Ok(Started::AwaitingAddress) => {
             // Left in `idle` on purpose. A room may not be advertised before its address is known,
-            // and `Start` is idempotent -- so the next tick runs it again and converges, rather than
+            // and `Start` is idempotent, so the next tick runs it again and converges, rather than
             // parking in `starting` where nothing would ever re-read the address.
             tracing::warn!(
                 room = %id,
@@ -338,7 +338,7 @@ async fn start(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
             // exists to protect. Nothing to do but let it finish.
             //
             // The planner normally catches this from the snapshot, so reaching here means the
-            // snapshot was stale -- a live read is what the applier has that the planner does not.
+            // snapshot was stale: a live read is what the applier has that the planner does not.
             // At `debug` because it is expected and self-clearing; the room's own state says more.
             tracing::debug!(
                 room = %id,
@@ -385,14 +385,14 @@ async fn start(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
 
         // **Refused for a reason a different port cannot fix.** `no_pool`, a lost
         // `onelemur.com/lb-pool` label, a wrong sharing key, an ExternalTrafficPolicy the holder
-        // will not share with -- all properties of the Service template or of `PUNA_LB_IP`, which
+        // will not share with: all properties of the Service template or of `PUNA_LB_IP`, which
         // `spec::service` renders identically for every room in the environment. So this is never
         // one room's problem, and reallocating would have every room in the namespace quarantine a
         // pair an hour until the range drained, with nothing that was going to start starting.
         //
         // The reservation is therefore LEFT BOUND and nothing is quarantined: the room comes back on
         // its own port once somebody fixes the cause. It still fails, so the backoff paces it and
-        // the reason lands on the room page -- which is the whole remedy here, since the fix is a
+        // the reason lands on the room page, which is the whole remedy here, since the fix is a
         // human editing a manifest.
         Ok(Started::AddressRefused { refusal }) if !refusal.is_port_collision() => {
             tracing::error!(
@@ -431,10 +431,10 @@ async fn start(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
         }
 
         Ok(Started::AddressRefused { refusal }) => {
-            // Whose Service holds the port. `external` is operations -- somebody took a port on the
+            // Whose Service holds the port. `external` is operations: somebody took a port on the
             // sharing key, and Puna's answer is to use a different one. `internal` is a Puna bug:
             // a Service of ours outliving its room, which the sweep reports and which no amount of
-            // reallocating will fix. **Both quarantine and both move on** -- the label exists so an
+            // reallocating will fix. **Both quarantine and both move on**: the label exists so an
             // alert can treat them differently, not so this code can.
             let conflict = match conflicting_puna_service(ctx, id, base_port).await {
                 Ok(Some(name)) => {
@@ -497,7 +497,7 @@ async fn start(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
 
             // **`failed`, not `idle`, and this is the pacing.** An idle room that wants to run is
             // what `plan::converging` counts, so going back to `idle` would re-plan `Start` every
-            // `PUNA_CONVERGE_INTERVAL` -- and every attempt quarantines another pair. One room could
+            // `PUNA_CONVERGE_INTERVAL`, and every attempt quarantines another pair. One room could
             // take the whole range inside a couple of hours and put every OTHER room into port
             // exhaustion, which is a fleet-wide outage caused by one contested port.
             //
@@ -508,7 +508,7 @@ async fn start(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
             // can read it.
             //
             // The backoff cannot be short-circuited here either: `attach_desired_spec_hashes` skips
-            // a room with no reservation, and the quarantine above unbound this one -- so M10c's
+            // a room with no reservation, and the quarantine above unbound this one, so M10c's
             // "a changed spec interrupts the wait" needs a hash it cannot compute, and stays out of
             // the way until the room retries on its own.
             return fail_with(
@@ -546,7 +546,7 @@ async fn start(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
 ///
 /// Attribution for a refusal, and the reason [`crate::cluster::RoomService`] carries its ports at
 /// all. The list is label-selected to `managed-by=puna`, so anything it returns is ours by
-/// definition — the question is only whether one of them is sitting on the port this room was just
+/// definition: the question is only whether one of them is sitting on the port this room was just
 /// refused. The room's *own* Service is excluded by name: its Deployment has been deleted but the
 /// garbage collector may not have caught up, and finding ourselves would report every refusal as a
 /// leak.
@@ -578,8 +578,8 @@ async fn conflicting_puna_service(
 /// **The victim gets the row, not the taker**, because the victim is the one who will be surprised:
 /// a reclaimed port invalidates the address embedded in every patch its players have already
 /// downloaded, so "why does my client connect to somebody else's room" has an answer in the room's
-/// own history. The reservation is a weak claim by design — honored while nothing else needs the
-/// port — and this is what makes that claim's expiry visible rather than silent.
+/// own history. The reservation is a weak claim by design (honored while nothing else needs the
+/// port) and this is what makes that claim's expiry visible rather than silent.
 async fn note_reclaim(
     conn: &mut AsyncPgConnection,
     victim: RoomId,
@@ -607,7 +607,7 @@ async fn note_reclaim(
 /// A room's spec and the environment it is fingerprinted against, rendered together.
 ///
 /// The two travel as one because the hash covers `slot_auth`, which reaches pahoa through the
-/// Secret — so a spec handed around without the environment that produced it is a spec whose hash
+/// Secret, so a spec handed around without the environment that produced it is a spec whose hash
 /// cannot be explained.
 pub(crate) struct RenderedSpec {
     pub spec: crate::cluster::RoomSpec,
@@ -618,13 +618,13 @@ pub(crate) struct RenderedSpec {
 ///
 /// **One renderer, two callers, on purpose.** [`start`] renders to apply, and [`desired_spec_hash`]
 /// renders to ask whether anything has changed. If those two ever disagreed the backoff interrupt
-/// would either never fire or never stop firing — and both failures are silent, because each looks
+/// would either never fire or never stop firing, and both failures are silent, because each looks
 /// exactly like the room being fine. Sharing the rendering makes the drift unrepresentable rather
 /// than merely unlikely.
 ///
 /// `Ok(None)` is a room or a secret that is no longer there: nothing to render, and nothing to
-/// record against a row that may already be gone. `Err` is a spec that *cannot* be rendered — today
-/// only the fail-closed Secret builder — which is the room's own configuration being wrong, and is
+/// record against a row that may already be gone. `Err` is a spec that *cannot* be rendered (today
+/// only the fail-closed Secret builder) which is the room's own configuration being wrong, and is
 /// the one case worth a `failed` row.
 pub(crate) async fn render_spec(
     conn: &mut AsyncPgConnection,
@@ -660,7 +660,7 @@ pub(crate) async fn render_spec(
 ///
 /// The planner's backoff interrupt compares this against the hash on the row. **Every failure
 /// collapses to `None`, deliberately:** a room whose spec cannot be rendered has not "changed" in
-/// any sense worth acting on — it would fail the same way again — so the honest answer is *no
+/// any sense worth acting on (it would fail the same way again) so the honest answer is *no
 /// opinion*, which leaves the backoff to do the job it is good at. `None` must never read as "the
 /// spec changed", or one unrenderable room would retry on every tick forever.
 pub(crate) async fn desired_spec_hash(
@@ -723,7 +723,7 @@ struct RowRecorder<'a> {
 impl DeploymentRecorder for RowRecorder<'_> {
     async fn record(&mut self, room: RoomId, uid: &str, spec_hash: &str) -> anyhow::Result<()> {
         // `desired_spec_hash` is cleared, not set to the value just recorded. It answers *what
-        // would this room render to now*, and the hourly lane is what answers it -- so anything
+        // would this room render to now*, and the hourly lane is what answers it, so anything
         // written here would be an answer from a different question's clock.
         //
         // Leaving the old one in place is the bug this prevents: after a legitimate recreate the
@@ -767,7 +767,7 @@ async fn recreate(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome>
 
     // Not a rolling update: the port is in the args and the Service, and pahoa holds an exclusive
     // flock on the save directory, so two pods cannot overlap. Dropping to `idle` lets the next tick
-    // take the ordinary Start path -- one code path for creating a room's objects.
+    // take the ordinary Start path: one code path for creating a room's objects.
     ctx.cluster
         .delete_deployment(&object_name(action.room))
         .await?;
@@ -784,7 +784,7 @@ async fn recreate(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome>
 ///
 /// Called from every step that leaves the room running its freshly-rendered spec: the recreate that
 /// a request triggered, and `start`, which covers a request made against a room that was already
-/// idle -- there is nothing to recreate there, and leaving the request set would bounce the room
+/// idle: there is nothing to recreate there, and leaving the request set would bounce the room
 /// the moment it came up.
 async fn clear_redeploy_request(
     conn: &mut AsyncPgConnection,
@@ -847,16 +847,16 @@ async fn mark_running(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outc
 ///
 /// **pahoa persists a lock in `room.save`, and Puna's row is the authority.** That split is
 /// deliberate: the save is the one thing a recovery might reset, and a PVC recreated or a save
-/// cleared to get a room started again would take every lock with it — silently, leaving somebody
+/// cleared to get a room started again would take every lock with it, silently, leaving somebody
 /// barred in Puna's own records and able to connect. The Secret-based lock this replaced survived
 /// that, because it lived in Puna's state; this is what buys the property back.
 ///
 /// **Almost always a no-op**, which is what makes it affordable to run on every start: rooms with a
-/// locked slot are rare, and a room with none makes no calls at all. It is idempotent besides —
+/// locked slot are rare, and a room with none makes no calls at all. It is idempotent besides:
 /// locking an already-locked slot is the same answer twice.
 ///
 /// Failures are logged and never propagated. The room *is* running, and refusing to record that
-/// because a moderation action could not be re-asserted would be the worse trade — but it is logged
+/// because a moderation action could not be re-asserted would be the worse trade, but it is logged
 /// at ERROR rather than WARN, because the state it leaves is somebody who should be shut out and is
 /// not, and nothing else in the system will notice.
 async fn reapply_locks(ctx: &Context<'_>, conn: &mut AsyncPgConnection, room_id: RoomId) {
@@ -899,7 +899,7 @@ async fn reapply_locks(ctx: &Context<'_>, conn: &mut AsyncPgConnection, room_id:
                 tracing::info!(room = %room_id, slot, "re-applied a lock after the room started");
             }
             // A refusal is an answer, and here it means the room disagrees about a slot Puna has
-            // barred -- worth the same volume as a transport failure, because the outcome is the
+            // barred, worth the same volume as a transport failure, because the outcome is the
             // same: somebody who should be shut out is not.
             Ok(output) => tracing::error!(
                 room = %room_id,
@@ -920,7 +920,7 @@ async fn reapply_locks(ctx: &Context<'_>, conn: &mut AsyncPgConnection, room_id:
 /// Push Puna's traffic filters at a room that has just come up.
 ///
 /// **The same reasoning as [`reapply_locks`] and a stronger case for it.** pahoa persists filters
-/// into `room.save`, so a save reset or a recreated PVC takes every one of them silently — and
+/// into `room.save`, so a save reset or a recreated PVC takes every one of them silently, and
 /// unlike a lock, a filter that has quietly stopped applying is invisible from every angle: the
 /// room looks healthy, the slot is connected, and only the traffic is different.
 ///
@@ -928,8 +928,8 @@ async fn reapply_locks(ctx: &Context<'_>, conn: &mut AsyncPgConnection, room_id:
 /// believes. `PATCH` merges, and a re-assert loop that merges can never remove a rule.
 ///
 /// **What it deliberately does NOT do: scrub filters Puna does not know about.** A slot Puna
-/// believes follows the room gets no call, so a ruleset set directly through pahoa's API — which
-/// that API exists to allow — survives here. Scrubbing would cost one call per slot on every start
+/// believes follows the room gets no call, so a ruleset set directly through pahoa's API (which
+/// that API exists to allow) survives here. Scrubbing would cost one call per slot on every start
 /// of every room, to undo something nobody has yet done by accident. If it ever bites, the cheap
 /// version is `/admin/v1/status`'s per-slot `filtered` flag, provided it reports a slot's OWN state
 /// rather than its effective one.
@@ -950,7 +950,7 @@ async fn reapply_filters(ctx: &Context<'_>, conn: &mut AsyncPgConnection, room_i
         }
     };
 
-    // Nothing to say, so nothing is said -- and no call is made on the overwhelmingly common start
+    // Nothing to say, so nothing is said, and no call is made on the overwhelmingly common start
     // of a room that has never been filtered.
     if room_rules.is_none() && slots.is_empty() {
         return;
@@ -987,7 +987,7 @@ async fn reapply_filters(ctx: &Context<'_>, conn: &mut AsyncPgConnection, room_i
 
     for (slot, state) in slots {
         // **The three states, and `Follows` is not in this list.** Only divergent slots have rows,
-        // so every entry here is either its own ruleset or an explicit exemption -- and `to_stored`
+        // so every entry here is either its own ruleset or an explicit exemption, and `to_stored`
         // is what turns the exemption into the `[]` that means "filtered by nothing", rather than
         // the delete that would make it follow the room again.
         let rules = state.to_stored();
@@ -1014,7 +1014,7 @@ async fn reapply_filters(ctx: &Context<'_>, conn: &mut AsyncPgConnection, room_i
     tracing::info!(room = %room_id, "re-applied traffic filters after the room started");
 }
 
-/// A sweep with no ready replica, and — on the third — the degraded state itself.
+/// A sweep with no ready replica, and, on the third, the degraded state itself.
 ///
 /// Counted on the row rather than in memory so a leader handover does not reset it.
 async fn bump_not_ready(
@@ -1080,7 +1080,7 @@ async fn mark_idle(
 /// Ask a room to stop, before its Deployment is deleted.
 ///
 /// **Ask first, then delete anyway.** `POST /admin/v1/shutdown` lets the room quiesce, flush a final
-/// save and release its `flock` on its own schedule rather than inside a 45-second grace period —
+/// save and release its `flock` on its own schedule rather than inside a 45-second grace period,
 /// but it is a nicety on top of the delete, never a replacement for it. Deleting the Deployment is
 /// what actually stops a room, and a room that cannot be asked (an old image, a missing Secret, a
 /// wedged process) must still stop. So this returns nothing and never fails the caller.
@@ -1092,12 +1092,12 @@ async fn mark_idle(
 /// **It is not slower than letting SIGTERM do it, which is why every teardown path uses it.** pahoa
 /// notifies its waiters and answers `202` before quiescing (`http/mod.rs`'s `shutdown`), and every
 /// way out of a running room converges on the same quiesce and the same final save (`serve.rs`). So
-/// the work is identical and this only starts it EARLIER — at the moment of an in-cluster round trip
+/// the work is identical and this only starts it EARLIER: at the moment of an in-cluster round trip
 /// rather than after a delete has propagated to a kubelet and become a signal.
 ///
 /// `reason` reaches pahoa's log and nothing else: the journal's `stopped` record carries the literal
 /// `"admin request"` for any admin-API shutdown, chosen on pahoa's side. Which is the point of
-/// calling this from a redeploy — the alternative reads as `SIGTERM`, and a redeploy is the most
+/// calling this from a redeploy: the alternative reads as `SIGTERM`, and a redeploy is the most
 /// operator-driven thing in the system.
 async fn ask_to_stop(
     ctx: &Context<'_>,
@@ -1175,7 +1175,7 @@ async fn retry(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
 ///
 /// Ordered so that a crash leaves a *recoverable* directory rather than an orphaned one: the
 /// directory moves to the trash before the row goes, so the worst case is a room whose row points at
-/// a directory now in the trash — which the integrity check finds and an operator can undo. The other
+/// a directory now in the trash, which the integrity check finds and an operator can undo. The other
 /// order would delete the row and leave a directory nothing references.
 async fn delete(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
     use diesel_async::{AsyncConnection, scoped_futures::ScopedFutureExt};
@@ -1216,7 +1216,7 @@ async fn delete(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
                 }
 
                 // A timestamp in the name, so deleting and recreating a room twice in one day does
-                // not collide in the trash -- and so an operator can tell which copy is which.
+                // not collide in the trash, and so an operator can tell which copy is which.
                 let stamp = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
                 let moved = storage::trash(&layout, id, &stamp)?;
 
@@ -1247,7 +1247,7 @@ async fn delete(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
     })
 }
 
-/// Record a failure and when to try again — and take the room's Deployment down with it.
+/// Record a failure and when to try again, and take the room's Deployment down with it.
 ///
 /// **Every path into `failed` comes through here**, which is why the deletion belongs here rather
 /// than beside [`Step::FailStart`]: the progress deadline, a port range with nothing left, and a
@@ -1262,7 +1262,7 @@ async fn fail(ctx: &Context<'_>, action: &Action, error: &str) -> anyhow::Result
 /// Exists because a refusal is a start failure that deserves its own `puna_room_starts_total`
 /// series: it is paced and diagnosed differently from a room that will not come up, and folding it
 /// into `failed` would hide the one outcome an operator can act on directly. **One writer either
-/// way** — the alternative was incrementing a second label at the call site, which would have made
+/// way**: the alternative was incrementing a second label at the call site, which would have made
 /// the result labels sum to more than the attempts.
 async fn fail_with(
     ctx: &Context<'_>,
@@ -1271,14 +1271,14 @@ async fn fail_with(
     result: &str,
 ) -> anyhow::Result<Outcome> {
     // **Delete before recording, not after.** Left alone, a failed room's Deployment crashloops for
-    // the entire backoff against a spec nothing will use -- burning restarts, holding a scheduling
+    // the entire backoff against a spec nothing will use: burning restarts, holding a scheduling
     // slot, and making `kubectl delete pod` look broken, because the Deployment recreates the pod
     // from the same unusable spec the moment it goes.
     //
     // The order is chosen by what each crash window costs. Deleting first and crashing leaves the
     // room in `starting` with no Deployment, which the next tick resolves down the ordinary vanish
     // path for the price of one more start attempt. Recording first and crashing leaves the
-    // crashlooping pod in place for the whole backoff with nothing scheduled to remove it -- which
+    // crashlooping pod in place for the whole backoff with nothing scheduled to remove it, which
     // is precisely the state this exists to end.
     //
     // The reservation is a database row and is untouched, so the room comes back on its own port.
@@ -1354,7 +1354,7 @@ async fn fail_with(
 /// `15s * 2^failures`, capped at ten minutes, ±20%.
 ///
 /// **The jitter comes from the room's own id, not a random number.** It is stable for a room and
-/// spread across rooms, which is all a herd needs — and it keeps the backoff reproducible, so a
+/// spread across rooms, which is all a herd needs, and it keeps the backoff reproducible, so a
 /// support question about when a room will retry has an answer that does not depend on what the
 /// process happened to roll.
 fn retry_delay(failure_count: i32, room: RoomId) -> chrono::TimeDelta {
@@ -1377,7 +1377,7 @@ fn retry_delay(failure_count: i32, room: RoomId) -> chrono::TimeDelta {
 /// Put a room back to `idle`, forgetting the Deployment it used to have.
 ///
 /// **The port reservation is deliberately untouched.** A room comes back on the same port, which is
-/// the requirement the whole reservation table exists for -- and the reason idle teardown never
+/// the requirement the whole reservation table exists for, and the reason idle teardown never
 /// releases anything.
 /// Take a room down because nobody has spoken in it for the configured window.
 ///
@@ -1386,12 +1386,12 @@ fn retry_delay(failure_count: i32, room: RoomId) -> chrono::TimeDelta {
 /// that stops a room and the reaper cannot drift from it.
 ///
 /// That also settles what a reaped room looks like afterwards: identical to one somebody stopped.
-/// Same page, same Start button, same port, same save — which is right, because from a player's
+/// Same page, same Start button, same port, same save, which is right, because from a player's
 /// side that is what happened, and a room that idles out and returns on a URL hit is the design the
 /// whole reservation table exists to support.
 ///
 /// **This is the orchestrator writing a column §2 calls web-owned**, and it is the second place
-/// that happens — `recreate` already clears `redeploy_requested_at`. The rule's purpose is that two
+/// that happens: `recreate` already clears `redeploy_requested_at`. The rule's purpose is that two
 /// writers must not fight over one value, and these two do not: the web tier says `running` when
 /// somebody opens the room, this says `stopped` when it falls quiet, and each is a level-triggered
 /// statement about the present rather than a claim on the column. Guarded anyway, in the `WHERE`:
@@ -1418,7 +1418,7 @@ async fn reap(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
 
     // Recorded against the room so the page can say WHY it stopped. Without this the room reads as
     // one somebody stopped by hand, and the organizer who did not stop it has no way to find out
-    // what did -- which is the support conversation this row exists to end.
+    // what did, which is the support conversation this row exists to end.
     puna_core::model::event::record(
         &mut conn,
         action.room,
@@ -1468,7 +1468,7 @@ pub(crate) async fn clear_deployment(
     .execute(conn)
     .await?;
     // The note's remaining job. It is the only record of WHY for the recreate paths, which write no
-    // event of their own -- previously it survived only by sitting in a column that made it look
+    // event of their own: previously it survived only by sitting in a column that made it look
     // like a failure.
     tracing::info!(room = %room, "room is idle: {note}");
     Ok(())
@@ -1499,13 +1499,13 @@ mod tests {
     ///
     /// A source lint because nothing observable would change: the steps tests run against
     /// `TcpProbe`, whose `graceful_shutdown` is false precisely so they never dial, so deleting
-    /// either call leaves the whole suite green. The room still stops — the delete is the real
-    /// mechanism — and the only symptom is a word in a file: the `stopped` record says `SIGTERM`
+    /// either call leaves the whole suite green. The room still stops (the delete is the real
+    /// mechanism) and the only symptom is a word in a file: the `stopped` record says `SIGTERM`
     /// where it should say `admin request`.
     ///
     /// That word is the reason this exists. A redeploy was the one teardown that skipped the ask,
     /// so the most operator-driven action in the system read as an anonymous signal while an idle
-    /// reap — which nobody performs — read as an admin request. Exactly backwards, and invisible
+    /// reap (which nobody performs) read as an admin request. Exactly backwards, and invisible
     /// from anywhere but the journal.
     ///
     /// The ordering is asserted too. Asking after the delete would be a request racing a SIGTERM
@@ -1625,7 +1625,7 @@ mod db_tests {
             orchestrator: Orchestrator::assume_leader(),
             pahoa_image: "pahoa:test",
             // The fallback on purpose: these tests have no room to dial, and it is the probe whose
-            // `request_shutdown` refuses -- so a stop here takes exactly the degrade path a room on
+            // `request_shutdown` refuses, so a stop here takes exactly the degrade path a room on
             // an old image would.
             probe: &puna_core::probe::TcpProbe,
             room_route: &Route::Public,
@@ -1689,14 +1689,14 @@ mod db_tests {
 
     /// A refused address is PACED, and the pacing is the point.
     ///
-    /// Landing the room back in `idle` would be the obvious spelling — it keeps its objects gone
+    /// Landing the room back in `idle` would be the obvious spelling: it keeps its objects gone
     /// and the next pass allocates a different pair, which is exactly what should happen. It is
     /// also what `plan::converging` counts, so the next pass is three seconds away and each one
     /// quarantines another pair. One contested port would take the whole range inside a couple of
     /// hours and put every other room into exhaustion.
     ///
     /// So this asserts the room is `failed` with a `retry_after`, which is the same "keep trying,
-    /// paced" the backoff has always meant — and that the pair it could not have is quarantined
+    /// paced" the backoff has always meant, and that the pair it could not have is quarantined
     /// rather than handed straight back.
     #[tokio::test]
     async fn a_refused_address_paces_the_room_rather_than_retrying_at_the_convergence_cadence() {
@@ -1765,7 +1765,7 @@ mod db_tests {
 
     /// A refusal that is not about the port must NOT spend one.
     ///
-    /// `no_pool`, a missing `lb-pool` label, a wrong sharing key — all rendered identically for
+    /// `no_pool`, a missing `lb-pool` label, a wrong sharing key: all rendered identically for
     /// every room by `spec::service`, so they are never one room's problem. Quarantining here would
     /// have every room in the namespace burn a pair an hour until the range drained, with nothing
     /// that was going to start starting: a configuration mistake laundered into port exhaustion,
@@ -1886,7 +1886,7 @@ mod db_tests {
 
     /// **The fail-closed rule, end to end.** A per-slot room with a slot that has no password would
     /// render a map that locks that player out, so the Secret builder refuses and the room lands in
-    /// `failed` with the slots named -- rather than starting and quietly turning a player away.
+    /// `failed` with the slots named, rather than starting and quietly turning a player away.
     #[tokio::test]
     async fn an_incomplete_slot_password_map_fails_the_room_rather_than_starting_it() {
         testdb::with_db(|pool| async move {
@@ -1993,8 +1993,8 @@ mod db_tests {
 
             // **Going idle is not an error, and `last_error` is where the page reads one from.**
             // This used to receive the reason the room went idle, so an ordinary stop rendered a
-            // red line saying the room stopped underneath a line already saying it is not running
-            // -- and told every `/status` consumer the room had errored. The reason lives in
+            // red line saying the room stopped underneath a line already saying it is not running,
+            // and told every `/status` consumer the room had errored. The reason lives in
             // `room_events` and the log; this column is for genuine failures, which `fail()` owns.
             assert_eq!(
                 observed.last_error, None,
@@ -2005,7 +2005,7 @@ mod db_tests {
     }
 
     /// Deletion: the objects go, the directory moves to the trash, the row goes, and the pair is
-    /// released -- in that order, so a crash leaves something recoverable.
+    /// released, in that order, so a crash leaves something recoverable.
     #[tokio::test]
     async fn deleting_a_room_trashes_its_directory_and_releases_its_pair() {
         testdb::with_db(|pool| async move {
@@ -2057,7 +2057,7 @@ mod db_tests {
                 "the directory is recoverable from the trash, not destroyed"
             );
 
-            // The pair is free again -- released by the FK's ON DELETE SET NULL -- and its place in
+            // The pair is free again (released by the FK's ON DELETE SET NULL) and its place in
             // the LRU order is untouched, so it is not handed out ahead of never-used pairs.
             #[derive(diesel::QueryableByName)]
             struct Row {
@@ -2134,7 +2134,7 @@ mod db_tests {
 
     /// **The one catastrophic-and-silent failure in M17.** A redeploy is a request, so it has to be
     /// consumed by the step that acts on it. Left set, the planner sees it again on the very next
-    /// tick and recreates the room again — forever, with no error anywhere, presenting only as
+    /// tick and recreates the room again, forever, with no error anywhere, presenting only as
     /// players being disconnected every thirty seconds for reasons nothing in Puna can explain.
     #[tokio::test]
     async fn a_redeploy_request_is_consumed_by_the_recreate_it_causes() {
@@ -2232,7 +2232,7 @@ mod db_tests {
     }
 
     /// **M10c, half one.** A room entering `failed` takes its Deployment with it. Left in place it
-    /// crashloops for the whole backoff against a spec nothing will use — and it makes the obvious
+    /// crashloops for the whole backoff against a spec nothing will use, and it makes the obvious
     /// operator reflex look broken, because `kubectl delete pod` is answered by the Deployment
     /// putting the pod straight back.
     #[tokio::test]
@@ -2297,14 +2297,14 @@ mod db_tests {
         .await;
     }
 
-    /// **M10c, half two — the drift guard.** The backoff interrupt compares the hash `start`
+    /// **M10c, half two: the drift guard.** The backoff interrupt compares the hash `start`
     /// recorded against the hash `desired_spec_hash` recomputes, so those two renderings agreeing is
     /// **Starting a room clears the stale answer to "what would it render to now".**
     ///
     /// `desired_spec_hash` is written by the hourly lane and `spec_hash` by every start, so after a
     /// recreate the second moves and the first does not. Left in place, the admin table compares
     /// them, finds them different, and reports spec drift on the one room that was *just* brought
-    /// exactly up to date — for up to an hour, and most visibly right after somebody pressed
+    /// exactly up to date, for up to an hour, and most visibly right after somebody pressed
     /// Restart to fix drift. NULL is "not computed yet", which renders as no drift.
     #[tokio::test]
     async fn starting_a_room_clears_the_stale_desired_spec_hash() {
@@ -2362,7 +2362,7 @@ mod db_tests {
     }
 
     /// the entire property. If they ever disagreed for a room nobody had touched, every failed room
-    /// would retry on every tick and the backoff would be gone — silently, because a retrying room
+    /// would retry on every tick and the backoff would be gone, silently, because a retrying room
     /// looks like a room being fixed.
     #[tokio::test]
     async fn the_recomputed_spec_hash_matches_the_one_start_recorded() {
@@ -2481,7 +2481,7 @@ mod reclaim_tests {
     ///
     /// The victim is the one who will be surprised: every patch its players have already downloaded
     /// carries an address that now belongs to somebody else. The reservation is a weak claim by
-    /// design, and this is what keeps its expiry from being silent — the room page maps this event
+    /// design, and this is what keeps its expiry from being silent: the room page maps this event
     /// kind to a sentence, so "why does my client connect to another room" has an answer.
     #[tokio::test]
     async fn reclaiming_a_port_is_recorded_against_the_room_that_lost_it() {
@@ -2593,7 +2593,7 @@ mod reclaim_tests {
             let taker_events = testdb::event_kinds(&mut conn, newcomer).await;
             assert!(!taker_events.contains(&"port_reclaimed".to_string()));
 
-            // The victim's room and its state directory are untouched -- losing a port must never
+            // The victim's room and its state directory are untouched: losing a port must never
             // mean losing a room.
             let observed = testdb::observed(&mut conn, idle)
                 .await

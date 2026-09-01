@@ -5,8 +5,8 @@
 //!
 //! ## The two probes answer different questions, on purpose
 //!
-//! `/healthz` is "this process is alive". It is deliberately true for a **parked** replica -- one
-//! that lost the leader election and is waiting -- because restarting it would achieve nothing and
+//! `/healthz` is "this process is alive". It is deliberately true for a **parked** replica (one
+//! that lost the leader election and is waiting) because restarting it would achieve nothing and
 //! a rollout would then crashloop the incoming pod while the outgoing one still held the lock.
 //!
 //! `/readyz` is "this process is leading and reconciling", which is `leader && last tick within

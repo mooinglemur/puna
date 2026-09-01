@@ -4,10 +4,10 @@
 //!
 //! A Service cannot express a port range, which is the fact that makes an orchestrator necessary at
 //! all: something has to create one Service per room at runtime. Cilium's `sharing-key` is what lets
-//! hundreds of them share one public address as long as their ports stay distinct — measured at 300
+//! hundreds of them share one public address as long as their ports stay distinct: measured at 300
 //! Services on one key, all landing on the same IP.
 //!
-//! **The failure mode is silent, and every annotation here is aimed at it** — but not in the way
+//! **The failure mode is silent, and every annotation here is aimed at it**, but not in the way
 //! this comment said until 2026-08-22, and the difference decides which of Puna's guards can fire.
 //!
 //! Cilium's documentation says conflicting Services "will be allocated different IPs", and that
@@ -15,7 +15,7 @@
 //! `satisfyService` in `operator/pkg/lbipam/lbipam.go` branches on whether the Service requested a
 //! specific address: the "different IPs" behavior is the *generic* branch, which falls through to
 //! allocating a fresh one. Every room Service here sets `lbipam.cilium.io/ips`, so every room takes
-//! the *specific* branch — which on conflict logs
+//! the *specific* branch, which on conflict logs
 //! `already_allocated_incompatible_service`, sets `IPAMRequestSatisfied=False`, and `continue`s
 //! **with no address at all.**
 //!
@@ -25,7 +25,7 @@
 //!     behind it cannot fire for a port conflict. The room lands in `AwaitingAddress` instead and
 //!     re-requests the same conflicting port every tick, forever, with nothing counting it. The
 //!     mismatch machinery is kept because a differing address arriving by some other route is still
-//!     worth refusing to serve — just do not rely on it for this.
+//!     worth refusing to serve, but do not rely on it for this.
 //!   * **The read-back cannot validate `PUNA_LB_IP` itself.** Both sides of that comparison derive
 //!     from the same value, so pointing it at a different pool address is honored by Cilium and
 //!     passes the check. That is structural rather than an oversight, and is covered by an alert on
@@ -39,7 +39,7 @@
 //!   * **`sharing-cross-namespace`** must be on *both* sides. The lobby's Gateway already carries
 //!     `"*"`; without it here, sharing simply does not happen across the namespace boundary.
 //!   * **`allocateLoadBalancerNodePorts: false`**. The default allocates a NodePort per port, and the
-//!     range holds 2768 — two per room means it runs out at around 1400 rooms, on a design whose
+//!     range holds 2768, so two per room means it runs out at around 1400 rooms, on a design whose
 //!     port ranges allow 5000.
 use std::collections::BTreeMap;
 
@@ -142,7 +142,7 @@ pub fn secret(spec: &SecretSpec, site: &Site) -> Secret {
 ///
 /// **`blockOwnerDeletion` is deliberately omitted.** Setting it triggers the
 /// `OwnerReferencesPermissionEnforcement` admission plugin, which checks for `update` on the owner's
-/// `finalizers` subresource — a verb the orchestrator's Role does not grant and should not.
+/// `finalizers` subresource, a verb the orchestrator's Role does not grant and should not.
 fn owner_reference(owner: &OwnerRef) -> OwnerReference {
     OwnerReference {
         api_version: "apps/v1".to_string(),

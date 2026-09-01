@@ -10,7 +10,7 @@
 //! Three rules, each learned from a different way this can go wrong:
 //!
 //!   * **Orphaned Deployments take two strikes and two minutes.** The row is always committed
-//!     before the Deployment is created, so an orphan is real — *except* on a fresh leader's first
+//!     before the Deployment is created, so an orphan is real, *except* on a fresh leader's first
 //!     tick, which can read a stale list. Requiring the same object on two consecutive ticks makes
 //!     that impossible to act on.
 //!   * **Only objects whose room has no row at all are collected.** An object whose owner is gone
@@ -45,8 +45,8 @@ const ORPHAN_MIN_AGE: Duration = Duration::from_secs(120);
 
 /// A room's Secret is re-applied at least this often even when nothing has changed.
 ///
-/// The contract is `secret_synced_at IS NULL` meaning "needs a re-apply" — set by whatever changes
-/// a credential — and this interval is the backstop for a writer that forgot, not the mechanism.
+/// The contract is `secret_synced_at IS NULL` meaning "needs a re-apply" (set by whatever changes
+/// a credential) and this interval is the backstop for a writer that forgot, not the mechanism.
 const SECRET_REFRESH: chrono::TimeDelta = chrono::TimeDelta::hours(1);
 
 /// How often the expensive lane runs.
@@ -136,7 +136,7 @@ impl Sweeper {
 
     /// Deployments Puna manages whose room does not exist.
     ///
-    /// Returns `(deleted, pending)` — pending being the ones on their first strike, which is worth
+    /// Returns `(deleted, pending)`, pending being the ones on their first strike, which is worth
     /// reporting because a number that stays above zero means the rule is not converging.
     async fn collect_orphans(
         &self,
@@ -285,7 +285,7 @@ impl Sweeper {
         };
 
         // Counted, never removed. A generation is content-addressed and shared, so reclaiming one
-        // is an admin action with a listing in front of it -- not something a sweep decides.
+        // is an admin action with a listing in front of it, not something a sweep decides.
         match reclaimable_generations(conn, layout).await {
             Ok(0) => {}
             Ok(count) => tracing::info!(
@@ -304,13 +304,13 @@ impl Sweeper {
 /// Recompute what each live room's spec **would** render to now, for the admin table's drift column.
 ///
 /// **On the hourly lane, and that is the whole design decision.** Rendering a spec costs four
-/// queries per room — the row, its secrets, its slots, its reservation — which is why `reconcile`
+/// queries per room (the row, its secrets, its slots, its reservation) which is why `reconcile`
 /// pays it only for failed rooms whose decision it can change. Paying it every thirty seconds for
 /// every room would put a per-room cost on every pass to answer a question only a human reading an
 /// admin page ever asks, and that page does not need drift detected within thirty seconds.
 ///
-/// Nothing here decides anything. **Drift never causes a restart** — an image bump lands on the
-/// whole environment at once and a room mid-session is not something a `git push` may interrupt —
+/// Nothing here decides anything. **Drift never causes a restart**: an image bump lands on the
+/// whole environment at once and a room mid-session is not something a `git push` may interrupt,
 /// so this column is read by the admin table and by nothing in the planner.
 ///
 /// Only live rooms: an idle room is running nothing, so it has nothing to disagree with, and it
@@ -420,7 +420,7 @@ async fn room_ids(conn: &mut AsyncPgConnection) -> Result<HashSet<RoomId>, diese
 /// Two implementations of this would be two chances to get that ordering right.
 ///
 /// Uses the same fail-closed builder the start path does. A room whose slot passwords have gone
-/// incomplete keeps the Secret it has rather than being handed one that locks a player out --
+/// incomplete keeps the Secret it has rather than being handed one that locks a player out:
 /// under pahoa's rule a map with a hole in it refuses the missing slot, and an empty one refuses
 /// everybody.
 #[allow(clippy::too_many_arguments)]
@@ -681,7 +681,7 @@ mod db_tests {
 
     /// The hourly lane fills the column in for live rooms and leaves idle ones alone.
     ///
-    /// An idle room is running nothing, so it has nothing to disagree with — and computing a
+    /// An idle room is running nothing, so it has nothing to disagree with, and computing a
     /// desired hash for one would cost four queries to answer a question with no meaning.
     #[tokio::test]
     async fn only_live_rooms_get_a_desired_spec_hash() {
@@ -716,7 +716,7 @@ mod db_tests {
 
             // **Both rooms get a reservation, and that is what makes this test prove anything.**
             // A room with no port cannot be rendered against at all, so an idle room without one
-            // would come back `None` whatever this function did -- the assertion below would pass
+            // would come back `None` whatever this function did: the assertion below would pass
             // against a version that ignored the state filter entirely. Mutation-checked: with a
             // port on each, widening the query to include `idle` fails this.
             for room in [live, idle] {

@@ -1,14 +1,14 @@
 //! The state machine, as a pure function.
 //!
-//! `(rooms, cluster, now) -> actions`. No database, no filesystem, no cluster, no clock — every
+//! `(rooms, cluster, now) -> actions`. No database, no filesystem, no cluster, no clock: every
 //! input is an argument, so every transition in §3's table is a line in a test rather than a
 //! sequence somebody has to reproduce against a live room.
 //!
 //! ## Deciding and doing are separated on purpose
 //!
 //! This module decides; [`Step`] is what it decides; the applier does. The value of the split is
-//! that the interesting failures here are all *decisions* — starting a room that should be idle,
-//! marking a room running while its pod is gone, reclaiming a port from under connected players —
+//! that the interesting failures here are all *decisions* (starting a room that should be idle,
+//! marking a room running while its pod is gone, reclaiming a port from under connected players)
 //! and none of them need I/O to be wrong in. What it costs is that a `Step` is a promise the
 //! applier has to keep, so each variant documents what "done" means for it.
 //!
@@ -16,7 +16,7 @@
 //!
 //! **The integrity check.** `provisioned_at` set with the directory missing is a filesystem
 //! property, and folding it in would mean handing the planner a third view of the world whose
-//! *absence* — a `readdir` that failed — would read as every room being faulted at once. It stays
+//! *absence* (a `readdir` that failed) would read as every room being faulted at once. It stays
 //! in [`crate::reconcile`], where a failed read is a failed read.
 //!
 //! **Orphans and stale Secrets.** Both need memory across ticks (an orphan is only an orphan on the
@@ -38,7 +38,7 @@ const START_DEADLINE: Duration = Duration::seconds(300);
 /// How long a room may sit in `stopping` before the graceful path is abandoned.
 ///
 /// Twice `terminationGracePeriodSeconds`. A pod still present after that did not go down when
-/// asked, so the Deployment is deleted rather than waited on indefinitely — pahoa holds an
+/// asked, so the Deployment is deleted rather than waited on indefinitely: pahoa holds an
 /// exclusive `flock` on the save directory, so a room that will not exit is a room that cannot
 /// restart.
 const STOP_DEADLINE: Duration = Duration::seconds(90);
@@ -47,7 +47,7 @@ const STOP_DEADLINE: Duration = Duration::seconds(90);
 ///
 /// The snapshot is read with `resourceVersion=0`, which is the watch cache and can lag. Without
 /// this a room whose Deployment was created moments ago would be declared vanished and dropped to
-/// `idle`, then started again — a loop that costs a room its pod every tick and looks like a
+/// `idle`, then started again: a loop that costs a room its pod every tick and looks like a
 /// scheduling problem.
 const VANISH_GRACE: Duration = Duration::seconds(60);
 
@@ -58,7 +58,7 @@ const DEGRADED_SWEEPS: i32 = 3;
 ///
 /// A projection, not [`puna_core::model::room::Room`]: the planner reads observed columns the room
 /// page has no business rendering, and deliberately **not** the columns it would be wrong to decide
-/// on. `base_port` and `deployment_uid` are absent for that reason — they are things the applier
+/// on. `base_port` and `deployment_uid` are absent for that reason: they are things the applier
 /// needs, and a planner that could see them could branch on them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoomView {
@@ -73,7 +73,7 @@ pub struct RoomView {
     pub spec_hash: Option<String>,
     /// What the room's spec would hash to **if it were rendered right now**, where that is known.
     ///
-    /// Computed by the caller only for rooms whose decision it can change — today that is `failed`
+    /// Computed by the caller only for rooms whose decision it can change: today that is `failed`
     /// rooms still inside their backoff, and nothing else. Rendering it costs a room's secrets, its
     /// slot list and its reservation, so paying it for every room on every tick would buy a
     /// comparison exactly one state acts on.
@@ -96,7 +96,7 @@ pub struct RoomView {
     /// running its freshly-rendered spec clears it.
     pub redeploy_requested_at: Option<DateTime<Utc>>,
 
-    /// When a client last spoke in this room, as pahoa reported it — falling back to when the room
+    /// When a client last spoke in this room, as pahoa reported it, falling back to when the room
     /// started, for one that nobody has ever joined.
     ///
     /// **`None` means the idle question cannot be answered**, and the reaper refuses to act on it.
@@ -118,14 +118,14 @@ impl RoomView {
     ///     wants rooms up until somebody stops them says so.
     ///   * **The room is not pinned.** An administrator said this one stays up.
     ///   * **The idle question is answerable at all.** `idle_since` is `None` when the probe could
-    ///     not tell — an unreachable room, a stale reading, a tcp-fallback probe that reports no
+    ///     not tell: an unreachable room, a stale reading, a tcp-fallback probe that reports no
     ///     activity at all. **A room Puna cannot see is not a room Puna may reap**, because a
     ///     failed probe and an empty room produce the same silence, and only one of them should
     ///     cost somebody their session.
     ///   * **And then, finally, the clock.**
     ///
     /// The order matters only for reading; the compiler shortcuts either way. What matters is that
-    /// the third is a refusal rather than a default — the same null-is-not-zero rule the probe
+    /// the third is a refusal rather than a default, the same null-is-not-zero rule the probe
     /// columns follow, applied to the one decision that acts on them.
     pub fn should_reap(&self, now: DateTime<Utc>, idle_timeout: Duration) -> bool {
         // `<= zero` rather than `== zero`, so a nonsensical negative disables the reaper instead of
@@ -143,20 +143,20 @@ impl RoomView {
 /// Why a room is being put back to `idle`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IdleReason {
-    /// The Deployment is gone and Puna did not remove it — a hand-deleted Deployment, a drained
+    /// The Deployment is gone and Puna did not remove it: a hand-deleted Deployment, a drained
     /// node whose pod never came back, a namespace someone tidied.
     DeploymentGone,
     /// The stop Puna asked for finished.
     StopComplete,
     // A spec change is deliberately not a reason here: it is [`Step::Recreate`], which lands the
     // room in `idle` itself. One step, so the applier cannot delete the Deployment and then fail to
-    // move the row -- which would leave a room advertising a pod that is gone.
+    // move the row, which would leave a room advertising a pod that is gone.
 }
 
 /// How many rooms one full pass may take down for being idle.
 ///
-/// **One**, and not configurable, unlike the recreate cap. A reap is never urgent — the rooms it
-/// acts on are by definition ones nobody is using — so there is no situation where draining the
+/// **One**, and not configurable, unlike the recreate cap. A reap is never urgent (the rooms it
+/// acts on are by definition ones nobody is using) so there is no situation where draining the
 /// queue faster is worth the risk of a fleet coming down at once. A hundred rooms that all went
 /// quiet overnight take a hundred intervals to reap, which is fifty minutes at the default and
 /// costs nobody anything.
@@ -170,7 +170,7 @@ pub const MAX_REAPS_PER_TICK: usize = 1;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
     /// Materialize the room's state directory, then set `provisioned_at` and `state = 'idle'`.
-    /// In that order — the reverse is what produces an `integrity_fault`.
+    /// In that order: the reverse is what produces an `integrity_fault`.
     Provision,
 
     /// Allocate a port pair and create the objects: Secret, Deployment, own the Secret, Service,
@@ -183,7 +183,7 @@ pub enum Step {
     /// Not a rolling update, and it cannot be one: the port is in the args *and* the Service, and
     /// pahoa holds an exclusive `flock` on the save directory, so a surge pod would crashloop until
     /// the progress deadline expired. Going through `idle` rather than straight to a recreate is
-    /// what lets the next tick take the ordinary [`Step::Start`] path — one code path for creating
+    /// what lets the next tick take the ordinary [`Step::Start`] path: one code path for creating
     /// a room's objects, whatever the reason.
     Recreate,
 
@@ -201,8 +201,8 @@ pub enum Step {
     /// reclaimable. Degraded is a report, not a teardown.
     MarkDegraded,
 
-    /// Put the room back to `idle`, clearing `advertised_*` and **never touching the reservation**
-    /// — a room comes back on the same port, which is the requirement the whole reservation table
+    /// Put the room back to `idle`, clearing `advertised_*` and **never touching the reservation**:
+    /// a room comes back on the same port, which is the requirement the whole reservation table
     /// exists for.
     MarkIdle(IdleReason),
 
@@ -225,8 +225,8 @@ pub enum Step {
     ///
     /// **It writes `desired_state = 'stopped'` rather than tearing anything down**, and the
     /// ordinary [`Step::Stop`] path does the work on a following pass. Two consequences, both
-    /// wanted. A reaped room is afterwards *indistinguishable from one somebody stopped* — same
-    /// page, same Start button, same port, same save — which is exactly right, because to a player
+    /// wanted. A reaped room is afterwards *indistinguishable from one somebody stopped* (same
+    /// page, same Start button, same port, same save) which is exactly right, because to a player
     /// that is what happened. And the teardown stays in one place, so there is no second code path
     /// that stops a room and can drift from the first.
     ///
@@ -239,12 +239,12 @@ impl Step {
     /// Whether taking this step leaves the room somewhere it still has to move on from.
     ///
     /// This is what tells the loop to look again in seconds rather than at the next full pass, and
-    /// it is asked of the steps just *applied* — because the room views were read before they ran.
+    /// it is asked of the steps just *applied*, because the room views were read before they ran.
     /// A pass that recreates a room read it as `running`; by the time the pass ends it is `idle`
     /// with a Deployment draining, and nothing in the views says so.
     ///
     /// Answering `false` where it should be `true` costs the latency this whole mechanism exists to
-    /// remove. Answering `true` where it should be `false` costs cheap passes that plan nothing —
+    /// remove. Answering `true` where it should be `false` costs cheap passes that plan nothing,
     /// so the doubtful cases go to `true`.
     pub fn leaves_work_pending(&self) -> bool {
         match self {
@@ -277,7 +277,7 @@ impl Step {
 ///
 /// Deliberately a property of the world rather than of the last pass, so a restarted orchestrator
 /// picks the short cadence back up without having to remember anything. The one thing it cannot see
-/// is a transition this pass just caused — [`Step::leaves_work_pending`] covers that.
+/// is a transition this pass just caused. [`Step::leaves_work_pending`] covers that.
 pub fn converging(rooms: &[RoomView], cluster: &ClusterSnapshot) -> usize {
     rooms
         .iter()
@@ -323,7 +323,7 @@ pub struct Action {
 ///
 /// The loop runs a short **convergence** pass while a room is mid-transition, so a restart does not
 /// spend most of its downtime waiting for the next full pass. Everything a convergence pass does is
-/// a subset of a full one — same planner, same applier, same idempotence — but two steps are barred
+/// a subset of a full one (same planner, same applier, same idempotence) but two steps are barred
 /// from it, and both bars are statements about the state machine rather than about scheduling,
 /// which is why they live here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -336,7 +336,7 @@ pub enum TickKind {
 
 impl TickKind {
     /// The metric label. Must match `puna_core::metrics::TICK_KINDS`, which is what `init` seeds to
-    /// zero — a label written here and absent there renders as missing data rather than as a zero,
+    /// zero: a label written here and absent there renders as missing data rather than as a zero,
     /// and "the loop has stopped converging" would look exactly like "nothing has scraped yet".
     pub fn as_str(self) -> &'static str {
         match self {
@@ -369,18 +369,18 @@ pub fn plan(
         //
         //   * `Recreate` is PACED, and its pace is expressed as a per-pass cap. Allowing it here
         //     would turn "one room per reconcile interval" into "one room every few seconds" and
-        //     tear through a fleet-wide restart queue -- the exact stampede the cap exists to
+        //     tear through a fleet-wide restart queue: the exact stampede the cap exists to
         //     prevent, reintroduced by the mechanism meant to make one restart quicker.
-        //   * `Reap` is paced the same way `Recreate` is -- one per pass -- and for the same
+        //   * `Reap` is paced the same way `Recreate` is (one per pass) and for the same
         //     reason: at the convergence cadence a fleet that has gone quiet overnight would come
         //     down a room every few seconds instead of one per interval. The threshold itself does
         //     not care how often it is evaluated, but the CAP does, and the cap is the pacing.
         //   * `NotReady` COUNTS PASSES. `not_ready_sweeps` reaching DEGRADED_SWEEPS is what calls a
         //     room degraded, so counting convergence passes would declare a room degraded roughly
-        //     ten times sooner -- a threshold silently redefined by a scheduling change.
+        //     ten times sooner: a threshold silently redefined by a scheduling change.
         //
         // Nothing is lost by deferring either: the next full pass sees the same world. The rule for
-        // anything added later is the one these two fail -- **a step whose meaning depends on how
+        // anything added later is the one these two fail: **a step whose meaning depends on how
         // often it is taken belongs to the full pass.**
         .filter(|(_, step)| {
             kind == TickKind::Reconcile
@@ -390,13 +390,13 @@ pub fn plan(
 
     // **The cap exists because nothing else bounds this.** Applying is a sequential loop with no
     // throttle, and a foreground delete returns as soon as the API server accepts it rather than
-    // when the pod is gone -- so an uncapped pass would stop every room it planned for inside one
+    // when the pod is gone, so an uncapped pass would stop every room it planned for inside one
     // tick and bring them all back together: one simultaneous final save and restore per room, on
     // one shared CephFS volume. Deferring costs nothing, because the loop is level-triggered and
     // a room not recreated this tick is recreated on the next.
     //
     // Chosen oldest-request-first so a rollout drains in the order people asked for it and a room
-    // cannot be starved by later requests arriving. Everything else keeps the caller's ordering --
+    // cannot be starved by later requests arriving. Everything else keeps the caller's ordering:
     // the tick reads rooms by `created_at`, and reordering the whole pass to cap one step would
     // make the sweep's behavior depend on uuids.
     let mut by_age: Vec<usize> = planned
@@ -412,7 +412,7 @@ pub fn plan(
     let mut deferred: Vec<usize> = by_age.into_iter().skip(max_recreates).collect();
 
     // **Reaps are capped separately, at one, and the budgets do not share.** A tick that recreates
-    // a room and reaps another has done one of each, which is the intent -- they are different
+    // a room and reaps another has done one of each, which is the intent: they are different
     // operations on different rooms and neither crowds the other out.
     //
     // Ordered by how long the room has been quiet, so the longest-abandoned goes first and a room
@@ -450,7 +450,7 @@ fn step_for(
     idle_timeout: Duration,
 ) -> Option<Step> {
     // Deletion wins from every state, including `integrity_fault` and `failed`. It is the one
-    // request that must not be blocked by the room being in a bad way -- a room nobody can fix is
+    // request that must not be blocked by the room being in a bad way: a room nobody can fix is
     // precisely a room somebody wants to delete.
     if room.desired == DesiredState::Deleted {
         return Some(Step::Delete);
@@ -464,7 +464,7 @@ fn step_for(
 
         // Never auto-repaired, in any direction. Recreating the directory would replace saved
         // progress with an empty room and look like a successful start, so the only way out is an
-        // operator -- or the deletion handled above.
+        // operator, or the deletion handled above.
         RoomState::IntegrityFault => None,
 
         // Orchestrator-owned and transient: whatever is mid-flight owns it, and the row moves when
@@ -475,12 +475,12 @@ fn step_for(
         RoomState::Idle => match room.desired {
             // **Not while the last Deployment is still going away.** A recreate drops the room to
             // `idle` the moment the API server accepts the delete, and under foreground propagation
-            // the object outlives that call for as long as the pod takes to drain -- up to the full
+            // the object outlives that call for as long as the pod takes to drain, up to the full
             // grace period, since pahoa flushes a final save on SIGTERM.
             //
             // Starting inside that window is worse than waiting: the name is still taken, so a
             // create conflicts, and the applier's `get` finds a readable Deployment whose spec hash
-            // matches the one about to be rendered -- so it ADOPTS a dying object and waits for a
+            // matches the one about to be rendered, so it ADOPTS a dying object and waits for a
             // ready replica that can never arrive, until START_DEADLINE five minutes later.
             //
             // Nothing else needs to happen here: the object's disappearance is what makes the room
@@ -491,7 +491,7 @@ fn step_for(
             // idle teardown never touches the directory or the reservation.
             // At rest, holding its port. Nothing to do, and specifically nothing to clean up:
             // idle teardown never touches the directory or the reservation. `closed` rests here
-            // too -- it differs from `stopped` only in who may ask for it to run again, which is
+            // too: it differs from `stopped` only in who may ask for it to run again, which is
             // the web tier's question and not this one's.
             DesiredState::Stopped | DesiredState::Closed => None,
             DesiredState::Deleted => unreachable!("handled above"),
@@ -564,13 +564,13 @@ fn step_for(
                 // **Somebody asked.** First among the arms that see a Deployment, because a
                 // redeploy is the one instruction here that a human issued about this room
                 // specifically: it outranks re-affirming `running` and outranks waiting out a
-                // start. It does NOT outrank `Stop` or `Delete`, both handled above -- a room
+                // start. It does NOT outrank `Stop` or `Delete`, both handled above: a room
                 // being torn down has no use for a restart.
                 Some(_) if room.redeploy_requested_at.is_some() => Some(Step::Recreate),
 
                 // **Quiet for long enough.** Deliberately BELOW the redeploy arm: a redeploy is a
                 // request somebody made about this room, it consumes itself in one pass, and
-                // reaping first would leave that request pending on a stopped room -- to fire the
+                // reaping first would leave that request pending on a stopped room, to fire the
                 // moment anybody started it again, bouncing the room out from under them. Let the
                 // redeploy happen; the room is still idle on the next tick.
                 //
@@ -582,14 +582,14 @@ fn step_for(
                     Some(Step::Reap)
                 }
 
-                // The running spec is not the one the row describes -- a new image, a changed
+                // The running spec is not the one the row describes: a new image, a changed
                 // port, or a `slot_auth` change, which reaches pahoa through the Secret and moves
                 // nothing else in the pod. A hash we cannot match at all (`None` on the row) is the
                 // crash window in §7 step 3, and is treated the same way: the row is authoritative
                 // and adoption would mean trusting a label to prove provenance.
                 //
                 // Note what is NOT here: a comparison against `desired_spec_hash`. Drift from the
-                // rendered spec is reported, never acted on -- see `redeploy_requested_at`.
+                // rendered spec is reported, never acted on. See `redeploy_requested_at`.
                 Some(cluster) if cluster.spec_hash != room.spec_hash => Some(Step::Recreate),
 
                 Some(cluster) if cluster.ready_replicas >= 1 => {
@@ -795,7 +795,7 @@ mod tests {
 
     /// **An idle room does not start on top of a Deployment that is still draining.**
     ///
-    /// The row above — idle, wanting to run, with a leftover Deployment — plans `Start` on purpose,
+    /// The row above (idle, wanting to run, with a leftover Deployment) plans `Start` on purpose,
     /// because `Start` is idempotent and reconciles the spec itself. That reasoning holds for an
     /// object that is *staying*; it is exactly wrong for one that has been accepted for deletion.
     /// The name is still taken, so nothing can be created under it, and the applier's read finds a
@@ -830,7 +830,7 @@ mod tests {
     /// running two cadences. A recreate is paced *per pass*, so allowing it at the short cadence
     /// turns "one room per reconcile interval" into one every few seconds and tears through a
     /// fleet-wide restart queue. `NotReady` increments `not_ready_sweeps`, and `DEGRADED_SWEEPS` is
-    /// a count of passes — so a room would be called degraded about ten times sooner.
+    /// a count of passes, so a room would be called degraded about ten times sooner.
     #[test]
     fn a_convergence_pass_takes_neither_of_the_two_steps_that_count_passes() {
         let mut drifting = view(RoomState::Running, DesiredState::Running);
@@ -935,8 +935,8 @@ mod tests {
     /// The label vocabulary is one vocabulary, not two that happen to agree today.
     ///
     /// `metrics::init` seeds `TICK_KINDS` to zero so a cold orchestrator renders both series. A
-    /// kind written here and missing from that list would render as *no data* instead of as a zero
-    /// — and "the loop has stopped converging" would be indistinguishable from "nothing has been
+    /// kind written here and missing from that list would render as *no data* instead of as a zero,
+    /// and "the loop has stopped converging" would be indistinguishable from "nothing has been
     /// scraped yet", which is precisely the ambiguity the seeding exists to remove.
     #[test]
     fn every_tick_kind_is_a_label_the_registry_seeds() {
@@ -954,11 +954,11 @@ mod tests {
         );
     }
 
-    /// **To the reconciler, `closed` IS `stopped`** — and the arm that carries that out is an
+    /// **To the reconciler, `closed` IS `stopped`**, and the arm that carries that out is an
     /// equality check the compiler cannot make exhaustive.
     ///
     /// Adding a variant to `DesiredState` produced two errors in this file and left the third
-    /// site — `if room.desired == DesiredState::Stopped` in the live-states arm — compiling
+    /// site (`if room.desired == DesiredState::Stopped` in the live-states arm) compiling
     /// perfectly and silently wrong. That is the one that matters: a running room asked to close
     /// would have kept running indefinitely while its page said closed, with nothing logged and
     /// nothing to look at.
@@ -1029,7 +1029,7 @@ mod tests {
     ///
     /// The snapshot comes from the watch cache (`resourceVersion=0`), so a Deployment created
     /// seconds ago can be absent from it. Believing that immediately would drop the room to `idle`
-    /// and start it again every tick — a pod destroyed per sweep, looking for all the world like a
+    /// and start it again every tick: a pod destroyed per sweep, looking for all the world like a
     /// scheduling problem.
     #[test]
     fn a_vanished_deployment_is_believed_only_after_the_grace_period() {
@@ -1083,7 +1083,7 @@ mod tests {
     }
 
     /// **The M10c case.** A room pinned at the ten-minute cap keeps waiting after an operator has
-    /// already fixed what broke it — so a spec that renders differently now is what cuts the wait
+    /// already fixed what broke it, so a spec that renders differently now is what cuts the wait
     /// short, because that difference *is* the operator having acted.
     #[test]
     fn a_changed_spec_interrupts_the_backoff() {
@@ -1100,7 +1100,7 @@ mod tests {
         assert_eq!(decide(&room, &snapshot(vec![])), Some(Step::Retry));
 
         // Agreement is not a change, and this is the assertion that stops the interrupt from
-        // becoming an unconditional retry -- which would defeat the backoff entirely.
+        // becoming an unconditional retry, which would defeat the backoff entirely.
         room.desired_spec_hash = Some("what-we-tried".into());
         assert_eq!(decide(&room, &snapshot(vec![])), None);
     }
@@ -1112,7 +1112,7 @@ mod tests {
         let mut room = view(RoomState::Failed, DesiredState::Running);
         room.retry_after = Some(now() + Duration::minutes(10));
 
-        // Not computed -- which is every room the caller did not render, so this must never be read
+        // Not computed, which is every room the caller did not render, so this must never be read
         // as "the spec changed" or every failed room would retry at once.
         room.spec_hash = Some("what-we-tried".into());
         room.desired_spec_hash = None;
@@ -1125,7 +1125,7 @@ mod tests {
     }
 
     /// The interrupt is scoped to `failed`. A room that wants to stay stopped stays stopped, however
-    /// much its spec has moved on -- otherwise a changed image would start rooms nobody asked for.
+    /// much its spec has moved on: otherwise a changed image would start rooms nobody asked for.
     #[test]
     fn a_changed_spec_does_not_start_a_room_that_wants_to_be_stopped() {
         let mut room = view(RoomState::Failed, DesiredState::Stopped);
@@ -1177,8 +1177,8 @@ mod tests {
         assert_eq!(decide(&room, &cluster), Some(Step::Stop));
     }
 
-    /// A `slot_auth` change moves nothing in the pod spec — it rides in the Secret through
-    /// `envFrom` — so the mode is folded into the hash precisely to make this fire.
+    /// A `slot_auth` change moves nothing in the pod spec (it rides in the Secret through
+    /// `envFrom`) so the mode is folded into the hash precisely to make this fire.
     #[test]
     fn a_changed_spec_hash_recreates_from_every_live_state() {
         for state in [RoomState::Starting, RoomState::Running, RoomState::Degraded] {
@@ -1202,7 +1202,7 @@ mod tests {
     ///
     /// An image bump moves `PUNA_PAHOA_IMAGE` for the whole environment at once. If a rendered-spec
     /// disagreement were enough to plan a recreate, that one `git push` would restart every room in
-    /// the environment — including rooms with people in them, at whatever hour it merged. The only
+    /// the environment, including rooms with people in them, at whatever hour it merged. The only
     /// thing that may bounce a running room is somebody asking.
     #[test]
     fn drift_alone_plans_nothing() {
@@ -1276,7 +1276,7 @@ mod tests {
             "the two oldest requests go first, so nobody is starved by later arrivals"
         );
 
-        // The deferred rooms are not lost -- the loop is level-triggered, so the next tick sees
+        // The deferred rooms are not lost: the loop is level-triggered, so the next tick sees
         // them again and they are now the oldest outstanding requests.
         let remaining: Vec<RoomView> = vec![rooms[1].clone(), rooms[3].clone()];
         let actions = plan(
@@ -1392,11 +1392,11 @@ mod tests {
 
     /// **The safety property: inability to observe is not evidence of idleness.**
     ///
-    /// `idle_since` is `None` whenever the question cannot be answered — no probe has succeeded,
+    /// `idle_since` is `None` whenever the question cannot be answered: no probe has succeeded,
     /// the last one is stale, or the probe in use cannot report activity at all. Every one of those
     /// looks exactly like a silent room from the column's side, and only one of them means nobody
     /// is playing. A reaper that read `None` as "very idle" would take down the rooms Puna has lost
-    /// sight of **first**, because it reaps the longest-idle candidate — precisely the rooms whose
+    /// sight of **first**, because it reaps the longest-idle candidate: precisely the rooms whose
     /// players are most likely to still be there and least likely to be reachable for an
     /// explanation.
     #[test]
@@ -1461,8 +1461,8 @@ mod tests {
     ///
     /// The threshold does not care how often it is evaluated, but the one-per-pass cap does: at the
     /// convergence cadence a quiet fleet would come down a room every few seconds rather than one
-    /// per reconcile interval. That is the M17e rule — a step whose meaning depends on how often it
-    /// is taken belongs to the full pass — and this is the third step to fail it.
+    /// per reconcile interval. That is the M17e rule (a step whose meaning depends on how often it
+    /// is taken belongs to the full pass) and this is the third step to fail it.
     #[test]
     fn a_convergence_pass_never_reaps() {
         let rooms = vec![quiet_room(Duration::days(2))];
@@ -1482,7 +1482,7 @@ mod tests {
     /// A redeploy somebody asked for outranks a reap.
     ///
     /// Reaping first would leave the request pending on a stopped room, to fire the moment anybody
-    /// started it again — bouncing the room out from under whoever just opened it. Letting the
+    /// started it again, bouncing the room out from under whoever just opened it. Letting the
     /// redeploy run costs one tick; the room is still quiet on the next.
     #[test]
     fn a_requested_redeploy_outranks_a_reap() {

@@ -7,7 +7,7 @@
 //!
 //! ## No `k8s_openapi` type crosses this boundary, in either direction
 //!
-//! The plan specified the read side that way already — [`RoomDeployment`] carries seven fields
+//! The plan specified the read side that way already: [`RoomDeployment`] carries seven fields
 //! rather than a whole `Deployment`, so [`crate::plan`] stays pure. **This module extends the same
 //! rule to the write side**, which the plan drafted with `k8s_openapi` types: [`RoomSpec`],
 //! [`ServiceSpec`] and [`SecretSpec`] describe a room's objects in Puna's terms, and rendering
@@ -18,7 +18,7 @@
 //!   * `spec::secret` already works this way. It returns a `BTreeMap` of environment variables,
 //!     not a `Secret`, and nothing about it is worse for that.
 //!   * The fake would otherwise have to reach into a `Deployment`'s labels to answer "which room
-//!     is this?", making every lifecycle test depend on the label rendering being right — two
+//!     is this?", making every lifecycle test depend on the label rendering being right: two
 //!     properties tangled into one failure.
 //!   * The manifest is where the cluster's own vocabulary belongs (`ownerReferences`,
 //!     `ipFamilyPolicy`, `sharing-key`), and none of it is a decision the reconciler makes.
@@ -37,7 +37,7 @@ use crate::spec::secret::SecretData;
 /// Every room object is named `mw-<room-id>`.
 ///
 /// 39 characters with a UUID, comfortably inside the 63-character RFC 1035 limit Service names are
-/// held to — and the bare id fits a label *value* untruncated too. So nothing here ever shortens or
+/// held to, and the bare id fits a label *value* untruncated too. So nothing here ever shortens or
 /// hashes an id, which is worth stating because a truncation introduced later would collide
 /// silently rather than fail.
 pub fn object_name(room: RoomId) -> String {
@@ -46,8 +46,8 @@ pub fn object_name(room: RoomId) -> String {
 
 /// What the cluster can go wrong with, classified by what the caller should do about it.
 ///
-/// The classification is the point. §7's rule is that **the tick is the retry** — nothing loops
-/// inside one pass — so an error only has to answer "try again next tick, or stop touching this
+/// The classification is the point. §7's rule is that **the tick is the retry** (nothing loops
+/// inside one pass) so an error only has to answer "try again next tick, or stop touching this
 /// room?".
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ClusterError {
@@ -57,7 +57,7 @@ pub enum ClusterError {
     AlreadyExists { name: String },
 
     // There is deliberately no `NotFound`. A `get` returns `Option`, and a delete of something
-    // already gone is success -- teardown runs every tick until the row is gone, so anything else
+    // already gone is success: teardown runs every tick until the row is gone, so anything else
     // would turn a completed delete into an error that never clears.
     //
     /// `403`, or a `404` on the API group itself: RBAC or a wrong apiVersion. Retrying cannot fix
@@ -96,7 +96,7 @@ pub struct OwnerRef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoomSpec {
     pub room_id: RoomId,
-    /// Covers the spec proper **and `slot_auth`** — the password mode reaches pahoa through the
+    /// Covers the spec proper **and `slot_auth`**: the password mode reaches pahoa through the
     /// Secret via `envFrom`, so it moves nothing in the Deployment and would otherwise never
     /// trigger a recreate. Password *values* stay out, which is what keeps per-slot rotation live.
     pub spec_hash: String,
@@ -107,7 +107,7 @@ pub struct RoomSpec {
     /// Whether to publish the filtered feed. On by default: the pair is reserved either way and
     /// the filtered listener is the same server, so turning it off is the unusual choice.
     pub wants_filtered: bool,
-    /// Every slot in the multidata, groups included — pahoa sizes its outbound budget from
+    /// Every slot in the multidata, groups included: pahoa sizes its outbound budget from
     /// `slot_info.len()`, so the connectable count would under-request memory.
     pub slot_count: i32,
     pub save_interval_secs: i32,
@@ -172,7 +172,7 @@ pub struct RoomDeployment {
     pub name: String,
     pub uid: String,
     /// `None` when the room label is missing or unparseable, which makes it an orphan by
-    /// definition — there is no room row it could belong to.
+    /// definition: there is no room row it could belong to.
     pub room_id: Option<RoomId>,
     pub spec_hash: Option<String>,
     /// The image the room container is **actually** running, as the cluster reports it.
@@ -180,7 +180,7 @@ pub struct RoomDeployment {
     /// Observed rather than remembered, and the distinction is the whole point of surfacing it: the
     /// row already records what Puna believes it started the room with, and the two disagree
     /// exactly when something has gone wrong. `None` means the container could not be identified by
-    /// name -- see [`crate::spec::ROOM_CONTAINER`] -- which is "cannot tell", never "no image".
+    /// name (see [`crate::spec::ROOM_CONTAINER`]) which is "cannot tell", never "no image".
     pub image: Option<String>,
     pub replicas: i32,
     pub ready_replicas: i32,
@@ -189,13 +189,13 @@ pub struct RoomDeployment {
     /// finalizers, which under foreground propagation means waiting on its pod to drain.
     ///
     /// Load-bearing rather than informational, because a delete **returns as soon as the API server
-    /// accepts it** — foreground sets the propagation policy, it does not block. So there is a
+    /// accepts it**: foreground sets the propagation policy, it does not block. So there is a
     /// window, as long as the pod's grace period, in which the Deployment is still readable and is
     /// nobody's Deployment: it will not come back, and a new one cannot take its place while it
     /// holds the name.
     ///
     /// Without this flag a start landing in that window sees an ordinary object with a matching
-    /// spec hash and **adopts it** — recording a dying object's uid and waiting for a ready replica
+    /// spec hash and **adopts it**, recording a dying object's uid and waiting for a ready replica
     /// that can never arrive, until the start deadline five minutes later. That is strictly worse
     /// than waiting, so both the planner and [`crate::apply::ensure_room_running`] check it.
     pub deleting: bool,
@@ -209,15 +209,15 @@ pub struct RoomService {
     /// `status.loadBalancer.ingress[0].ip`, once IPAM has answered.
     ///
     /// **`None` alone is ambiguous**, which is why [`RoomService::ipam_refusal`] sits beside it. It
-    /// means "not yet" for the 0.3–0.5 s IPAM normally takes, and it *also* means "refused" — a port
+    /// means "not yet" for the 0.3–0.5 s IPAM normally takes, and it *also* means "refused": a port
     /// conflict on a Service that requested a specific address gets no allocation at all rather than
     /// a different one. Read together the two are decisive: an absent address with a refusal is
     /// permanent, an absent address without one is a room to look at again next pass.
     ///
     /// A value that is not the configured address is a different failure again, and still worth
-    /// quarantining — it just is not the one a port collision produces.
+    /// quarantining, but it is not the one a port collision produces.
     pub ingress_ip: Option<String>,
-    /// Why IPAM refused, when it did — the `IPAMRequestSatisfied` condition read as `False`.
+    /// Why IPAM refused, when it did: the `IPAMRequestSatisfied` condition read as `False`.
     ///
     /// **`None` covers satisfied, still deciding, and not published at all**, which is deliberate:
     /// only an explicit `False` is a refusal, so a Cilium that does not publish the condition
@@ -254,7 +254,7 @@ const ALREADY_ALLOCATED: &str = "already_allocated_incompatible_service";
 /// The one `isCompatible` verdict that names the PORT.
 ///
 /// Cilium interpolates it into the condition message as `Reason: <this>`, from a vocabulary of five
-/// Go constants with no interpolation of their own — so matching the phrase is reading a status
+/// Go constants with no interpolation of their own, so matching the phrase is reading a status
 /// field with a closed range, not parsing prose. The others are `different sharing key`, `different
 /// and not permitted namespace`, `different ExternalTrafficPolicy`, and `compatible
 /// ExternalTrafficPolicy local but selecting different set of pods`.
@@ -265,7 +265,7 @@ impl IpamRefusal {
     ///
     /// Everything Puna does about a refusal turns on this. A genuine collision is a fact about one
     /// port and the room should move; every other refusal is a fact about the Service *template* or
-    /// about `PUNA_LB_IP` — rendered identically for every room in the environment — so moving is
+    /// about `PUNA_LB_IP` (rendered identically for every room in the environment) so moving is
     /// not merely useless, it is destructive. Each attempt quarantines a pair for an hour, and since
     /// every room is refused for the same cause, the range drains while nothing that was ever going
     /// to start starts. **A configuration mistake would be laundered into port exhaustion**, which
@@ -280,7 +280,7 @@ impl IpamRefusal {
     }
 }
 
-/// A Secret as the reconciler sees it. Never its contents — a sweep needs to know a Secret exists
+/// A Secret as the reconciler sees it. Never its contents: a sweep needs to know a Secret exists
 /// and whether it is owned, and reading the values back would be the one call that puts every
 /// room's credentials through the orchestrator's logs on a bad day.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -307,7 +307,7 @@ impl ClusterSnapshot {
     }
 
     /// Neither of these has a production caller yet: nothing in the room lifecycle asks about a
-    /// Service or a Secret by room — the Deployment is the object the state machine turns on, and the
+    /// Service or a Secret by room: the Deployment is the object the state machine turns on, and the
     /// other two follow it through ownership. **M9's sweep is what reads them**, to find the ones
     /// whose owner is gone. The lifecycle tests use them today to assert that ownership landed.
     #[cfg_attr(
@@ -344,7 +344,7 @@ pub trait ClusterApi: Send + Sync {
     async fn list_secrets(&self) -> Result<Vec<RoomSecret>>;
 
     async fn get_deployment(&self, name: &str) -> Result<Option<RoomDeployment>>;
-    /// Returns `.metadata.uid`, which the caller must persist **before doing anything else** —
+    /// Returns `.metadata.uid`, which the caller must persist **before doing anything else**:
     /// losing it means nothing can ever be owned by this Deployment, and unowned objects are not
     /// collected.
     async fn create_deployment(&self, spec: &RoomSpec) -> Result<String>;
@@ -400,7 +400,7 @@ mod refusal_tests {
     }
 
     /// Every other `isCompatible` verdict is a property of the Service template, so it is the same
-    /// for every room here — reallocating would drain the range without starting anything.
+    /// for every room here, so reallocating would drain the range without starting anything.
     #[test]
     fn the_other_incompatibilities_are_not_about_the_port() {
         for incompatibility in [

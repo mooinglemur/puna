@@ -9,7 +9,7 @@
 //! ## What it models, and where the fidelity actually matters
 //!
 //! **Garbage collection by uid.** Deleting a Deployment removes every Service and Secret whose
-//! `owner_uid` matches its uid — and **leaves the rest behind**. That asymmetry is the whole point:
+//! `owner_uid` matches its uid, and **leaves the rest behind**. That asymmetry is the whole point:
 //! Puna's teardown is `delete Deployment` and nothing else, so an ownerReference written without
 //! the right uid does not fail, it leaks. Here that leak is a surviving object in a test assertion
 //! rather than a Service holding a port for a room that no longer exists.
@@ -138,7 +138,7 @@ impl FakeCluster {
         Ok(())
     }
 
-    // -- the test-facing controls --
+    // --- the test-facing controls ---
 
     /// Fail the next call to `op` with `error`, once.
     pub fn fail_next(&self, op: Op, error: ClusterError) {
@@ -178,7 +178,7 @@ impl FakeCluster {
         self.lock().ingress_delay = reads;
     }
 
-    /// Refuse to allocate at all, stating a reason — Cilium's *other* conflict branch.
+    /// Refuse to allocate at all, stating a reason: Cilium's *other* conflict branch.
     ///
     /// A Service that requests a specific address (which every room does) and collides gets no
     /// allocation rather than a different one, so this withholds the address **permanently** where
@@ -213,10 +213,10 @@ impl FakeCluster {
     /// Model what a foreground delete actually does: **accept, and leave the object behind.**
     ///
     /// By default this fake removes a Deployment the instant `delete_deployment` returns, which is
-    /// the optimistic case -- the pod exited immediately -- and is a fine model for most of what the
+    /// the optimistic case (the pod exited immediately) and is a fine model for most of what the
     /// lifecycle suite asserts. It is not what Kubernetes does. `DeleteParams::foreground()` sets a
     /// propagation policy and returns as soon as the API server accepts the request; the object
-    /// stays readable, carrying a `deletionTimestamp`, until its pod finishes draining -- up to the
+    /// stays readable, carrying a `deletionTimestamp`, until its pod finishes draining, up to the
     /// full 45-second grace period, because pahoa flushes a final save on `SIGTERM`.
     ///
     /// **That gap was invisible here, and a real bug lived in it**: a start landing inside the
@@ -278,8 +278,8 @@ impl Default for FakeCluster {
 
 /// Remove a Deployment and everything the garbage collector would take with it.
 ///
-/// **Matching on uid, not on name.** A dependent whose `owner_uid` is stale — from a Deployment
-/// that was recreated, or from an ownerReference written before the uid was known — survives,
+/// **Matching on uid, not on name.** A dependent whose `owner_uid` is stale (from a Deployment
+/// that was recreated, or from an ownerReference written before the uid was known) survives,
 /// exactly as it would in the cluster. That is the leak, and it is worth being able to see.
 fn collect_dependents(inner: &mut Inner, name: &str) {
     let Some(deployment) = inner.deployments.remove(name) else {
@@ -301,7 +301,7 @@ fn read_deployment(stored: &StoredDeployment) -> RoomDeployment {
         room_id: Some(stored.spec.room_id),
         spec_hash: Some(stored.spec.spec_hash.clone()),
         // The fake stores the spec it was created with, so the image it reports is the image it was
-        // asked for -- which is what makes a test that changes the image and expects the observed
+        // asked for, which is what makes a test that changes the image and expects the observed
         // value to follow meaningful.
         image: Some(stored.spec.image.clone()),
         replicas: stored.replicas,
@@ -405,7 +405,7 @@ impl ClusterApi for FakeCluster {
         if inner.hold_deletions
             && let Some(stored) = inner.deployments.get_mut(name)
         {
-            // Accepted, not finished -- dependents stay, because garbage collection has not run.
+            // Accepted, not finished: dependents stay, because garbage collection has not run.
             // A second delete of an already-draining object is also accepted, as the API server
             // accepts it: the request is a no-op and returns success.
             stored.deleting = true;
@@ -791,7 +791,7 @@ mod tests {
         assert_eq!(err, ClusterError::Transient("apiserver said 503".into()));
         assert!(!err.is_fatal(), "the tick is the retry");
 
-        // Once, so the next tick's attempt is the one that succeeds -- which is what
+        // Once, so the next tick's attempt is the one that succeeds, which is what
         // level-triggered recovery looks like.
         cluster
             .create_deployment(&room_spec(room, "hash-1"))

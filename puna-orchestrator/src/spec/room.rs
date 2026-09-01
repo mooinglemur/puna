@@ -3,14 +3,14 @@
 //! ## The spec hash decides when a room gets bounced, so what it covers is a contract
 //!
 //! The reconciler compares the hash on a running Deployment against the one the row describes, and
-//! a difference means delete-and-recreate — roughly a minute of downtime with clients reconnecting
+//! a difference means delete-and-recreate: roughly a minute of downtime with clients reconnecting
 //! on their own. Most of that is the two reconcile intervals a recreate crosses, not the pod: one
 //! tick stops the room, the next starts it. So every field is a decision about whether a change is
 //! worth that, and two of them are the reason this is not simply "hash the manifest":
 //!
 //!   * **`slot_auth` is covered**, though it moves nothing in the pod spec. The password mode
 //!     reaches pahoa through the Secret with `envFrom`, so without folding it in, turning passwords
-//!     on would change the Secret and never restart the room that reads it at startup — the room
+//!     on would change the Secret and never restart the room that reads it at startup, and the room
 //!     would stay open while the UI said locked.
 //!   * **Per-slot password *values* are not covered.** They can be rotated on a live room over the
 //!     admin API, and hashing them would bounce a room every time one player rotated a password.
@@ -23,7 +23,7 @@
 //! password in the environment before anyone can use it.
 //!
 //! Those keys briefly came from the draft rather than the map, while Puna expressed a lock by
-//! withholding a slot from it — a lock is something pahoa can be told later, so it had to stay out
+//! withholding a slot from it: a lock is something pahoa can be told later, so it had to stay out
 //! of the fingerprint. pahoa's native `lock` verb removed the conflation, so the map's keys mean
 //! exactly "who holds a credential" again and reading them here is honest.
 //!
@@ -49,7 +49,7 @@ const CANONICAL_VERSION: &str = "puna/room-spec/1";
 /// Everything a room's pod is, before it is fingerprinted.
 ///
 /// Deliberately not a `RoomSpec` with a placeholder hash. A struct whose hash is a lie for the
-/// duration of a function call is a struct that eventually escapes one — and `spec_hash` is compared
+/// duration of a function call is a struct that eventually escapes one, and `spec_hash` is compared
 /// against a live Deployment, so a wrong value there is a room that either never converges or gets
 /// recreated on every tick.
 #[derive(Debug, Clone)]
@@ -58,7 +58,7 @@ pub struct Draft {
     pub image: String,
     pub base_port: u16,
     pub wants_filtered: bool,
-    /// Every slot in the multidata, **groups included** — this sizes the memory request, and pahoa
+    /// Every slot in the multidata, **groups included**: this sizes the memory request, and pahoa
     /// derives its outbound budget from `slot_info.len()`, so the connectable count under-requests.
     pub slot_count: i32,
     pub save_interval_secs: i32,
@@ -101,7 +101,7 @@ impl Draft {
             format!("base_port={}", self.base_port),
             format!("filtered={}", self.wants_filtered),
             format!("slot_count={}", self.slot_count),
-            // Derived from `slot_count`, so these move only when Puna's own derivation does -- which
+            // Derived from `slot_count`, so these move only when Puna's own derivation does, which
             // is exactly when a running room needs recreating to pick up a different fan-out, and
             // is a change `slot_count` alone could never express.
             format!("shards={}", shards(self.slot_count)),
@@ -114,7 +114,7 @@ impl Draft {
             out.push('\n');
         }
 
-        // `SecretData` is a BTreeMap, so this walks in key order without sorting -- which is also
+        // `SecretData` is a BTreeMap, so this walks in key order without sorting, which is also
         // why it is a BTreeMap rather than a HashMap.
         for (key, value) in env {
             match key.as_str() {
@@ -151,7 +151,7 @@ fn slot_numbers(json: &str) -> Vec<String> {
     match serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(json) {
         Ok(map) => {
             let mut keys: Vec<String> = map.into_iter().map(|(k, _)| k).collect();
-            // Numeric where possible, so "10" sorts after "9" -- the ordering only has to be
+            // Numeric where possible, so "10" sorts after "9": the ordering only has to be
             // stable, but one that reads correctly is easier to eyeball in a diff.
             keys.sort_by_key(|k| (k.parse::<i64>().unwrap_or(i64::MAX), k.clone()));
             keys
@@ -167,7 +167,7 @@ fn slot_numbers(json: &str) -> Vec<String> {
 /// headroom each. A 2000-slot room lands at 562.5 MiB and is passed as 563.
 ///
 /// The expression is pahoa's `config::outbound_budget_for`, and it used to be a *transcription* of
-/// it — the same number computed twice from one input with nothing checking the two agreed. It is
+/// it: the same number computed twice from one input with nothing checking the two agreed. It is
 /// passed on the argv now, so this is the number the room actually uses and [`memory_limit_bytes`]
 /// is sized against a fact rather than a guess about another repository.
 ///
@@ -175,17 +175,17 @@ fn slot_numbers(json: &str) -> Vec<String> {
 ///
 /// **The first version passed bytes**, because the option's presence was checked and its *unit* was
 /// not: `main.rs` reads `--outbound-budget` as `Some(mib) => mib * 1024 * 1024`, and its help text
-/// says `<MiB>`. So `589824000` — meant as 562.5 MiB — configured **562 TiB**, and every room
+/// says `<MiB>`. So `589824000`, meant as 562.5 MiB, configured **562 TiB**, and every room
 /// deployed with it had no room-wide backstop at all.
 ///
 /// That failure is invisible from every direction anybody would look. pahoa accepts the value, the
 /// startup banner reports it without comment, per-connection caps still shed slow clients so lag
-/// disconnects look normal, and the only symptom is the room-wide budget never binding — which is
+/// disconnects look normal, and the only symptom is the room-wide budget never binding, which is
 /// indistinguishable from a healthy room until many clients stall at once, at which point the room
 /// queues until the kernel kills it. **It re-armed the exact OOM this milestone existed to remove.**
 ///
 /// Rounded **up** rather than down so the cap is never quieter than pahoa's own default would have
-/// been, and returned in MiB so the unit is in the name and the byte value is derived from it —
+/// been, and returned in MiB so the unit is in the name and the byte value is derived from it,
 /// rather than the two being converted at a call site, which is where this went wrong.
 pub fn outbound_budget_mib(slot_count: i32) -> i64 {
     const PER_CONNECTION: i64 = 96 * 1024;
@@ -206,12 +206,12 @@ const MIB: i64 = 1024 * 1024;
 /// The same cap in bytes, for sizing the container against it.
 ///
 /// Derived from [`outbound_budget_mib`] rather than computed beside it, so the number Puna sizes
-/// the memory limit against is exactly the number the room was told to use — including the rounding.
+/// the memory limit against is exactly the number the room was told to use, including the rounding.
 pub fn outbound_budget_bytes(slot_count: i32) -> i64 {
     outbound_budget_mib(slot_count).saturating_mul(MIB)
 }
 
-/// Fan-out width — pahoa's `--shards`, and a **reliability** number before a throughput one.
+/// Fan-out width: pahoa's `--shards`, and a **reliability** number before a throughput one.
 ///
 /// A broadcast that will not fit a shard's inbox closes *every connection that shard owns*, because
 /// the audience is expanded inside the shard and the actor that dropped the message does not know
@@ -221,7 +221,7 @@ pub fn outbound_budget_bytes(slot_count: i32) -> i64 {
 /// ## It used to be `limits.cpu`, which was wrong twice over
 ///
 /// pahoa derived the width from the cgroup CPU quota, so Puna's `limits.cpu: "2"` gave **every room
-/// in the fleet two shards** — and a 2000-slot room therefore put half its population behind one
+/// in the fleet two shards**, and a 2000-slot room therefore put half its population behind one
 /// queue. A dev-cluster run at ~5000 connections shed ~2,500 on the first overflow and never
 /// recovered: they all came back at once, each buying a full item-history replay, which costs the
 /// room far more than shedding them saved.
@@ -235,7 +235,7 @@ pub fn outbound_budget_bytes(slot_count: i32) -> i64 {
 /// pahoa derives exactly this from the seed when the flag is absent, so passing it is redundant for
 /// the room and **not** redundant for the container: [`shard_queue_bytes`] is memory the outbound
 /// budget does not account for, and Puna sizes the limit against it. Same rule as
-/// [`outbound_budget_mib`] — the value Puna sized for and the value the room runs at must not be
+/// [`outbound_budget_mib`]: the value Puna sized for and the value the room runs at must not be
 /// able to disagree.
 pub fn shards(slot_count: i32) -> i64 {
     /// Connections one shard may own before it is worth splitting: the blast radius a dropped
@@ -251,25 +251,25 @@ pub fn shards(slot_count: i32) -> i64 {
     ((connections + CONNECTIONS_PER_SHARD - 1) / CONNECTIONS_PER_SHARD).clamp(FLOOR, CEILING)
 }
 
-/// How far behind one shard may fall before it starts closing connections — `--shard-queue-depth`.
+/// How far behind one shard may fall before it starts closing connections: `--shard-queue-depth`.
 ///
 /// **The larger of two bursts that scale in opposite directions**, which is pahoa's rule and was
 /// briefly Puna's alone. Their first default was per-connection only; the burst that actually
 /// overflowed a Puna room is per-*release*, and the two are unrelated quantities. Puna overrode the
-/// depth for one release, reported why, and pahoa adopted the release term verbatim in `9c382ab` —
+/// depth for one release, reported why, and pahoa adopted the release term verbatim in `9c382ab`,
 /// so this is a transcription again rather than a divergence, and the two agree at every size.
 ///
 /// It is still **passed** rather than left to their default, and their own note on the field says
 /// why: *"it sizes the container against these, so the value it sized for and the value the room
 /// runs at must not be able to disagree."* Dropping the flag would not remove the second
-/// computation — [`shard_queue_bytes`] still needs this number to size the memory limit — it would
+/// computation ([`shard_queue_bytes`] still needs this number to size the memory limit) it would
 /// only stop anything checking that the two agree, which is exactly how the `--outbound-budget`
 /// unit bug reached the cluster.
 ///
 /// ## Why the width does not size this, and why widening it did not help
 ///
 /// `Shards::broadcast` enqueues one copy of the message into **every** shard's inbox. So the number
-/// of broadcasts a room can buffer is exactly the depth, *however many shards there are* — widening
+/// of broadcasts a room can buffer is exactly the depth, *however many shards there are*: widening
 /// the fan-out multiplies the total memory and leaves broadcast headroom exactly where it was. That
 /// is why the second dev-cluster run collapsed at the same point as the first, on 12 shards instead
 /// of 2, with CPU at **0.3 of 2 cores**: nothing was compute-bound and nothing had more room.
@@ -277,7 +277,7 @@ pub fn shards(slot_count: i32) -> i64 {
 /// ## What the burst actually is
 ///
 /// A release fans out twice. The full feed chunks 140 items into one broadcast and is cheap. The
-/// scoped feed does not amortize at all — `room.rs` ends a release with
+/// scoped feed does not amortize at all. `room.rs` ends a release with
 ///
 /// ```text
 /// for (target, messages) in scoped {
@@ -295,10 +295,10 @@ pub fn shards(slot_count: i32) -> i64 {
 /// ## The connection term alone was a constant, which is what made this necessary
 ///
 /// pahoa's first derivation had only the reconnect-storm half, and `shards_for` divides by 512 while
-/// it multiplied the per-shard connection count by 8 — so the two cancelled: **4,096 for every room
+/// it multiplied the per-shard connection count by 8, so the two cancelled: **4,096 for every room
 /// from 1 slot to ~5,461**, rising only once the shard count clamped at 32. The release burst grows
 /// linearly with slots and that term did not grow at all, so headroom measured in concurrent
-/// releases was `4096 / slots` — about 20 at 200 slots, 8 at 500, and **2 at 2000**. The room that
+/// releases was `4096 / slots`: about 20 at 200 slots, 8 at 500, and **2 at 2000**. The room that
 /// failed was taking 14 goals a second.
 ///
 /// The storm term is kept rather than replaced, because it is the right model for the burst it
@@ -307,7 +307,7 @@ pub fn shards(slot_count: i32) -> i64 {
 /// argument about which case a given room is in.
 ///
 /// **It is bounded by slots rather than by locations on purpose.** The receiver count caps the
-/// burst, so slots alone is an upper bound — which over-provisions a shallow seed by a few MiB of
+/// burst, so slots alone is an upper bound, which over-provisions a shallow seed by a few MiB of
 /// envelopes and needs nothing plumbed through [`crate::cluster::RoomSpec`] that is not already
 /// there. The safe direction, cheaply.
 ///
@@ -315,7 +315,7 @@ pub fn shards(slot_count: i32) -> i64 {
 ///
 /// Depth absorbs a *burst*. It does nothing about sustained overproduction: at 14 goals a second the
 /// room was producing broadcasts faster than it could deliver them, and a deeper queue defers that
-/// rather than preventing it. What it buys is the ability to tell the two apart — a room that
+/// rather than preventing it. What it buys is the ability to tell the two apart: a room that
 /// collapses again with a deep queue *and* CPU pinned at its limit is a compute problem, which is a
 /// different lever and one this project has deliberately not pulled yet.
 pub fn shard_queue_depth(slot_count: i32) -> i64 {
@@ -330,7 +330,7 @@ pub fn shard_queue_depth(slot_count: i32) -> i64 {
     /// room ran at before either knob existed, and it has never been the thing that failed alone.
     const FLOOR: i64 = 4096;
     /// pahoa refuses more, on the grounds that a room this far behind will not catch up by queuing.
-    /// Left where it is deliberately -- broadcast headroom costs `shards × depth` and buys `depth`,
+    /// Left where it is deliberately: broadcast headroom costs `shards × depth` and buys `depth`,
     /// so raising the ceiling is the most expensive way to buy it. The cheap way is pahoa's next
     /// change: stop broadcasting slot-scoped traffic to shards that own nobody.
     const CEILING: i64 = 65536;
@@ -352,11 +352,11 @@ pub fn shard_queue_depth(slot_count: i32) -> i64 {
 /// Asked of pahoa and answered explicitly: `outbound_budget_bytes` is charged in `deliver()`, which
 /// runs *after* a shard has expanded the audience and is queuing a frame for a specific connection.
 /// A message still sitting in a shard's inbox has not been expanded yet, so nothing has reserved for
-/// it — which is why the dev room could queue **zero** bytes while its shards overflowed. Two
+/// it, which is why the dev room could queue **zero** bytes while its shards overflowed. Two
 /// queues, and only the second one is metered.
 ///
 /// So this is a third term in the memory sizing rather than something already inside the budget.
-/// It is the **envelope** cost — `shards × depth` messages, reserved by `mpsc::channel` at startup
+/// It is the **envelope** cost: `shards × depth` messages, reserved by `mpsc::channel` at startup
 /// rather than grown on demand, so it is resident from the first second regardless of load. The
 /// payloads the envelopes point at are refcounted `Bytes`, one allocation per broadcast however many
 /// shards hold a handle, so their footprint follows what the room has in flight rather than the
@@ -364,7 +364,7 @@ pub fn shard_queue_depth(slot_count: i32) -> i64 {
 ///
 /// `size_of::<ShardMsg>()` is 72 on x86-64. pahoa declines to pin a floor to it and states it in
 /// their README as stable enough to size against, so a drift here costs a slightly-off limit rather
-/// than a failure — which is the right sort of dependency to take on another repository's layout.
+/// than a failure, which is the right sort of dependency to take on another repository's layout.
 pub fn shard_queue_bytes(slot_count: i32) -> i64 {
     const SHARD_MSG_BYTES: i64 = 72;
 
@@ -376,7 +376,7 @@ pub fn shard_queue_bytes(slot_count: i32) -> i64 {
 /// Connections a room of this size is expected to hold.
 ///
 /// One player commonly runs a game client, a text client and a tracker. The same rule the outbound
-/// budget uses — and pahoa's own `CONNECTIONS_PER_SLOT`, which is what makes the fan-out numbers
+/// budget uses, and pahoa's own `CONNECTIONS_PER_SLOT`, which is what makes the fan-out numbers
 /// here reproduce theirs exactly.
 fn expected_connections(slot_count: i32) -> i64 {
     const CONNECTIONS_PER_SLOT: i64 = 3;
@@ -403,7 +403,7 @@ fn expected_connections(slot_count: i32) -> i64 {
 ///
 /// **The load column is not a function of connections alone**, which is the finding that shaped
 /// these constants. Two 2000-slot rooms at ~2000 connections measured 208 MiB and 494 MiB; the
-/// difference is churn — the second had taken 20,000 reconnects, and freed connection state is
+/// difference is churn: the second had taken 20,000 reconnects, and freed connection state is
 /// retained by the allocator rather than returned. At rest a 2000-slot room is flat to within
 /// 3 MiB for hours, so this is fragmentation and not a leak, but a limit has to cover the churny
 /// case because a room under load is exactly the room that is being dropped and re-joined.
@@ -414,14 +414,14 @@ fn expected_connections(slot_count: i32) -> i64 {
 ///
 /// It began at 192 MiB against 46-70 MiB observed, chosen so no room's limit got smaller than the
 /// one it already ran under. Troy's call, and the reasoning was that those small-room samples come
-/// from rooms with one or two connections — nothing about them says what a 200-slot room does
-/// mid-cascade — so generosity cost little and tightening later could be done against data.
+/// from rooms with one or two connections (nothing about them says what a 200-slot room does
+/// mid-cascade) so generosity cost little and tightening later could be done against data.
 ///
 /// ## It is 160 MiB now, and the 32 MiB came off for a reason rather than a preference
 ///
 /// **Every measurement in that table included a term that no longer exists.** pahoa's journal
 /// writer used a flat `sync_channel(1 << 19)`, sized for the worst burst a 2000-slot seed can
-/// produce and then allocated in *every* room — 28 MiB resident from startup whether or not
+/// produce and then allocated in *every* room: 28 MiB resident from startup whether or not
 /// anything was ever queued. It now sizes from the seed's own location count, which pahoa measured
 /// as a flat **30.7 MB** off every room from 1 slot to 96.
 ///
@@ -440,7 +440,7 @@ fn expected_connections(slot_count: i32) -> i64 {
 /// written.
 ///
 /// **The measurements below are deliberately left alone.** They are pre-repin, so they overstate
-/// every room by the ring — holding the limit to them is stricter than reality, which is the safe
+/// every room by the ring, and holding the limit to them is stricter than reality, which is the safe
 /// direction, and re-fitting them properly wants a week of `process_resident_memory_bytes` from a
 /// fleet on the new image. `PUNA_PAHOA_IMAGE` reaching every room is what makes that data exist.
 fn non_queue_bytes(slot_count: i32) -> i64 {
@@ -450,8 +450,8 @@ fn non_queue_bytes(slot_count: i32) -> i64 {
     /// Fitted to the 2000-slot room under churn: 2000 × 288 KiB = 562 MiB over the floor, so 754
     /// against 494 measured.
     ///
-    /// **Its equality with pahoa's own per-slot budget contribution (3 × 96 KiB) is a coincidence**
-    /// — both scale with the connections a slot implies, but one is queue depth and this is
+    /// **Its equality with pahoa's own per-slot budget contribution (3 × 96 KiB) is a coincidence:**
+    /// both scale with the connections a slot implies, but one is queue depth and this is
     /// resident state. Do not "simplify" this function to `budget + FLOOR`: pahoa owns the 96 KiB
     /// and can change it, and the two would then move together for no reason.
     const PER_SLOT: i64 = 288 * 1024;
@@ -463,7 +463,7 @@ fn non_queue_bytes(slot_count: i32) -> i64 {
 /// What to request, in bytes: the room's ordinary footprint plus room to queue.
 ///
 /// A quarter of the budget rather than all of it, because the request is the **scheduling
-/// reservation** — what the node sets aside and what protects the room from eviction — and
+/// reservation** (what the node sets aside and what protects the room from eviction) and
 /// reserving a queue depth the room reaches only under a cascade would price every room at its
 /// worst minute. The limit is where the worst minute is covered.
 ///
@@ -482,7 +482,7 @@ pub fn memory_request_bytes(slot_count: i32) -> i64 {
 ///
 /// This was 50m for every room, which Troy measured as overstating the smallest by nearly an order
 /// of magnitude. The request is what the scheduler subtracts from a node and what a ResourceQuota
-/// charges, so it decides how many rooms fit on the fleet — and a one-slot async holding three
+/// charges, so it decides how many rooms fit on the fleet, and a one-slot async holding three
 /// sockets and writing a save every thirty seconds is not the same workload as a 2000-slot sync
 /// mid-cascade. Sizing them alike means either over-reserving the small end or under-reserving the
 /// large one, and 50m did the first.
@@ -528,7 +528,7 @@ pub fn cpu_request_millicores(slot_count: i32) -> i64 {
 /// binds first then everybody's connection dies instead of one, and the backpressure that was
 /// supposed to protect the room never gets to run.
 ///
-/// The previous formula — `budget × 3/2 + 256 MiB` — did not hold it at scale. For a 2000-slot
+/// The previous formula (`budget × 3/2 + 256 MiB`) did not hold it at scale. For a 2000-slot
 /// room that is 1099 MiB against a 562 MiB budget, leaving 537 MiB above the queue for everything
 /// else; the room measured 494 MiB of base at 2000 connections and was OOM-killed three times.
 /// The 256 MiB was flat, and the thing it was covering is not: it scales with slots and with the
@@ -539,13 +539,13 @@ pub fn cpu_request_millicores(slot_count: i32) -> i64 {
 ///
 /// ## The third term
 ///
-/// [`shard_queue_bytes`] is added at face value — no headroom multiplier, because it is a fixed
+/// [`shard_queue_bytes`] is added at face value, with no headroom multiplier, because it is a fixed
 /// reservation rather than something the room grows into. It is small (3.4 MiB for a 2000-slot
 /// room, under 10 MiB at any size this derivation produces) and it is here because it is
 /// **structurally outside the outbound budget**, which is the one thing about it worth remembering.
 ///
 /// It does double-count by about 576 KiB against the base measurements above, which were taken on
-/// rooms running two shards of 4096 — inside the noise of a fit whose per-slot term is drawn from
+/// rooms running two shards of 4096, inside the noise of a fit whose per-slot term is drawn from
 /// the worst observation, and in the safe direction.
 pub fn memory_limit_bytes(slot_count: i32) -> i64 {
     outbound_budget_bytes(slot_count)
@@ -601,7 +601,7 @@ mod tests {
     }
 
     /// Pins the canonical form. A change here is a change to what every existing room's annotation
-    /// means, so it should cost a deliberate edit -- and `CANONICAL_VERSION` is the honest way to
+    /// means, so it should cost a deliberate edit, and `CANONICAL_VERSION` is the honest way to
     /// make one.
     #[test]
     fn the_canonical_form_is_pinned() {
@@ -748,7 +748,7 @@ mod tests {
         );
         assert_ne!(two, three);
 
-        // The map's own key order must not matter -- it is a JSON object, and only its membership
+        // The map's own key order must not matter: it is a JSON object, and only its membership
         // is a fact about the room.
         let reordered = hash(
             &draft,
@@ -764,7 +764,7 @@ mod tests {
     /// Startup-only values are covered, all of them.
     ///
     /// A rotated admin token that has not reached the pod makes every console call fail with a
-    /// `404`, which reads as "this room is running an old image" -- the most confusing possible
+    /// `404`, which reads as "this room is running an old image": the most confusing possible
     /// symptom for the most routine possible operation.
     #[test]
     fn every_startup_only_credential_moves_the_hash() {
@@ -863,7 +863,7 @@ mod tests {
     /// This is the assertion that was missing when Puna passed `--outbound-budget=589824000`
     /// intending 562.5 MiB and configured 562 TiB. Nothing else could have caught it: pahoa accepts
     /// the number, the banner prints it without comment, and per-connection caps keep shedding slow
-    /// clients so a room with no room-wide backstop looks entirely normal — right up until many
+    /// clients so a room with no room-wide backstop looks entirely normal, right up until many
     /// clients stall at once and it queues until the kernel kills it.
     #[test]
     fn the_argv_budget_is_the_same_cap_the_container_is_sized_against() {
@@ -907,7 +907,7 @@ mod tests {
 
     /// Both numbers are pahoa's own derivation, and this pins the values rather than the formula.
     ///
-    /// Puna passes both flags, so Puna wins wherever the two disagree — which makes a disagreement
+    /// Puna passes both flags, so Puna wins wherever the two disagree, which makes a disagreement
     /// a container sized for a fan-out nobody chose, in silence. The depth was briefly Puna's alone;
     /// pahoa adopted the release term in `9c382ab`, so the rows below are equally theirs and ours
     /// and a drift in either direction fails here.
@@ -937,7 +937,7 @@ mod tests {
 
         // **The release term is what binds on every room worth worrying about**, and that is the
         // finding rather than an implementation detail. If it stopped dominating, the sizing would
-        // quietly go back to being connection-shaped -- the shape that gave a 2000-slot room two
+        // quietly go back to being connection-shaped: the shape that gave a 2000-slot room two
         // concurrent releases of headroom and collapsed twice.
         let storm = |slots: i32| {
             let shards = shards(slots);
@@ -957,7 +957,7 @@ mod tests {
         // because the first draft of this test assumed the opposite and was wrong.
         //
         // It falls out of `shards_for`: below the 32-shard clamp the width is at least
-        // `connections / 512`, so the storm term is at most `512 × 8 = 4096` -- the floor -- and
+        // `connections / 512`, so the storm term is at most `512 × 8 = 4096` (the floor) and
         // above the clamp it is `3 × slots / 32 × 8`, which is `0.75 × slots` against a release term
         // of `16 × slots`. So `max()` is the release term or the floor, everywhere.
         //
@@ -1086,7 +1086,7 @@ mod tests {
     /// This is the property two dev rooms broke. pahoa's budget exists so that a room sheds one
     /// slow client instead of dying; if the container limit binds first then everybody's connection
     /// dies rather than one, and the backpressure never runs at all. It is one subtraction, and
-    /// nothing asserted it — the old formula failed it at 2000 slots by 43 MiB against a base that
+    /// nothing asserted it: the old formula failed it at 2000 slots by 43 MiB against a base that
     /// measured 494.
     #[test]
     fn the_limit_lets_a_room_reach_its_own_outbound_cap() {
@@ -1102,14 +1102,14 @@ mod tests {
             );
 
             // **The shard envelopes are a fourth thing that is live at the same time**, and they
-            // are outside the budget's accounting -- so the cap is only reachable if the limit
+            // are outside the budget's accounting, so the cap is only reachable if the limit
             // holds all three at once.
             //
             // This does NOT hold the envelope term in place, and it is worth saying so rather than
             // letting a later reader assume it does: the `base × 3/2` headroom is 114 MiB at 96
             // slots against 576 KiB of envelopes, so the assertion stays true with the term
-            // deleted. That is the honest state of it -- the envelopes are a rounding error in the
-            // limit -- and `the_memory_numbers_are_pinned` is what actually catches the deletion.
+            // deleted. That is the honest state of it (the envelopes are a rounding error in the
+            // limit) and `the_memory_numbers_are_pinned` is what actually catches the deletion.
             let envelopes = shard_queue_bytes(slots);
             assert!(
                 limit >= budget + base + envelopes,
@@ -1126,8 +1126,8 @@ mod tests {
     ///
     /// The cap is the half worth testing hardest. Kubernetes **rejects a pod whose request exceeds
     /// its limit**, and `limits.cpu` is 2 cores; extended linearly this ramp crosses 2000m at about
-    /// 4000 slots. **Nothing bounds a room's slot count** — it is whatever the uploaded seed
-    /// declares, and M38's sizing table reasons out to 6000 — so without the cap that room fails
+    /// 4000 slots. **Nothing bounds a room's slot count** (it is whatever the uploaded seed
+    /// declares, and M38's sizing table reasons out to 6000) so without the cap that room fails
     /// admission with an error about resources and nothing about the room.
     #[test]
     fn the_cpu_request_ramps_from_a_floor_to_one_core_and_stops_there() {
@@ -1176,7 +1176,7 @@ mod tests {
     /// assertion about the invariant.
     ///
     /// A limit that merely equals `memory_limit_bytes` asserts nothing, and the shard envelopes are
-    /// a rounding error against the base headroom -- so dropping them from either formula changes
+    /// a rounding error against the base headroom, so dropping them from either formula changes
     /// no property, only the number. Pinning the number is the only thing that notices. Same shape
     /// as `the_canonical_form_is_pinned`, and the same rule: a change here should be a deliberate
     /// edit with the arithmetic re-done, not a test updated to whatever the code now returns.
@@ -1196,7 +1196,7 @@ mod tests {
         );
 
         // 2000 slots: 563 MiB budget + 12×32000×72 envelopes + (160 MiB + 2000×288 KiB) base.
-        // The envelope term is 26.4 MiB here rather than 3.4 -- the depth is Puna's own, sized for
+        // The envelope term is 26.4 MiB here rather than 3.4: the depth is Puna's own, sized for
         // sixteen simultaneous releases rather than pahoa's flat 4,096.
         const BASE_2000: i64 = 160 * 1024 * 1024 + 2000 * 288 * 1024;
         assert_eq!(
@@ -1209,7 +1209,7 @@ mod tests {
         );
 
         // The totals, as flat numbers, because the expressions above would follow the constants if
-        // somebody changed one -- these are what a reviewer compares against a manifest.
+        // somebody changed one: these are what a reviewer compares against a manifest.
         assert_eq!(memory_request_bytes(96), 213_450_752);
         assert_eq!(memory_limit_bytes(96), 361_824_256);
         assert_eq!(memory_request_bytes(2000), 932_831_232);

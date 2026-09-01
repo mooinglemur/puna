@@ -7,7 +7,7 @@
 //! ## Four fields that look like boilerplate and are not
 //!
 //! **`strategy: Recreate`.** Pahoa holds an exclusive `flock` on the save directory for as long as
-//! the process runs, so a RollingUpdate's surge pod cannot start — it CrashLoopBackOffs until
+//! the process runs, so a RollingUpdate's surge pod cannot start: it CrashLoopBackOffs until
 //! `progressDeadlineSeconds` expires and the rollout is reported as failed. Recreate is not a
 //! preference; it is the only strategy that works.
 //!
@@ -17,14 +17,14 @@
 //! announces itself.
 //!
 //! **`enableServiceLinks: false`.** The default injects an environment variable pair for every
-//! Service in the namespace, and this namespace accumulates one Service per room — hundreds of
+//! Service in the namespace, and this namespace accumulates one Service per room: hundreds of
 //! variables in every room's environment, for nothing.
 //!
 //! **`terminationGracePeriodSeconds: 45`**, not the 30-second default. Pahoa's SIGTERM path budgets
 //! about twenty seconds of disk: up to `shutdown_timeout` waiting out an in-flight save so the newest
 //! snapshot lands last, then up to ten more to encode, write and fsync the final one. Thirty fits
 //! with almost no margin, and the case that eats it is a CephFS MDS failover, where I/O blocks and no
-//! userspace timeout helps. Overrunning means SIGKILL and a fall back to the last completed save —
+//! userspace timeout helps. Overrunning means SIGKILL and a fall back to the last completed save,
 //! exactly the loss pahoa's SIGTERM handling exists to remove.
 use std::collections::BTreeMap;
 
@@ -63,7 +63,7 @@ const REVISION_HISTORY_LIMIT: i32 = 0;
 ///
 /// A Secret volume's files are owned `root:fsGroup`, so `0400` would be readable only by root while
 /// the room runs as uid 1000. The image is `FROM scratch` with no `/etc/passwd`, so this mode is the
-/// only thing making the certificate readable — and pahoa's failure is a fatal startup error naming
+/// only thing making the certificate readable, and pahoa's failure is a fatal startup error naming
 /// the path, which reads like a missing file rather than a permission.
 const TLS_FILE_MODE: i32 = 0o440;
 
@@ -211,7 +211,7 @@ fn container(spec: &RoomSpec) -> Container {
             },
         ]),
         // Both probes are HTTPS on the game port, because pahoa terminates its own TLS and serves
-        // /healthz on the same port as the WebSocket -- it sniffs the first byte to tell them apart.
+        // /healthz on the same port as the WebSocket: it sniffs the first byte to tell them apart.
         // The kubelet does not validate the certificate for probes, so this works regardless of the
         // name it dials, which is just as well: it dials a pod IP.
         startup_probe: Some(probe(60)),
@@ -222,7 +222,7 @@ fn container(spec: &RoomSpec) -> Container {
 
 /// `pod`, `namespace` and `node` for pahoa's startup banner.
 ///
-/// Kubernetes sets none of these on its own, and without them a room's log cannot say where it ran —
+/// Kubernetes sets none of these on its own, and without them a room's log cannot say where it ran,
 /// which is the question a post-mortem starts with, after the pod is gone. Not secrets, so they are
 /// plain `env` rather than part of the Secret.
 fn downward_api() -> Vec<EnvVar> {
@@ -265,16 +265,16 @@ fn resources(spec: &RoomSpec) -> ResourceRequirements {
     ResourceRequirements {
         requests: Some(BTreeMap::from([
             // **Scaled with the room**, 10m at the floor to a core at 2000 slots. It was flat at
-            // 50m -- itself lowered from 250m before the first deployment -- and a flat request
+            // 50m (itself lowered from 250m before the first deployment) and a flat request
             // prices a one-slot async like a 2000-slot sync. See `cpu_request_millicores` for the
             // derivation, the measurements it is generous against, and why it is capped.
             //
             // A room is idle almost all of the time: it holds sockets, applies the occasional check
-            // and writes a save every thirty seconds. The bursts that matter -- a seed loading, a
-            // wave of clients reconnecting -- are what `limits.cpu` covers, and a request is a
+            // and writes a save every thirty seconds. The bursts that matter (a seed loading, a
+            // wave of clients reconnecting) are what `limits.cpu` covers, and a request is a
             // RESERVATION rather than a ceiling.
             //
-            // Revise it from measurement, not from argument -- container_cpu_usage_seconds_total
+            // Revise it from measurement, not from argument: container_cpu_usage_seconds_total
             // by pod over a week of real rooms. Too LOW shows up as rooms landing on a node that
             // cannot actually feed them, which reads as lag rather than as a scheduling fault.
             (
@@ -560,7 +560,7 @@ mod tests {
         let limits = resources.limits.unwrap();
 
         assert_eq!(limits["cpu"], Quantity("2".to_string()));
-        // Steady state, not burst -- see the note on `resources`. The gap between the two is the
+        // Steady state, not burst. See the note on `resources`. The gap between the two is the
         // point: a room reserves little and is allowed to spike.
         //
         // Rendered from the same function the manifest uses rather than pinned as a literal, so the
@@ -585,8 +585,8 @@ mod tests {
             limits["memory"],
             quantity_bytes(crate::spec::room::memory_limit_bytes(spec.slot_count))
         );
-        // A 96-slot room sits on pahoa's 64 MiB budget floor, so its request is the base --
-        // 160 MiB plus 96 slots at 288 KiB -- plus a quarter of that budget, plus the 576 KiB of
+        // A 96-slot room sits on pahoa's 64 MiB budget floor, so its request is the base
+        // (160 MiB plus 96 slots at 288 KiB) plus a quarter of that budget, plus the 576 KiB of
         // shard envelopes, which the outbound budget does not account for.
         //
         // Spelled as a rendered quantity rather than by calling the function again, deliberately:

@@ -6,7 +6,7 @@
 //!
 //! ## The error classification is the interesting part
 //!
-//! §7's rule is that **the tick is the retry** — nothing loops inside one pass — so an error only has
+//! §7's rule is that **the tick is the retry** (nothing loops inside one pass) so an error only has
 //! to answer one question: try again next tick, or stop touching this room? Getting that wrong is
 //! expensive in both directions. A `403` treated as transient is a room that fails identically every
 //! 30 seconds forever, filling the log with the same line; a `503` treated as fatal is a room that
@@ -45,7 +45,7 @@ const IPAM_REQUEST_SATISFIED: &str = "IPAMRequestSatisfied";
 /// Count one API call, by what it did and how it went.
 ///
 /// Wrapping every call rather than sampling: at a few requests per tick the cost is nothing, and the
-/// question this answers -- "is the orchestrator hammering the API server, and which verb" -- is
+/// question this answers ("is the orchestrator hammering the API server, and which verb") is
 /// only answerable if nothing is missing from the denominator. `result` is coarse on purpose: `ok`,
 /// `fatal`, `transient`, `conflict`. A per-status-code label would be a cardinality problem in
 /// exchange for detail the error message already carries.
@@ -89,7 +89,7 @@ impl KubeCluster {
 
     /// Every list is label-selected and served from the watch cache.
     ///
-    /// `resourceVersion=0` is what makes three calls per tick cheap at several hundred rooms — the
+    /// `resourceVersion=0` is what makes three calls per tick cheap at several hundred rooms: the
     /// API server answers from memory rather than etcd. The price is that a read can lag, which is
     /// exactly why the planner waits out a grace period before believing a Deployment has vanished.
     fn list_params() -> ListParams {
@@ -266,7 +266,7 @@ fn classify(error: kube::Error) -> ClusterError {
         },
         // RBAC, or a request the API server will refuse identically forever.
         401 | 403 => ClusterError::Fatal(message),
-        // A `404` here is not "the object is missing" -- `get_opt` returns `None` for that and the
+        // A `404` here is not "the object is missing": `get_opt` returns `None` for that and the
         // deletes above treat it as success. Reaching this means the *resource type* was not found:
         // a wrong apiVersion, or a CRD that is not installed.
         404 => ClusterError::Fatal(format!("{message}: is the apiVersion right?")),
@@ -315,7 +315,7 @@ fn read_deployment(deployment: &Deployment, naming: &spec::Naming) -> Option<Roo
             .unwrap_or_else(chrono::Utc::now),
         // Presence is the whole signal; the value is when the delete was accepted, which nothing
         // needs. Kubernetes sets it on the object and leaves it readable until the finalizers
-        // clear -- so this reads `true` for exactly as long as the old pod is still draining.
+        // clear, so this reads `true` for exactly as long as the old pod is still draining.
         deleting: metadata.deletion_timestamp.is_some(),
     })
 }
@@ -332,8 +332,8 @@ fn read_service(service: &Service, naming: &spec::Naming) -> Option<RoomService>
             .and_then(|lb| lb.ingress.as_ref())
             .and_then(|ingress| ingress.first())
             .and_then(|ingress| ingress.ip.clone()),
-        // Only an explicit `False` counts. A missing condition -- an older Cilium, or a Service the
-        // operator has not reached yet -- reads as `None` and leaves the room waiting, which is the
+        // Only an explicit `False` counts. A missing condition (an older Cilium, or a Service the
+        // operator has not reached yet) reads as `None` and leaves the room waiting, which is the
         // behavior this had before the condition was read at all.
         ipam_refusal: service
             .status
@@ -483,7 +483,7 @@ mod tests {
     }
 
     /// A Deployment whose pod is not up yet omits `readyReplicas` entirely, and that omission means
-    /// zero rather than "cannot tell" — the opposite of how a probe's absent field reads.
+    /// zero rather than "cannot tell": the opposite of how a probe's absent field reads.
     #[test]
     fn an_absent_ready_replica_count_is_zero() {
         let deployment = Deployment {

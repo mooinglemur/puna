@@ -7,16 +7,16 @@
 //! ## The ordering is the whole content of this module
 //!
 //! ```text
-//! 1. apply the Secret, UNOWNED   -- the pod cannot start without it, so it cannot wait for the pod
-//! 2. create the Deployment       -- 409 is success; re-get for the uid
-//! 3. PERSIST the uid             -- before anything is owned by it
-//! 4. apply the Secret, OWNED     -- now the garbage collector will take it away with the room
-//! 5. create the Service          -- owned, so teardown stays one call
-//! 6. read the ingress address    -- and refuse to advertise a room on the wrong one
+//! 1. apply the Secret, UNOWNED:     the pod cannot start without it, so it cannot wait for the pod
+//! 2. create the Deployment:         409 is success; re-get for the uid
+//! 3. PERSIST the uid:               before anything is owned by it
+//! 4. apply the Secret, OWNED:       now the garbage collector will take it away with the room
+//! 5. create the Service:            owned, so teardown stays one call
+//! 6. read the ingress address:      and refuse to advertise a room on the wrong one
 //! ```
 //!
 //! Step 3 is the one that looks like bookkeeping and is not. **Losing the uid means nothing can ever
-//! be owned by that Deployment**, and unowned objects are never collected — so a crash between 2 and
+//! be owned by that Deployment**, and unowned objects are never collected, so a crash between 2 and
 //! 3 must leave a room that can be repaired, which it does: the next tick finds the Deployment, reads
 //! its uid, and continues. A crash after 4 with the uid unwritten would instead leave a Service
 //! holding a port for a room nobody can account for.
@@ -26,7 +26,7 @@
 //! §5 says to poll `status.loadBalancer.ingress` for up to 30 seconds after creating the Service.
 //! This reads it **once per tick** instead. Cilium answers in 0.3–0.5 s measured, so the poll almost
 //! never waits; when it does, sleeping inside a tick would serialize the whole sweep behind one
-//! room, and the address is not needed until the pod is ready — which is an image pull and a save
+//! room, and the address is not needed until the pod is ready, which is an image pull and a save
 //! restore away. So a missing address is [`Started::AwaitingAddress`] and the next tick looks again.
 
 use puna_core::ids::RoomId;
@@ -69,7 +69,7 @@ pub enum Started {
     AwaitingAddress,
 
     /// **IPAM said no.** The port is taken on the shared address, so this pair will never be
-    /// satisfied — Cilium's specific-request branch refuses outright rather than allocating
+    /// satisfied: Cilium's specific-request branch refuses outright rather than allocating
     /// somewhere else, which is what separates this from [`Started::AddressMismatch`].
     ///
     /// Acted on at the first sighting, like a mismatch and for the same reason: the read behind it
@@ -98,7 +98,7 @@ pub enum Started {
 /// Everything a start needs that is not the cluster.
 pub struct StartRequest<'a> {
     pub spec: &'a RoomSpec,
-    /// The room's environment, exactly as `spec::secret::build` produced it — complete or the build
+    /// The room's environment, exactly as `spec::secret::build` produced it: complete or the build
     /// refused, because a partial `PAHOA_SLOT_PASSWORDS` is a room nobody can join.
     pub secret: &'a SecretData,
     pub site: &'a Site,
@@ -107,7 +107,7 @@ pub struct StartRequest<'a> {
 /// Writing down what was created, injected so the ordering above can be asserted.
 ///
 /// One method, and it exists as a trait rather than a closure so the fake-cluster suite can prove
-/// step 3 happened **before** step 4 — the property that makes a crash recoverable.
+/// step 3 happened **before** step 4, the property that makes a crash recoverable.
 #[async_trait::async_trait]
 pub trait DeploymentRecorder: Send {
     async fn record(&mut self, room: RoomId, uid: &str, spec_hash: &str) -> anyhow::Result<()>;
@@ -135,7 +135,7 @@ pub async fn ensure_room_running(
     let uid = match cluster.get_deployment(&name).await? {
         // **Checked before the hash, and that order is the whole guard.** A Deployment accepted for
         // deletion stays readable until its pod drains, and its annotation still carries the spec
-        // hash it was created with -- which is the hash about to be rendered whenever a restart was
+        // hash it was created with, which is the hash about to be rendered whenever a restart was
         // asked for rather than caused by drift. So the arm below would match it and adopt a dying
         // object, recording its uid and then waiting out START_DEADLINE for a replica that is on its
         // way out. Deleting it again (the arm after) is merely useless.
@@ -147,7 +147,7 @@ pub async fn ensure_room_running(
             existing.uid
         }
         Some(_) => {
-            // Delete and return: the next tick recreates. Not a rolling update, and it cannot be --
+            // Delete and return: the next tick recreates. Not a rolling update, and it cannot be:
             // the port is in the args and the Service, and pahoa's flock stops two pods overlapping.
             cluster.delete_deployment(&name).await?;
             return Ok(Started::Recreating);
@@ -227,7 +227,7 @@ pub async fn ensure_room_running(
         }),
         Some(observed) => {
             // Deleting the Deployment collects the Service, which is what actually releases the
-            // wrong allocation -- and it has to happen before the caller quarantines the pair, or a
+            // wrong allocation, and it has to happen before the caller quarantines the pair, or a
             // second room could be handed the same wrong address in between.
             cluster
                 .delete_deployment(&object_name(spec.room_id))
@@ -241,7 +241,7 @@ pub async fn ensure_room_running(
 ///
 /// Deleting the Deployment is the whole of it: the Service and the Secret carry ownerReferences to
 /// it, so the garbage collector removes them. The Secret is deleted explicitly as well, for the one
-/// window where it would otherwise leak — a start that applied the unowned Secret (step 1) and never
+/// window where it would otherwise leak: a start that applied the unowned Secret (step 1) and never
 /// reached step 4 leaves a Secret with no owner, which nothing would ever collect.
 pub async fn teardown_room(cluster: &dyn ClusterApi, room: RoomId) -> Result<(), ApplyError> {
     let name = object_name(room);
@@ -353,7 +353,7 @@ mod tests {
                 Op::ApplySecret,   // 1, unowned
                 Op::GetDeployment, // 2
                 Op::CreateDeployment,
-                Op::ApplySecret, // 4, owned -- after the recorder, asserted below
+                Op::ApplySecret, // 4, owned: after the recorder, asserted below
                 Op::GetService,  // 5
                 Op::CreateService,
                 Op::GetService, // 6
@@ -418,14 +418,14 @@ mod tests {
         assert_eq!(cluster.object_names().len(), 3);
     }
 
-    /// A double-run -- two leaders for a moment -- must converge rather than error.
+    /// A double-run (two leaders for a moment) must converge rather than error.
     #[tokio::test]
     async fn a_409_is_success_and_the_uid_is_read_back() {
         let cluster = FakeCluster::new();
         let mut recorder = Recording::default();
         let spec = spec(RoomId::new(), "pahoa:test");
 
-        // The object exists -- another leader made it a moment ago -- and our read of the watch
+        // The object exists (another leader made it a moment ago) and our read of the watch
         // cache misses it. That is the only way a `create` can 409, and why it is treated as success.
         cluster
             .create_deployment(&spec)
@@ -443,7 +443,7 @@ mod tests {
         );
     }
 
-    /// A changed spec hash -- a new image, a moved port, a `slot_auth` change -- deletes and returns.
+    /// A changed spec hash (a new image, a moved port, a `slot_auth` change) deletes and returns.
     #[tokio::test]
     async fn a_changed_spec_deletes_the_deployment_and_stops_there() {
         let cluster = FakeCluster::new();
@@ -516,15 +516,15 @@ mod tests {
 
     /// **A start must never adopt a Deployment that is on its way out.**
     ///
-    /// The dangerous case is the *unchanged* spec — a plain "restart this room", the admin button —
+    /// The dangerous case is the *unchanged* spec (a plain "restart this room", the admin button)
     /// because the draining object's annotation still carries exactly the hash about to be
     /// rendered. Without the `deleting` check the hash arm matches, the dying object's uid is
     /// recorded, the room moves to `starting`, and it waits out `START_DEADLINE`: five minutes of
     /// downtime in place of a few seconds, ending in a failure with nothing pointing at the cause.
     ///
     /// Reachable in production because a foreground delete returns as soon as it is accepted, so
-    /// any `NOTIFY` landing in the drain window — somebody pressing Start, a `/room/<id>`
-    /// navigation — wakes a pass inside it.
+    /// any `NOTIFY` landing in the drain window (somebody pressing Start, a `/room/<id>`
+    /// navigation) wakes a pass inside it.
     #[tokio::test]
     async fn a_start_waits_for_a_draining_deployment_rather_than_adopting_it() {
         let cluster = FakeCluster::new();
@@ -659,7 +659,7 @@ mod tests {
     ///
     /// The one direction this may not fail in. Reading a missing condition as a refusal would tear
     /// down every room in an environment whose Cilium is a version older than the one this was
-    /// written against — during the 0.3–0.5 s every healthy room spends without an address.
+    /// written against, during the 0.3–0.5 s every healthy room spends without an address.
     #[tokio::test]
     async fn a_silent_cluster_is_waited_on_rather_than_treated_as_a_refusal() {
         let cluster = FakeCluster::new();
@@ -699,7 +699,7 @@ mod tests {
             !ops.contains(&Op::CreateService),
             "a Service owned by an unrecorded uid would outlive the room: {ops:?}"
         );
-        // The Deployment exists with nobody's record of its uid -- which is exactly the recoverable
+        // The Deployment exists with nobody's record of its uid, which is exactly the recoverable
         // half of the window: the next tick reads the uid off the object.
         let snapshot = cluster.snapshot().await.expect("snapshot");
         assert!(snapshot.deployment(room).is_some());

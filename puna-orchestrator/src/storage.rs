@@ -4,7 +4,7 @@
 //! /var/lib/puna/
 //! ├── generations/<sha256>/     WEB-owned. Read here, never written.
 //! ├── rooms/<room-id>/          this module's; bind-mounted into that room's pod alone
-//! │   ├── seed.archipelago      COPIED from generations/ -- rooms are self-contained
+//! │   ├── seed.archipelago      COPIED from generations/; rooms are self-contained
 //! │   └── room.lock  room.save  PAHOA'S. Puna never writes these two names.
 //! └── trash/<room-id>-<ts>/     7-day undo
 //! ```
@@ -16,7 +16,7 @@
 //!
 //! 1. build everything under `rooms/.tmp-<id>-<nonce>/`
 //! 2. `fsync` the contents, then the directory
-//! 3. `rename` it onto `rooms/<id>` -- **atomic**
+//! 3. `rename` it onto `rooms/<id>`: **atomic**
 //! 4. `fsync` `rooms/` so the rename itself survives a crash
 //! 5. only then does the caller set `provisioned_at`
 //!
@@ -28,7 +28,7 @@
 //! ## Rooms are self-contained
 //!
 //! The seed is **copied** in rather than referenced out of `generations/`. It costs a few
-//! megabytes per room and buys a single directory to check for the invariant above -- and it means
+//! megabytes per room and buys a single directory to check for the invariant above, and it means
 //! generation retention can never make an existing room unstartable.
 
 use std::path::{Path, PathBuf};
@@ -202,7 +202,7 @@ pub fn room_exists(layout: &Layout, id: RoomId) -> bool {
 ///
 /// A rename rather than a delete, for two reasons. It is instant, where `rm -rf` of a 2000-slot
 /// save on CephFS is minutes. And it is an undo for the one operation that destroys player
-/// progress -- the sweep removes trash older than the retention window, so a mistake has days to
+/// progress: the sweep removes trash older than the retention window, so a mistake has days to
 /// be noticed.
 pub fn trash(layout: &Layout, id: RoomId, stamp: &str) -> Result<Option<PathBuf>, StorageError> {
     let source = layout.room(id);
@@ -251,7 +251,7 @@ pub fn list_room_dirs(layout: &Layout) -> Result<Vec<RoomId>, StorageError> {
 /// Remove `.tmp-*` directories older than `max_age`, returning how many went.
 ///
 /// These are abandoned provisioning attempts. Nothing references them, so the only cost of
-/// leaving one is disk -- but the volume's quota is shared across every room in the environment,
+/// leaving one is disk, but the volume's quota is shared across every room in the environment,
 /// which is why the sweep exists at all.
 pub fn sweep_temp_dirs(
     layout: &Layout,
@@ -293,7 +293,7 @@ pub fn sweep_temp_dirs(
 ///
 /// For counting what nothing references. **Never for deleting**: a generation is content-addressed
 /// and shared between every room built from it, so reclaiming one is an administrator's action with
-/// a listing in front of it — and a room whose generation was removed is permanently unstartable,
+/// a listing in front of it, and a room whose generation was removed is permanently unstartable,
 /// which is the failure D2 exists to prevent.
 pub fn list_generation_dirs(layout: &Layout) -> Result<Vec<String>, StorageError> {
     let generations = layout.generations();

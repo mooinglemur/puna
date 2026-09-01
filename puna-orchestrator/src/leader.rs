@@ -6,7 +6,7 @@
 //! does not promise it during a node partition: a pod can be unreachable-but-running while its
 //! replacement starts. So the guarantee lives in the database that already holds all the state.
 //! `pg_try_advisory_lock` is held by a *session*, and Postgres releases it when that session ends
-//! -- including when the process dies, the connection drops, or the node vanishes. There is
+//! (including when the process dies, the connection drops, or the node vanishes). There is
 //! nothing to expire and no TTL to tune.
 //!
 //! Deliberately **not** a Kubernetes Lease. That would add `coordination.k8s.io/leases` to a Role
@@ -16,7 +16,7 @@
 //!
 //! ## The lock is a simplicity property, not a correctness one
 //!
-//! Every mutation is already safe to run twice -- `create` treats `AlreadyExists` as success,
+//! Every mutation is already safe to run twice: `create` treats `AlreadyExists` as success,
 //! allocation is atomic, directory materialization is temp-dir-plus-rename, Secret writes are
 //! server-side apply, command claiming is a conditional `UPDATE`, per-room work takes its own
 //! advisory lock, and pahoa's `flock` is the last backstop against two pods serving one room. The
@@ -36,14 +36,14 @@ const GLOBAL_LOCK_KEY: i32 = 0;
 
 /// Proof that this process holds the orchestrator lock.
 ///
-/// Constructing one requires [`acquire`], which requires the lock to have actually been taken --
+/// Constructing one requires [`acquire`], which requires the lock to have actually been taken,
 /// so this is a witness rather than an assertion. It is what
 /// [`puna_core::model::Orchestrator`] should be built from once M6's wiring lands, replacing
 /// `assume_leader`'s honor system.
 #[derive(Debug)]
 pub struct LeaderLock {
     /// Held for the lifetime of the leadership. Dropping it ends the session, and Postgres
-    /// releases the lock -- which is the whole mechanism.
+    /// releases the lock, which is the whole mechanism.
     _client: tokio_postgres::Client,
     lost: Arc<Notify>,
 }
@@ -68,7 +68,7 @@ impl LeaderLock {
 
 /// Try to become the orchestrator.
 ///
-/// `Ok(None)` means somebody else holds it -- a normal outcome during a rollout, not an error. The
+/// `Ok(None)` means somebody else holds it: a normal outcome during a rollout, not an error. The
 /// caller parks, serves `/healthz` alive and `/readyz` not-ready, and retries.
 ///
 /// **Opens its own connection**, not one from the pool: the lock belongs to the session, and a
