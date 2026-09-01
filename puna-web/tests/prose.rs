@@ -102,16 +102,63 @@ const KEPT: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// Every source file in the workspace, this one excepted.
+/// Every source file **Puna wrote**, this one excepted.
+///
+/// **Taken from the workspace members rather than by walking the root**, which is not a
+/// simplification of the same thing. CI sets `CARGO_HOME` to `$CI_PROJECT_DIR/.cargo` so the crate
+/// registry can be cached, which puts every dependency's source *inside* the workspace root: a walk
+/// from there reads a few hundred megabytes of other people's crates and fails on their punctuation,
+/// which is theirs to choose. A local run never sees it, because `CARGO_HOME` is `~/.cargo` there.
+///
+/// Skipping `.cargo` by name would fix that one case and leave the shape intact, and the shape is
+/// the problem: a root walk is an allowlist of everything, so it breaks again the next time the
+/// build puts something new beside the crates. `members` is the definition of what this repository
+/// is, so a crate added there is covered without anybody remembering, and nothing else ever is.
 fn sources() -> Vec<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("the crate sits in the workspace root")
         .to_path_buf();
+
     let mut found = Vec::new();
-    walk(&root, &mut found);
+    for member in members(&root) {
+        walk(&root.join(member), &mut found);
+    }
     found.sort();
     found
+}
+
+/// The `members` list out of the workspace manifest.
+///
+/// Read rather than hardcoded, so the set this lints and the set cargo builds cannot drift. Parsed
+/// by hand because the alternative is a toml dependency for one array, and the shape is fixed: the
+/// `members = [` line, then one quoted path per line until the bracket closes.
+fn members(root: &Path) -> Vec<String> {
+    let manifest =
+        std::fs::read_to_string(root.join("Cargo.toml")).expect("the workspace manifest");
+    let mut names = Vec::new();
+    let mut inside = false;
+    for line in manifest.lines() {
+        let line = line.trim();
+        if line.starts_with("members") {
+            inside = true;
+            continue;
+        }
+        if !inside {
+            continue;
+        }
+        if line.starts_with(']') {
+            break;
+        }
+        if let Some(name) = line.split('"').nth(1) {
+            names.push(name.to_string());
+        }
+    }
+    assert!(
+        !names.is_empty(),
+        "no workspace members parsed out of Cargo.toml: this lint is no longer looking at anything"
+    );
+    names
 }
 
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -123,8 +170,8 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if path.is_dir() {
-            // Build output and version control carry neither prose nor our authorship.
-            if name != "target" && name != ".git" {
+            // A per-crate build directory is possible even with a shared workspace target.
+            if name != "target" {
                 walk(&path, out);
             }
         } else if path
