@@ -116,13 +116,13 @@ impl Session {
             // --- SET EXPLICITLY. Rocket will NOT set it for us here. ---------------------------
             // Rocket only defaults `Secure` on when Rocket itself terminates TLS
             // (`CookieJar::set_defaults`: `if cookie.secure().is_none() && config.tls_enabled()`).
-            // Every Puna deployment terminates TLS upstream -- Envoy for the UI -- so
+            // Every Puna deployment terminates TLS upstream (Envoy for the UI), so
             // `tls_enabled()` is false and the attribute would never be added. The reasonable
             // assumption that "Rocket handles this" is exactly what makes it invisible.
             //
             // It matters more than the usual amount because the UI and the rooms SHARE A HOSTNAME,
             // differing only by port, and cookies have no port isolation: this cookie is sent to
-            // rooms.example.com:41234 -- a pahoa room -- exactly as it is to :443. pahoa neither
+            // rooms.example.com:41234 (a pahoa room) exactly as it is to :443. pahoa neither
             // parses nor logs cookies, and the value is AEAD-encrypted, so it cannot read it. But
             // it is still a bearer credential: anyone who captures it can replay it here. Without
             // `Secure`, a single plaintext request to a room port puts it on the wire in the
@@ -181,8 +181,8 @@ impl<'r> FromRequest<'r> for Session {
         // **View-as is READ-ONLY, and this is the whole enforcement.**
         //
         // It lives on the base guard rather than on `LoggedInSession` because it has to be TOTAL:
-        // `POST /room/<id>/start` takes a plain `Session` -- an anonymous visitor may start an idle
-        // room, which is D8's whole design -- so a check one rung up would leave exactly that route
+        // `POST /room/<id>/start` takes a plain `Session` (an anonymous visitor may start an idle
+        // room, which is D8's whole design), so a check one rung up would leave exactly that route
         // open. Every other guard in this crate composes on this one, so refusing here refuses
         // everywhere, and a write route added tomorrow inherits it without anybody remembering.
         //
@@ -265,7 +265,7 @@ async fn standing(
     let mut conn = pool.get().await.map_err(|e| anyhow::anyhow!(e))?;
     let found = puna_core::model::user::status_of(&mut conn, user_id).await?;
 
-    // A session-bearing request with no `users` row should not happen -- login upserts one. Treated
+    // A session-bearing request with no `users` row should not happen: login upserts one. Treated
     // as active because it is an anomaly in OUR bookkeeping rather than a sanction, and logged so
     // it is not silent; refusing here would lock somebody out over a missing row nobody meant.
     let (status, note) = found.unwrap_or_else(|| {
@@ -442,7 +442,7 @@ async fn oauth_callback(
     user::upsert(&mut conn, discord_id, &discord_user.username).await?;
 
     // **Refused before a cookie is minted.** The `LoggedInSession` guard also turns a banned
-    // account away, so this is not the only defense -- it is the one that makes the refusal
+    // account away, so this is not the only defense: it is the one that makes the refusal
     // legible. Without it a banned person logs in successfully, lands on the site, and is then
     // told no by every page they touch, which reads as the site being broken rather than as a
     // decision somebody made about them.
@@ -561,7 +561,7 @@ mod tests {
     #[test]
     fn an_unparseable_session_is_treated_as_anonymous() {
         let session: std::result::Result<Session, _> = serde_json::from_str("{\"garbage\":true}");
-        // Missing fields fall back to Default, which is anonymous -- never an authenticated
+        // Missing fields fall back to Default, which is anonymous, never an authenticated
         // session with a null user.
         let session = session.unwrap_or_default();
         assert!(!session.is_logged_in);
@@ -570,7 +570,7 @@ mod tests {
     }
 
     // Two shapes, and both matter. `/read` takes the base guard, which is what
-    // `POST /room/<id>/start` does -- an anonymous visitor may start an idle room (D8), so a write
+    // `POST /room/<id>/start` does: an anonymous visitor may start an idle room (D8), so a write
     // route genuinely reaches production holding only a `Session`. `/write-logged-in` stands for
     // everything else.
     #[get("/read")]
@@ -644,7 +644,7 @@ mod tests {
         }
 
         // **And the ban check fails CLOSED**, which this rig proves for free: it mounts no database
-        // pool, so `LoggedInSession` cannot determine standing -- and refuses rather than assuming
+        // pool, so `LoggedInSession` cannot determine standing, and refuses rather than assuming
         // the account is fine. The first draft returned `Option` and let the request through on
         // `None`, which meant a database blip briefly un-banned everybody.
         let response = client
@@ -657,7 +657,7 @@ mod tests {
             "unreadable account standing let an authenticated write through"
         );
 
-        // Reading as somebody else works -- that is the entire point.
+        // Reading as somebody else works: that is the entire point.
         let response = client
             .get("/read")
             .private_cookie(cookie_for(&impersonated()))
@@ -669,7 +669,7 @@ mod tests {
             "the page should render as the person being viewed"
         );
 
-        // Writing does not, through either guard shape -- and `/write-logged-in` answers 403 rather
+        // Writing does not, through either guard shape, and `/write-logged-in` answers 403 rather
         // than the 503 above, because the read-only refusal happens in the `Session` guard that
         // `LoggedInSession` calls first. That ordering is the point: impersonation is refused before
         // anything else is consulted.
@@ -705,7 +705,7 @@ mod tests {
         assert_eq!(view_as.admin_id, 1);
         assert_eq!(view_as.admin_username, "troy");
 
-        // And an ordinary session still parses, including one written before this field existed --
+        // And an ordinary session still parses, including one written before this field existed:
         // `#[serde(default)]` is what stops a deploy logging everybody out.
         let old = r#"{"user_id":7,"username":"kai","is_logged_in":true,"is_admin":true}"#;
         let parsed: Session = serde_json::from_str(old).expect("an older cookie still parses");

@@ -87,7 +87,7 @@ fn known_gate(key: &str) -> Option<&'static str> {
 
 #[derive(FromForm)]
 struct AllowForm {
-    /// A Discord snowflake, as text. It exceeds 2^53, so it travels as a string everywhere --
+    /// A Discord snowflake, as text. It exceeds 2^53, so it travels as a string everywhere:
     /// a JSON number would lose precision in the browser.
     user_id: String,
     note: Option<String>,

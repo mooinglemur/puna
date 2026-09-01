@@ -371,8 +371,8 @@ pub fn slot_rows(
     // something it was given. See `Viewer`.
     viewer: &Viewer<'_>,
 ) -> Vec<SlotRow> {
-    // **Puna's roster leads, not the document.** A spectator appears in neither per-player array --
-    // pahoa mirrors the reference's `get_all_players()` split -- but it is still a slot somebody
+    // **Puna's roster leads, not the document.** A spectator appears in neither per-player array
+    // (pahoa mirrors the reference's `get_all_players()` split), but it is still a slot somebody
     // claimed, and a tracker that silently omitted it would describe a different room from the one
     // on the room page.
     roster
@@ -500,7 +500,7 @@ pub fn hints(
 
         for hint in list {
             // `Hint(receiving_player, finding_player, location, item, found, entrance, item_flags,
-            // status)` -- NetUtils.py. Positional, so the order is transcribed rather than guessed.
+            // status)`, from NetUtils.py. Positional, so the order is transcribed rather than guessed.
             let Some(fields) = hint.as_array() else {
                 continue;
             };
@@ -518,7 +518,7 @@ pub fn hints(
             let receiving_slot = receiving as i32;
             let finding_slot = finding as i32;
 
-            // A slot's view keeps the hints it is either end of -- what it will receive, and what
+            // A slot's view keeps the hints it is either end of: what it will receive, and what
             // it is holding for somebody else. Both are "about" that player.
             if let Some(only) = scope
                 && receiving_slot != only
@@ -626,8 +626,8 @@ pub fn items(
 
             Some(ItemRow {
                 order: index + 1,
-                // The item is resolved in THIS slot's game -- it is this player's item, placed in
-                // somebody else's world -- while the location is resolved in the finder's.
+                // The item is resolved in THIS slot's game (it is this player's item, placed in
+                // somebody else's world) while the location is resolved in the finder's.
                 item: names.item(&slot.game, item),
                 classification: classify(at(3).unwrap_or(0)),
                 from_slot,
@@ -714,7 +714,7 @@ pub fn summary(rows: &[SlotRow], overall: bool) -> String {
     }
 
     // **Over the rows in hand, not over the room.** With no selection the two are the same; with
-    // one, this describes the line it is on the end of -- the property the tracker's own footer
+    // one, this describes the line it is on the end of, the property the tracker's own footer
     // picks for the same reason, because a total contradicting the entries beside it is worse than
     // no total. Somebody who wants the room's true figure asks without `?s`.
     if overall {
@@ -724,7 +724,7 @@ pub fn summary(rows: &[SlotRow], overall: bool) -> String {
         let goaled = players.iter().filter(|r| r.status == "goal").count();
 
         // Checks-weighted, as the footer is: a 12-location world must not count as much as a
-        // 2000-location one. An unknown total is not a number, so it does not get a percentage --
+        // 2000-location one. An unknown total is not a number, so it does not get a percentage,
         // the same rule each slot follows.
         let share = if total > 0 {
             percent(done, total)
@@ -1091,13 +1091,13 @@ mod tests {
             "an unclaimed slot offered an edit control"
         );
 
-        // Staff get every row, including the unclaimed one -- which is harmless and is what
+        // Staff get every row, including the unclaimed one, which is harmless and is what
         // "organizers may change anything a player can" means when nobody holds it yet.
         let organizer = rows(Some(99), true);
         assert!(organizer.iter().all(|r| r.editable));
 
         // A signed-out viewer of a room with the feature on is not a participant at all, and a
-        // participant of a room with it OFF has no `people` -- neither gets a control.
+        // participant of a room with it OFF has no `people`: neither gets a control.
         assert!(rows(None, false).iter().all(|r| !r.editable));
         for row in slot_rows(
             &annotated_roster(),
@@ -1283,7 +1283,7 @@ mod tests {
         assert_eq!(troy.last_activity_ms_ago, Some(3_600_000), "one hour");
 
         // A spectator appears in neither per-player array, so it must not read as a player who has
-        // done nothing -- and `null` activity is *never*, not 1970.
+        // done nothing, and `null` activity is *never*, not 1970.
         let watcher = &view.slots[2];
         assert!(watcher.spectator);
         assert_eq!(watcher.checks_total, 0);
@@ -1351,7 +1351,7 @@ mod tests {
         let finder = hints(&roster(), &document, &names_of(&games), fresh(), Some(2));
         assert_eq!(finder.hints.len(), 2, "slot 2 finds one and receives one");
 
-        // And the rendered view of slot 1 names nobody it should not -- the assertion that holds
+        // And the rendered view of slot 1 names nobody it should not: the assertion that holds
         // however the filtering is implemented.
         let rendered = serde_json::to_string(&receiver).expect("serializes");
         assert!(
@@ -1551,7 +1551,7 @@ mod tests {
         // line since before the flag existed sees exactly what it always did.
         //
         // Checks-weighted rather than an average of the two percentages: 2 of 3 and 1 of 2 is 3 of
-        // 5, which is 60.0% -- averaging 66.6 and 50.0 would give 58.3 and would let a 12-location
+        // 5, which is 60.0%: averaging 66.6 and 50.0 would give 58.3 and would let a 12-location
         // world count as much as a 2000-location one. The spectator contributes 0/0 to the checks
         // and is excluded from the goal denominator, which is why that reads 1/2 and not 1/3.
         assert_eq!(

@@ -142,7 +142,7 @@ fn whitespace_between_text_and_a_tag_is_preserved_explicitly() {
             let after = source[end..].trim_start_matches([' ', '\t', '\n', '\r']);
             let text_at = source.len() - after.len();
             let run = &source[end..text_at];
-            // `+` rides INSIDE the closer -- `+}}` -- so it is the character before it, not after.
+            // `+` rides INSIDE the closer (`+}}`), so it is the character before it, not after.
             let preserved = source[..end - closer.len()].ends_with('+');
 
             if run.is_empty() || preserved || !after.starts_with(is_rendered_text) {
@@ -190,7 +190,7 @@ fn a_glyph_only_control_names_itself_twice() {
 
         // `summary` belongs here with the other two: `<details>` is this codebase's default toggle
         // because it needs no script, so a glyph-only summary is an ordinary control rather than an
-        // exotic one -- the room page's rename pencil is exactly that.
+        // exotic one: the room page's rename pencil is exactly that.
         for element in ["button", "a", "summary"] {
             for (at, open, content) in elements(&source, element) {
                 if renders_text(content) {
@@ -218,7 +218,7 @@ fn a_glyph_only_control_names_itself_twice() {
     }
 
     // A source lint is the easiest kind to write vacuously, so say how much it must have seen.
-    // Twenty-nine glyph controls exist today -- twenty-seven until the roster gained a mention copy
+    // Twenty-nine glyph controls exist today: twenty-seven until the roster gained a mention copy
     // and the members page an invite copy. The moderation column is why this number moves in steps,
     // and it once moved DOWN:
     // release and collect went into an overflow menu and gained written labels, so they are no
@@ -471,7 +471,7 @@ fn the_theme_selector_agrees_across_markup_script_and_stylesheet() {
 
     // The attribute the script writes is the attribute the stylesheet keys on. Written as
     // `dataset.theme` in JavaScript and `[data-theme=` in CSS, so neither spelling can be grepped
-    // for in the other file -- which is exactly why this drifts unnoticed.
+    // for in the other file, which is exactly why this drifts unnoticed.
     assert!(
         script.contains("documentElement.dataset.theme"),
         "theme.js no longer writes the attribute the stylesheet reads"
@@ -519,7 +519,7 @@ fn the_theme_selector_agrees_across_markup_script_and_stylesheet() {
     assert!(css.contains(".theme { display: none; }") && css.contains(".js-theme .theme {"));
 
     // **Not deferred.** A deferred script runs after parsing, so the page would paint in the system
-    // theme and snap to the chosen one -- a white flash on every navigation for somebody who picked
+    // theme and snap to the chosen one: a white flash on every navigation for somebody who picked
     // dark. This is the assertion that keeps somebody from "tidying" it in with the others.
     //
     // Anchored on `<script` AND the filename together, not on the filename alone: the comment
@@ -553,7 +553,7 @@ fn source(relative: &str) -> PathBuf {
 /// test that exercises routes: the property is about the guard every other guard composes on.
 #[test]
 fn viewing_as_somebody_is_read_only_at_the_base_guard() {
-    // **Comments stripped first.** Prose about a rule contains the rule's own identifiers -- the
+    // **Comments stripped first.** Prose about a rule contains the rule's own identifiers: the
     // `LoggedInSession` guard's comment explains why it does not call `from_request_sync`, and
     // naming it there was enough to trip the negative assertion below. Third time in this codebase
     // that a source lint has matched its own explanation; see `puna-silent-breakage`.
@@ -595,7 +595,7 @@ fn viewing_as_somebody_is_read_only_at_the_base_guard() {
     );
 
     // Exactly one route may write while impersonating, and it is the way out. It takes no session
-    // guard at all -- it could not be reached through one -- so the thing to assert is that it
+    // guard at all (it could not be reached through one), so the thing to assert is that it
     // remains the ONLY caller of the bypass.
     let users = code_only(
         &std::fs::read_to_string(source("src/routes/users.rs")).expect("routes/users.rs"),
@@ -1470,7 +1470,7 @@ fn the_feed_page_is_sized_to_the_window() {
     let css = code_only_css(&std::fs::read_to_string(source("static/css/puna.css")).expect("css"));
 
     // **Anchored on the block itself, not on the file.** The first version of this asked whether
-    // `feed-page` appeared anywhere in the template -- and the comment above the block names the
+    // `feed-page` appeared anywhere in the template, and the comment above the block names the
     // class in order to explain it, so the lint passed with the class deleted. Fourth time a lint
     // in this file has matched its own prose, and the second caught by mutating it first.
     let layout = markup
@@ -1527,7 +1527,7 @@ fn the_feed_page_is_sized_to_the_window() {
     // `min-height` is the sticky-footer idiom, and the two cases are opposites: a sticky footer
     // needs a short page to grow, this needs a long one to be capped. A floor with no ceiling leaves
     // the flex container with no definite size to distribute, so nothing shrinks, `.journal` grows
-    // with every record, and the whole document scrolls -- the exact failure this page's layout
+    // with every record, and the whole document scrolls: the exact failure this page's layout
     // exists to remove. It looks right, it passes every other check here, and it is only visible to
     // somebody scrolling a busy feed.
     assert!(
@@ -1836,13 +1836,13 @@ fn every_table_scrolls_inside_a_wrapper() {
         for (at, _) in source.match_indices("<table") {
             tables += 1;
             // The wrapper is the element immediately before it, so look at the preceding markup
-            // rather than anywhere in the file -- a page with one wrapped table and one bare one
+            // rather than anywhere in the file: a page with one wrapped table and one bare one
             // would otherwise pass.
             let before = source[..at].trim_end();
             // **Two wrappers qualify, and they are different jobs.** `.scroll-x` scrolls one axis
             // and pins the other shut, which is right for a table the page should grow to fit.
-            // `.table-scroll` scrolls both, for the tracker's two tables whose length nobody chose
-            // -- and it has to be a single element, because `position: sticky` resolves against the
+            // `.table-scroll` scrolls both, for the tracker's two tables whose length nobody chose,
+            // and it has to be a single element, because `position: sticky` resolves against the
             // nearest scrollport and a header nested one wrapper deeper would slide away.
             let wrapped = ["<div class=\"scroll-x\">", "<div class=\"table-scroll"]
                 .iter()
@@ -2052,7 +2052,7 @@ fn a_form_made_into_a_block_resets_the_margin_this_stylesheet_gives_every_form()
         let selector = selector.trim().replace('\n', " ");
 
         // Rules that target a `<form>` element by name. `.rename form`, `td .actions form`, and any
-        // future one -- a class selector cannot be checked this way and does not need to be, since
+        // future one: a class selector cannot be checked this way and does not need to be, since
         // the global default is keyed on the element.
         if !selector.split(',').any(|s| s.trim().ends_with("form")) {
             continue;
@@ -2280,7 +2280,7 @@ fn a_tab_names_its_page_before_the_room_it_belongs_to() {
         );
 
         // **Control tags are blanked first, and that is not tidiness.** The redeem page's title is
-        // `{{ page }}{% if let Some(room) = room_name %}: {{+ room }}{% endif %}` -- the earliest
+        // `{{ page }}{% if let Some(room) = room_name %}: {{+ room }}{% endif %}`: the earliest
         // mention of `room_name` is the *binding*, which renders nothing and sits before the colon
         // that the value it binds sits after. Reading the raw text failed that page for having the
         // right order.
@@ -2326,7 +2326,7 @@ fn a_tab_names_its_page_before_the_room_it_belongs_to() {
 #[test]
 fn the_sort_direction_is_applied_inside_compare_rather_than_by_its_caller() {
     let script = std::fs::read_to_string(source("static/tracker.js")).expect("tracker.js");
-    // Comments name the thing they warn about, so a lint reading them rejects the correct file --
+    // Comments name the thing they warn about, so a lint reading them rejects the correct file,
     // which has happened here before and teaches the next person to delete the lint.
     let code: String = script
         .lines()
@@ -2390,8 +2390,8 @@ fn every_sort_override_names_a_column_that_exists() {
         .expect("unterminated sortValues")
         .0;
 
-    // `key: ...` per line, comments and blanks skipped. The block is a literal by construction --
-    // it is a config object -- so this does not have to parse JavaScript to read it.
+    // `key: ...` per line, comments and blanks skipped. The block is a literal by construction
+    // (it is a config object), so this does not have to parse JavaScript to read it.
     let keys: Vec<&str> = block
         .lines()
         .map(str::trim)
@@ -2540,7 +2540,7 @@ fn the_tracker_summary_fills_every_cell_it_declares() {
         );
     }
 
-    // The footer has to span exactly the columns its OWN table declares -- scoped to the slots
+    // The footer has to span exactly the columns its OWN table declares, scoped to the slots
     // section, since this template holds four tables and a whole-file count would be meaningless.
     let slots = template
         .split_once("data-view=\"slots\"")
@@ -2881,7 +2881,7 @@ fn a_filter_box_is_hidden_until_the_script_that_drives_it_arrives() {
     // **Every page with a filter box must load something that reveals it.** This is the half that
     // was missing, and it cost exactly what it protects: the tracker has its own `tracker.js` and
     // does not load `table.js`, so wrapping one of its boxes in `.table-controls` hid the box AND
-    // the toggle beside it -- gated by a class nothing on that page ever set. The markup was right,
+    // the toggle beside it, gated by a class nothing on that page ever set. The markup was right,
     // the stylesheet was right, and the control was invisible.
     for path in templates() {
         let raw = std::fs::read_to_string(&path)
@@ -2889,7 +2889,7 @@ fn a_filter_box_is_hidden_until_the_script_that_drives_it_arrives() {
 
         // **Fragments are checked through the pages that include them, not on their own.**
         // `admin/resting.html` carries a filter box and loads nothing, because it is injected into
-        // `/admin/rooms` and included by `resting_page.html` -- both of which load the script. So a
+        // `/admin/rooms` and included by `resting_page.html`, both of which load the script. So a
         // page is expanded with whatever it includes before being asked, and a template that
         // extends nothing is skipped as a fragment.
         if !raw.contains("{% extends") {
@@ -3004,7 +3004,7 @@ fn a_copy_control_is_hidden_until_the_script_that_drives_it_arrives() {
     }
 
     // The tracker builds its own copy controls in `tracker.js` rather than in markup, so it is not
-    // one of these -- it loads `copy.js` for that reason and says so in its own comment.
+    // one of these: it loads `copy.js` for that reason and says so in its own comment.
     assert!(
         pages >= 3,
         "only {pages} pages render a copy control -- this lint is no longer looking at anything"
@@ -3026,7 +3026,7 @@ fn a_copy_control_is_hidden_until_the_script_that_drives_it_arrives() {
 fn a_shorthand_duration_carries_the_instant_behind_it() {
     let script = std::fs::read_to_string(source("static/localtime.js")).expect("localtime.js");
 
-    // The CALL, not any mention of the attribute -- the first version of this asserted
+    // The CALL, not any mention of the attribute: the first version of this asserted
     // `contains("[data-at]")` and matched the doc comment on `stamp` describing what it sweeps, so
     // it passed with the selector renamed. Fourth time in this codebase a lint has matched its own
     // prose; see the note on the theme selector.

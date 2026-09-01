@@ -1,7 +1,7 @@
 //! Rocket `FromParam` for puna-core's typed ids.
 //!
-//! The impls live here rather than in `puna-core` because that crate must not depend on rocket --
-//! see the note at the top of its `Cargo.toml`. The orphan rule then forces a wrapper: `RoomId`
+//! The impls live here rather than in `puna-core` because that crate must not depend on rocket.
+//! See the note at the top of its `Cargo.toml`. The orphan rule then forces a wrapper: `RoomId`
 //! and `FromParam` are both foreign to this crate, so a direct impl is not possible.
 //!
 //! The wrapper earns its keep anyway. `RoomId` and `TrackerId` are both UUIDs and deliberately
@@ -43,12 +43,12 @@ macro_rules! id_param {
 id_param!(RoomParam, RoomId);
 
 // One id space, two kinds of target: a room's tracker id and a slot's are both drawn from it, and
-// which one a given uuid is only becomes apparent when it resolves. That is deliberate -- a bare
+// which one a given uuid is only becomes apparent when it resolves. That is deliberate: a bare
 // `/tracker/<uuid>` should not disclose whether it names a multiworld or one player's slot.
 id_param!(TrackerParam, TrackerId);
 
 // The feed's own space, deliberately neither of the two above. `/journal/<uuid>` is the link most
-// likely to be handed to an audience the organizers did not pick -- a stream chat, a spectator --
+// likely to be handed to an audience the organizers did not pick (a stream chat, a spectator),
 // so it must not be the room's id and must not be derivable from the tracker's either.
 id_param!(JournalParam, JournalId);
 

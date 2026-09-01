@@ -64,7 +64,7 @@ async fn slot_patch(
 
     // The room's slots are a copy taken at creation; the *patch* belongs to the generation, which
     // is shared between every room built from it. So the file is found through the generation and
-    // the authorization is done against the room -- two different questions about one slot number.
+    // the authorization is done against the room: two different questions about one slot number.
     let generation = generation::get(&mut conn, access.room.generation_id)
         .await?
         .ok_or_else(|| not_found("this room's generation is no longer indexed"))?;
@@ -75,7 +75,7 @@ async fn slot_patch(
         .find(|entry| entry.slot_number == n)
         .ok_or_else(|| not_found("no such slot"))?;
 
-    // Patchless games are ordinary -- most of them are -- and spectators never have one. Saying so
+    // Patchless games are ordinary (most of them are) and spectators never have one. Saying so
     // beats a 404 that reads as "your download is broken".
     let member = entry.patch_member.as_deref().ok_or_else(|| {
         not_found(
@@ -117,7 +117,7 @@ async fn slot_patch(
             // above found the file, which belongs to the shared generation; the password belongs to
             // this room's copy of the slot, and two rooms on one seed have different ones.
             //
-            // `room` mode uses the room-wide password with the slot's own name as the username --
+            // `room` mode uses the room-wide password with the slot's own name as the username:
             // pahoa authenticates the password and the name identifies the slot, so the pair is
             // what a client needs either way.
             let credential = match access.room.patch_policy {
@@ -133,7 +133,7 @@ async fn slot_patch(
                 password,
             });
             // **The port the room leads with, not the base port.** A patch is what a GAME client
-            // launches with, and game clients are precisely who the filtered listener exists for --
+            // launches with, and game clients are precisely who the filtered listener exists for,
             // so a 500-slot room whose organizer chose `Filtered` because the full feed drowns
             // clients was, until this line, handing every player who downloaded a patch the address
             // that drowns them.
@@ -141,7 +141,7 @@ async fn slot_patch(
             // `base_port + 1` is the pair's filtered half by construction: reservations are
             // allocated as an adjacent even/odd pair and `spec::args` passes exactly that. Read from
             // the reservation rather than from `advertised_filtered_port` for the reason this whole
-            // route exists -- the reservation outlives the Service, so a torn-down room still
+            // route exists: the reservation outlives the Service, so a torn-down room still
             // embeds the address it will come back on.
             //
             // Already-downloaded patches keep whatever they were built with, which is what the

@@ -139,12 +139,12 @@ const ACTIONS: &[(&str, &str)] = &[
     ("set_goaled", "Set as Goaled"),
     // **Filters, which are not commands and not the roster write either.** This sets the same state
     // on every staged slot and then queues an `ApplyFilters` per slot so the running room hears
-    // about it -- so the batch page reports it exactly like any other bulk action.
+    // about it, so the batch page reports it exactly like any other bulk action.
     //
     // **One action rather than three.** It used to be Apply / Exempt / Follow, because a single
     // rule was typed into a row of fields and the two ways of saying "no rules" had nowhere to
     // live but their own buttons. With the table here, an empty table IS those two cases and the
-    // radios under it are the choice between them -- so the button says what it does and the table
+    // radios under it are the choice between them, so the button says what it does and the table
     // says what it does it with, and the panel offers exactly what a slot's own page does.
     ("filter", "Set the filter"),
 ];
@@ -211,7 +211,7 @@ async fn show(
     let room = &access.room;
 
     let rows = puna_core::model::slot::list(&mut conn, room.id).await?;
-    // The roster's own resolver, so a claimant is named here exactly as they are named there --
+    // The roster's own resolver, so a claimant is named here exactly as they are named there,
     // including the "never logged in" stand-in, which `is_placeholder` filters out below rather
     // than offering a raw Discord id as an autocomplete suggestion.
     let owners = puna_core::model::slot::owner_names(&mut conn, room.id).await?;
@@ -303,7 +303,7 @@ async fn apply(
         let mut released = 0usize;
         for slot in &form.slots {
             // **Checked before released**, because `slot::release` mints a fresh claim token
-            // whether or not anybody held it -- so releasing an unclaimed slot would silently
+            // whether or not anybody held it, so releasing an unclaimed slot would silently
             // invalidate a claim link somebody had already been sent.
             let held = puna_core::model::slot::get(&mut conn, access.room.id, *slot)
                 .await?
@@ -382,7 +382,7 @@ async fn apply(
 
         // **What was done, not which button was pressed.** One button now covers three outcomes,
         // and "Set the filter applied to 12 slots" would leave the reader to remember what was in
-        // the table -- which is the thing they were about to check.
+        // the table, which is the thing they were about to check.
         let did = format!(
             "{} {}",
             describe_state(&state),
@@ -471,13 +471,13 @@ async fn apply(
     // **Puna's own half of every command, through the console's single entry point.**
     //
     // Not a rotation special case, which is what this was and what made it wrong: it called only
-    // the credential half, so a bulk lock reached pahoa with `room_slots.locked_at` unwritten --
+    // the credential half, so a bulk lock reached pahoa with `room_slots.locked_at` unwritten:
     // no "locked" chip on the roster, and the lock silently gone at the next restart, because that
     // column is what `reapply_locks` re-asserts. `prepare_command` is the one place that decides
     // which side effects a command needs, so a verb that grows a Puna-side half later gets it here
     // for free.
     //
-    // A room-level refusal inside it -- a room mid-transition, a rotation outside per-slot mode --
+    // A room-level refusal inside it (a room mid-transition, a rotation outside per-slot mode)
     // fails identically for every slot, so hitting one fails the request on the first command
     // before anything has moved. A later failure would leave the batch half-prepared: recoverable,
     // since every one of these actions is safe to repeat, and rare enough not to be worth nesting a
@@ -656,7 +656,7 @@ mod tests {
         use puna_core::model::member::RoomRole;
         for (name, _) in ACTIONS {
             let Some(command) = command_for(name, 1) else {
-                // A filter push is a helper's too -- `ApplyFilters { slot: Some(_) }` -- and that
+                // A filter push is a helper's too (`ApplyFilters { slot: Some(_) }`), and that
                 // is asserted where the tier lives, in `model::command`.
                 continue;
             };
@@ -806,7 +806,7 @@ mod db_tests {
 
             // **And the mirror, which fails the same way pointing the other direction.** If unlock
             // reached pahoa without clearing `locked_at`, `reapply_locks` would put the lock back
-            // on the next transition to `running` -- an operator who unlocked would watch the slot
+            // on the next transition to `running`, and an operator who unlocked would watch the slot
             // re-lock itself with nothing in the room's history to explain it.
             crate::routes::console::prepare_command(
                 &mut conn,

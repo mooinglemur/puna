@@ -288,7 +288,7 @@ async fn redeploy_drifted(
     environment: &State<Environment>,
 ) -> Result<Flash<Redirect>> {
     let mut conn = pool.get().await?;
-    // `All`, deliberately, even though a resting room can never drift -- `drift()` returns `None`
+    // `All`, deliberately, even though a resting room can never drift: `drift()` returns `None`
     // without a running image. Scanning the narrower set would give the same answer today and make
     // the bulk action's reach depend on an invariant stated somewhere else.
     let overview = fleet::overview(&mut conn, **environment, Scope::All).await?;
@@ -377,7 +377,7 @@ mod tests {
 
     fn room(running: Option<&str>) -> FleetRoom {
         FleetRoom {
-            // One id by default. A test that compares ids assigns its own from `IDS` -- a shared
+            // One id by default. A test that compares ids assigns its own from `IDS`: a shared
             // counter would hand out different ids depending on which other tests ran first, which
             // is a race dressed up as determinism.
             id: id(0),
@@ -458,7 +458,7 @@ mod tests {
     #[test]
     fn the_table_shows_drift_and_offers_a_redeploy() {
         // Distinct ids, because this test asserts which rows do and do not carry a control keyed
-        // by id -- with one shared id every such assertion is about all four rows at once.
+        // by id: with one shared id every such assertion is about all four rows at once.
         let mut drifted = room(Some("registry.example.com/g/pahoa:sha-old"));
         drifted.id = id(0);
         let mut current = room(Some(CONFIGURED));
@@ -467,7 +467,7 @@ mod tests {
         idle.id = id(2);
         // A room with a request already in flight, so the "redeploy queued" cell actually renders.
         // Without one that branch is never taken and every assertion about its wording passes
-        // against markup nothing produced -- which is exactly what happened until a mutation of
+        // against markup nothing produced, which is exactly what happened until a mutation of
         // the tag failed to fail.
         let mut queued = room(Some(CONFIGURED));
         queued.id = id(3);
@@ -543,7 +543,7 @@ mod tests {
 
         // **"Redeploy" is Puna's action; "Restarted" is the column reporting that Kubernetes
         // replaced the pod without being asked.** They are one word apart and they mean different
-        // things, so the page must not use the first word for the second event -- which it did,
+        // things, so the page must not use the first word for the second event, which it did,
         // with a "restart queued" tag sitting two columns from a header reading "Restarted".
         assert!(
             html.contains("<th data-key=\"restarted\""),
@@ -566,7 +566,7 @@ mod tests {
         }
 
         // The corner link and the tab both carry the deployment's name, so a page cannot be
-        // mistaken for the other environment's at a glance -- which is the whole point of setting
+        // mistaken for the other environment's at a glance, which is the whole point of setting
         // it, and which a page rendering the hardcoded "puna" would silently defeat.
         assert!(
             html.contains(">Example Multiworld</a>"),
@@ -574,7 +574,7 @@ mod tests {
         );
         // **The page leads and the name survives**, which is the shape every title took on
         // 2026-08-31: a tab is cut from the right, so "which page" has to come before "which
-        // deployment". The admin pages are the ones that carry the site name at all -- a room page
+        // deployment". The admin pages are the ones that carry the site name at all: a room page
         // has a room name in that slot and never had one to lose.
         assert!(
             html.contains("<title>Rooms: Example Multiworld admin</title>"),
@@ -591,13 +591,13 @@ mod tests {
             "the room name links to the room"
         );
 
-        // Who opened it, by name -- never the raw snowflake, which identifies a person and answers
+        // Who opened it, by name, never the raw snowflake, which identifies a person and answers
         // nobody's question.
         assert!(html.contains("<th data-key=\"created\">Created by</th>"));
         assert!(html.contains(">troy<"), "the creator's username is shown");
         assert!(!html.contains("4931"), "and their Discord id is not");
 
-        // The section is present, labeled with its count, and EMPTY -- the rooms behind it were
+        // The section is present, labeled with its count, and EMPTY: the rooms behind it were
         // never loaded. A page that quietly rendered them would defeat the whole point.
         assert!(
             html.contains("Stopped and closed rooms (2)"),
@@ -615,7 +615,7 @@ mod tests {
         // **The page opts out of the prose measure.** `main` is 62rem because that is a readable
         // line length for prose; this page is eight columns of dense facts, and held to it the
         // table scrolls sideways on a wide screen with a third of the page empty beside it. The
-        // opt-in is one line in the template, so losing it is silent -- the page still renders, it
+        // opt-in is one line in the template, so losing it is silent: the page still renders, it
         // just goes back to scrolling.
         assert!(
             html.contains("<body class=\"wide\">"),
@@ -651,7 +651,7 @@ mod tests {
             rows[0].deployed_ago
         );
 
-        // An idle room has neither, and a missing sort key must be missing rather than zero -- a
+        // An idle room has neither, and a missing sort key must be missing rather than zero: a
         // zero would sort as "just deployed", which is the opposite of the truth.
         let none = rows_of(&Overview {
             pahoa_image: None,

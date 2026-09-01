@@ -318,7 +318,7 @@ impl Filters {
     }
 }
 
-// Eight, and the honest fix is a context struct rather than this attribute -- deferred rather than
+// Eight, and the honest fix is a context struct rather than this attribute: deferred rather than
 // dismissed, because it is nine call sites of churn for no behavior change. Worth doing next time
 // this signature grows: the arguments most at risk of being transposed are the two `bool`s, and a
 // struct is what makes that unspellable.
@@ -348,7 +348,7 @@ fn slot_views(
                     "Exempt: nothing is filtered for this slot".into()
                 }
                 Some(puna_core::model::filter::SlotFilter::Own(rules)) => {
-                    // Its OWN rules, and the room's are deliberately absent -- which is the fact
+                    // Its OWN rules, and the room's are deliberately absent, which is the fact
                     // this hover exists to make visible without opening the editor. Said only when
                     // there IS a room filter to be replacing; otherwise it names a thing that does
                     // not exist and reads as though something were being lost.
@@ -371,8 +371,8 @@ fn slot_views(
             filter_chip: match (role.is_some(), filters.of(s.slot_number)) {
                 (true, Some(puna_core::model::filter::SlotFilter::Exempt)) => Some("unfiltered"),
                 // **The override, and it only exists when there is something to override.** With a
-                // room filter in force, a slot with rules of its own is not running the room's --
-                // pahoa replaces rather than merges -- and "filtered" would say the opposite of the
+                // room filter in force, a slot with rules of its own is not running the room's
+                // (pahoa replaces rather than merges), and "filtered" would say the opposite of the
                 // thing worth knowing, since every other slot is filtered too. With no room filter,
                 // there is nothing to diverge from and the plain word is the honest one.
                 (true, Some(puna_core::model::filter::SlotFilter::Own(_)))
@@ -398,7 +398,7 @@ fn slot_views(
             // **`role`, not `may_see_roster`**, and the difference is deliberate: a player holding
             // a slot reads the roster's names and does not get everyone's snowflake with it. Same
             // gate as the lock state and the password below, decided here rather than in markup for
-            // the same reason -- `GET /room/<id>` is public, and a template cannot prove what it
+            // the same reason: `GET /room/<id>` is public, and a template cannot prove what it
             // did not render.
             owner_mention: match (role.is_some(), s.owner_id) {
                 (true, Some(owner)) => Some(puna_core::model::user::mention(owner)),
@@ -425,9 +425,9 @@ fn slot_views(
             },
             // Staff, helpers included: unbinding a slot and handing out a fresh claim link is
             // running the room rather than deciding who runs it. The roster action a helper may
-            // NOT take is on `room_members` -- adding staff, or promoting themselves.
+            // NOT take is on `room_members`: adding staff, or promoting themselves.
             can_release: role.is_some_and(|r| r >= RoomRole::Helper) && s.owner_id.is_some(),
-            // Owner only, and NOT widened to staff -- see the field's note. Computed from the same
+            // Owner only, and NOT widened to staff. See the field's note. Computed from the same
             // comparison as `is_mine` rather than from it, so the two cannot drift apart.
             tracker_id: match (viewer, s.owner_id) {
                 (Some(v), Some(o)) if v == o => Some(s.tracker_id),
@@ -435,8 +435,8 @@ fn slot_views(
             },
             // **The guard's own function, not a copy of its rule.** It deliberately does not
             // include "holds some other slot in this room", and under `open` it includes everybody.
-            // `role` already carries the admin short-circuit -- `resolve_role` answers Organizer
-            // for an admin -- so passing `false` here is not dropping the admin case.
+            // `role` already carries the admin short-circuit (`resolve_role` answers Organizer
+            // for an admin), so passing `false` here is not dropping the admin case.
             can_download: slot::may_download_patch(patch_policy, &s, viewer, role, false),
             // A claim link is offered to staff, who hand them out. A player who already holds the
             // link does not need the page to show it, and showing it to everyone would let any
@@ -674,7 +674,7 @@ async fn create(
     let mut conn = pool.get().await?;
 
     // The generation must exist before a room can reference it, and saying so here beats a
-    // foreign-key violation surfacing as a 500 -- and it must be one a room will actually load.
+    // foreign-key violation surfacing as a 500, and it must be one a room will actually load.
     refuse_unloadable_seed(&mut conn, &data_dir.0, generation_id).await?;
 
     let mut new = room::NewRoom::direct(**environment, name, generation_id, gate.user_id());
@@ -731,7 +731,7 @@ async fn create(
         }
     };
 
-    // Only on success -- see the note in `import_lobby_owners`. An association recorded for an
+    // Only on success. See the note in `import_lobby_owners`. An association recorded for an
     // import that never happened turns on a room-page notice that explains the unclaimed slots
     // wrongly and permanently.
     match crate::lobby::import(
@@ -800,7 +800,7 @@ async fn show(
 
     // D8: a person arriving at an idle room's URL wants it back, and making them click a button
     // first is friction for the common case. A link preview is not a person, which is what
-    // `Navigation` sorts out -- and the write is idempotent either way, so a room already coming up
+    // `Navigation` sorts out, and the write is idempotent either way, so a room already coming up
     // is untouched.
     // A closed room is never started by arriving at it, whoever arrives. Staff get a button; the
     // implicit trigger is for the case where wanting the page IS wanting the room, and a closed
@@ -853,7 +853,7 @@ async fn show(
         && crate::routes::journal::visibility_for(role, room.journal_policy).is_some();
 
     // Who is playing, for anybody entitled to the roster. Same tier as the `players` spoiler
-    // policy: the room's staff, or somebody who holds a slot in it -- the people the roster is
+    // policy: the room's staff, or somebody who holds a slot in it, the people the roster is
     // *for*. `GET /room/<id>` is public, so without a gate a shared link would list everybody.
     let may_see_roster = role.is_some() || owns_a_slot;
     let owner_names = if may_see_roster {
@@ -863,7 +863,7 @@ async fn show(
     };
 
     // Staff only, and two reads for the whole page: the divergent slots (only those have rows) and
-    // the room's own rules. Both feed the chips, and the room's is needed for the SLOT chips too --
+    // the room's own rules. Both feed the chips, and the room's is needed for the SLOT chips too:
     // a slot with rules of its own reads differently depending on whether there is a room filter it
     // is not running.
     let room_rules = if role.is_some() {
@@ -1027,7 +1027,7 @@ fn is_working(room: &Room) -> bool {
         "provisioning" | "starting" | "stopping" | "deleting" | "degraded" => true,
         // Down and asked to come up.
         "idle" => room.desired_state == DesiredState::Running.as_sql(),
-        // Up and asked to come down -- stopped or closed, which are the same instruction.
+        // Up and asked to come down: stopped or closed, which are the same instruction.
         "running" => room.desired_state != DesiredState::Running.as_sql(),
         _ => false,
     }
@@ -1156,7 +1156,7 @@ async fn panel(id: RoomParam, session: Session, pool: &State<Pool>) -> Result<Pa
         .ok_or_else(|| not_found("no such room"))?;
 
     // Deliberately NO implicit start here, unlike `show`. D8's trigger is about a person arriving
-    // at a room, and this is a poll -- firing it would mean a page left open on a stopped room
+    // at a room, and this is a poll: firing it would mean a page left open on a stopped room
     // restarted it every few seconds, which is the link-unfurl hazard with a worse cadence.
     let role = resolve_role(&mut conn, &session, room.id).await?;
     let message = event::latest(&mut conn, room.id)
@@ -1164,7 +1164,7 @@ async fn panel(id: RoomParam, session: Session, pool: &State<Pool>) -> Result<Pa
         .and_then(|e| phrase(&e.kind));
     let elapsed = human_duration(since_ms(transition_began(&room)));
 
-    // One indexed lookup, and only for a room that has a shared password to show -- so the ordinary
+    // One indexed lookup, and only for a room that has a shared password to show, so the ordinary
     // room pays nothing for this on a path the page re-fetches on every state change.
     let owns_a_slot = match session.user_id {
         Some(user_id) if room.slot_auth == SlotAuth::Room => {
@@ -1248,7 +1248,7 @@ fn phrase(kind: &str) -> Option<&'static str> {
         "stopping" => "shutting the room down",
         "stopped" => "the room has stopped",
         // `requested_stop` was RECORDED and had no phrase, so clicking Stop fell through to the
-        // template's fallback and rendered "This room is running" -- the room's observed state,
+        // template's fallback and rendered "This room is running", the room's observed state,
         // stated as though nothing had been asked. An event kind with no sentence is silent in
         // exactly the moment somebody is watching for one.
         "requested_stop" => "stopping the room",
@@ -1275,14 +1275,14 @@ async fn start(id: RoomParam, session: Session, pool: &State<Pool>) -> Result<Re
     let mut conn = pool.get().await?;
 
     // **Re-checked here, not trusted from the page.** The page hides the control for a closed room,
-    // and hiding a control is a courtesy rather than a boundary -- this route is reachable by anyone
+    // and hiding a control is a courtesy rather than a boundary: this route is reachable by anyone
     // who can construct a POST, which for a room whose URL is its only credential is anyone at all.
     let room = room::get(&mut conn, id.0)
         .await?
         .ok_or_else(|| not_found("no such room"))?;
     if !may_start(&room, resolve_role(&mut conn, &session, room.id).await?) {
-        // 403 rather than 404: the room's existence is not the secret here -- the page renders it
-        // to everybody -- so pretending it is gone would be a worse answer to a real question.
+        // 403 rather than 404: the room's existence is not the secret here (the page renders it
+        // to everybody), so pretending it is gone would be a worse answer to a real question.
         return Err(Error::new(
             Status::Forbidden,
             anyhow::anyhow!("this room is closed; an organizer can reopen it"),
@@ -1458,8 +1458,8 @@ async fn add_member(
         .ok_or_else(|| Error::new(Status::BadRequest, anyhow::anyhow!("unknown role")))?;
 
     let mut conn = pool.get().await?;
-    // Unlike the creator allowlist, membership IS foreign-keyed to `users` -- a member is somebody
-    // the room's pages will name -- so a placeholder row is created for an id that has never
+    // Unlike the creator allowlist, membership IS foreign-keyed to `users` (a member is somebody
+    // the room's pages will name), so a placeholder row is created for an id that has never
     // logged in. Their username fills in on first login.
     user::ensure_exists(&mut conn, user_id).await?;
     member::set_role(&mut conn, id.0, user_id, role, Some(access.user_id()))
@@ -1916,7 +1916,7 @@ async fn import_lobby_owners(
 
     // **Associated only once the import has SUCCEEDED**, which is the opposite of what this did
     // first. Setting it up front was meant to save the organizer re-pasting a link after a
-    // transient failure -- but `lobby_room_id` is also what turns on the room page's unclaimed-slot
+    // transient failure, but `lobby_room_id` is also what turns on the room page's unclaimed-slot
     // notice, and that notice says the lobby "named an account for every YAML it could match".
     // After a failed fetch the lobby named nothing, so the room acquired a permanent, confident,
     // false explanation for slots that simply had not been imported yet.
@@ -2189,7 +2189,7 @@ async fn rename_room(
     room::rename(&mut conn, id.0, &name).await?;
 
     // Both names, because the new one is on the row already and the old one is the half that is
-    // otherwise gone -- "what was this room called before" is the question a rename raises.
+    // otherwise gone: "what was this room called before" is the question a rename raises.
     event::record(
         &mut conn,
         id.0,
@@ -2314,7 +2314,7 @@ pub(crate) mod tests {
         let theirs = 200_i64;
         let slots = vec![slot(1, Some(mine)), slot(2, Some(theirs)), slot(3, None)];
 
-        // A player: their own, and nothing else. Not the unclaimed slot either -- an unclaimed slot
+        // A player: their own, and nothing else. Not the unclaimed slot either: an unclaimed slot
         // still has a password, and it is not a free credential for whoever asks first.
         let views = slot_views(
             slots.clone(),
@@ -2605,7 +2605,7 @@ pub(crate) mod tests {
         assert!(views[2].tracker_id.is_none(), "unclaimed slot leaked");
 
         // Staff who own nothing here. They see claim tokens and every patch, and STILL get no
-        // per-slot tracker link -- this is the case the field's note is about.
+        // per-slot tracker link: this is the case the field's note is about.
         let views = slot_views(
             slots.clone(),
             Some(999),
@@ -2968,7 +2968,7 @@ pub(crate) mod tests {
              a link somebody can send"
         );
 
-        // A helper is handed no invite at all -- the route withholds the list, and this is the
+        // A helper is handed no invite at all. The route withholds the list, and this is the
         // markup half of that: nothing here reconstructs one from anything else on the page.
         let helper = page(false, Vec::new())
             .render()
@@ -3155,7 +3155,7 @@ pub(crate) mod tests {
             ("/slot/1/rotate-password", "rotating a slot's password"),
             ("/slot/1/release", "releasing a claimed slot"),
             ("/members", "seeing who else is staff"),
-            // The route decides who gets a mention at all; this is the other half -- that the
+            // The route decides who gets a mention at all; this is the other half: that the
             // control is reachable rather than sitting in a branch a helper never enters.
             (r#"data-copy="&#60;@77&#62;""#, "copying a player's mention"),
         ] {
@@ -3213,7 +3213,7 @@ pub(crate) mod tests {
             save < cancel,
             "cancel comes first, so Enter would discard the edit instead of saving it"
         );
-        // The tag `class="cancel"` sits in, rather than anything after it -- an earlier version of
+        // The tag `class="cancel"` sits in, rather than anything after it: an earlier version of
         // this scanned forward from the attribute and so could not see the opening tag it was
         // trying to identify, which made it pass against a cancel `<button>`.
         let tag = form[..cancel].rfind('<').expect("cancel sits inside a tag");
@@ -3313,7 +3313,7 @@ pub(crate) mod tests {
             in_state("running", password, is_organizer)
         };
 
-        // **Every state, because the first version of this rendered only in `running`** -- so a
+        // **Every state, because the first version of this rendered only in `running`**, so a
         // stopped room showed no password at all, and rotating on one answered "the room will use
         // it the next time it starts" while showing nothing. Idle is most of an async's life, and a
         // player watching a start is the most likely person here to want the credential in hand.
@@ -3411,7 +3411,7 @@ pub(crate) mod tests {
         use askama::Template;
 
         // **One room, bound once.** `a_room()` mints a fresh `RoomId` per call, so building the
-        // page from one and asserting against another compares two different rooms' URLs -- which
+        // page from one and asserting against another compares two different rooms' URLs, which
         // is how this test failed the first time it ran.
         let room = a_room();
         let html = OptionsTemplate {
@@ -3448,7 +3448,7 @@ pub(crate) mod tests {
         );
 
         // The other half of that link: the console has to render the id it points at. Checked from
-        // both sides, since a fragment naming nothing is the quietest failure available -- the
+        // both sides, since a fragment naming nothing is the quietest failure available: the
         // browser simply does not scroll and the page looks like it ignored the click.
         let console = include_str!("../../templates/rooms/console.html");
         assert!(
@@ -3702,7 +3702,7 @@ pub(crate) mod tests {
         }
 
         // **The filtered port still explains itself, and the standard one no longer needs to.**
-        // Both tables are one column now -- the descriptions were a column that, once the filtered
+        // Both tables are one column now: the descriptions were a column that, once the filtered
         // address moved behind a disclosure, had exactly one row saying the only address on screen
         // is the one to use. The explanation that matters lives on the disclosure itself, which is
         // where somebody deciding between them actually is.
@@ -3717,7 +3717,7 @@ pub(crate) mod tests {
 
         // **The BODY has to match the header, and asserting the header alone does not say that.**
         // The first version of this checked for `<th>Address</th>` and the absence of
-        // `<th>Description</th>` -- both true of a one-column header sitting over a two-column body,
+        // `<th>Description</th>`, both true of a one-column header sitting over a two-column body,
         // which is exactly the state that shipped: a table with a stray cell hanging off every row.
         // Counting cells is the assertion that a table is not broken.
         // `<thead>` starts with `<th`, so a naive substring count reads a one-column header as two.
@@ -3738,7 +3738,7 @@ pub(crate) mod tests {
                 1,
                 "the address table has more than one column heading:\n{table}"
             );
-            // Body rows only -- the heading row is a `<tr>` too, and counting `<td>` in it finds
+            // Body rows only: the heading row is a `<tr>` too, and counting `<td>` in it finds
             // none.
             let body = table
                 .split("<tbody>")
@@ -3758,7 +3758,7 @@ pub(crate) mod tests {
         }
 
         // The label is what a screen reader announces, and suppression eats the space before an
-        // expression even inside an attribute -- where nothing on screen would reveal it.
+        // expression even inside an attribute, where nothing on screen would reveal it.
         assert!(
             html.contains("aria-label=\"Copy mw.example:40000\""),
             "the copy control's label is missing or ran together"
@@ -3852,7 +3852,7 @@ pub(crate) mod tests {
         assert!(html.contains("12s"));
 
         // And the message is escaped on the way in. `phrase()` returns a fixed table today, but
-        // this element is the one the poller also writes into from JSON -- so it is worth pinning
+        // this element is the one the poller also writes into from JSON, so it is worth pinning
         // that the server side escapes rather than relying on the table staying literal.
         //
         // Asserted as absence rather than against a particular entity spelling: which of `&#39;`
@@ -4002,7 +4002,7 @@ pub(crate) mod tests {
     /// phrase is silent in exactly the moment somebody is watching for a message.
     #[test]
     fn every_requested_event_has_something_to_say() {
-        // The routes only, not this module's own tests -- which necessarily name the prefix in
+        // The routes only, not this module's own tests, which necessarily name the prefix in
         // order to search for it, and would otherwise be what the lint reports.
         let source = include_str!("rooms.rs")
             .split("#[cfg(test)]")
@@ -4104,7 +4104,7 @@ pub(crate) mod tests {
             "set_status",
             // The three that were reachable only from the console. `alias` and both directions of
             // `allow_release` are per-slot acts with no equivalent anywhere else, so the roster is
-            // where they belong -- a row is where somebody is already looking at the slot.
+            // where they belong: a row is where somebody is already looking at the slot.
             "alias",
             "allow_release",
         ] {
@@ -4115,7 +4115,7 @@ pub(crate) mod tests {
         }
 
         // **Both directions of the exemption, and neither of them a denial.** The command is one
-        // verb pointing two ways, so the direction rides on the control the way a lock's does --
+        // verb pointing two ways, so the direction rides on the control the way a lock's does,
         // and the pair has to be offered together, because the exemption lives in the room and this
         // page cannot know which way a slot currently sits. Losing one leaves a control that can
         // only be applied and never undone from here.
@@ -4130,7 +4130,7 @@ pub(crate) mod tests {
         // **The Copies field carries its default in the markup**, which is where `moderation.js`
         // gets it: the dialog resets each field to its `defaultValue` between openings, so losing
         // this attribute leaves an empty number box where the 1 should be. It would still send one
-        // copy -- `build()` reads a missing count as one -- so the only symptom is a blank field
+        // copy (`build()` reads a missing count as one), so the only symptom is a blank field
         // that looks like it is waiting for something.
         assert!(
             staff_html.contains(r#"name="amount" min="1" max="100" value="1""#),
@@ -4138,7 +4138,7 @@ pub(crate) mod tests {
         );
 
         // Named rather than merely absent: `forbid` is the reference's word for clearing an
-        // exemption and it is a lie -- the slot returns to the room's mode, which may still permit
+        // exemption and it is a lie: the slot returns to the room's mode, which may still permit
         // releasing. If it ever appears in this column somebody has restated the misreading.
         assert!(
             !staff_html.to_lowercase().contains("forbid"),
@@ -4155,7 +4155,7 @@ pub(crate) mod tests {
 
         // **Reachable for a slot that has NO filter yet**, which is the whole point and is what was
         // missing: the chip beside a player's name links here too, and it renders only once a slot
-        // already diverges -- so the editor was reachable for exactly the slots that did not need
+        // already diverges, so the editor was reachable for exactly the slots that did not need
         // it, and a slot's first filter could only be set from the bulk panel or by typing a URL.
         // The fixture slot has no filter, so this assertion fails if the link goes back behind the
         // chip.
@@ -4265,7 +4265,7 @@ pub(crate) mod tests {
 
         // **And the gate is asserted where it lives, which is not the template.** `SlotView`'s own
         // rule is that the decision happens in `slot_views` and the markup only asks whether there
-        // is a value -- a template cannot prove it did not render something. So this goes through
+        // is a value: a template cannot prove it did not render something. So this goes through
         // the function rather than rendering a hand-built view, which would only prove the template
         // renders what it is given.
         let mut locked = slot(1, Some(100));
@@ -4494,7 +4494,7 @@ pub(crate) mod tests {
             "the dialog has no target line"
         );
 
-        // **Outside the three stages**, or the answer stage -- the moment it matters most -- would
+        // **Outside the three stages**, or the answer stage (the moment it matters most) would
         // not show it. Asserted by position: the target must precede the form that the working and
         // result panes replace.
         let target = html.find("data-mod-target").expect("checked above");
@@ -4514,7 +4514,7 @@ pub(crate) mod tests {
             );
         }
 
-        // Every command must have a title, including the two that never open a confirmation --
+        // Every command must have a title, including the two that never open a confirmation:
         // their spinner and answer use the same shared heading.
         for command in ["lock", "kick"] {
             let at = script
@@ -4594,7 +4594,7 @@ mod db_tests {
                 if live {
                     fleet::request_redeploy(conn, &[id]).await.unwrap();
                 }
-                // `Room` does not carry the column -- only the fleet projection does -- so read it
+                // `Room` does not carry the column (only the fleet projection does), so read it
                 // directly rather than widening a struct for a test.
                 #[derive(diesel::QueryableByName)]
                 struct Pending {

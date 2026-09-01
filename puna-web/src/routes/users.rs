@@ -300,7 +300,7 @@ async fn stop_view_as(
     // **`is_admin` is re-derived from the configured list, never carried back from the cookie.**
     // The rest of the session is being rebuilt from a value the cookie supplied, and trusting it
     // for this one field would make the admin flag restorable from something a previous request
-    // wrote -- which is exactly the shape the login path refuses for the same reason.
+    // wrote, which is exactly the shape the login path refuses for the same reason.
     let is_admin = crate::auth::is_admin_by_config(view_as.admin_id, figment)?;
 
     let restored = Session {

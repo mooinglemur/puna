@@ -105,7 +105,7 @@ impl<'r, S: GateSource> FromRequest<'r> for CanCreateRoom<S> {
         };
 
         // **A restricted account is refused here and nowhere else**, because this guard is already
-        // the only door onto both things `restricted` withholds -- opening a room and uploading a
+        // the only door onto both things `restricted` withholds: opening a room and uploading a
         // generation. Checked BEFORE the gate so the answer does not depend on whether creation
         // happens to be open, and **before the admin bypass**, which is the point that matters: an
         // administrator who has been restricted is restricted, or the sanction means nothing the

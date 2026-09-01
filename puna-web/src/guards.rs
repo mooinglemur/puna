@@ -67,7 +67,7 @@ impl<'r> FromRequest<'r> for Navigation {
 
         // An older browser sends no `Sec-Fetch-Mode` at all. Requiring both would make the implicit
         // start silently stop working there, which is a worse failure than an occasional missed
-        // start -- so the absence of the header falls back to the Accept header alone.
+        // start, so the absence of the header falls back to the Accept header alone.
         let absent = headers.get_one("Sec-Fetch-Mode").is_none();
         RocketOutcome::Success(Navigation(wants_html && (navigating || absent)))
     }
@@ -241,7 +241,7 @@ impl<'r, M: MinRole> FromRequest<'r> for RoomAccess<M> {
             Err(e) => return Outcome::Error((e.status, e)),
         };
 
-        // A non-member is told the room exists, because the room page itself is public -- there is
+        // A non-member is told the room exists, because the room page itself is public: there is
         // nothing to hide by pretending otherwise, and a 404 here would send an organizer who
         // mistyped their own account hunting for a deleted room.
         match role {
@@ -403,7 +403,7 @@ async fn resolve_slot(
             });
         }
 
-        // 401 for an anonymous caller so the catcher sends them to Discord -- a player following
+        // 401 for an anonymous caller so the catcher sends them to Discord: a player following
         // their own claim link from a phone is the common case, and a 403 would strand them.
         // 403 once logged in, because logging in again will not help.
         if session.is_logged_in {

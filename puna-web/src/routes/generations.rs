@@ -176,7 +176,7 @@ async fn upload(
     };
 
     // Reported, not fatal: a patch nobody can download is a player who cannot join, and the
-    // uploader is the only person able to fix it -- but the rest of the seed is still usable, so
+    // uploader is the only person able to fix it, but the rest of the seed is still usable, so
     // refusing the whole upload would be worse than saying so.
     let unmatched = meta.unmatched_patches.clone();
 
@@ -487,7 +487,7 @@ mod tests {
             games_cached,
             slots_cached,
             // Players only. The generation has four slots and one is a spectator, which owns no
-            // locations and therefore no cache row -- so three is COMPLETE, not a shortfall.
+            // locations and therefore no cache row, so three is COMPLETE, not a shortfall.
             slots_total: 3,
         }
     }
@@ -601,7 +601,7 @@ mod tests {
     /// written, and reaching the route needs a database, a volume and a real zip.
     #[test]
     fn the_dedup_notice_is_never_the_global_answer() {
-        // Only the routes, not this module's own tests -- which necessarily name both values in
+        // Only the routes, not this module's own tests, which necessarily name both values in
         // order to talk about them, and would otherwise be the thing the lint reports.
         let source = include_str!("generations.rs")
             .split("#[cfg(test)]")

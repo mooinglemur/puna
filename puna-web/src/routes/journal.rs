@@ -362,10 +362,10 @@ async fn download(
     let mut conn = pool.get().await?;
     let (room, visibility) = readable(&mut conn, &session, id).await?;
     // **The file is where the withheld records are**, so it goes only to a viewer entitled to all
-    // of them -- an organizer, or anybody at all on a `full` room. Serving it to a `Feed` viewer
+    // of them: an organizer, or anybody at all on a `full` room. Serving it to a `Feed` viewer
     // would hand over precisely what the socket just filtered, which is the one combination
     // `JournalPolicy` deliberately cannot express. `404` rather than `403`, so a refusal says
-    // nothing a probe could use -- the same answer the gates above give.
+    // nothing a probe could use, the same answer the gates above give.
     if visibility != Visibility::Everything {
         return Err(not_found("this room's history is not available"));
     }
@@ -555,7 +555,7 @@ async fn feed(
                 Ok(Ok(replay)) => {
                     let cursor = replay.cursor;
                     // `start` rides the opening frame as well as every backfill page, because it is
-                    // what the page anchors its walk on -- and it has to be re-sent on every replay,
+                    // what the page anchors its walk on, and it has to be re-sent on every replay,
                     // including after a reconnect, or a viewer that dropped mid-backfill would ask
                     // for a region its current view no longer joins on to.
                     let mut frame: serde_json::Value = serde_json::from_str(&batch(
@@ -615,7 +615,7 @@ async fn feed(
                     //
                     // Without this, an open feed holds a pod for the WHOLE grace period. Rocket's
                     // `CancellableIo` keeps doing ordinary I/O until `grace` expires and hyper's
-                    // graceful shutdown waits for open connections -- and a feed socket never
+                    // graceful shutdown waits for open connections, and a feed socket never
                     // completes on its own, that being the point of it. So a grace long enough for
                     // a download would be paid on every rollout by every reader, for nothing.
                     //

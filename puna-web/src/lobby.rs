@@ -157,16 +157,16 @@ impl Lobby {
         // --- REDIRECTS ARE NOT FOLLOWED, AND THAT IS A CREDENTIAL DECISION ------------------------
         //
         // reqwest follows up to ten by default, and it strips only the headers it knows are
-        // sensitive -- `Authorization`, `Cookie`, `Proxy-Authorization`, `WWW-Authenticate`. A
+        // sensitive: `Authorization`, `Cookie`, `Proxy-Authorization`, `WWW-Authenticate`. A
         // custom `X-Api-Key` is not on that list, so it is re-sent to whatever host the chain
         // reaches. This token is the lobby's own ADMIN_TOKEN, which grants full admin there.
         //
-        // Not hypothetical, and not specific to one environment -- **both lobbies do this, and a
+        // Not hypothetical, and not specific to one environment: **both lobbies do this, and a
         // WRONG key is treated exactly like no key at all.** Verified 2026-08-28 against both:
         // `/api/room/<id>` answers `303` to `/auth/login`, which answers `303` to
         // `https://discord.com/oauth2/authorize`. So an unsynced token walked our lobby admin token
         // out to discord.com, which the web tier's NetworkPolicy already permits it to reach for
-        // OAuth -- there was not even a connection refusal to stop it.
+        // OAuth, and there was not even a connection refusal to stop it.
         //
         // Following also destroyed the diagnosis, which is the half that was already observed: the
         // lobby never gets to say "refused", Discord answers `200` with HTML, `.json()` fails, and
@@ -298,8 +298,8 @@ pub fn ap_name(submitted: &str) -> String {
 /// claimed ones is what made a fully-claimed room report every yaml as matching nothing.
 pub fn plan(roster: &[Slot], yamls: &[LobbyYaml]) -> Plan {
     // **Every exact match is settled before a single cut name is considered.** The two passes
-    // cannot compete for one yaml -- a yaml that matches a slot exactly is at most sixteen
-    // characters, so cutting it changes nothing and it can only ever name that same slot -- but the
+    // cannot compete for one yaml (a yaml that matches a slot exactly is at most sixteen
+    // characters, so cutting it changes nothing and it can only ever name that same slot), but the
     // ordering says so structurally rather than by that argument, and it is the argument that would
     // stop holding if the cut ever gained a substitution step.
     let mut matched: Vec<Option<usize>> = roster
@@ -317,7 +317,7 @@ pub fn plan(roster: &[Slot], yamls: &[LobbyYaml]) -> Plan {
         .collect();
 
     // The second pass: the generator cut these names and the lobby did not. Order-independent,
-    // since a yaml cuts to exactly one string and no two slots share a name -- so a candidate here
+    // since a yaml cuts to exactly one string and no two slots share a name, so a candidate here
     // belongs to one slot or to none, and which slot asks first cannot change the answer.
     for (slot, matched) in roster.iter().zip(matched.iter_mut()) {
         if matched.is_some() {
@@ -333,7 +333,7 @@ pub fn plan(roster: &[Slot], yamls: &[LobbyYaml]) -> Plan {
             continue;
         };
         // **Two names cutting to one is left for a person.** Claiming either would be a guess about
-        // which account a slot belongs to, and a wrong guess hands somebody else's world away --
+        // which account a slot belongs to, and a wrong guess hands somebody else's world away,
         // where leaving it costs one claim link, which is what this slot has anyway.
         if candidates.next().is_some() {
             continue;

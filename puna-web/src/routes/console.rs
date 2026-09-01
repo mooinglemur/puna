@@ -181,7 +181,7 @@ async fn show(
         uncertain: uncertain.unwrap_or(false),
         // **Validated against the menu, not echoed.** These arrive in a URL, and a `<option
         // selected>` rendered from an unchecked query parameter is arbitrary text chosen by
-        // whoever wrote the link -- the same shape M17b's flash cookie replaced `?notice=` to
+        // whoever wrote the link, the same shape M17b's flash cookie replaced `?notice=` to
         // avoid. An unknown value selects nothing, which is what a bare console does anyway.
         preselect_kind: kind.filter(|k| MENU.contains(&k.as_str())),
         preselect_slot: slot,
@@ -337,11 +337,11 @@ fn build(form: &CommandForm) -> std::result::Result<RoomCommand, String> {
         // in it and were two menu entries describing the same act.
         //
         // One copy stays `SendItem` rather than becoming `SendMultiple { amount: 1 }`, so nothing
-        // about the wire moves for the command anybody actually runs -- `send_item` is the
+        // about the wire moves for the command anybody actually runs: `send_item` is the
         // one-copy spelling, as `RoomCommand::SendMultiple`'s own doc says.
         "send_item" => {
             // Bounded here as well as by pahoa, so the answer to a typo is a sentence rather than a
-            // round trip -- and the limit is named, because "too many" without the number is the
+            // round trip, and the limit is named, because "too many" without the number is the
             // kind of error that gets guessed at twice.
             let amount = match form.amount {
                 Some(amount) if (1..=100).contains(&amount) => amount,
@@ -504,8 +504,8 @@ pub(crate) async fn prepare_slot_credential(
     };
     let slot_number = *slot_number;
 
-    // The two states where a rotation is expressible. Everything else -- `starting`, `stopping`,
-    // `degraded`, `provisioning`, `deleting`, `integrity_fault` -- is a room whose pod exists or is
+    // The two states where a rotation is expressible. Everything else (`starting`, `stopping`,
+    // `degraded`, `provisioning`, `deleting`, `integrity_fault`) is a room whose pod exists or is
     // about to, and cannot be told.
     let at_rest = matches!(room.state.as_str(), "idle" | "failed");
     if room.state != "running" && !at_rest {
@@ -542,7 +542,7 @@ pub(crate) async fn prepare_slot_credential(
 
     // **Read the state back**, because the one above came from the request guard and a room can
     // begin starting in between. `start` renders the Secret from the row, so a start that read the
-    // row before this write produces a pod running the old map with the row saying otherwise --
+    // row before this write produces a pod running the old map with the row saying otherwise,
     // silently, which is the whole class of failure worth spending a query to avoid.
     let moved = room::get(conn, room.id)
         .await?
@@ -581,7 +581,7 @@ pub(crate) async fn prepare_command(
     let prepared = prepare_slot_credential(conn, room, command).await?;
 
     // Locking: writes Puna's record of intent and then travels on as an ordinary command. Nothing
-    // to prepare -- pahoa's `lock` needs no Secret and no password mode -- but the intent belongs
+    // to prepare (pahoa's `lock` needs no Secret and no password mode), but the intent belongs
     // here, because pahoa's copy records neither who asked nor survives a save reset.
     let locked_kind = record_lock(conn, room, command, by).await?;
 
@@ -728,7 +728,7 @@ async fn run_inner(
 
     // **A room with no process to tell is told nothing, and that is not a failure.** The durable
     // half has landed and a start renders the Secret from the row, so queueing would only produce a
-    // `rejected` row saying the room is down -- true, and nothing the operator needs to act on.
+    // `rejected` row saying the room is down: true, and nothing the operator needs to act on.
     match prepared {
         Prepared::Stored(_) => {
             return Ok(if wants_json {
@@ -800,7 +800,7 @@ async fn run_inner(
             }
             if lines.is_empty() {
                 // pahoa's own phrasing is what an organizer expects to read, so this only stands in
-                // when there was none -- a terse `{"ok": true}` is a legal answer.
+                // when there was none: a terse `{"ok": true}` is a legal answer.
                 lines.push(if succeeded {
                     "Done.".into()
                 } else {
@@ -1121,8 +1121,8 @@ mod tests {
     fn the_console_and_the_template_offer_the_same_commands() {
         let template = include_str!("../../templates/rooms/console.html");
 
-        // Each form declares its command in one hidden field, which is also what the browser posts
-        // -- so this reads the same string the route will act on rather than a label beside it.
+        // Each form declares its command in one hidden field, which is also what the browser posts,
+        // so this reads the same string the route will act on rather than a label beside it.
         let offered: Vec<&str> = template
             .match_indices(r#"<input type="hidden" name="kind" value=""#)
             .map(|(at, m)| {
@@ -1168,12 +1168,12 @@ mod tests {
             assert!(build(&filled(kind)).is_ok(), "{kind} does not build");
         }
 
-        // `send_multiple` is no longer a `kind` anybody can post -- it left the menu when it became
-        // a field on this command -- so the form refuses the old spelling outright rather than
+        // `send_multiple` is no longer a `kind` anybody can post (it left the menu when it became
+        // a field on this command), so the form refuses the old spelling outright rather than
         // keeping a second door onto the same act.
         assert!(build(&filled("send_multiple")).is_err());
 
-        // Not on the menu -- the room page's password column has its own control for it -- but
+        // Not on the menu (the room page's password column has its own control for it) but
         // buildable, because that control and the console share one route.
         assert!(build(&filled("rotate_password")).is_ok());
 
@@ -1418,7 +1418,7 @@ mod tests {
             "the option command left the page"
         );
 
-        // The gate, and that it is the one *immediately* above the form it gates -- searched
+        // The gate, and that it is the one *immediately* above the form it gates: searched
         // backwards from the marker rather than forwards from the top, because the template has
         // several `is_organizer` blocks and a naive `rfind` matched the last one on the page, which
         // sits below this and would have passed with the gate deleted.

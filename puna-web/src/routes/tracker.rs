@@ -76,7 +76,7 @@ impl Memo {
             // **Expired entries are dropped here, not merely ignored on read.** The comment this
             // replaces argued that a room nobody asks about any more could keep its entry until the
             // process restarts, because "at a few hundred rooms that is not worth an eviction
-            // policy" -- which quietly assumed a small document. A 2000-slot room's is 17.6 MiB, so
+            // policy", which quietly assumed a small document. A 2000-slot room's is 17.6 MiB, so
             // ten rooms that were browsed once is 350 MiB of a 768 Mi limit held for nothing. The
             // sweep is O(rooms) over a map with one entry per room per kind, on a path that only
             // runs on a cache miss.
@@ -293,7 +293,7 @@ async fn access(
 
     if !room::may_see_tracker(room.tracker_policy, is_staff, owns_a_slot) {
         return Err(if session.user_id.is_none() {
-            // The tracker tier initiates no login of its own -- it holds no Discord credentials --
+            // The tracker tier initiates no login of its own (it holds no Discord credentials),
             // but the 401 catcher redirects to the web tier's `/auth/login` on the same hostname,
             // which is why both roles share one `ROCKET_SECRET_KEY` and only one has the secrets.
             unauthorized("log in to see this tracker")
@@ -347,7 +347,7 @@ async fn document(
     let access = access(&mut conn, &session, id.0).await?;
 
     // Scoping happens after every cache layer, so the caches hold ONE document per room per kind
-    // and a slot view is a projection of it -- rather than one cached document per slot, which
+    // and a slot view is a projection of it, rather than one cached document per slot, which
     // would multiply both the upstream fetches and the memory by the room's slot count.
     let scope = access.target.slot_number();
     let fetched = obtain(&mut conn, &state, &access.room, which).await?;
@@ -386,7 +386,7 @@ async fn obtain(
     // Layer 2: the shared cache, honoring pahoa's own window.
     //
     // `mut` because the document is **taken** rather than cloned: the two `take` call sites below
-    // are mutually exclusive -- the fresh one returns -- and at 17.6 MiB a defensive clone is not
+    // are mutually exclusive (the fresh one returns) and at 17.6 MiB a defensive clone is not
     // free. Were that ever reordered, the second take would answer `None` and the request would
     // degrade to "this room cannot be reached", which is a visible failure rather than a silent one.
     let mut cached = tracker::cached(conn, room.id).await?;
@@ -395,7 +395,7 @@ async fn obtain(
     //
     // This read the room's single `last_tracker_at`, which the STATIC document's write also moved.
     // A room whose live document has outgrown `PUNA_TRACKER_CACHE_MAX` keeps the last copy that fit
-    // -- `store` refuses to truncate -- and the static writes kept stamping that copy as current, so
+    // (`store` refuses to truncate), and the static writes kept stamping that copy as current, so
     // the tier served an hours-old live document with `stale: false` for a minute out of every five.
     // Measured on a 2000-slot room reporting 233 checks against the 169,938 it actually had.
     let entry = cached.as_mut().and_then(|c| c.take(which.kind()));
@@ -414,7 +414,7 @@ async fn obtain(
         }
 
         // Not fresh, and it is the only copy anybody has. Put it back so the fallback below can
-        // serve it **with its real age attached** if the room does not answer -- which is what the
+        // serve it **with its real age attached** if the room does not answer, which is what the
         // column is for, and is the honest version of what the old code was doing by accident.
         if let Some(cache) = cached.as_mut() {
             match which.kind() {
@@ -436,7 +436,7 @@ async fn obtain(
         Err(e) => {
             // **The torn-down room.** Serving the last known document is the whole reason the
             // column exists; the page says how old it is, and deliberately offers **no start
-            // button** -- a tracker's audience is not necessarily authorized to provision a pod,
+            // button**: a tracker's audience is not necessarily authorized to provision a pod,
             // and a widely-shared link that spins up compute is the hazard D8 exists to prevent.
             if let Some(cache) = cached.as_mut()
                 && let Some(stale) = cache.take(which.kind())
@@ -463,8 +463,8 @@ async fn obtain(
 
 // ---- the digested views ------------------------------------------------------------------------
 //
-// Puna's own shape, under its own prefix. The reference owns the whole `/api/tracker/*` subtree --
-// `WebHostLib/api/__init__.py` even sets its CORS policy over the glob -- so putting a
+// Puna's own shape, under its own prefix. The reference owns the whole `/api/tracker/*` subtree
+// (`WebHostLib/api/__init__.py` even sets its CORS policy over the glob), so putting a
 // Puna-shaped document in there would be a trap for a tool walking that namespace. The two
 // reference-compatible endpoints above are untouched.
 
@@ -860,7 +860,7 @@ async fn summary_text(
         target.slot_number(),
         Utc::now(),
         // **The outsider's view, and it has to be**: this response is deliberately identical for
-        // every reader -- that is what lets it be `public`-cacheable and what makes it answerable to
+        // every reader: that is what lets it be `public`-cacheable and what makes it answerable to
         // a bot with no session at all. A viewer-dependent field here would be a shared cache
         // handing one reader another's document, which is the exact trade the comment below buys.
         //
@@ -870,7 +870,7 @@ async fn summary_text(
     );
 
     // Filtered after the digest rather than before it, so a selected slot's row is built from the
-    // same code every other view builds it from -- and so `?s` cannot become a second place that
+    // same code every other view builds it from, and so `?s` cannot become a second place that
     // decides what a row contains.
     let rows: Vec<digest::SlotRow> = match &wanted {
         Some(only) => rows
@@ -935,7 +935,7 @@ async fn render(
     flash: Option<rocket::request::FlashMessage<'_>>,
 ) -> Result<TrackerTemplate> {
     // Only to name the slot in the heading. The roster is Puna's, not the document's, which is why
-    // a spectator -- absent from every per-player array -- still has a name here.
+    // a spectator (absent from every per-player array) still has a name here.
     let slot_name = match scope {
         Some(number) => slot::list(conn, access.room.id)
             .await?
@@ -1006,7 +1006,7 @@ async fn fetch(
         .fetch(room.id, base_port, &secrets.admin_token, which)
         .await?;
 
-    // One key, merged in SQL, so fetching one document cannot evict the other -- a room with a
+    // One key, merged in SQL, so fetching one document cannot evict the other: a room with a
     // cached live document and no static one would render a table with no games. This used to be a
     // read-modify-write, which meant parsing the whole column back into this process to write one
     // half of it.
@@ -1020,7 +1020,7 @@ async fn fetch(
              from the room every time and will not survive a teardown"
         ),
         // The cast to `jsonb` is where Postgres parses it, so this is a room that answered with
-        // something that is not JSON. Served anyway -- the room is what said it -- but worth a line,
+        // something that is not JSON. Served anyway (the room is what said it), but worth a line,
         // because from a viewer's side the only symptom is a tracker that never caches.
         Err(e) => tracing::warn!(
             room = %room.id,
@@ -1107,7 +1107,7 @@ fn scope_to_slot(document: &serde_json::Value, slot_number: i32) -> serde_json::
                 .unwrap_or_default();
             out.insert(key.clone(), serde_json::Value::Array(kept));
         }
-        // Anything else -- `groups`, or a key a later pahoa adds -- is left out. A slot's view
+        // Anything else (`groups`, or a key a later pahoa adds) is left out. A slot's view
         // showing the item-link groups would name other slots, which is the one thing it is for
         // not doing.
     }
@@ -1118,8 +1118,8 @@ fn scope_to_slot(document: &serde_json::Value, slot_number: i32) -> serde_json::
 /// A room that cannot be reached, mapped to something a caller can act on.
 fn unreachable_room(e: UpstreamError) -> Error {
     match e {
-        // A `404` from a room means no admin token is configured there -- pahoa answers `404`
-        // rather than `401` precisely so this is distinguishable -- which means the Secret did not
+        // A `404` from a room means no admin token is configured there (pahoa answers `404`
+        // rather than `401` precisely so this is distinguishable), which means the Secret did not
         // arrive. That is a Puna fault, not a caller's.
         UpstreamError::Room(puna_core::room::RoomError::Status { status: 404 }) => Error::new(
             Status::BadGateway,
@@ -1212,7 +1212,7 @@ fn selection(
     }
 
     // **A slot's own tracker id already names its slot**, so combining it with a different one is
-    // two answers to one question -- the rule `scope_of` applies to the digested views, applied
+    // two answers to one question, the rule `scope_of` applies to the digested views, applied
     // here for the same reason. `404` rather than a refusal, matching it.
     if let Some(own) = scope
         && wanted != [own]
@@ -1263,7 +1263,7 @@ fn respond(body: String, caching: Caching, conditional: &IfNoneMatch) -> Json {
     }
 
     // `private` throughout, because a `members`-policy tracker is per-viewer and the digested views
-    // are per-viewer on EVERY policy -- a shared cache in front of this must never hand one reader
+    // are per-viewer on EVERY policy: a shared cache in front of this must never hand one reader
     // another's document. `summary.txt` is the one `public` response here, and the one that is
     // identical for every reader by construction.
     let cache_control = match caching {
@@ -1340,7 +1340,7 @@ async fn set_annotation(
     let access = access(&mut conn, &session, id.0).await?;
 
     // The room has to have opted in. Without this the feature would be reachable by POST on a room
-    // that never turned it on -- a control nobody can see is still a route anybody can construct.
+    // that never turned it on: a control nobody can see is still a route anybody can construct.
     if !access.sees_annotations() {
         return Err(not_found("this room does not use the enhanced tracker"));
     }
@@ -1488,7 +1488,7 @@ mod tests {
         use rocket::local::asynchronous::Client;
 
         // A pool that is never connected to. `get_database_pool` with no migrations builds the
-        // deadpool and nothing else -- connections are made on `get()` -- so this is here to
+        // deadpool and nothing else (connections are made on `get()`), so this is here to
         // satisfy Rocket's `&State<Pool>` sentinel, which aborts ignite for unmanaged state and
         // would otherwise be indistinguishable from the collision this test is looking for.
         let pool = puna_core::db::get_database_pool("postgres://127.0.0.1:1/none", None)
@@ -1618,7 +1618,7 @@ mod tests {
         assert_eq!(scoped["hints"].as_array().unwrap().len(), 1);
         assert_eq!(scoped["activity_timers"].as_array().unwrap().len(), 1);
 
-        // Nobody else's name is anywhere in the rendered document -- which is the assertion that
+        // Nobody else's name is anywhere in the rendered document, which is the assertion that
         // actually matters, because it holds however the filtering is implemented.
         let rendered = scoped.to_string();
         assert!(!rendered.contains("Someone Else"), "{rendered}");
@@ -1770,7 +1770,7 @@ mod tests {
         let on = render(true);
         // **The room page's word, and a key that matches it.** The key is `tracker.js`'s handle on
         // this column and is no longer the name of a field on the row, so what makes it sort is an
-        // explicit `sortValues` entry -- pinned separately, since a key with no entry falls back to
+        // explicit `sortValues` entry, pinned separately, since a key with no entry falls back to
         // a lookup that finds nothing and orders by nothing.
         assert!(on.contains(r#"<th data-key="held_by">Held by</th>"#));
         assert!(on.contains(r#"data-annotations="1""#));
@@ -1927,7 +1927,7 @@ mod tests {
         assert!(selection(Some("1,9"), &roster, None).is_err(), "not a slot");
 
         // A slot's own tracker id already names its slot, so combining it with a different one is
-        // two answers to one question -- `scope_of`'s rule, and its `404`.
+        // two answers to one question: `scope_of`'s rule, and its `404`.
         assert!(selection(Some("2"), &roster, Some(1)).is_err());
         assert_eq!(
             selection(Some("1"), &roster, Some(1)).unwrap(),
@@ -2133,7 +2133,7 @@ mod tests {
             "locations and items are the two tables nobody chose the length of"
         );
 
-        // Each bounded wrapper holds a table DIRECTLY -- no second scroller in between.
+        // Each bounded wrapper holds a table DIRECTLY: no second scroller in between.
         for section in html.split(r#"<div class="table-scroll bounded">"#).skip(1) {
             let head = section.split("<table").next().unwrap_or_default();
             assert!(
@@ -2164,7 +2164,7 @@ mod tests {
         );
 
         // The store that restores it, and the file that reacts to it. Checked against the CALLS
-        // rather than any mention -- a lint that matches its own prose has happened four times in
+        // rather than any mention: a lint that matches its own prose has happened four times in
         // this codebase.
         let toggles = std::fs::read_to_string("static/toggles.js").expect("toggles.js");
         assert!(
@@ -2216,7 +2216,7 @@ mod tests {
         assert!(one_slot.contains(r#"data-toggle="tracker.slot.items.latest""#));
 
         // And the script derives the same namespace for the sorts it remembers, from the same
-        // signal the template branches on -- `data-slot` being present.
+        // signal the template branches on: `data-slot` being present.
         let tracker = std::fs::read_to_string("static/tracker.js").expect("tracker.js");
         assert!(
             tracker.contains(r#"root.dataset.slot ? "slot" : "room""#),

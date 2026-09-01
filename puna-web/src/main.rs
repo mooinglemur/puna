@@ -213,7 +213,7 @@ fn build(
     settings: Settings,
 ) -> Rocket<Build> {
     // Rocket's `limits.data-form` caps what is read off the wire; this caps what is decompressed.
-    // Read the former so the two cannot silently disagree -- a decompression limit above the wire
+    // Read the former so the two cannot silently disagree: a decompression limit above the wire
     // limit is unreachable, and below it turns a legitimate upload into Rocket's generic 413.
     let wire_limit = figment
         .extract::<rocket::Config>()
@@ -264,13 +264,13 @@ fn build(
             .attach(rocket_oauth2::OAuth2::<auth::Discord>::fairing("discord")),
         // The tracker tier deliberately gets no OAuth fairing and no Discord credentials: it
         // never initiates a login. It still reads the session cookie (for `members` policy), which
-        // needs only the shared ROCKET_SECRET_KEY -- and its 401 catcher redirects to the web
+        // needs only the shared ROCKET_SECRET_KEY, and its 401 catcher redirects to the web
         // tier's login on the same hostname, which is what makes that split work.
         Role::Tracker => rocket.mount("/", routes::tracker::routes()),
     };
 
     // --- ATTACHED LAST, AND THAT IS NOT COSMETIC ------------------------------------------------
-    // Response fairings run in attach order, so this has to come after the OAuth2 fairing -- the
+    // Response fairings run in attach order, so this has to come after the OAuth2 fairing: the
     // whole point is to reach `rocket_oauth2_state`, which that fairing sets and offers no way to
     // configure. Attached before it, this would run first, see no cookie, and do nothing.
     //
@@ -306,7 +306,7 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|v| Environment::from_str(&v).map_err(|e| anyhow::anyhow!(e)))?;
 
     // Scoped to the role, so this process exports only what it can actually compute. A web replica
-    // publishing `puna_orchestrator_leader 0` is not a harmless extra series -- it is a zero that
+    // publishing `puna_orchestrator_leader 0` is not a harmless extra series: it is a zero that
     // alert expressions have to know to exclude.
     puna_core::metrics::init(match role {
         Role::Web => puna_core::metrics::Component::Web,
@@ -314,7 +314,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Started before the pool, and before Rocket, so a tier that is slow to reach Postgres is still
-    // scrapeable while it tries. It registers nothing itself -- `init()` above owns the registry --
+    // scrapeable while it tries. It registers nothing itself (`init()` above owns the registry),
     // so ordering against anything else here does not matter.
     tokio::spawn(metrics_listener::serve());
 
@@ -330,7 +330,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Rocket's own figment, which picks up Rocket.toml via ROCKET_CONFIG. The Discord credentials
-    // live in that file and NOT in environment variables -- see the note on `auth::discord_config`.
+    // live in that file and NOT in environment variables: see the note on `auth::discord_config`.
     //
     // --- THE SHUTDOWN GRACE, MERGED IN RATHER THAN SET THROUGH ROCKET'S OWN ENV ------------------
     // Rocket's default is TWO SECONDS, which is the whole budget an in-flight response gets after
@@ -340,7 +340,7 @@ async fn main() -> anyhow::Result<()> {
     //
     // **Not `ROCKET_SHUTDOWN_GRACE`, which does nothing.** Rocket merges `Env::prefixed("ROCKET_")`
     // with no key splitting, so that name arrives as a flat `shutdown_grace` key, matches no field,
-    // and is ignored in silence -- the same shape as a `2Mi` that parses as a default. Reading our
+    // and is ignored in silence, the same shape as a `2Mi` that parses as a default. Reading our
     // own variable and merging the nested key means a typo is a startup error instead.
     let grace = puna_core::config::shutdown_grace_from_env()?;
     let figment = rocket::Config::figment().merge(("shutdown.grace", grace));
@@ -360,8 +360,8 @@ async fn main() -> anyhow::Result<()> {
     let advertise_host = std::env::var("PUNA_ADVERTISE_HOST")
         .map_err(|_| anyhow::anyhow!("PUNA_ADVERTISE_HOST must be set"))?;
 
-    // How the tracker tier reaches a room. In-cluster by default -- no hairpin through the public
-    // address, and the room's traffic never leaves -- with the public route as a switch for running
+    // How the tracker tier reaches a room. In-cluster by default (no hairpin through the public
+    // address, and the room's traffic never leaves) with the public route as a switch for running
     // this outside a cluster. TLS is verified against `advertise_host` either way, because that is
     // the only name the room certificate carries.
     let upstream = upstream::Upstream {
