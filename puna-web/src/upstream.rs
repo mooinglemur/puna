@@ -77,8 +77,8 @@ impl Document {
 
 /// Re-exported so the tier's configuration keeps naming one type.
 ///
-/// The transport itself -- resolving the Service address while verifying against the advertised
-/// hostname -- lives in `puna_core::room`, because the orchestrator's probe dials rooms the same
+/// The transport itself (resolving the Service address while verifying against the advertised
+/// hostname) lives in `puna_core::room`, because the orchestrator's probe dials rooms the same
 /// way and that property must not be implemented twice.
 pub use puna_core::room::Route;
 

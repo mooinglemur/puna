@@ -5,7 +5,7 @@
 //! than a room whose pod crashloops minutes later with the cause buried in a container log.
 //!
 //! The order is validate, then write, then index. Nothing reaches the filesystem until
-//! `inspect` has accepted it, so a rejected upload leaves no trace at all -- which matters
+//! `inspect` has accepted it, so a rejected upload leaves no trace at all, which matters
 //! because the volume is shared and quota'd across every room in the environment.
 
 use puna_core::artifact::{self, IngestError};
@@ -47,7 +47,7 @@ pub struct ShowTemplate {
     /// A room name to start from: `<organizer>'s multiworld <YYYY-MM-DD>`.
     ///
     /// **Server-rendered rather than filled in by script**, so it is there before anything loads
-    /// and there for somebody with scripting off. The date is the server's, in UTC -- a name is a
+    /// and there for somebody with scripting off. The date is the server's, in UTC: a name is a
     /// label rather than an instant, and one that disagreed with the creator's calendar by a few
     /// hours would be a worse kind of wrong than one that is simply the server's day.
     default_room_name: String,
@@ -330,7 +330,7 @@ async fn read_upload(form: &mut Form<UploadForm<'_>>) -> std::result::Result<Vec
 ///
 /// **A page rather than a documented curl**, because the repair is rare enough that nobody will
 /// remember the path and important enough that the tracker shows raw ids until it runs. The
-/// rebuild's summary rides back in a one-shot cookie -- see [`crate::flash`] for why not the query
+/// rebuild's summary rides back in a one-shot cookie. See [`crate::flash`] for why not the query
 /// string.
 #[derive(Template, WebTemplate)]
 #[template(path = "admin/generations.html")]

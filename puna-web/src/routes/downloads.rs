@@ -254,8 +254,8 @@ fn attachment(filename: &str) -> Header<'static> {
 
 /// A download name built from the seed, the slot and the player.
 ///
-/// **Every part of this is untrusted text** -- a player name and a member name both come out of a
-/// zip somebody uploaded -- and it is going into a response header, where a newline would be a
+/// **Every part of this is untrusted text** (a player name and a member name both come out of a
+/// zip somebody uploaded), and it is going into a response header, where a newline would be a
 /// response-splitting bug and a quote would end the filename early. So it is not sanitized so much
 /// as reconstructed: an allowlist of characters, a length cap, and the extension taken from the
 /// same function that named the file on disk.

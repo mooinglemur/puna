@@ -2,7 +2,7 @@
 //!
 //! One implementation, generic over the source, so that adding a creation route means naming a
 //! source in its signature rather than remembering to call a check. A route that forgets the guard
-//! does not compile into something insecure -- it compiles into something that cannot see who the
+//! does not compile into something insecure: it compiles into something that cannot see who the
 //! caller is, because the guard is also how a handler gets its [`LoggedInSession`].
 //!
 //! The *policy* is not here. It lives in `puna_core::model::settings`, because the lobby push
@@ -27,7 +27,7 @@ use crate::error::Error;
 /// A creation source, lifted to the type level so it can index a request guard.
 ///
 /// Rocket guards take no parameters, so `CanCreateRoom(source)` becomes
-/// `CanCreateRoom<Direct>` -- distinct types over one implementation, which is what keeps the
+/// `CanCreateRoom<Direct>`: distinct types over one implementation, which is what keeps the
 /// check in a single place while still letting a route say which gate applies to it.
 pub trait GateSource: Send + Sync + 'static {
     const SOURCE: RoomSource;
@@ -47,7 +47,7 @@ impl GateSource for Direct {
 /// Proof that this caller may create a room from `S`.
 ///
 /// Carries the session, so a handler needs only this one guard, and the [`Grant`] that admitted
-/// them -- which is what a `room_events` row should record. "Created while the gate was open" and
+/// them, which is what a `room_events` row should record. "Created while the gate was open" and
 /// "created by an admin over a closed gate" are different facts about the same room, and only one
 /// of them survives the gate being closed again.
 pub struct CanCreateRoom<S: GateSource> {

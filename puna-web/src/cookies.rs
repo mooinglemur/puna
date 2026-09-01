@@ -3,7 +3,7 @@
 //! ## Why a fairing rather than setting it where each cookie is built
 //!
 //! `Session::save` does set it explicitly, and should. But Puna is not the only thing that writes
-//! a cookie here: `rocket_oauth2` sets `rocket_oauth2_state` -- the OAuth CSRF token -- from inside
+//! a cookie here: `rocket_oauth2` sets `rocket_oauth2_state` (the OAuth CSRF token) from inside
 //! [`OAuth2::get_redirect`], built as `Cookie::build(..).same_site(Lax).build()` with no `Secure`
 //! and **no configuration hook to add one**. There is nothing to pass and nothing to override.
 //!
@@ -12,7 +12,7 @@
 //!
 //! ## Why the attribute is missing in the first place
 //!
-//! Rocket only defaults `Secure` on when Rocket itself terminates TLS -- `CookieJar::set_defaults`
+//! Rocket only defaults `Secure` on when Rocket itself terminates TLS: `CookieJar::set_defaults`
 //! is `if cookie.secure().is_none() && config.tls_enabled()`. Every Puna deployment terminates TLS
 //! upstream at Envoy, so `tls_enabled()` is false and no cookie ever gets the attribute by
 //! default. The reasonable assumption that Rocket handles this is exactly what makes it invisible:
@@ -21,7 +21,7 @@
 //! ## Why it matters more here than in a typical app
 //!
 //! The UI and the multiworld rooms **share a hostname**, differing only by port, and cookies have
-//! no port isolation -- a cookie scoped to `rooms.example.com` is sent to `rooms.example.com:41234`,
+//! no port isolation: a cookie scoped to `rooms.example.com` is sent to `rooms.example.com:41234`,
 //! a pahoa room, exactly as it is to `:443`. pahoa neither parses nor logs cookies and the values
 //! are AEAD-encrypted, so it cannot read them. But they are bearer credentials: `punasession`
 //! replays a login, and `rocket_oauth2_state` is what stops an attacker completing an OAuth flow
@@ -81,7 +81,7 @@ impl Fairing for SecureCookies {
 ///
 /// **`skip(1)` is load-bearing**: the first `;`-separated segment is `name=value`, and a cookie
 /// whose VALUE happens to be or contain `secure` must not be read as carrying the attribute. Our
-/// own values are base64 ciphertext, so this is defensive rather than observed -- but the failure
+/// own values are base64 ciphertext, so this is defensive rather than observed, but the failure
 /// it prevents is a credential silently shipped without the flag, which is not a failure that
 /// announces itself.
 fn has_secure(header: &str) -> bool {

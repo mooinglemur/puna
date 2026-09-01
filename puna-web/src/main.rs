@@ -4,8 +4,8 @@
 //! serves only the tracker surface, and runs as its own Deployment so that a spike on the most
 //! public, least-authenticated part of Puna cannot degrade room creation or the OAuth callback.
 //!
-//! M3 scope: the shell -- Discord OAuth, session guards, health and readiness, an empty landing
-//! page and admin page. Rooms, artifacts, the console and the tracker arrive in M4 onwards.
+//! M3 scope: the shell (Discord OAuth, session guards, health and readiness, an empty landing
+//! page and admin page). Rooms, artifacts, the console and the tracker arrive in M4 onwards.
 
 mod auth;
 mod commands;
@@ -42,7 +42,7 @@ use tpl::TplContext;
 
 /// Rocket's own default `limits.data-form` is 2 MiB, which every real generation zip exceeds.
 /// `Rocket.toml` raises it; this is the fallback when it does not, and it is deliberately large
-/// enough to be useful rather than small enough to be safe -- the deployment sets the real number.
+/// enough to be useful rather than small enough to be safe: the deployment sets the real number.
 const DEFAULT_UPLOAD_LIMIT: u64 = 256 * 1024 * 1024;
 
 #[derive(rust_embed::RustEmbed)]
@@ -51,7 +51,7 @@ struct Assets;
 
 /// The root of the shared volume, in Rocket's state.
 ///
-/// The web tier's mount is `generations/` and nothing else, by `subPath` -- it cannot reach a
+/// The web tier's mount is `generations/` and nothing else, by `subPath`: it cannot reach a
 /// room's state directory even though this is spelled as the volume root.
 pub struct DataDir(pub std::path::PathBuf);
 
@@ -178,8 +178,8 @@ fn not_found() -> &'static str {
 
 /// Rocket answers 422 when a route matches but a parameter or form field will not parse.
 ///
-/// The common way to reach it is a truncated room link -- `/room/<half a uuid>` matches the route
-/// and then fails `FromParam` -- so a bare status code would leave someone staring at a number.
+/// The common way to reach it is a truncated room link (`/room/<half a uuid>` matches the route
+/// and then fails `FromParam`), so a bare status code would leave someone staring at a number.
 /// The status is left alone rather than remapped to 404: form submissions land here too, and
 /// telling someone their input was not found would be worse than telling them nothing.
 #[catch(422)]

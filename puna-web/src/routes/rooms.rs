@@ -6,7 +6,7 @@
 //!
 //! `GET /room/<id>` is deliberately **public**: players arrive from a shared link, and the
 //! unguessable id is the authorization, exactly as the reference implementation does it. What that
-//! page shows varies by who is looking -- credentials only ever through `SlotAccess`.
+//! page shows varies by who is looking: credentials only ever through `SlotAccess`.
 
 use puna_core::artifact;
 use puna_core::model::command::{self, RoomCommand};
@@ -38,7 +38,7 @@ type Pool = puna_core::db::Pool;
 /// Refuse to open a room from a seed a room would not load.
 ///
 /// The same check the upload form runs, run again here, and it is not redundant: those checks live
-/// in `pahoa-multidata` at a pinned rev and **they change** -- so every generation on the volume
+/// in `pahoa-multidata` at a pinned rev and **they change**, so every generation on the volume
 /// was last checked under whatever the rules were the day it arrived. Bumping the pin is what makes
 /// this the only place the answer is current, and a room opened from a stale pass is a pod that
 /// exits at startup with the reason in a container log.
@@ -126,7 +126,7 @@ pub struct RoomTemplate {
     slots: Vec<SlotView>,
     /// Precomputed rather than left as an `Option<RoomRole>` for the template to compare against.
     /// Askama binds pattern captures by reference, so `role >= Organizer` in markup is a type
-    /// error waiting to be papered over with a deref -- and a template is the worst place to put
+    /// error waiting to be papered over with a deref, and a template is the worst place to put
     /// an authorization comparison anyway.
     is_staff: bool,
     is_organizer: bool,
@@ -148,7 +148,7 @@ pub struct RoomTemplate {
     ///
     /// **Deliberately not gated on the room being `running`.** The tracker serves
     /// `last_tracker_doc` behind an "as of <time>" banner when the room is down, which for an async
-    /// is most of its life -- that fallback is a designed feature, and hiding the link while it
+    /// is most of its life: that fallback is a designed feature, and hiding the link while it
     /// applies would conceal the page exactly when it is most useful.
     can_see_tracker: bool,
     /// Whether to offer the feed link at all.
@@ -162,8 +162,8 @@ pub struct RoomTemplate {
     /// The latest event in words, for the transient states. `None` renders the state itself, which
     /// is worse but never wrong.
     message: Option<&'static str>,
-    /// Already formatted, because a template is not where a duration should be turned into English
-    /// -- and because the same string is what `room.js` overwrites on its first poll.
+    /// Already formatted, because a template is not where a duration should be turned into English,
+    /// and because the same string is what `room.js` overwrites on its first poll.
     elapsed: String,
     /// Whether this room is closed, and therefore whether the page offers a start control at all.
     ///
@@ -172,11 +172,11 @@ pub struct RoomTemplate {
     /// same question the page answers. A page offering a button the route rejects is worse than one
     /// that hides it.
     is_closed: bool,
-    /// Whether the viewer may start this room *right now* -- which is everybody for an idle room,
+    /// Whether the viewer may start this room *right now*, which is everybody for an idle room,
     /// and staff only for a closed one.
     may_start: bool,
     /// Whether the room is mid-transition, INCLUDING a request the orchestrator has not reached
-    /// yet. See [`is_working`] -- rendering from `state` alone is what made a click bounce back to
+    /// yet. See [`is_working`]: rendering from `state` alone is what made a click bounce back to
     /// the display it had just replaced.
     is_working: bool,
     /// Whether this viewer holds a slot here, which decides two things: the roster's usernames are
@@ -212,10 +212,10 @@ pub struct SlotView {
     pub is_spectator: bool,
     pub owner_id: Option<i64>,
     pub is_mine: bool,
-    /// Present only when the viewer may see it -- staff, or the unclaimed-slot case.
+    /// Present only when the viewer may see it: staff, or the unclaimed-slot case.
     pub claim_token: Option<String>,
-    /// Whether this slot has a patch file at all. **Most games do not** -- they are played with a
-    /// client rather than a patched ROM -- so offering the link unconditionally would promise a
+    /// Whether this slot has a patch file at all. **Most games do not** (they are played with a
+    /// client rather than a patched ROM), so offering the link unconditionally would promise a
     /// download that answers 404 with an explanation nobody asked for.
     pub has_patch: bool,
     /// Whether this viewer would get past `PatchAccess`.
@@ -229,7 +229,7 @@ pub struct SlotView {
     /// This slot's own tracker id, and **only when the viewer owns the slot**.
     ///
     /// The reason is capability tiers, not confidentiality. `GET /room/<id>` is a PUBLIC page under
-    /// the default `link` policy -- the unguessable room id is the whole authorization -- so
+    /// the default `link` policy (the unguessable room id is the whole authorization), so
     /// rendering every slot's tracker id here would mean holding the room URL yields all of them.
     /// That collapses two deliberately separate capabilities into one and makes the slot id's
     /// independence pointless: it exists so a player can share their own progress *without* handing
@@ -237,7 +237,7 @@ pub struct SlotView {
     ///
     /// **Staff are not a special case, and the narrow choice here is not a strong one.** An
     /// organizer already sees every slot's progress through the room-level tracker, so withholding
-    /// the per-slot link discloses nothing they cannot reach -- and anyone minded to leak would
+    /// the per-slot link discloses nothing they cannot reach, and anyone minded to leak would
     /// share the room tracker, which shows strictly more. Widening this to staff would cost no
     /// confidentiality; it is kept to owners because that is the smallest rule that satisfies the
     /// public-page constraint above, not because staff seeing it would be unsafe.
@@ -245,7 +245,7 @@ pub struct SlotView {
     /// Also gated on `can_see_tracker` at the template, since `disabled` policy 404s every tracker
     /// id including a slot's own.
     pub tracker_id: Option<puna_core::ids::TrackerId>,
-    /// This slot's password, and **only when the viewer may see it** -- its owner, the room's
+    /// This slot's password, and **only when the viewer may see it**: its owner, the room's
     /// staff, or an admin, which is the same rule `SlotAccess` applies to the JSON route.
     ///
     /// The struct's note above exists for exactly this field: a template cannot prove it did not
@@ -616,7 +616,7 @@ struct CreateRoomForm {
     server_password: Option<String>,
     /// Whether participants may annotate their slots on the tracker.
     ///
-    /// **A checkbox, so absent must mean off** -- `#[field(default = false)]` is what expresses
+    /// **A checkbox, so absent must mean off**: `#[field(default = false)]` is what expresses
     /// that, and is why this is a plain `bool` where `server_password` above is an `Option<String>`.
     ///
     /// The template posts `value="true"`, which is deliberate and not decorative: Rocket's `bool`
@@ -1238,7 +1238,7 @@ fn human_duration(ms: i64) -> String {
 ///
 /// Deliberately a small allowlist rather than a formatting of every kind: an event nobody has
 /// written a sentence for renders as nothing, and the page falls back to the state. The failure
-/// mode of the alternative -- showing raw kinds -- is a page that says `ip_mismatch` to a player.
+/// mode of the alternative (showing raw kinds) is a page that says `ip_mismatch` to a player.
 fn phrase(kind: &str) -> Option<&'static str> {
     Some(match kind {
         "provisioned" => "preparing this room's files",
@@ -1342,7 +1342,7 @@ struct CloneForm {
 ///
 /// Two guards, because two separate things are being asserted: that the caller belongs to the
 /// source room, and that they may create rooms at all. The creation gate is not implied by
-/// membership -- an organizer of somebody else's room is not thereby a creator.
+/// membership: an organizer of somebody else's room is not thereby a creator.
 #[post("/room/<id>/clone", data = "<form>")]
 async fn clone_room(
     id: RoomParam,
@@ -1836,7 +1836,7 @@ struct LiveOptionsForm {
     patch_policy: String,
     primary_port: String,
     spoiler_policy: String,
-    /// A checkbox, so **absent is off** -- unlike every field beside it, which is a radio group
+    /// A checkbox, so **absent is off**, unlike every field beside it, which is a radio group
     /// whose value is always posted. `#[field(default = false)]` is what makes unticking it mean
     /// something rather than leaving the previous value in place.
     #[field(default = false)]
@@ -2577,7 +2577,7 @@ pub(crate) mod tests {
     ///
     /// The id exists so a player can share their own progress without handing over the multiworld's
     /// tracker. That promise is only worth anything if the room page does not hand every slot's link
-    /// to whoever is looking -- which is the easy mistake, because staff legitimately see more of
+    /// to whoever is looking, which is the easy mistake, because staff legitimately see more of
     /// every other column in this table.
     #[test]
     fn a_slot_tracker_id_is_offered_only_to_the_slot_owner() {
@@ -2657,7 +2657,7 @@ pub(crate) mod tests {
     }
 
     /// An event nobody has written a sentence for renders as nothing, and the page falls back to
-    /// the state. The alternative -- formatting the raw kind -- says `ip_mismatch` to a player.
+    /// the state. The alternative (formatting the raw kind) says `ip_mismatch` to a player.
     #[test]
     fn only_events_with_a_sentence_are_shown() {
         assert!(phrase("starting").is_some());
@@ -3775,7 +3775,7 @@ pub(crate) mod tests {
     ///
     /// So the guarded failure is somebody copying the first address they see without reading either
     /// label, and the test is positional: the filtered one must sit *after* the disclosure that
-    /// hides it. Asserting only that both are present -- which the previous version did -- passes
+    /// hides it. Asserting only that both are present (which the previous version did) passes
     /// just as happily with them side by side, which is the layout this replaced.
     #[test]
     fn the_filtered_address_is_behind_a_disclosure_and_the_standard_one_is_not() {

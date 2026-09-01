@@ -1,7 +1,7 @@
 //! One-shot page notices, carried in a cookie rather than in the URL.
 //!
 //! Every one of these is the sentence a POST wants to say after it redirects, and a redirect
-//! carries nothing else. The obvious place to put it is a query parameter -- which is where these
+//! carries nothing else. The obvious place to put it is a query parameter, which is where these
 //! started, and which has three problems that only the third makes urgent:
 //!
 //!   * **It survives a refresh.** The message is about something that happened once, so a page
@@ -10,18 +10,18 @@
 //!   * **It survives a bookmark and a paste.** The URL an operator copies out of the address bar
 //!     carries a stale sentence into wherever they paste it.
 //!   * **Anyone can write one.** `/admin/rooms?notice=<whatever>` renders whatever it is handed,
-//!     in the site's own voice, on the site's own admin page. It mutates nothing -- so it is not
-//!     CSRF -- but it does not have to mutate anything to be useful: a link that makes Puna appear
+//!     in the site's own voice, on the site's own admin page. It mutates nothing (so it is not
+//!     CSRF), but it does not have to mutate anything to be useful: a link that makes Puna appear
 //!     to tell an administrator something is exactly the shape a phishing message wants.
 //!
 //! A cookie fixes all three at once, because the message is delivered *out of band from the link*.
 //! Rocket's [`Flash`] sets it on the redirect and [`FlashMessage`] removes it as it is read, so it
-//! shows once and is gone -- a refresh renders the same page with no notice, which is the behavior
+//! shows once and is gone: a refresh renders the same page with no notice, which is the behavior
 //! the URL form only pretended to have.
 //!
 //! It is not a security control and should not be mistaken for one: the cookie is not encrypted,
 //! and someone who can already run script on this origin can set it. What it removes is the
-//! *link* -- the thing you can send to somebody else.
+//! *link*: the thing you can send to somebody else.
 
 use rocket::request::FlashMessage;
 

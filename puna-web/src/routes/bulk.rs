@@ -103,7 +103,7 @@ pub struct BulkTemplate {
 #[template(path = "rooms/batch.html")]
 pub struct BatchTemplate {
     base: TplContext,
-    /// The sentence the enqueue left behind -- notably the release-claims counts, which are Puna's
+    /// The sentence the enqueue left behind, notably the release-claims counts, which are Puna's
     /// own work rather than anything the batch rows record. Dropped until 2026-08-28.
     notice: Option<crate::flash::Notice>,
     room_id: String,

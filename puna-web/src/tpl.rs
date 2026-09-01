@@ -3,7 +3,7 @@
 //! `base.html` reads `base.*` and nothing else, so a page struct only has to hold its own data
 //! plus one of these. Built from a [`Session`] rather than assembled by hand at each call site,
 //! because a page that forgot to populate `is_admin` would silently hide the admin nav from an
-//! administrator -- a bug that looks like a permissions problem.
+//! administrator: a bug that looks like a permissions problem.
 
 use std::sync::LazyLock;
 
@@ -15,7 +15,7 @@ pub const STATIC_VERSION: &str = env!("STATIC_VERSION");
 /// What this deployment calls itself, from `PUNA_SITE_NAME`.
 ///
 /// **Defaulted rather than required**, unlike the orchestrator's deployment-specific values. Those
-/// name a shared resource -- an address, a port range, a label somebody else's policy matches -- so
+/// name a shared resource (an address, a port range, a label somebody else's policy matches), so
 /// a default there is one deployment's answer silently adopted by another. This one names nothing
 /// but itself: the worst a missing value can do is show the software's own name, which is true.
 ///
@@ -36,7 +36,7 @@ pub struct TplContext {
     pub is_admin: bool,
     pub username: String,
     /// The name in the corner, in the tab, and on the landing page. Not the software's name in the
-    /// footer -- that one identifies the build and stays `puna`.
+    /// footer: that one identifies the build and stays `puna`.
     pub site_name: &'static str,
     pub version: &'static str,
     pub static_version: &'static str,

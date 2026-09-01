@@ -1,8 +1,8 @@
-//! `/admin/rooms` -- what every room is running, and the control that changes it.
+//! `/admin/rooms`: what every room is running, and the control that changes it.
 //!
 //! The page exists because a spec change deliberately does **not** disturb a running room. An image
 //! bump lands on the whole environment at once, and a room with people in it is not something a
-//! `git push` gets to interrupt -- so drift accumulates on purpose, and somebody has to be able to
+//! `git push` gets to interrupt, so drift accumulates on purpose, and somebody has to be able to
 //! see it and decide.
 
 use puna_core::Environment;
@@ -32,7 +32,7 @@ pub struct Row {
     pub id: RoomId,
     pub name: String,
     pub state: String,
-    /// `running`, `stopped` or `closed` -- what somebody ASKED for, which is what the resting table
+    /// `running`, `stopped` or `closed`: what somebody ASKED for, which is what the resting table
     /// reports and what it is split on. See `fleet::Scope`.
     pub desired_state: String,
     /// Who opened it, already resolved to something printable: a username, `"never logged in"` for
@@ -45,7 +45,7 @@ pub struct Row {
     pub running_tag: Option<String>,
     pub drift: Option<&'static str>,
     pub deployed_ago: Option<String>,
-    /// Present only when the process is meaningfully younger than its Deployment -- i.e. the pod
+    /// Present only when the process is meaningfully younger than its Deployment: i.e. the pod
     /// restarted **without Puna asking**, its spec unchanged. An eviction, a drain, or a container
     /// restart in place.
     ///
@@ -58,7 +58,7 @@ pub struct Row {
     /// The two ages again as seconds, for `data-value`.
     ///
     /// **The column cannot sort on what it displays.** "6d 2h" and "40m" compare as text with the
-    /// 4 before the 6, so the oldest room in the fleet sorts into the middle -- and a sort that is
+    /// 4 before the 6, so the oldest room in the fleet sorts into the middle, and a sort that is
     /// subtly wrong is worse than no sort, because it looks like it worked. `table.js` reads
     /// `data-value` in preference to the cell's text for exactly this.
     pub deployed_secs: Option<i64>,
@@ -71,7 +71,7 @@ pub struct Row {
     pub clients: Option<i32>,
     pub redeploy_pending: bool,
     /// How long the room has been quiet, and the same span as a sort key. `None` for a room that is
-    /// not running -- nothing is idling on a room that is already off.
+    /// not running: nothing is idling on a room that is already off.
     pub idle: Option<String>,
     pub idle_secs: Option<i64>,
     pub idle_at_ms: Option<i64>,
@@ -354,7 +354,7 @@ mod tests {
     /// Fixture room ids: fixed, distinct, and **all hex letters with no digits**.
     ///
     /// A random uuid contains random digits, and the assertions below check that a Discord id is
-    /// *absent* from the page -- so a uuid happening to contain that digit run fails a correct
+    /// *absent* from the page, so a uuid happening to contain that digit run fails a correct
     /// build, at random, roughly never on the run you are watching. It did, once, immediately.
     /// `tracker/show.html`'s leak test already carries the same note for the same reason.
     const IDS: [&str; 4] = [
@@ -367,7 +367,7 @@ mod tests {
     /// **Ids are fixed and all-hex-letters, never `RoomId::new()`.**
     ///
     /// A random uuid contains random digits, and the assertions below check that a Discord id is
-    /// *absent* from the page -- so a uuid happening to contain that digit run fails a correct
+    /// *absent* from the page, so a uuid happening to contain that digit run fails a correct
     /// build, at random, roughly never on the run you are watching. It did. `tracker/show.html`'s
     /// leak test already carries the same note for the same reason: an all-letter id cannot collide
     /// with a number the page is asserted not to contain.

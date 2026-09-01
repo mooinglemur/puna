@@ -606,7 +606,7 @@ mod tests {
         }
     }
 
-    /// `-1` is the lobby's "no author", not a user id -- and it would be a perfectly valid argument
+    /// `-1` is the lobby's "no author", not a user id, and it would be a perfectly valid argument
     /// to `user::ensure_exists`, which is what makes reading it as one worth preventing here.
     #[test]
     fn the_lobbys_no_author_sentinel_is_not_a_user() {

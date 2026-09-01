@@ -1292,7 +1292,7 @@ mod tests {
 
     /// **The failure with no symptom.** A hint's item belongs to the RECEIVER's game and its
     /// location to the FINDER's. Swap them and both lookups still succeed, returning real names of
-    /// real things -- so this asserts the exact strings, not merely that something resolved.
+    /// real things, so this asserts the exact strings, not merely that something resolved.
     #[test]
     fn a_hints_item_and_location_resolve_in_different_games() {
         let games = game_names();
@@ -1332,8 +1332,8 @@ mod tests {
         );
     }
 
-    /// A slot's hint table keeps what it will receive AND what it is holding for someone else --
-    /// both are about that player -- and nothing else.
+    /// A slot's hint table keeps what it will receive AND what it is holding for someone else
+    /// (both are about that player), and nothing else.
     #[test]
     fn a_slots_hints_are_the_ones_it_is_either_end_of() {
         let games = game_names();
@@ -1389,7 +1389,7 @@ mod tests {
         );
     }
 
-    /// A received item is the RECEIVER's, placed in the FINDER's world -- so the two halves of one
+    /// A received item is the RECEIVER's, placed in the FINDER's world, so the two halves of one
     /// row resolve in two different games, the same trap as a hint.
     #[test]
     fn a_received_items_name_and_location_resolve_in_different_games() {

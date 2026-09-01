@@ -1,4 +1,4 @@
-//! `/admin/users` -- who Puna knows, what standing they are in, and the two controls that change
+//! `/admin/users`: who Puna knows, what standing they are in, and the two controls that change
 //! it.
 //!
 //! ## Sanctions never delete
@@ -12,7 +12,7 @@
 //! ## Viewing as somebody is READ-ONLY, and that is enforced in one place
 //!
 //! [`view_as`] rewrites the caller's own session so every guard, query and template resolves to the
-//! other person with no special case anywhere -- and `Session`'s request guard refuses any
+//! other person with no special case anywhere, and `Session`'s request guard refuses any
 //! non-`GET` while it is set. See `auth::Session::from_request`, which is where the rule lives and
 //! why it lives there rather than here.
 //!
@@ -38,7 +38,7 @@ use askama_web::WebTemplate;
 /// One row, with every decision already made so the template only formats.
 pub struct Row {
     /// Rendered as text, not a number: a Discord snowflake exceeds 2^53 and JavaScript would round
-    /// it -- and this table is sorted and filtered in the browser.
+    /// it, and this table is sorted and filtered in the browser.
     pub id: String,
     pub username: String,
     /// `true` when the account has a row but has never signed in, which the lobby push produces.
@@ -217,8 +217,8 @@ struct ViewAsForm {
 /// See the site as somebody else, read-only.
 ///
 /// Rewrites the caller's own session so that `user_id`, `username` and `is_admin` describe the
-/// target -- which is what makes every guard and template resolve to them with no branch anywhere
-/// -- and stashes the real identity in `view_as` for the banner and the way back.
+/// target (which is what makes every guard and template resolve to them with no branch anywhere)
+/// and stashes the real identity in `view_as` for the banner and the way back.
 ///
 /// **`is_admin` goes to `false`**, and that is not merely tidy: leaving it set would render the
 /// admin navigation and the admin-gated pages while claiming to show what an ordinary user sees,
@@ -281,7 +281,7 @@ async fn view_as(
 ///
 /// **Takes no session guard**, which is the point: `Session`'s guard refuses every non-`GET` while
 /// impersonating, so a route reached through it could never run here. It reads the cookie itself
-/// instead. That is safe because the only thing it can do is *drop* a capability -- the identity it
+/// instead. That is safe because the only thing it can do is *drop* a capability: the identity it
 /// restores comes out of the encrypted cookie's `view_as`, which only [`view_as`] above can write,
 /// and it is written there from an [`AdminSession`].
 #[post("/admin/users/stop-view-as")]

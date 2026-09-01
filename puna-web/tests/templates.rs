@@ -380,7 +380,7 @@ fn line_containing(source: &str, at: usize) -> &str {
     &source[start..end]
 }
 
-/// `{% endif %}`, `{% else %}` and friends -- tags that close or divide a block.
+/// `{% endif %}`, `{% else %}` and friends: tags that close or divide a block.
 fn terminates_a_block(tag: &str) -> bool {
     let body = tag
         .trim_start_matches(['{', '%', '+'])

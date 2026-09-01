@@ -896,7 +896,7 @@ async fn summary_text(
 /// The reference implementation's per-slot URL, so tools that construct it keep working.
 ///
 /// It leaks nothing new: anyone who can build this path already holds the multiworld's tracker id.
-/// The *other* per-slot form -- a slot's own id -- is the one that discloses nothing about the room,
+/// The *other* per-slot form (a slot's own id) is the one that discloses nothing about the room,
 /// and both render the same page.
 #[get("/tracker/<id>/<team>/<player>")]
 async fn slot_page(
@@ -924,7 +924,7 @@ async fn slot_page(
 ///
 /// It fetches no tracker document at all: every table is rendered in the browser from
 /// `/api/puna/tracker/**`. So the HTML costs one row read and nothing upstream, and the only work
-/// that touches a room is the JSON the client asks for -- which is also the only thing that has to
+/// that touches a room is the JSON the client asks for, which is also the only thing that has to
 /// be fresh.
 async fn render(
     conn: &mut diesel_async::AsyncPgConnection,
@@ -1631,7 +1631,7 @@ mod tests {
         assert_eq!(scoped["total_checks_done"][0]["checks_done"], 4);
     }
 
-    /// Item-link groups name their members, so a scoped view drops them -- along with any key a
+    /// Item-link groups name their members, so a scoped view drops them, along with any key a
     /// later pahoa adds that this build has never seen.
     #[test]
     fn unrecognized_and_membership_keys_are_dropped_rather_than_forwarded() {
@@ -2089,7 +2089,7 @@ mod tests {
     /// exactly one slot, so the box is offered on the multiworld view and nowhere else.
     ///
     /// Asserted by counting, because both pages carry several search boxes and "contains a search
-    /// box" is true either way -- the question is how many.
+    /// box" is true either way: the question is how many.
     #[test]
     fn the_one_row_slot_table_offers_no_filter() {
         let multiworld = tracker_page(None).render().expect("renders");
@@ -2122,7 +2122,7 @@ mod tests {
     /// One because `position: sticky` resolves against the nearest scrollport: nest a horizontal
     /// scroller inside a vertical one and the header sticks to a box that never scrolls vertically,
     /// so it slides away with the rows. That failure is invisible in markup and only shows when
-    /// somebody scrolls a long list -- which is exactly the case these two exist for.
+    /// somebody scrolls a long list, which is exactly the case these two exist for.
     #[test]
     fn a_slots_locations_and_items_scroll_inside_one_bounded_wrapper() {
         let html = tracker_page(Some(1)).render().expect("renders");

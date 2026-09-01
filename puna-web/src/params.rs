@@ -5,8 +5,8 @@
 //! and `FromParam` are both foreign to this crate, so a direct impl is not possible.
 //!
 //! The wrapper earns its keep anyway. `RoomId` and `TrackerId` are both UUIDs and deliberately
-//! different capabilities -- `/room/<id>` reaches the room, `/tracker/<id>` must not be walkable
-//! back to it -- so a route that accidentally took the wrong one would leak the room URL through a
+//! different capabilities (`/room/<id>` reaches the room, `/tracker/<id>` must not be walkable
+//! back to it), so a route that accidentally took the wrong one would leak the room URL through a
 //! tracker link. Distinct parameter types make that a compile error rather than a review question.
 
 use puna_core::ids::{JournalId, RoomId, TrackerId};

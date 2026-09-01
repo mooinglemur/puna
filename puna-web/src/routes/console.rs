@@ -562,14 +562,14 @@ pub(crate) async fn prepare_slot_credential(
 /// `room_slots.locked_at` unwritten. The visible symptom was a roster with no "locked" chip. The
 /// worse one was invisible: that column is what `steps::reapply_locks` re-asserts on every
 /// transition to `running`, so those slots would have quietly let their holders back in at the next
-/// restart -- pahoa's own copy lives in `room.save`, which a save reset takes with it.
+/// restart: pahoa's own copy lives in `room.save`, which a save reset takes with it.
 ///
 /// So this is not tidying. **Two callers deciding independently which side effects a command needs
 /// is the bug**, and one function they both go through is the fix: a command that grows a Puna-side
 /// half later gets it in both places or neither.
 ///
 /// Returns the credential [`Prepared`] state, which is the one thing a caller still has to branch
-/// on -- a rotation against a room that is not running has landed durably and must not be queued.
+/// on: a rotation against a room that is not running has landed durably and must not be queued.
 pub(crate) async fn prepare_command(
     conn: &mut diesel_async::AsyncPgConnection,
     room: &puna_core::model::room::Room,
@@ -605,14 +605,14 @@ pub(crate) async fn prepare_command(
 /// **Separate from [`prepare_slot_credential`] because locking is no longer a credential
 /// operation.** pahoa owns the verb now: `lock` is an ordinary passthrough command that reaches the
 /// running room and nothing else, so there is no Secret to write, no ordering to get right, and no
-/// per-slot mode requirement -- it works in every password mode.
+/// per-slot mode requirement: it works in every password mode.
 ///
 /// What stays on this side is the **intent and the audit trail**. pahoa persists the lock in
 /// `room.save`, which goes with a save that is reset or a PVC that is recreated, and it records
 /// only the fact rather than who asked. `room_slots.locked_at` / `locked_by` is therefore the
 /// authority, and the orchestrator re-applies it whenever a room reaches `running`.
 ///
-/// Returns the `room_events` kind, or `None` when the row did not move -- a repeat click, which
+/// Returns the `room_events` kind, or `None` when the row did not move: a repeat click, which
 /// should not write an event claiming something changed.
 async fn record_lock(
     conn: &mut diesel_async::AsyncPgConnection,

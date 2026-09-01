@@ -1,4 +1,4 @@
-//! `/admin/gates` -- the two creation switches and the allowlist.
+//! `/admin/gates`: the two creation switches and the allowlist.
 //!
 //! Every change is recorded with `updated_by` / `added_by`, because "who opened room creation"
 //! is a question that only ever gets asked after something has gone wrong.

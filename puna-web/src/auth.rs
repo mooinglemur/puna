@@ -1,7 +1,7 @@
 //! Discord OAuth, the session cookie, and the layered request guards.
 //!
 //! Adapted from `Archipelago-lobby/community-ap-tools/src/auth.rs`. The flow is deliberately the
-//! same -- same Discord application, same `/oauth2/@me` lookup, same immediate token revoke -- so
+//! same (same Discord application, same `/oauth2/@me` lookup, same immediate token revoke), so
 //! that a user who has already authorized the app sees a redirect rather than a consent dialog.
 //!
 //! Three things differ from the original, each for a reason:
@@ -12,8 +12,8 @@
 //!     produces a logout loop that looks like random session loss.
 //!
 //!   * Login is NOT gated. community-ap-tools rejects anyone not already in a team, because every
-//!     one of its pages is staff-only. Puna's public surface is genuinely public -- a player
-//!     follows a room link and claims a slot -- so authentication and authorization are separate:
+//!     one of its pages is staff-only. Puna's public surface is genuinely public (a player
+//!     follows a room link and claims a slot), so authentication and authorization are separate:
 //!     anyone may log in, and `CanCreateRoom` (M4) plus `RoomRole` (M5) decide what they may do.
 //!
 //!   * `is_admin` is re-derived from Puna's own `admins` list on every login and never inherited.
@@ -376,7 +376,7 @@ pub fn is_admin(user_id: i64, config: &Dict) -> bool {
 ///
 /// Exists for one caller: restoring an administrator's own session when they stop viewing the site
 /// as somebody else. The rest of that session is rebuilt from a value the cookie carried, and
-/// `is_admin` deliberately is not -- it is re-derived here, the same way login does it, so the flag
+/// `is_admin` deliberately is not: it is re-derived here, the same way login does it, so the flag
 /// can never be restored from something a previous request wrote.
 pub fn is_admin_by_config(user_id: i64, figment: &Figment) -> Result<bool> {
     Ok(is_admin(user_id, &discord_config(figment)?))

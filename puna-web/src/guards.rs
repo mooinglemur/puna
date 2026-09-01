@@ -2,24 +2,24 @@
 //!
 //! ## Both read the room id from the route's FIRST dynamic segment
 //!
-//! Rocket guards take no parameters, so a guard cannot be told which room it is guarding -- it has
+//! Rocket guards take no parameters, so a guard cannot be told which room it is guarding: it has
 //! to find out, from the routed URI. **`Request::param(n)` is SEGMENT-indexed**, so for
 //! `/room/<id>/...` the id is segment **1** (segment 0 is the literal `room`), and for
 //! `/room/<id>/slot/<n>/...` the slot number is segment **3**.
 //!
 //! Reading `param(0)` as "the first dynamic parameter" is the obvious misreading and it compiles.
-//! It also made every guarded route here answer 404 for everybody from M5 until 2026-08-20 -- see
+//! It also made every guarded route here answer 404 for everybody from M5 until 2026-08-20. See
 //! [`ROOM_ID_SEGMENT`].
 //!
 //! So every room-scoped route must spell the room id first: `/room/<id>/...`. That is a convention,
-//! and conventions rot -- but breaking it fails loudly and immediately, with a 404 on the first
+//! and conventions rot, but breaking it fails loudly and immediately, with a 404 on the first
 //! request rather than authorization against the wrong room. The failure mode is "this page never
 //! works", not "this page works for the wrong people".
 //!
 //! ## Admins short-circuit; nothing else does
 //!
 //! A global admin resolves to [`RoomRole::Organizer`] without a roster row, and deliberately does
-//! not get one -- `member::list` stays an honest answer to "who is staff here". Everyone else is
+//! not get one: `member::list` stays an honest answer to "who is staff here". Everyone else is
 //! resolved from the roster and from nothing else: there is no creator special case, because
 //! `rooms.created_by` is informational and the uploader is simply the first organizer row.
 
@@ -118,7 +118,7 @@ impl MinRole for Organizer {
 
 /// Proof that the caller holds at least `M` in the room named by the route.
 ///
-/// Carries the room, so a handler needs one guard rather than a guard plus a lookup -- and so the
+/// Carries the room, so a handler needs one guard rather than a guard plus a lookup, and so the
 /// room it authorized against is provably the room it renders.
 pub struct RoomAccess<M: MinRole> {
     pub room: Room,
@@ -472,7 +472,7 @@ mod tests {
     }
 
     /// An older browser sends no `Sec-Fetch-Mode` at all. Requiring it would make the implicit start
-    /// silently stop working there, which is worse than the occasional missed one -- the explicit
+    /// silently stop working there, which is worse than the occasional missed one: the explicit
     /// button is always present either way.
     #[test]
     fn a_browser_without_the_header_still_counts_as_navigating() {
