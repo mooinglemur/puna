@@ -46,7 +46,7 @@ async fn a_notification_reaches_a_listener() {
     });
 
     // The subscription is asynchronous, so give it a moment before firing. A notification sent
-    // before `LISTEN` completes is genuinely lost -- that is Postgres's behavior, not a bug here.
+    // before `LISTEN` completes is genuinely lost: that is Postgres's behavior, not a bug here.
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     let (client, _rx) = puna_core::db::raw_connection_with_notifications(&url)

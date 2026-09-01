@@ -101,7 +101,7 @@ async fn room_states_match_the_database() {
 
         // metrics::ROOM_STATES exists so the gauge can publish a zero per state at startup.
         // If a state is added to the migration and not there, the dashboard silently loses a
-        // series -- which is exactly the "no data vs zero" ambiguity that list exists to avoid.
+        // series, which is exactly the "no data vs zero" ambiguity that list exists to avoid.
         assert_eq!(
             from_db,
             puna_core::metrics::ROOM_STATES,

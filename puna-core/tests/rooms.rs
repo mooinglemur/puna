@@ -91,7 +91,7 @@ async fn creating_a_room_populates_slots_membership_and_credentials() {
         .await
         .expect("create");
 
-        // The uploader is the first organizer -- an ordinary roster row, not a special case.
+        // The uploader is the first organizer: an ordinary roster row, not a special case.
         assert_eq!(
             member::role_of(&mut conn, id, OWNER).await.expect("role"),
             Some(RoomRole::Organizer)
@@ -307,7 +307,7 @@ async fn assert_mode(conn: &mut diesel_async::AsyncPgConnection, id: RoomId, mod
     match mode {
         SlotAuth::PerSlot => {
             // COMPLETE, not merely non-empty. Under pahoa's fail-closed rule a slot missing from
-            // the map is refused, so a gap here is a player who cannot join -- and the spectator
+            // the map is refused, so a gap here is a player who cannot join, and the spectator
             // is the slot most likely to be the gap.
             assert!(
                 entries.iter().all(|(_, p)| p.is_some()),
@@ -555,7 +555,7 @@ async fn a_clone_carries_the_people_and_none_of_the_credentials() {
         let clone_slots = slot::list(&mut conn, clone).await.expect("slots");
         assert_eq!(clone_slots.len(), source_slots.len());
 
-        // Owners carry over -- the same people keep their slots without re-claiming...
+        // Owners carry over: the same people keep their slots without re-claiming...
         assert_eq!(clone_slots[0].owner_id, Some(PLAYER));
         assert!(
             clone_slots[0].claim_token.is_none(),
@@ -857,7 +857,7 @@ async fn renaming_a_room_touches_nothing_but_the_name() {
             .expect("exists");
 
         // Pretend the room has started, so there is a hash for a rename to disturb. `Room` does not
-        // project `spec_hash` -- it is orchestrator-owned -- so this reads the column itself, which
+        // project `spec_hash` (it is orchestrator-owned) so this reads the column itself, which
         // is what the planner compares and therefore the thing that must not move.
         diesel::sql_query(
             "UPDATE rooms SET spec_hash = 'hash-1', redeploy_requested_at = NULL WHERE id = $1",
@@ -1005,7 +1005,7 @@ async fn the_fleet_overview_scopes_on_what_was_asked_for() {
         assert_eq!(names(&all).len(), 3);
 
         // The count is what the collapsed heading reports, so it must be right whichever scope
-        // was loaded -- including the one that deliberately loaded none of them.
+        // was loaded, including the one that deliberately loaded none of them.
         for overview in [&active, &resting, &all] {
             assert_eq!(
                 overview.resting, 2,

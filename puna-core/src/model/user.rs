@@ -180,7 +180,7 @@ impl AdminUser {
     pub fn status(&self) -> UserStatus {
         // An unparseable value means the database knows a variant this build does not. Reading it
         // as `Active` would quietly hand back privileges somebody removed, so it reads as the
-        // *most* restricted thing instead -- wrong in the safe direction.
+        // *most* restricted thing instead: wrong in the safe direction.
         UserStatus::parse(&self.status).unwrap_or(UserStatus::Banned)
     }
 }

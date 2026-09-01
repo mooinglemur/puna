@@ -268,7 +268,7 @@ pub async fn get_database_pool(
     ensure_crypto_provider();
 
     // DEVIATION: tolerate an existing instrumentation hook. The lobby `.expect()`s here, which
-    // panics the second time a pool is built -- fine for a process that builds one, fatal for a
+    // panics the second time a pool is built: fine for a process that builds one, fatal for a
     // test suite that builds one per test.
     let _ = diesel::connection::set_default_instrumentation(|| {
         Some(Box::new(DbInstrumentation::default()))

@@ -538,7 +538,7 @@ pub fn rules_gained_by_following(room: &[Rule]) -> Vec<Rule> {
 // --- storage -------------------------------------------------------------------------------------
 //
 // Rules are stored as the JSON pahoa reads, validated on the way in. Reading them back is a parse
-// that can fail -- a row written by a future Puna, or hand-edited -- and every read here degrades to
+// that can fail (a row written by a future Puna, or hand-edited) and every read here degrades to
 // "no rules" rather than failing the page, because a roster that will not render is a worse answer
 // than a chip that is missing. The one exception is the re-assert path, which must not push a
 // half-understood ruleset at a room; that reads through `parse_strict`.
@@ -1041,7 +1041,7 @@ mod tests {
         assert_eq!(SlotFilter::Follows.to_stored(), None);
         assert_eq!(SlotFilter::Exempt.to_stored(), Some(vec![]));
 
-        // And the chip marks divergence, not "is filtered" -- both of these differ from the room.
+        // And the chip marks divergence, not "is filtered": both of these differ from the room.
         assert!(!SlotFilter::Follows.diverges());
         assert!(SlotFilter::Exempt.diverges());
         assert!(SlotFilter::Own(vec![bounce("DeathLink", None)]).diverges());

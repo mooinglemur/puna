@@ -132,7 +132,7 @@ async fn a_refusal_is_terminal_and_keeps_the_rooms_own_words() {
         .expect("enqueue");
         command::claim(&mut conn).await.expect("claim");
 
-        // `ok: false` -- the room understood and said no.
+        // `ok: false`: the room understood and said no.
         let refusal = CommandOutput {
             ok: false,
             output: vec!["no such slot: 9".into()],

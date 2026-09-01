@@ -351,13 +351,13 @@ impl RoomCommand {
             // Reads and speech. Nothing here changes a player's game.
             Self::Status | Self::Say { .. } | Self::Countdown { .. } => RoomRole::Helper,
             // `hint` costs the slot's points, and is still a helper's: that is the support action
-            // the tier exists for -- a player stuck on a lost item asks, and a helper answers.
+            // the tier exists for: a player stuck on a lost item asks, and a helper answers.
             // `hint_location` is the same act pointed the other way round.
             Self::Hint { .. } | Self::HintLocation { .. } => RoomRole::Helper,
             // These reach into somebody's game or end their session, and they are a helper's too:
             // each is a thing a player asks staff for, and none of them changes the room itself.
-            // `kick` in particular is a disconnect rather than a ban -- the player may reconnect
-            // immediately -- so it is moderation, which is the work this tier is for.
+            // `kick` in particular is a disconnect rather than a ban (the player may reconnect
+            // immediately) so it is moderation, which is the work this tier is for.
             Self::Release { .. }
             | Self::Collect { .. }
             | Self::SendItem { .. }
@@ -378,7 +378,7 @@ impl RoomCommand {
             | Self::LockSlot { .. }
             // **A helper's, though it cannot be undone**, which is the argument against and is
             // answered by the tier line rather than by how severe it feels. Declaring a goal acts
-            // on one slot's game, which is what this tier is for -- and `release` two arms up is
+            // on one slot's game, which is what this tier is for, and `release` two arms up is
             // equally irreversible and already a helper's. It is also what a goal CAUSES under the
             // auto rules, so an organizer-only `set_status` would be a gate a helper walks around
             // by releasing manually: the same outcome, one step longer, and no record that it was
@@ -386,7 +386,7 @@ impl RoomCommand {
             | Self::SetStatus { .. } => RoomRole::Helper,
             // **The only command whose tier depends on its own field**, and it has to: a slot's
             // filter is one slot's traffic, which is a helper's by the same argument as `lock`,
-            // while the ROOM's changes what every player experiences and persists into the save --
+            // while the ROOM's changes what every player experiences and persists into the save:
             // the `option` argument. Two variants would have been the alternative, and would have
             // split the dispatcher's one intercept into two that can drift.
             Self::ApplyFilters { slot } => match slot {
@@ -560,7 +560,7 @@ mod tests {
             ),
             (
                 // Sent explicitly in both directions rather than omitted when true. pahoa defaults
-                // an absent `allowed` to true, so the two agree -- but this command's whole hazard
+                // an absent `allowed` to true, so the two agree, but this command's whole hazard
                 // is that `false` reads like a denial and is not one, and a body that says which
                 // way it meant is worth more than a byte saved.
                 RoomCommand::AllowRelease {
@@ -578,7 +578,7 @@ mod tests {
             ),
             (
                 // A STRING, even for an integer option. pahoa accepts a string, a number or a
-                // boolean and parses from text either way -- and a string is what keeps this enum
+                // boolean and parses from text either way, and a string is what keeps this enum
                 // `Eq`, since `serde_json::Value` is not.
                 RoomCommand::SetOption {
                     name: "hint_cost".into(),
@@ -848,7 +848,7 @@ mod tests {
             assert_eq!(command.required_role(), expected, "{name} changed tier");
         }
 
-        // The ladder is `Ord`, so every check is `role >= required` -- an organizer may do
+        // The ladder is `Ord`, so every check is `role >= required`: an organizer may do
         // everything a helper may.
         assert!(Organizer >= Helper);
         assert!(
@@ -925,7 +925,7 @@ mod tests {
         assert_eq!(Disposition::from_status(503), Disposition::Failed);
         assert_eq!(Disposition::from_status(401), Disposition::Failed);
 
-        // A room that said no is `ok` -- the command completed, and `result.ok` is the answer.
+        // A room that said no is `ok`: the command completed, and `result.ok` is the answer.
         // Marking it failed would invite a retry, and retrying a refusal loops forever.
         assert_eq!(Disposition::Answered.state(), "ok");
 

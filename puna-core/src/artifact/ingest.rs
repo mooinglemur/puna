@@ -358,14 +358,14 @@ pub fn inspect(bytes: &[u8], size_limit: u64) -> Result<GenerationMeta, IngestEr
     let data =
         MultiData::parse(&multidata_bytes).map_err(|e| IngestError::Multidata(e.to_string()))?;
 
-    // Before anything is attributed, because a seed no room will load has nothing worth indexing
-    // -- and because the whole point of doing this at upload is that it is a sentence on a form
+    // Before anything is attributed, because a seed no room will load has nothing worth indexing,
+    // and because the whole point of doing this at upload is that it is a sentence on a form
     // rather than a pod exiting at startup with the reason in a container log.
     if let Some(reason) = load_refusal(&data) {
         return Err(IngestError::WillNotLoad(reason));
     }
 
-    // Connectable slots: players and spectators, groups dropped. See the module docs -- a spectator
+    // Connectable slots: players and spectators, groups dropped. See the module docs: a spectator
     // that is missing here is a spectator with no password in a `per_slot` room. Groups still count
     // toward pahoa's memory budget, which is why `slot_count` is taken separately below.
     let connectable: BTreeMap<u32, (String, String, SlotKind)> = data
@@ -406,7 +406,7 @@ pub fn inspect(bytes: &[u8], size_limit: u64) -> Result<GenerationMeta, IngestEr
             buf
         };
 
-        // The patch's own manifest first -- authoritative, and immune to every naming convention.
+        // The patch's own manifest first: authoritative, and immune to every naming convention.
         // The filename's `P<n>` is the fallback for patch types that are not zips, such as
         // `.apmanual`. Player names are never used to CHOOSE a slot.
         let manifest = read_patch_manifest(&member_bytes);
@@ -416,7 +416,7 @@ pub fn inspect(bytes: &[u8], size_limit: u64) -> Result<GenerationMeta, IngestEr
             .or_else(|| slot_from_filename(&name));
 
         // A manifest name that disagrees with the multidata is the signature of patches from a
-        // DIFFERENT generation being bundled in -- the slot number would still resolve, and the
+        // DIFFERENT generation being bundled in: the slot number would still resolve, and the
         // player would receive a patch for someone else's world in a seed they are not playing.
         // Cheap to detect here, effectively undiagnosable later.
         if let (Some(slot), Some(claimed)) = (
@@ -498,7 +498,7 @@ mod tests {
             // Canonical form.
             ("AP_14318265276849580066_P31_FrootRoop-SM.apsm", Some(31)),
             ("AP_14318265276849580066_P55_Minecraft.apmc", Some(55)),
-            // UNDERSCORES IN PLAYER NAMES -- the normal case, since get_out_file_name_base
+            // UNDERSCORES IN PLAYER NAMES: the normal case, since get_out_file_name_base
             // replaces spaces with underscores. No separator is a reliable field boundary.
             ("AP_14318265276849580066_P40_IronSquire_SMS.apsms", Some(40)),
             (
@@ -539,7 +539,7 @@ mod tests {
     /// mis-attribution, which is the outcome that actually matters.
     #[test]
     fn a_malformed_legacy_name_is_read_or_refused_never_misattributed() {
-        // Only one delimited P-component, so it resolves -- and to the right slot.
+        // Only one delimited P-component, so it resolves, and to the right slot.
         assert_eq!(
             slot_from_filename("AP_bciP6tGNR-GbEx0RqU-2Bg_P16_ExamplePlayerMC.apmc"),
             Some(16),
@@ -552,7 +552,7 @@ mod tests {
 
     #[test]
     fn a_filename_with_no_slot_component_is_reported_not_guessed() {
-        // Both real. Neither carries a slot number, so neither may be attributed from its name --
+        // Both real. Neither carries a slot number, so neither may be attributed from its name:
         // if such a patch is not a zip with a manifest, it lands in `unmatched_patches`.
         assert_eq!(
             slot_from_filename("AP_vZgp2aaNToWM3RknI8UoFA_SP.apsm64ex"),
@@ -597,7 +597,7 @@ mod tests {
         }
 
         // Real patch members. Every patch extension is `.ap*`, so none can collide with a ROM
-        // extension -- but `.apsms` next to a banned `.sms` is close enough to be worth pinning.
+        // extension, but `.apsms` next to a banned `.sms` is close enough to be worth pinning.
         for ok in [
             "AP_14318265276849580066_P40_IronSquire_SMS.apsms",
             "AP_14318265276849580066_P55_Minecraft.apmc",
@@ -666,7 +666,7 @@ mod tests {
             .find("MultiData::parse(&multidata_bytes)")
             .expect("the parse call was renamed; re-point this lint rather than deleting it");
         // Ordering is not incidental: the checks read the parsed seed, and everything after them
-        // -- patch attribution, the slot list, the games -- is work on a seed no room will load.
+        // (patch attribution, the slot list, the games) is work on a seed no room will load.
         assert!(
             call > parse,
             "the load-time checks must run on the parsed seed"

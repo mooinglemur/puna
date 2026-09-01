@@ -97,7 +97,7 @@ pub async fn insert(
             .bind::<BigInt, _>(meta.size_bytes)
             .bind::<Text, _>(&meta.seed_name)
             // `slot_count`, NOT `slots.len()`. This column sizes the room's memory request, and
-            // pahoa derives its outbound budget from `slot_info.len()` -- every slot, groups
+            // pahoa derives its outbound budget from `slot_info.len()`: every slot, groups
             // included. The connectable list is a different number and would under-request.
             .bind::<Integer, _>(meta.slot_count)
             .bind::<BigInt, _>(meta.locations)
@@ -150,7 +150,7 @@ pub async fn insert(
             }
 
             // A row this statement just created cannot have a reference yet, so this is always
-            // true -- taken from the write rather than assumed, so the two can never disagree.
+            // true, taken from the write rather than assumed, so the two can never disagree.
             let first_for_this_user = record_upload(conn, row.id, first_ingested_by).await?;
 
             Ok(Insertion {

@@ -174,7 +174,7 @@ fn connectable_slots_are_kept_and_groups_are_dropped() {
         "every spectator should be kept, and marked as one"
     );
 
-    // Each kept slot must agree with the multidata on type -- a spectator recorded as a player
+    // Each kept slot must agree with the multidata on type: a spectator recorded as a player
     // would be handed a claim link promising a patch and a game that do not exist.
     for slot in &meta.slots {
         let info = data
@@ -250,7 +250,7 @@ fn a_seed_a_room_would_refuse_is_refused_here() {
         "the refusal should name the slot"
     );
 
-    // Team 1. Nothing generates one -- `Main.py:337` writes team 0 unconditionally -- and neither
+    // Team 1. Nothing generates one (`Main.py:337` writes team 0 unconditionally) and neither
     // server can serve it: the reference accepts the seed and raises inside `ctx.clients[team]` on
     // the connect that used the name, with the room already up.
     let mut other_team = seed.clone();

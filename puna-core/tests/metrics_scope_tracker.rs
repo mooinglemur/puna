@@ -18,7 +18,7 @@ fn the_tracker_tier_exports_shared_families_and_nothing_it_cannot_compute() {
 
     // `seeded_`, not `families`: a registered *Vec with no series renders no `# TYPE` line, so
     // the visible set is the registered set minus DEFERRED_FAMILIES. For this tier that leaves
-    // nothing at all on a cold process -- `diesel_query_seconds` appears once readiness runs its
+    // nothing at all on a cold process: `diesel_query_seconds` appears once readiness runs its
     // first query.
     let mut expected: Vec<String> = metrics::seeded_families(Component::Tracker)
         .into_iter()

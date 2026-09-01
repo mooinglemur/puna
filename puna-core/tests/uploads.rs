@@ -239,8 +239,8 @@ async fn re_uploading_does_not_move_your_entry() {
 
         // The newer UPLOAD is of the older GENERATION, so the two possible sort keys disagree.
         // Without this the test passes against an `ORDER BY generations.created_at`, which is the
-        // mutation that would sink a second uploader's brand new entry to the bottom of their list
-        // -- and make its position report how old the seed is.
+        // mutation that would sink a second uploader's brand new entry to the bottom of their list,
+        // and make its position report how old the seed is.
         diesel::sql_query(
             "UPDATE generations SET created_at = now() - interval '60 days' WHERE id = $1",
         )

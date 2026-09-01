@@ -266,8 +266,8 @@ async fn quarantine_holds_a_pair_out_then_releases_it() {
         shrink_range(&mut conn, "dev", 2).await;
 
         let room = insert_room(&mut conn, generation, "idle").await;
-        // Which of the two pairs it lands on is arbitrary -- the tie among never-allocated pairs
-        // is broken randomly -- and this test is about the quarantine, not the choice.
+        // Which of the two pairs it lands on is arbitrary (the tie among never-allocated pairs
+        // is broken randomly) and this test is about the quarantine, not the choice.
         let first = port::allocate_pair(&orch, &mut conn, DEV, room)
             .await
             .expect("allocation");
@@ -390,7 +390,7 @@ async fn touch_live_rooms_only_moves_live_ones() {
             .expect("touch");
         assert_eq!(touched, 1, "only the running room's reservation is touched");
 
-        // The idle room stays oldest, so it remains the next victim -- which is the pre-API
+        // The idle room stays oldest, so it remains the next victim, which is the pre-API
         // degradation: LRU means "least recently running" rather than "least recently allocated".
         let newcomer = insert_room(&mut conn, generation, "idle").await;
         shrink_range_to_bound_only(&mut conn).await;
@@ -458,7 +458,7 @@ async fn narrowing_the_range_moves_a_live_room_rather_than_refusing() {
         let mut conn = pool.get().await.expect("connection");
         let generation = insert_generation(&mut conn).await;
 
-        // Four pairs only, so both rooms land somewhere in a known low band -- WHICH of the four
+        // Four pairs only, so both rooms land somewhere in a known low band: WHICH of the four
         // each takes is random, so the window below is chosen to sit above all of them rather than
         // relative to whatever they happened to get.
         shrink_range(&mut conn, "dev", 4).await;
@@ -536,7 +536,7 @@ async fn a_reservation_outside_the_range_is_never_handed_back() {
         //
         // It used to be `held + 100 ..= held + 300`, which reads as though `held` were the bottom
         // of the range. It is not: phase 2 of the allocator picks with `ORDER BY last_activity ASC,
-        // random()`, and on a fresh database every unbound pair ties at `-infinity` -- so `held` is
+        // random()`, and on a fresh database every unbound pair ties at `-infinity`, so `held` is
         // a uniformly random pair anywhere in dev's 5000. Whenever it landed in the top 300 the
         // window ran off the end of the seeded rows, no reservation existed inside it, and the
         // allocator correctly answered `Exhausted`: the right answer to a question the test did
@@ -553,7 +553,7 @@ async fn a_reservation_outside_the_range_is_never_handed_back() {
         );
 
         // Move the recorded range out from under the reservation WITHOUT reconciling the rows, so
-        // the stale binding survives -- the state a mid-flight range change would leave behind.
+        // the stale binding survives: the state a mid-flight range change would leave behind.
         common::set_recorded_range(&mut conn, "dev", window_lo, window_hi).await;
 
         let fresh = port::allocate_pair(&orch, &mut conn, DEV, room)

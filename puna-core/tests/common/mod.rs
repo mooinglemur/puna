@@ -9,7 +9,7 @@
 //! dropped silently by a job that loses its service definition.
 
 // This module is compiled separately into EVERY integration-test binary, and each one uses a
-// different subset -- `schema.rs` needs none of the fixture builders. Without this, a helper used
+// different subset: `schema.rs` needs none of the fixture builders. Without this, a helper used
 // by one binary is dead code in the other and fails `clippy -D warnings`.
 #![allow(dead_code)]
 
@@ -111,8 +111,8 @@ where
 pub async fn insert_generation(conn: &mut AsyncPgConnection) -> GenerationId {
     let id = GenerationId::new();
     // **Two md5s, because a sha256 is 32 bytes and one md5 is 16.** A real `generations.sha256`
-    // always names a directory on disk, and code that turns the column back into a `[u8; 32]` --
-    // the name-cache rebuild does -- would silently skip every row this helper made if it were
+    // always names a directory on disk, and code that turns the column back into a `[u8; 32]`
+    // (the name-cache rebuild does) would silently skip every row this helper made if it were
     // short. Cheap to be honest here; confusing not to be.
     diesel::sql_query(
         "INSERT INTO generations (id, sha256, size_bytes, seed_name, slots, locations)

@@ -191,7 +191,7 @@ pub async fn cached(
     }
 
     // **Postgres renders each document to text and this process never parses it.** The keys are
-    // bound rather than interpolated -- they are compile-time constants, not input, but binding
+    // bound rather than interpolated: they are compile-time constants, not input, but binding
     // them is what keeps `store`'s idea of the keys and this one from being two things that could
     // drift. `->` then `::text` rather than `->>`, because the two agree for an object and only the
     // first stays valid JSON for anything else.

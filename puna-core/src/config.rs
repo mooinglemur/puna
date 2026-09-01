@@ -241,7 +241,7 @@ impl OrchestratorConfig {
             lb_ip: require("PUNA_LB_IP")?,
             // Required, not defaulted. A default here would name one deployment's sharing group,
             // so a second deployment that forgot to set it would silently join the first's shared
-            // address instead of failing at startup -- and sharing an address is exactly the thing
+            // address instead of failing at startup, and sharing an address is exactly the thing
             // whose failures are hardest to see.
             lb_sharing_key: require("PUNA_LB_SHARING_KEY")?,
             pahoa_image: require("PUNA_PAHOA_IMAGE")?,

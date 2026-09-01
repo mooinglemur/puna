@@ -44,7 +44,7 @@ fn members(zip: &[u8]) -> std::collections::BTreeMap<String, Vec<u8>> {
 
 #[test]
 fn a_real_patch_keeps_everything_but_its_server_field() {
-    // Skipped, never failed, when the fixture is absent -- and deliberately NOT tied to
+    // Skipped, never failed, when the fixture is absent, and deliberately NOT tied to
     // `PUNA_REQUIRE_DB_TESTS`, which is about Postgres. CI has a database and does not have a
     // generation zip: real ones are tens of megabytes and carry real players' names, so they stay
     // out of the repository. Coupling the two turns "CI has no fixture" into a red pipeline.
@@ -123,8 +123,8 @@ fn a_real_patch_keeps_everything_but_its_server_field() {
 
     assert_eq!(rewritten["server"], "rooms.example.com:41234");
 
-    // Every other key of a real manifest -- `game`, `player`, `patch_file_ending`,
-    // `compatible_version`, whatever this game happens to carry -- survives untouched. This is the
+    // Every other key of a real manifest (`game`, `player`, `patch_file_ending`,
+    // `compatible_version`, whatever this game happens to carry) survives untouched. This is the
     // assertion that would catch a rewrite that reconstructed the manifest instead of editing it.
     let original_object = original_manifest.as_object().expect("an object");
     let rewritten_object = rewritten.as_object().expect("an object");

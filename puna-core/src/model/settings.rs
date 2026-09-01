@@ -276,7 +276,7 @@ pub async fn is_allowlisted(
     .await?;
 
     // `EXISTS` always returns exactly one row, so an empty result is an impossibility rather than
-    // an absence -- treat it as not allowlisted, which is the closed direction.
+    // an absence: treat it as not allowlisted, which is the closed direction.
     Ok(rows.into_iter().next().is_some_and(|row| row.present))
 }
 

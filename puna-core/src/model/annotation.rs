@@ -231,7 +231,7 @@ pub async fn set_slot_annotation(
     actor: i64,
 ) -> Result<(), diesel::result::Error> {
     // Trimmed here rather than at the route, so every caller gets the same answer about what counts
-    // as empty -- and so the column's own CHECK is never the thing that reports a blank note, which
+    // as empty, and so the column's own CHECK is never the thing that reports a blank note, which
     // would surface as a database error rather than as a deletion.
     let note = note.map(str::trim).filter(|n| !n.is_empty());
 
@@ -291,7 +291,7 @@ pub async fn preferences(
         .map(|row| Preference {
             user_id: row.user_id,
             // A value this build does not recognize reads as `No`, which withholds the handle. The
-            // default is `Unknown`, which publishes it -- so unlike every other enum here the
+            // default is `Unknown`, which publishes it, so unlike every other enum here the
             // fallback and the default are deliberately different values.
             preference: PingPreference::parse(&row.preference).unwrap_or(PingPreference::No),
         })

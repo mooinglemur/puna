@@ -71,7 +71,7 @@ async fn names_round_trip_and_stay_scoped_to_their_game() {
         );
 
         // **The same id, a different game, a different name.** Item and location ids are namespaced
-        // per game, so a cache that collapsed them would render confident nonsense -- the failure
+        // per game, so a cache that collapsed them would render confident nonsense: the failure
         // mode with no symptom, because every name it produces is a real name of something.
         let timespinner = names::game(&mut conn, generation, "Timespinner")
             .await

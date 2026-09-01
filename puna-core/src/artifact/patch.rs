@@ -119,7 +119,7 @@ pub fn embed_server(
             let mut member = archive.by_index(index)?;
             let name = member.name().to_string();
 
-            // Members that are not files -- directory entries -- have no contents to copy, and
+            // Members that are not files (directory entries) have no contents to copy, and
             // `read_to_end` on one yields nothing rather than failing, so they are handled first.
             if member.is_dir() {
                 writer.add_directory(&name, options(&member))?;
@@ -245,7 +245,7 @@ mod tests {
     /// Puna serves what it stored. A file it does not recognize is still the player's file.
     #[test]
     fn anything_unrecognized_is_returned_untouched() {
-        // Not a zip at all -- some games ship a bare binary patch.
+        // Not a zip at all: some games ship a bare binary patch.
         let raw = b"BSDIFF40\x00\x01\x02".to_vec();
         assert_eq!(
             embed_server(raw.clone(), "host", 1, None).expect("passthrough"),

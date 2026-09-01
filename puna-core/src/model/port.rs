@@ -152,7 +152,7 @@ pub async fn allocate(
     //
     // **Unless that pair is no longer inside the configured range**, in which case the room gets a
     // new one instead. Startup reconciliation already deletes out-of-range rows, so this is the
-    // second guard rather than the first -- but the cost of missing it is a room brought back onto
+    // second guard rather than the first, but the cost of missing it is a room brought back onto
     // a port the deployment does not own, which collides silently on a shared address rather than
     // erroring. Falling through to a fresh allocation is always safe; returning a stale port is
     // not.
@@ -185,19 +185,19 @@ pub async fn allocate(
     }
 
     // The room may still hold a QUARANTINED reservation, which step 1 skipped. Release it before
-    // allocating, or the partial unique index on room_id rejects the new binding -- and the room
+    // allocating, or the partial unique index on room_id rejects the new binding, and the room
     // would be stuck for as long as the quarantine lasts.
     release(_orchestrator, conn, room_id).await?;
 
     // **`port_ranges` is the authority in every phase below, not the rows.** Reservation rows are
-    // the working set and can lag the configured range -- a range narrowed while the orchestrator
+    // the working set and can lag the configured range: a range narrowed while the orchestrator
     // is running leaves rows behind until the next startup reconciles them. Selecting from rows
     // alone would then hand out a port the deployment no longer owns, which does not error: it
     // collides on the shared address and leaves the room reachable at a name DNS never mentions.
     // Filtering here means an inconsistent table can produce *no* port, never an invalid one.
     for _ in 0..MAX_CONTENTION_RETRIES {
         // Phase 2: an unbound pair. Ordered by `last_activity`, so never-allocated ('-infinity')
-        // comes first and a recently *released* pair comes last -- which is what lets a room torn
+        // comes first and a recently *released* pair comes last, which is what lets a room torn
         // down and restarted land back on its own port. Among the never-allocated, which all tie,
         // the pick is random; see the module note on why not `base_port`.
         //
@@ -238,7 +238,7 @@ pub async fn allocate(
         }
 
         // Phase 3: no unbound pair exists, so reclaim the least recently used one that is not
-        // serving players. Weak claim, not a lease -- honored while nothing else needs the port.
+        // serving players. Weak claim, not a lease: honored while nothing else needs the port.
         //
         // The victim's room row and on-disk state are untouched: only the binding moves. Losing a
         // port must never mean losing a room.
@@ -604,7 +604,7 @@ pub async fn ensure_range(
     let (low, high) = (i32::from(low), i32::from(high));
 
     // Read before writing, because the delete below destroys the evidence of which rooms were
-    // affected -- and those are exactly the rooms that need a restart queued.
+    // affected, and those are exactly the rooms that need a restart queued.
     let stranded: Vec<Stranded> = diesel::sql_query(format!(
         "SELECT p.base_port, p.room_id, (r.state IN ({LIVE_STATES})) AS live
            FROM port_reservations p
@@ -638,7 +638,7 @@ pub async fn ensure_range(
 
     // Everything outside the range, bound or not. A row for a port this deployment does not own is
     // a row that must never be handed out, and leaving a bound one in place would let the room
-    // return to the same invalid port on its next start -- [`allocate`]'s first step is "the room's
+    // return to the same invalid port on its next start: [`allocate`]'s first step is "the room's
     // own previous pair".
     let dropped = diesel::sql_query(
         "DELETE FROM port_reservations
@@ -652,7 +652,7 @@ pub async fn ensure_range(
     .await?;
 
     // Every pair in range that has no row yet. `ON CONFLICT DO NOTHING` makes a widened range and
-    // an unchanged one the same statement, and keeps every existing row's `last_activity` -- which
+    // an unchanged one the same statement, and keeps every existing row's `last_activity`, which
     // is the LRU ordering, and would be destroyed by a delete-and-reseed.
     let added = diesel::sql_query(
         "INSERT INTO port_reservations (environment, base_port)
@@ -667,7 +667,7 @@ pub async fn ensure_range(
 
     // A live room genuinely IS serving on a port outside the range, so it cannot be left alone.
     // Queued through the ordinary redeploy signal rather than stopped here: that path already
-    // stops the room, allocates a fresh port on the way back up, and is capped per tick -- so a
+    // stops the room, allocates a fresh port on the way back up, and is capped per tick, so a
     // range change rolls through the environment instead of taking it down at once.
     let restarting: Vec<RoomId> = stranded
         .iter()

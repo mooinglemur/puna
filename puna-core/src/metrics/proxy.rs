@@ -164,7 +164,7 @@ fn convert(
     let owned: HashSet<&str> = families(Component::Orchestrator).into_iter().collect();
 
     // A histogram's or summary's companions are ordinary samples named `x_sum` and `x_count`, so
-    // refusing the family means refusing those too -- otherwise a `_count` with no buckets behind
+    // refusing the family means refusing those too: otherwise a `_count` with no buckets behind
     // it survives, and reads as a metric that works.
     let structured: HashSet<&str> = scrape
         .samples
@@ -381,7 +381,7 @@ mod tests {
 
         let metric = &packets.get_metric()[0];
         assert_eq!(label(metric, "room").as_deref(), Some("room-a"));
-        // Every label the room sent, untouched -- including `team`, which pahoa added ahead of the
+        // Every label the room sent, untouched, including `team`, which pahoa added ahead of the
         // first scrape precisely so a dashboard would not have to be rebuilt for it.
         assert_eq!(label(metric, "team").as_deref(), Some("0"));
         assert_eq!(label(metric, "slot").as_deref(), Some("1"));

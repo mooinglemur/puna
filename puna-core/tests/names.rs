@@ -83,7 +83,7 @@ fn a_slots_locations_are_the_location_list_and_nothing_more() {
         );
     }
 
-    // A spectator owns no locations and therefore has no row -- rather than an empty one, which
+    // A spectator owns no locations and therefore has no row, rather than an empty one, which
     // would make "nothing to check" and "not cached" the same shape.
     for (slot, info) in &data.slot_info {
         if data.locations.for_slot(*slot).is_empty() {

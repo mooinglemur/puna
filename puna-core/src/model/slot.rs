@@ -178,7 +178,7 @@ impl From<SlotRow> for Slot {
             locked_at: row.locked_at,
             locked_by: row.locked_by,
             // Unknown reads as `Unknown`, which renders as no chip at all. Nothing is withheld or
-            // granted by this value, so there is no safe direction to prefer -- unlike the ping
+            // granted by this value, so there is no safe direction to prefer, unlike the ping
             // preference beside it, where the fallback deliberately differs from the default.
             progression: crate::model::annotation::ProgressionStatus::parse(&row.progression)
                 .unwrap_or_default(),
@@ -300,7 +300,7 @@ pub async fn owns_a_slot(
     .await?;
 
     // `EXISTS` returns exactly one row, so an empty result is an impossibility rather than an
-    // absence -- treat it as "not a participant", which is the closed direction.
+    // absence: treat it as "not a participant", which is the closed direction.
     Ok(rows.into_iter().next().is_some_and(|row| row.present))
 }
 
@@ -639,7 +639,7 @@ mod tests {
         );
         assert!(!may_access(&mine, None, None, false), "anonymous");
 
-        // An unclaimed slot has no owner, so ownership admits nobody -- the claim link is what
+        // An unclaimed slot has no owner, so ownership admits nobody: the claim link is what
         // grants access to it, not the mere absence of a claimant.
         assert!(!may_access(&unclaimed, Some(7), None, false));
         assert!(may_access(

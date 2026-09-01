@@ -256,7 +256,7 @@ pub async fn overview(
             .await?;
 
     // `LEFT JOIN`, never an inner one: `created_by` is nullable and the FK is not cascading, so an
-    // inner join would silently drop every room whose creator is unknown -- which on an admin page
+    // inner join would silently drop every room whose creator is unknown, which on an admin page
     // is the difference between "no such room" and "nobody knows who made it".
     //
     // The scope is a `&'static str` from an enum, not a caller's string. Nothing user-supplied

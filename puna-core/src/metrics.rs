@@ -760,7 +760,7 @@ pub fn retain_rooms(live: &std::collections::HashSet<String>) {
     });
 
     // The name gauge keys on `(room, name)`, so it needs the name that was published rather than
-    // the one the room currently has -- see `ROOM_NAMES`.
+    // the one the room currently has: see `ROOM_NAMES`.
     if let Ok(mut names) = ROOM_NAMES.lock() {
         names.retain(|room, name| {
             if live.contains(room) {
@@ -773,7 +773,7 @@ pub fn retain_rooms(live: &std::collections::HashSet<String>) {
 
     // **Reconciled against `live` in its own right, not swept alongside the map above.** The
     // proxied families are keyed by `(room, slot, cmd, ...)`, so a room left behind does not
-    // strand one stale reading but every series it ever had -- and driving that off `ROOM_SERIES`
+    // strand one stale reading but every series it ever had, and driving that off `ROOM_SERIES`
     // would make it depend on the status publisher having seen the same room, which is true today
     // and is not a property either side states. Found by a test that published metrics for a room
     // and no status: the room was dropped from every gauge and kept re-exporting.
@@ -918,7 +918,7 @@ pub const ORCHESTRATOR_FAMILIES: &[&str] = &[
     "puna_room_filtered_from_slots_total",
     "puna_room_filtered_to_slots_total",
     // The proxy's own bookkeeping. The families it PROXIES are deliberately not listed here and
-    // cannot be -- their names come from pahoa, not from Puna. See `proxied_families_are_not
+    // cannot be: their names come from pahoa, not from Puna. See `proxied_families_are_not
     // _declared_here` in `tests/metrics_proxy.rs` for why that is the design rather than a gap.
     "puna_room_metrics_series",
     "puna_room_metrics_dropped_total",
@@ -947,7 +947,7 @@ pub const DEFERRED_FAMILIES: &[&str] = &[
     "puna_commands_total",
     "puna_k8s_requests_total",
     "puna_reconcile_errors_total",
-    // Labeled by room, so they appear only once a room has been probed -- and disappear again when
+    // Labeled by room, so they appear only once a room has been probed, and disappear again when
     // it stops, which is what `retain_rooms` is for.
     "puna_room_clients_connected",
     "puna_room_mailbox_depth",
@@ -1012,7 +1012,7 @@ pub fn init(component: Component) {
 
     match component {
         // Nothing yet beyond the shared families. When the request fairing lands, force it here
-        // and add it to WEB_FAMILIES -- the scope test fails if only one of those happens.
+        // and add it to WEB_FAMILIES: the scope test fails if only one of those happens.
         Component::Web => {}
         Component::Tracker => {}
         Component::Orchestrator => init_orchestrator(),
@@ -1078,7 +1078,7 @@ fn init_orchestrator() {
     // and a second would silently fail to register. See `metrics::proxy`.
     proxy::register(&REGISTRY);
     // Seeded to zero so a cold orchestrator renders every capability rather than none, and from
-    // the SAME vocabulary the publisher uses -- the two diverging is exactly what went wrong.
+    // the SAME vocabulary the publisher uses: the two diverging is exactly what went wrong.
     for capability in crate::probe::ProbeCapabilities::NAMES {
         PROBE_CAPABILITY.with_label_values(&[capability]).set(0);
     }
@@ -1113,14 +1113,14 @@ mod tests {
     #[test]
     fn every_total_is_a_counter_and_no_counter_is_missing_the_suffix() {
         // **Guarded, because `init` WRITES.** It reseeds every `PROBE_CAPABILITY` child to zero,
-        // and unguarded this ran between the capability test's publish and its assertion --
+        // and unguarded this ran between the capability test's publish and its assertion,
         // failing it with "was seeded but never published", which reads as the publisher being
         // broken rather than as this test having zeroed the gauge underneath it. Intermittent:
         // reproduced twice in sixty runs of the full lib, and never when the metrics tests were
         // run alone, because it needs enough other tests in flight to lose the race.
         //
         // The rule these statics impose: anything touching the shared registry takes `exclusive`,
-        // reads included -- a read here is a read of state another test is mid-way through writing.
+        // reads included: a read here is a read of state another test is mid-way through writing.
         let _guard = exclusive();
 
         // Every component, so the invariant covers the whole registry rather than one tier's
@@ -1439,8 +1439,8 @@ mod tests {
         let _guard = exclusive();
 
         // **The real seeding path, not a hand-rolled copy of it.** Seeding from `NAMES` here would
-        // compare the constant to itself and pass against the very divergence this exists to catch
-        // -- which it did, until a mutation test said so.
+        // compare the constant to itself and pass against the very divergence this exists to catch,
+        // which it did, until a mutation test said so.
         init(Component::Orchestrator);
         publish_probe_capabilities(&crate::probe::HttpsProbe.capabilities());
 

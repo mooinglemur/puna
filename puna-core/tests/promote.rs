@@ -192,7 +192,7 @@ async fn indexing_the_same_generation_twice_yields_one_row() {
 
         // The same account twice: news once, a duplicate after. This is the value the page renders,
         // and `insert` producing it is what stops a caller indexing a generation without recording
-        // who uploaded it -- an upload that succeeds and then is missing from its uploader's list.
+        // who uploaded it: an upload that succeeds and then is missing from its uploader's list.
         assert!(
             first.first_for_this_user,
             "the first upload is theirs to see"
@@ -224,7 +224,7 @@ async fn indexing_the_same_generation_twice_yields_one_row() {
         assert_eq!(stored.has_spoiler, meta.spoiler_member.is_some());
 
         // `generations.slots` sizes the room's memory request, and pahoa derives its outbound
-        // budget from every slot including groups -- so this must be `slot_count`, not the length
+        // budget from every slot including groups, so this must be `slot_count`, not the length
         // of the connectable list. The two differ on any seed with item links.
         assert_eq!(stored.slots, meta.slot_count);
 

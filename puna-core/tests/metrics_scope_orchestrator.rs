@@ -19,7 +19,7 @@ fn the_orchestrator_exports_exactly_the_families_it_owns() {
 
     // `seeded_`, not `families`: a registered *Vec with no series renders no `# TYPE` line, so the
     // combinatorial counters in DEFERRED_FAMILIES are legitimately absent until something writes
-    // one. Comparing against the full registered set is what this test did first, and it failed --
+    // one. Comparing against the full registered set is what this test did first, and it failed,
     // which is how DEFERRED_FAMILIES came to be written down rather than left in a doc comment.
     let mut expected: Vec<String> = metrics::seeded_families(Component::Orchestrator)
         .into_iter()

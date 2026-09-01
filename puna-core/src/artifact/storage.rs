@@ -146,7 +146,7 @@ pub fn promote(
 ) -> Result<(GenerationPaths, Promotion), StorageError> {
     let paths = GenerationPaths::new(data_dir, &meta.sha256);
 
-    // A cheap pre-check. Not the guarantee -- the rename below is -- but it turns the common
+    // A cheap pre-check. Not the guarantee (the rename below is) but it turns the common
     // re-upload into one `stat` rather than a full extraction that is then thrown away.
     if paths.exists() {
         return Ok((paths, Promotion::AlreadyPresent));

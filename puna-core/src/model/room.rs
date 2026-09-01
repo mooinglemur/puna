@@ -742,7 +742,7 @@ impl From<RoomRow> for Room {
             // reads as the most restrictive answer, never the default one.
             journal_policy: JournalPolicy::parse(&row.journal_policy)
                 .unwrap_or(JournalPolicy::Disabled),
-            // Unknown reads as `Open`, which embeds no credential -- the restrictive direction
+            // Unknown reads as `Open`, which embeds no credential: the restrictive direction
             // here is the one that discloses less, same rule as the policies above.
             patch_policy: PatchPolicy::parse(&row.patch_policy).unwrap_or(PatchPolicy::Open),
             // Unknown reads as `Full`, the address that fails loudly rather than silently.
@@ -896,7 +896,7 @@ pub async fn create(
             // gets there, which is what that column is for.
             let id = RoomId::new();
             // Only `room` mode has a room-wide password, and the `room_password_matches_mode`
-            // CHECK enforces exactly that -- so getting this wrong is a failed insert, not a
+            // CHECK enforces exactly that, so getting this wrong is a failed insert, not a
             // room whose mode and credential disagree.
             let password = match new.slot_auth {
                 SlotAuth::Room => Some(crate::secret::room_password()),
@@ -1247,7 +1247,7 @@ pub async fn rotate_password(
     let password = crate::secret::room_password();
 
     // Scoped to the mode in the WHERE rather than checked first, so a mode change landing between a
-    // read and this write cannot leave a password on a room that does not want one -- the
+    // read and this write cannot leave a password on a room that does not want one: the
     // `room_password_matches_mode` CHECK would refuse it, loudly and at the wrong layer.
     let updated = diesel::sql_query(
         "UPDATE rooms SET password = $2 WHERE id = $1 AND slot_auth = 'room'::slot_auth_mode",
@@ -1565,7 +1565,7 @@ pub async fn clone_room(
     }
 
     if keep_owners {
-        // Owners carry over; tokens and passwords do not -- `create` already minted fresh ones.
+        // Owners carry over; tokens and passwords do not: `create` already minted fresh ones.
         diesel::sql_query(
             "UPDATE room_slots AS target
                 SET owner_id = source.owner_id,
@@ -1585,14 +1585,14 @@ pub async fn clone_room(
         // **Preferences travel with the owners; annotations do not travel at all.**
         //
         // The split is what each thing is about. A ping preference is a standing statement about a
-        // person -- how they want to be contacted about this multiworld -- and a clone is the same
+        // person (how they want to be contacted about this multiworld) and a clone is the same
         // group playing the same seed again, so asking everybody to answer it a second time is a
         // question they already answered. A progression and a note describe a *playthrough*, and
         // the clone is starting one over; carrying BK status would have a fresh room describe the
         // old room's progress.
         //
         // Annotations need no code to be left behind: `create` inserts fresh slots and the copy
-        // above takes only owners. That is exactly why there is a test pinning it -- nothing here
+        // above takes only owners. That is exactly why there is a test pinning it: nothing here
         // would fail if somebody widened that UPDATE.
         //
         // Gated on `keep_owners` with the copy it belongs to: starting with unclaimed slots is
@@ -1779,7 +1779,7 @@ mod tests {
         use TrackerPolicy::*;
 
         // `link` is the reference's own model: holding the URL is the authorization, and it works
-        // for someone who has never logged in -- which is most of a tracker's audience.
+        // for someone who has never logged in, which is most of a tracker's audience.
         assert!(may_see_tracker(Link, false, false));
 
         assert!(may_see_tracker(Members, true, false));

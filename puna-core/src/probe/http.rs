@@ -92,7 +92,7 @@ impl RoomProbe for HttpsProbe {
             .await?
             .post(endpoint.url(COMMAND))
             .bearer_auth(admin_token)
-            // Serialized from the typed enum, so the body cannot be a shape pahoa has to reject --
+            // Serialized from the typed enum, so the body cannot be a shape pahoa has to reject,
             // which is why a `400` here is a Puna bug rather than a caller's.
             .json(command)
             .send()
@@ -104,7 +104,7 @@ impl RoomProbe for HttpsProbe {
         }
 
         // **A refusal arrives here, not in the error path.** pahoa answers `200` with `ok: false`
-        // for "no such slot", "nobody to kick", "countdown out of range" -- the room understood and
+        // for "no such slot", "nobody to kick", "countdown out of range": the room understood and
         // said no. Mapping that to an error would invite a retry, and retrying a refusal loops.
         response
             .json()
@@ -134,7 +134,7 @@ impl RoomProbe for HttpsProbe {
 
         // **A `404` here has two causes and pahoa's message names only one of them.** Its handler
         // answers `there is no slot <n> in this seed` both when the slot genuinely does not exist
-        // and when the room is not in per-slot mode at all -- the actor collapses the second into
+        // and when the room is not in per-slot mode at all: the actor collapses the second into
         // the first (`None => known = false`). So a rotation that arrives after somebody switched
         // the mode reports a missing slot, and sends whoever reads it to look at the seed.
         //
@@ -161,7 +161,7 @@ impl RoomProbe for HttpsProbe {
 
         // **`PUT` replaces and `DELETE` removes, and the two are different states rather than one
         // with an empty value.** On a slot, no ruleset means "follow the room's" and an empty one
-        // means "filtered by nothing at all" -- so sending `[]` where a delete was meant leaves a
+        // means "filtered by nothing at all", so sending `[]` where a delete was meant leaves a
         // slot exempt from a filter it was supposed to inherit, silently and in the direction that
         // reads as the filter simply not working.
         // **The token is applied in BOTH arms rather than once on the joined builder**, which is
@@ -513,7 +513,7 @@ mod tests {
         assert_eq!(status.save, None);
         assert_eq!(status.started_at, None);
 
-        // A slot with no number is dropped rather than defaulted to 0 -- slot 0 is the server
+        // A slot with no number is dropped rather than defaulted to 0: slot 0 is the server
         // itself, so a default would be an outright lie about who is connected.
         assert_eq!(status.slots.len(), 1);
         assert_eq!(status.slots[0].slot, 1);
