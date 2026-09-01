@@ -1,6 +1,6 @@
 //! Turning a room's tracker documents into the four tables a browser renders.
 //!
-//! **Pure**: documents in, view structs out. No Rocket, no database, no clock — `now` is an
+//! **Pure**: documents in, view structs out. No Rocket, no database, no clock: `now` is an
 //! argument. That is what lets every shape here be asserted from a JSON literal rather than from a
 //! live room, which matters because the interesting failures are all *transformations* (a name
 //! resolved in the wrong game, a hint counted twice, a slot's data appearing in another's view) and
@@ -11,8 +11,8 @@
 //! pahoa's live document is measured at **2.7 MB for a 185-slot room**, dominated by exactly the
 //! two arrays these tables render, and the browser needs almost none of it: the multiworld view
 //! wants one row per slot, and a slot's view wants one slot's arrays. Digesting server-side turns
-//! both into tens of KB. It is also a capability decision — a page showing the multiworld's slot
-//! table has no business holding every slot's location list — and it is what makes the *names*
+//! both into tens of KB. It is also a capability decision (a page showing the multiworld's slot
+//! table has no business holding every slot's location list), and it is what makes the *names*
 //! possible at all, since the documents carry only numeric ids.
 //!
 //! ## The name-resolution rule is the reference's, and it is easy to get backwards
@@ -21,7 +21,7 @@
 //!
 //! | Value | Resolved in the game of |
 //! |---|---|
-//! | A received item | the **receiving** slot — whose tracker this is |
+//! | A received item | the **receiving** slot, whose tracker this is |
 //! | A location in that slot's own table | that slot |
 //! | A hint's **item** | `receiving_player` |
 //! | A hint's **location** | `finding_player` |
@@ -40,11 +40,11 @@ use serde::Serialize;
 
 /// How stale the underlying documents are, and when the client should ask again.
 ///
-/// Sent on every view so the page never has to guess a polling cadence — the server knows the
+/// Sent on every view so the page never has to guess a polling cadence: the server knows the
 /// document's own cache window, and asking faster than that cannot produce new data.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Freshness {
-    /// RFC 3339. When the room last answered — **not** when this response was built.
+    /// RFC 3339. When the room last answered, **not** when this response was built.
     pub as_of: String,
     /// True when the room did not answer and this is the last thing it said, which for an async is
     /// most of its life.
@@ -57,7 +57,7 @@ pub struct Freshness {
 ///
 /// Deliberately carries **no rendered prose and no ids beyond the slot number**. `last_activity` is
 /// an age in milliseconds computed *by the server*, so a skewed client clock cannot render a
-/// negative age — the same discipline `/room/<id>/status` already uses for `since_ms` — and the
+/// negative age (the same discipline `/room/<id>/status` already uses for `since_ms`), and the
 /// client keeps it ticking between polls without a fetch.
 ///
 /// It also carries **no tracker id**. The client builds a drill-down from the id already in its own
@@ -78,18 +78,18 @@ pub struct SlotRow {
     pub hints: usize,
     /// Whether anybody has taken this slot, and **`None` for a viewer not entitled to know**.
     ///
-    /// Something the reference cannot show, because it does not know who is playing — which is an
+    /// Something the reference cannot show, because it does not know who is playing, which is an
     /// argument that Puna *can* and not that this audience *should*. It is the one column here that
     /// is not about the multiworld: it answers "who signed up", which is Puna's own sign-up sheet
     /// rather than anything about the game, on the page built to be handed to spectators.
     ///
     /// **The tracker id is independent of the room id precisely so it can go to people who should
-    /// not get the room**, so "the room page shows this too" is the wrong test — the room page's
+    /// not get the room**, so "the room page shows this too" is the wrong test: the room page's
     /// audience is the one the organizers chose. Same tier as the roster's own identity column and
     /// as `may_see_spoiler`'s `players`: the room's staff, or somebody who holds a slot in it.
     ///
     /// Omitted from the JSON entirely rather than sent as `false`, so a client cannot mistake
-    /// "withheld" for "unclaimed" — see the note in `tracker.js`, where that mistake is one
+    /// "withheld" for "unclaimed". See the note in `tracker.js`, where that mistake is one
     /// falsy-check away.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claimed: Option<bool>,
@@ -112,7 +112,7 @@ pub struct SlotRow {
     ///
     /// **Decided here rather than by the client comparing ids**, which would mean sending every
     /// viewer their own id and every row's owner id and trusting the comparison. The client renders
-    /// a control if and only if this says so, and the route re-checks regardless — a control is a
+    /// a control if and only if this says so, and the route re-checks regardless: a control is a
     /// courtesy and the guard is the rule.
     ///
     /// Absent rather than `false` for everybody else, so a row for a viewer with no business
@@ -128,7 +128,7 @@ fn is_false(value: &bool) -> bool {
 /// A label and the name of the tint it is drawn in.
 ///
 /// **`tone` is the wire spelling and is used as a CSS class suffix and nothing else.** The client
-/// could map the label to a color instead, and that would key a visual decision on prose — a
+/// could map the label to a color instead, and that would key a visual decision on prose: a
 /// reworded label would silently drop the tint. This way the two travel together and the one that
 /// styling depends on is the one the database also uses.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -140,7 +140,7 @@ pub struct Chip {
 /// Who holds a slot, as much of it as this viewer is entitled to.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct SlotOwner {
-    /// The ping-preference chip, and **absent for `unknown`** — an unanswered preference shows no
+    /// The ping-preference chip, and **absent for `unknown`**: an unanswered preference shows no
     /// chip rather than the word, so what is on the page is only what somebody actually said.
     ///
     /// **Shown even when the handle is not**, which is the case that matters: "no pings" is
@@ -148,7 +148,7 @@ pub struct SlotOwner {
     /// for another way to reach them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ping: Option<&'static str>,
-    /// Absent when this viewer may not know who this is — the owner said `no` and the viewer is not
+    /// Absent when this viewer may not know who this is: the owner said `no` and the viewer is not
     /// staff. Its absence is what distinguishes "withheld" from "never signed in", which is
     /// [`Contact::handle`] being null.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -172,8 +172,8 @@ pub struct Contact {
 /// in hand and these are two small maps over the same room.
 #[derive(Debug, Default)]
 pub struct People {
-    /// Discord handles by id. A placeholder — the id as text, written by `ensure_exists` for
-    /// somebody who has never signed in — is **not** filtered out here; [`slot_rows`] turns it into
+    /// Discord handles by id. A placeholder (the id as text, written by `ensure_exists` for
+    /// somebody who has never signed in) is **not** filtered out here; [`slot_rows`] turns it into
     /// an absent handle, so the two are told apart in one place.
     pub handles: std::collections::HashMap<i64, String>,
     pub preferences: std::collections::HashMap<i64, PingPreference>,
@@ -182,7 +182,7 @@ pub struct People {
 /// What this viewer is entitled to see of a room's own people.
 ///
 /// A struct rather than a run of `bool` parameters because the three are read together and the
-/// interesting mistakes are all confusions between them — `staff` where `participant` was meant
+/// interesting mistakes are all confusions between them: `staff` where `participant` was meant
 /// admits everybody holding a slot to a handle its owner withheld.
 pub struct Viewer<'a> {
     /// Whoever is looking, when they are signed in. Only ever compared against a slot's owner, to
@@ -215,7 +215,7 @@ impl Viewer<'_> {
 
     /// Whether this viewer may change one slot's annotations: its holder, or the room's staff.
     ///
-    /// **Staff may edit anybody's**, which is the room's own rule — an organizer needs to be able to
+    /// **Staff may edit anybody's**, which is the room's own rule: an organizer needs to be able to
     /// correct or remove a note. What they may *not* touch is somebody's ping preference, which is
     /// why that lives on a different table with a writer that takes no actor.
     fn may_edit(&self, slot: &Slot) -> bool {
@@ -312,7 +312,7 @@ impl Names<'_> {
     /// turn a cosmetic gap into an outage.
     ///
     /// The wording matches pahoa's, not the reference WebHost's, because this is the same
-    /// multiworld a player sees named in the room's own chat — one vocabulary per room beats
+    /// multiworld a player sees named in the room's own chat: one vocabulary per room beats
     /// matching a page they are not reading.
     pub fn item(&self, game: &str, id: i64) -> String {
         self.games
@@ -426,15 +426,15 @@ pub fn slot_rows(
 /// Who holds a slot, reduced to what this viewer may have.
 ///
 /// **Two independent facts, and only one of them is ever withheld.** The ping preference is
-/// something its owner published, so every participant gets it — a player who sees "no pings"
+/// something its owner published, so every participant gets it: a player who sees "no pings"
 /// knows not to go looking for another route. The *handle* is the route, so `no` withholds it from
 /// other players and never from staff, who are the ones the preference itself says may still ping.
 ///
 /// The two `None`s below mean different things and must stay distinguishable, which is why one is a
 /// missing `contact` and the other is a null `handle` inside a present one:
 ///
-/// * **no `contact`** — this viewer may not know who holds the slot;
-/// * **`contact` with no `handle`** — somebody holds it who has never signed in, so there is no
+/// * **no `contact`**: this viewer may not know who holds the slot;
+/// * **`contact` with no `handle`**: somebody holds it who has never signed in, so there is no
 ///   handle to show. The mention still works, because it is built from the snowflake.
 ///
 /// An unclaimed slot has no owner at all and gets `None` from the outer function, which is a third
@@ -464,7 +464,7 @@ fn owner_of(slot: &Slot, people: &People, staff: bool) -> Option<SlotOwner> {
 /// Every hint in the multiworld, or the ones that concern one slot.
 ///
 /// **Deduplicated**, and that is not optional. A hint is filed under *both* the receiving and the
-/// finding player, so walking every per-player entry sees each cross-player hint twice — the
+/// finding player, so walking every per-player entry sees each cross-player hint twice: the
 /// reference collects them into a set for the same reason (`get_team_hints`). Without this the
 /// multiworld table would double most of its rows and the per-slot hint counts would disagree with
 /// the table they link to.
@@ -563,7 +563,7 @@ pub fn hints(
 /// One slot's locations, checked and unchecked.
 ///
 /// `all` is the slot's full location list out of the name cache; the document supplies which of
-/// them are done. **The item behind an unchecked location is not available here and never was** —
+/// them are done. **The item behind an unchecked location is not available here and never was**:
 /// the cache stores location ids only, so this function could not leak it if it tried.
 pub fn locations(
     slot: &Slot,
@@ -663,7 +663,7 @@ pub fn entry<'a>(
 ///
 /// The audience is what shapes every decision here: a Twitch bot answering `!progress` gets one
 /// message to say everything, and whoever reads it is watching a stream rather than studying a
-/// table. So it is one line, and the line carries the two facts a viewer asks about — how far along
+/// table. So it is one line, and the line carries the two facts a viewer asks about: how far along
 /// each world is, and whether it is finished.
 ///
 /// **`goal` REPLACES the percentage only when the world is also complete.** A room without
@@ -679,7 +679,7 @@ pub fn entry<'a>(
 /// **Spectators are omitted.** They own no locations, so every arithmetic here is 0/0 for them and
 /// any rendering of that is a claim about progress they cannot make.
 ///
-/// **The order is the roster's, which is slot order** — `slot::list` sorts on `slot_number`, and
+/// **The order is the roster's, which is slot order**: `slot::list` sorts on `slot_number`, and
 /// nothing here reorders. That is worth keeping rather than sorting by progress: this line is read
 /// repeatedly by the same people, so a world stays in the same position from one `!progress` to the
 /// next and a viewer can find theirs without reading the whole thing. Sorting by completion would
@@ -757,7 +757,7 @@ fn percent(done: i64, total: i64) -> String {
 /// A player name is untrusted text out of an uploaded seed, and this is the one response where a
 /// newline in it is not a cosmetic problem: a bot that reads a line gets a truncated answer, and
 /// the records after the break simply do not exist as far as it is concerned. Every control
-/// character goes, rather than newlines alone — a carriage return would overwrite the line in a
+/// character goes, rather than newlines alone: a carriage return would overwrite the line in a
 /// terminal and an escape would do rather more than that.
 fn one_line(name: &str) -> String {
     name.chars().filter(|c| !c.is_control()).collect()
@@ -795,7 +795,7 @@ fn hint_status(status: Option<i64>) -> &'static str {
 /// (`BaseClasses.py:1587-1589`).
 ///
 /// Checked in the reference's own order (`NetUtils._handle_item_name`): progression first, then
-/// useful, then trap — an item can carry more than one bit and the first match is what it is
+/// useful, then trap: an item can carry more than one bit and the first match is what it is
 /// called.
 fn classify(flags: i64) -> &'static str {
     match flags {
@@ -984,7 +984,7 @@ mod tests {
     /// **The room's own people get the annotations; nobody else learns the feature is on.**
     ///
     /// Three viewers, and the first two must produce byte-identical rows to a room with the toggle
-    /// off — which is the promise the option's own hint makes and the reason its default is safe.
+    /// off, which is the promise the option's own hint makes and the reason its default is safe.
     #[test]
     fn the_annotation_columns_reach_participants_and_nobody_else() {
         let people = people(PingPreference::Yes);
@@ -1057,7 +1057,7 @@ mod tests {
     ///
     /// Decided here rather than by the client comparing ids, which would mean sending every viewer
     /// their own id and every row's owner id and trusting the arithmetic. The route re-checks
-    /// regardless — this only decides whether a control is offered — but a control offered to the
+    /// regardless (this only decides whether a control is offered), but a control offered to the
     /// wrong person is a refusal somebody has to be told about, which is its own small failure.
     ///
     /// **Staff may edit anybody's**, which is the room's rule: an organizer needs to be able to
@@ -1198,14 +1198,14 @@ mod tests {
     /// **Who has signed up is not part of a tracker link.**
     ///
     /// The tracker id is independent of the room id *precisely* so it can be handed to an audience
-    /// the organizers did not choose — a stream chat, a spectator — so it is the widest-shared
+    /// the organizers did not choose (a stream chat, a spectator), so it is the widest-shared
     /// surface Puna has. Claim state is the one column on it that says nothing about the multiworld
     /// and everything about Puna's own sign-up sheet, so it goes to the room's own people and
     /// nobody else: the same tier the roster applies to who holds a slot.
     ///
     /// **Absent, not `false`.** Serializing `false` for a viewer who may not know would leave the
     /// client one falsy check away from tagging every slot `unclaimed` for exactly the audience the
-    /// server just declined to tell — so the withheld case is asserted on the wire and not only on
+    /// server just declined to tell, so the withheld case is asserted on the wire and not only on
     /// the struct.
     #[test]
     fn an_outsider_is_not_told_which_slots_are_unclaimed() {
@@ -1532,7 +1532,7 @@ mod tests {
     ///
     /// Troy is 2 of 3 and playing; Alice is 1 of 2 and has goaled, which is the without-auto-release
     /// case; the spectator is absent. Written as one exact string rather than as assertions about
-    /// its parts, because the **whole document** is the contract — a stray space or a lost newline
+    /// its parts, because the **whole document** is the contract: a stray space or a lost newline
     /// is a broken `!progress` command and nothing about the parts would say so.
     #[test]
     fn the_summary_is_one_line_a_bot_can_paste() {
@@ -1606,7 +1606,7 @@ mod tests {
         );
     }
 
-    /// A total of zero is **not known**, not "nothing to do", so it gets no percentage — and a
+    /// A total of zero is **not known**, not "nothing to do", so it gets no percentage, and a
     /// goaled slot still reports the one thing that is known about it regardless.
     #[test]
     fn an_unknown_total_is_not_reported_as_a_percentage() {

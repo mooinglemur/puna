@@ -1,6 +1,6 @@
 //! Waiting for a command to finish, without a connection per request.
 //!
-//! A console request wants to return the room's answer, not a job id — but the work happens in
+//! A console request wants to return the room's answer, not a job id. But the work happens in
 //! another process, so the handler has to wait. The naive way is to poll the row, and the cost is
 //! one query per waiter per interval; the naive fix is a `LISTEN` per request, and the cost is a
 //! Postgres session per waiter.
@@ -13,7 +13,7 @@
 //!
 //! The notification is latency, exactly as it is for the reconcile tick. If it does not arrive
 //! within [`FIRST_POLL`] the handler starts reading the row anyway, so a dropped listener degrades
-//! the console to a slightly slower console rather than a hung one — and the request gives up at
+//! the console to a slightly slower console rather than a hung one, and the request gives up at
 //! [`BUDGET`] with "still running" rather than holding a worker open indefinitely. The row stays
 //! readable at `/room/<id>/command/<cid>` either way, which is what makes giving up safe.
 
@@ -71,7 +71,7 @@ impl Waiters {
 
 /// Wait for a command to reach a terminal state, or run out of budget.
 ///
-/// `None` means "still running" rather than "failed" — the caller shows that and links to the row.
+/// `None` means "still running" rather than "failed": the caller shows that and links to the row.
 pub async fn wait_for(pool: &Pool, waiters: &Arc<Waiters>, id: CommandId) -> Option<CommandRow> {
     // Registered BEFORE the first read, so a command that finishes between the two is not missed.
     // The other order is the classic lost-wakeup: read (not finished), dispatcher finishes and
@@ -128,7 +128,7 @@ pub async fn listen(database_url: String, waiters: Arc<Waiters>) {
 mod tests {
     use super::*;
 
-    /// Two people can watch one command — a second organizer opening the console, or the same
+    /// Two people can watch one command: a second organizer opening the console, or the same
     /// person in two tabs. The second registration must not evict the first.
     #[tokio::test]
     async fn two_waiters_on_one_command_are_both_woken() {

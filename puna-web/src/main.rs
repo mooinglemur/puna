@@ -72,7 +72,7 @@ pub struct UploadLimit(pub u64);
 
 /// The lobby this deployment can import slot owners from, if any.
 ///
-/// A newtype so `&State<LobbyConfig>` is unambiguous — an `Option<Lobby>` in state would be a type
+/// A newtype so `&State<LobbyConfig>` is unambiguous: an `Option<Lobby>` in state would be a type
 /// somebody else could plausibly manage too.
 pub struct LobbyConfig(pub Option<lobby::Lobby>);
 
@@ -199,8 +199,8 @@ pub struct Settings {
     pub tracker_cache_max: usize,
     /// The lobby to import slot owners from, when one is configured.
     ///
-    /// `None` is an ordinary deployment rather than a misconfiguration — a Puna with no lobby beside
-    /// it is the standalone case — so the controls that use it are hidden rather than broken.
+    /// `None` is an ordinary deployment rather than a misconfiguration (a Puna with no lobby beside
+    /// it is the standalone case), so the controls that use it are hidden rather than broken.
     pub lobby: Option<lobby::Lobby>,
 }
 

@@ -2,21 +2,21 @@
 //!
 //! pahoa appends one JSON object per line to `history.jsonl` in the room's save directory, across
 //! every restart. Puna never writes it; the web tier mounts `rooms/` **read-only**, which is the
-//! whole reason that mount exists (§1) and is what makes this module safe to have at all — nothing
+//! whole reason that mount exists (§1) and is what makes this module safe to have at all: nothing
 //! here can create, truncate or corrupt a room's history.
 //!
 //! ## Why the file rather than the room
 //!
 //! The obvious alternative is to read the live feed from the room itself, and it is not available:
 //! **the web tier has no egress to room pods at all**, deliberately, which its NetworkPolicy states
-//! and calls the point rather than an omission. The file is the only path, and it is a good one —
+//! and calls the point rather than an omission. The file is the only path, and it is a good one:
 //! it is append-only, it survives restarts, and it is readable while the room is running with no
 //! coordination at all, which pahoa's own module notes is safe by construction.
 //!
 //! ## The one thing that will bite anybody editing this
 //!
 //! **A reader can see a partial line.** pahoa writes each record with a single `write_all` into a
-//! 256 KiB `BufWriter`, and the flush that empties it has no idea where record boundaries are — so
+//! 256 KiB `BufWriter`, and the flush that empties it has no idea where record boundaries are, so
 //! a tail taken mid-flush can end in half an object. Every function here therefore stops at the last
 //! `\n` and reports an offset that points **at** the remainder rather than past it, so the next read
 //! picks the partial line up whole. Getting that wrong produces a parse error in the browser for one
@@ -33,14 +33,14 @@ use puna_core::ids::RoomId;
 /// Transcribed from `pahoa_net::journal::FILE_NAME`, the same way the argv table is transcribed from
 /// their `SERVE_OPTS`: Puna does not depend on their crates in this tier, so the name is a fact
 /// about another repository rather than a value either side can look up. If it ever moves, this is
-/// the one place to follow it — and the symptom would be a viewer that reports every room as having
+/// the one place to follow it, and the symptom would be a viewer that reports every room as having
 /// no history, which is at least loud.
 pub const FILE_NAME: &str = "history.jsonl";
 
 /// Largest replay a client may ask for.
 ///
-/// A journal is routinely hundreds of megabytes — 250 MB and 1.2 million lines on the dev cluster's
-/// load-test rooms — so an unbounded "replay from the beginning" is a request to serialize a
+/// A journal is routinely hundreds of megabytes (250 MB and 1.2 million lines on the dev cluster's
+/// load-test rooms), so an unbounded "replay from the beginning" is a request to serialize a
 /// quarter of a gigabyte into a browser over a connection with no compression. The cap is on the
 /// **server** rather than in the page, because the page is not the only thing that can open a
 /// WebSocket.
@@ -100,7 +100,7 @@ pub fn tail(path: &Path, wanted: usize) -> std::io::Result<Replay> {
 /// The `wanted` complete lines immediately **before** a known record boundary.
 ///
 /// The backfill step. `end` comes from a previous read's [`Replay::start`], so it is already a
-/// boundary — which is what lets a page walk a journal backwards a screenful at a time without ever
+/// boundary, which is what lets a page walk a journal backwards a screenful at a time without ever
 /// re-reading what it has, and without the server holding any per-viewer position.
 pub fn before(path: &Path, end: Cursor, wanted: usize) -> std::io::Result<Replay> {
     let mut file = std::fs::File::open(path)?;
@@ -315,7 +315,7 @@ pub fn since(path: &Path, at: f64) -> std::io::Result<Replay> {
 
 /// The offset of the first record boundary at or **after** `from`.
 ///
-/// A boundary is offset zero, or any offset immediately following a newline — so an offset that is
+/// A boundary is offset zero, or any offset immediately following a newline, so an offset that is
 /// *already* a boundary is returned unchanged. The first version always scanned forward, which
 /// skipped the record starting exactly at `from`: harmless most of the time, and wrong precisely
 /// when that record is the one being searched for.
@@ -346,7 +346,7 @@ fn next_line_start(file: &mut std::fs::File, from: u64, size: u64) -> std::io::R
 /// The `at` of the record beginning at this offset.
 ///
 /// Read by scanning for the field rather than by parsing the object, because the two record types
-/// order their keys differently — a `check` leads with `type` and an `options` leads with `at` — and
+/// order their keys differently (a `check` leads with `type` and an `options` leads with `at`), and
 /// a search that assumed either would silently fail on the other.
 fn line_at(file: &mut std::fs::File, start: u64) -> std::io::Result<Option<f64>> {
     const PEEK: usize = 512;
@@ -510,7 +510,7 @@ mod tests {
         assert_eq!(timestamp_of(r#"{"type":"gap","dropped":3}"#), None);
     }
 
-    /// **Paging backwards reconstructs the file exactly — no gap, no repeat.**
+    /// **Paging backwards reconstructs the file exactly: no gap, no repeat.**
     ///
     /// This is the assertion the backfill button rests on, and the failure it guards is silent: an
     /// off-by-one in the reported `start` shows up as one record missing between two pages, or one

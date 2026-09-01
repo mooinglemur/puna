@@ -1,13 +1,13 @@
 //! A lint over the template sources.
 //!
 //! `askama.toml` sets `whitespace = "suppress"`, which strips whitespace adjacent to every tag. The
-//! escape is `{{+ ... }}`, and it **preserves** whitespace rather than inserting any — so
+//! escape is `{{+ ... }}`, and it **preserves** whitespace rather than inserting any, so
 //! `as {{+ name }}` is right and `as{{+ name }}` renders `asTroy`.
 //!
 //! The second form looks like it does the same thing, and on 2026-08-20 **every** use of `{{+` in
 //! this crate was that shape: the space had been deleted at the same time the `+` was added. It
 //! reached production on the home page. Nothing about it is visible in a diff or a compile, and a
-//! render test only catches the one string it happens to assert — so the guard is a lint over the
+//! render test only catches the one string it happens to assert, so the guard is a lint over the
 //! sources, which catches every instance including ones nobody has written yet.
 
 use std::path::{Path, PathBuf};
@@ -73,7 +73,7 @@ fn a_whitespace_preserving_tag_has_whitespace_to_preserve() {
 /// The other half of the same trap: a space between rendered text and a tag is **eaten**.
 ///
 /// The first lint catches `word{{+ x }}`, where the `+` preserves nothing. This catches the case
-/// with no `+` at all — `{{ count }} rooms` renders `4rooms`, and `running {% if %}` renders
+/// with no `+` at all: `{{ count }} rooms` renders `4rooms`, and `running {% if %}` renders
 /// `runningsha-abc`. Both shipped: the drift label and the configured-image line on
 /// `/admin/rooms`, within an hour of each other, by someone who had just fixed the first kind.
 ///
@@ -174,7 +174,7 @@ fn whitespace_between_text_and_a_tag_is_preserved_explicitly() {
 ///
 /// **This was reported twice.** M19b gave the four glyph controls in `rooms/show.html` a `title`
 /// after the gap was noticed there; `rooms/panel.html`'s address copy button was missed and was
-/// reported the same way the next day. Neither was visible to anything else here — the markup is
+/// reported the same way the next day. Neither was visible to anything else here: the markup is
 /// valid, the attribute that *is* present is spelled correctly, and the control works.
 #[test]
 fn a_glyph_only_control_names_itself_twice() {
@@ -267,7 +267,7 @@ fn elements<'a>(source: &'a str, name: &str) -> Vec<(usize, &'a str, &'a str)> {
 
 /// Whether an element's content puts any words on screen.
 ///
-/// An `<svg>` is dropped whole — it *is* the glyph, not a label for it — as are markup tags and
+/// An `<svg>` is dropped whole (it *is* the glyph, not a label for it), as are markup tags and
 /// control-flow tags, which render nothing themselves. An expression `{{ ... }}` counts as text,
 /// because whatever it interpolates is something the reader can see and read the control by.
 fn renders_text(content: &str) -> bool {
@@ -326,7 +326,7 @@ fn blank_tags(source: &str) -> String {
 
 /// Every `{{ ... }}` in a string, as `(offset, the trimmed expression)`.
 ///
-/// The `+` whitespace markers are stripped, so `{{+ room_name +}}` reads as `room_name` — a caller
+/// The `+` whitespace markers are stripped, so `{{+ room_name +}}` reads as `room_name`: a caller
 /// asking *which value is this* should not have to know how its spacing was spelled.
 fn expressions(source: &str) -> impl Iterator<Item = (usize, &str)> {
     source.match_indices("{{").filter_map(|(at, _)| {
@@ -353,13 +353,13 @@ fn is_rendered_text(c: char) -> bool {
 ///
 /// **The newline exclusion above is what let a real bug through**, and this is the narrowing.
 /// `... it could match. {{ ... }} it could not.` split across two lines rendered as
-/// *"it could not.They still have their claim links"* — flowing prose in a `<p>`, where the
+/// *"it could not.They still have their claim links"*, flowing prose in a `<p>`, where the
 /// exclusion's whole argument is that the stripped whitespace is layout around a branch whose body
 /// is a word on a line of its own.
 ///
 /// The tell is the punctuation. A word standing in for a table cell does not end in `,` or `.`;
 /// prose that continues onto the next line does, and there the space is the one between two
-/// sentences. It only has to hold for text with a NEWLINE before the tag — everything else is
+/// sentences. It only has to hold for text with a NEWLINE before the tag: everything else is
 /// flagged already.
 fn continues_a_sentence(before: &str) -> bool {
     before.ends_with(['.', ',', ';', ':', '!', '?'])
@@ -459,7 +459,7 @@ fn blank_comments(source: &str) -> String {
 ///
 /// Break any half of that and **the control keeps working**: the button still highlights, the
 /// choice still persists across a reload, and the page never changes color. Nothing errors, nothing
-/// logs, and the only way to notice is to look at it — which is how a theme switcher gets shipped
+/// logs, and the only way to notice is to look at it, which is how a theme switcher gets shipped
 /// broken and stays that way.
 ///
 /// So each side is read out of its own file and checked against the others.
@@ -546,7 +546,7 @@ fn source(relative: &str) -> PathBuf {
 /// The rule lives in the `Session` request guard rather than in `LoggedInSession`, and that is not
 /// a stylistic choice: `POST /room/<id>/start` takes a plain `Session`, because D8 lets an
 /// anonymous visitor start an idle room. A check one rung up would leave exactly that route open,
-/// and the symptom would be a room started by somebody who did not start it — invisible in the
+/// and the symptom would be a room started by somebody who did not start it, invisible in the
 /// audit trail, which would name the person being viewed.
 ///
 /// Asserted over the source because there is no way to assert "no route was forgotten" from a
@@ -645,7 +645,7 @@ fn code_only(source: &str) -> String {
 
 /// **Saving the restart form only rewrites the password mode when it actually changed.**
 ///
-/// `room::set_slot_auth` regenerates every slot password on its way into `per_slot` — correctly,
+/// `room::set_slot_auth` regenerates every slot password on its way into `per_slot`, correctly,
 /// since that is what switching modes means. So re-submitting the mode a room is already in rotates
 /// the lot, invalidating a password every player is holding, on a form somebody pressed to change
 /// the remote-admin checkbox beside it.
@@ -681,19 +681,19 @@ fn the_password_mode_is_only_rewritten_when_it_changed() {
 /// **A link's `source` is shown, and never shown as the identity.**
 ///
 /// The three link records carry two names. `team`/`slot`/`player` come off the authenticated
-/// connection the `Bounce` arrived on; `source` is copied straight out of the payload — the sending
+/// connection the `Bounce` arrived on; `source` is copied straight out of the payload: the sending
 /// client's own claim, with nothing in the protocol stopping one from naming somebody else. pahoa
 /// records them separately *because they can disagree*, and pins that they can.
 ///
 /// **Both halves of this are load-bearing, and the first draft got the second one wrong by dropping
-/// `source` entirely.** It is not noise: one slot can be a whole group of people — Archipelago's
-/// Minecraft world puts several accounts behind a single server holding the slot — so `source` is
+/// `source` entirely.** It is not noise: one slot can be a whole group of people (Archipelago's
+/// Minecraft world puts several accounts behind a single server holding the slot), so `source` is
 /// the only field saying which of them died, and withholding it drops the one fact the room cannot
 /// otherwise report.
 ///
 /// What must not happen is `source` filling the identity cell, where a name an attacker picks would
 /// read as the room's answer. That mistake never shows up in testing, because the two agree for
-/// every honest client — which is all of them until one is not.
+/// every honest client, which is all of them until one is not.
 ///
 /// So the lint pins the shape rather than the field: `who()` is the identity and reads only the
 /// authenticated name, and `source` reaches the page through `claimed()`, dimmed and carrying a
@@ -763,7 +763,7 @@ fn a_links_claimed_sender_is_shown_but_never_as_the_identity() {
 /// the renderer falls through to the raw-JSON default, so the general public gets a wall of
 /// `{"type":"traplink","at":1787159859.507,…}` where the feed should be.
 ///
-/// That is not hypothetical — `deathlink` had no renderer for as long as it was withheld, and
+/// That is not hypothetical: `deathlink` had no renderer for as long as it was withheld, and
 /// admitting it is what made the gap visible. The default exists for a type this build has never
 /// heard of; a type it deliberately publishes is not that.
 #[test]
@@ -805,7 +805,7 @@ fn every_publicly_visible_record_has_a_renderer() {
 
 /// **The whole-feed walk clears its in-flight flag before asking for the next page.**
 ///
-/// `askForEarlier` refuses to send while `backfilling` is set — one request in flight at a time,
+/// `askForEarlier` refuses to send while `backfilling` is set: one request in flight at a time,
 /// so a slow disk backs the walk up instead of queueing a thousand backwards seeks. The walk then
 /// continues itself from the frame handler, which means the handler must clear the flag *before*
 /// calling it. It did not: the flag was cleared only in the arm taken when the walk had already
@@ -813,7 +813,7 @@ fn every_publicly_visible_record_has_a_renderer() {
 ///
 /// **The result was a silent stop after one page.** On a room with 160,000 records the button
 /// loaded 5,000, disabled itself, and left the note reading "Loading earlier records…" forever.
-/// Nothing threw, so there was nothing in a console — and the failure is indistinguishable from a
+/// Nothing threw, so there was nothing in a console, and the failure is indistinguishable from a
 /// short file, which is why it was reported as "it seems to load a chunk, but then it stops".
 ///
 /// Pinned here because nothing in the Rust build parses this file, and the bug is one line of
@@ -844,7 +844,7 @@ fn the_whole_feed_walk_can_take_more_than_one_page() {
 
 /// **The feed's markup, script and stylesheet agree about their hooks.**
 ///
-/// Three files, three spellings of the same contract — `journal.html` names the elements,
+/// Three files, three spellings of the same contract: `journal.html` names the elements,
 /// `journal.js` looks them up by id and paints classes onto what it builds, and `puna.css` gives
 /// those classes meaning. Every half of it fails silently: a renamed id makes the script return at
 /// its first `if`, so the page renders and simply never connects, with nothing in a console anybody
@@ -1097,13 +1097,13 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
 
 /// **The feed lets go of its socket when the server is shutting down.**
 ///
-/// Without this arm an open feed holds its pod for the whole shutdown grace — Rocket keeps doing
+/// Without this arm an open feed holds its pod for the whole shutdown grace: Rocket keeps doing
 /// ordinary I/O until the period expires and hyper waits for open connections, while a feed socket
 /// by design never completes. So the grace that exists for downloads would be paid on every rollout
 /// by every reader, and the symptom is only ever "rollouts got slower".
 ///
 /// A source lint because there is nothing to observe: deleting the arm leaves every test green, the
-/// feed working, and the page reconnecting exactly as it does now — just later, after the socket is
+/// feed working, and the page reconnecting exactly as it does now, just later, after the socket is
 /// cut rather than closed.
 #[test]
 fn the_journal_feed_closes_itself_when_the_server_is_shutting_down() {
@@ -1144,7 +1144,7 @@ fn the_journal_feed_closes_itself_when_the_server_is_shutting_down() {
 ///
 /// The browser WebSocket API exposes no ping or pong to JavaScript: the browser answers the server
 /// by itself and tells the page nothing. So on a quiet room a protocol ping proves liveness to
-/// every layer except the one that has to draw the indicator — which is how a five-minute blackhole
+/// every layer except the one that has to draw the indicator, which is how a five-minute blackhole
 /// left the dot green.
 ///
 /// Both frames are asserted, because they do different jobs and dropping either is invisible:
@@ -1177,7 +1177,7 @@ fn the_journal_feed_sends_a_heartbeat_the_page_can_observe() {
 
 /// **The lobby import gates on the lobby room's author, and `import` is the only place it can.**
 ///
-/// The rule is a pure function with its own truth table, but a rule nothing calls guards nothing —
+/// The rule is a pure function with its own truth table, but a rule nothing calls guards nothing,
 /// and this one cannot be reached in a test, because everything around it needs a live lobby
 /// answering an HTTP request. Deleting the call compiles, passes every test, and turns the import
 /// back into a way to read a stranger's lobby room: paste any room id, and its players' names and
@@ -1218,13 +1218,13 @@ fn the_lobby_import_refuses_a_room_whose_author_has_no_standing() {
 /// **A page that something redirects to with a `Flash` has to read one.**
 ///
 /// This failed silently for the entire life of `routes/rooms.rs`. Every `Flash` in that module
-/// lands on `/room/<id>` or `/room/<id>/options`, and neither route took a `FlashMessage` — so
+/// lands on `/room/<id>` or `/room/<id>/options`, and neither route took a `FlashMessage`, so
 /// "Saved. These took effect immediately", the rename confirmation, the password-rotation result
 /// and every lobby-import outcome were written into a cookie and dropped by the page they were
 /// addressed to.
 ///
 /// **Nothing anywhere reports it.** The POST succeeds, the redirect is followed, the page renders
-/// correctly, and the only symptom is a sentence that never appears — which reads as the feature
+/// correctly, and the only symptom is a sentence that never appears, which reads as the feature
 /// having nothing to say. It surfaced only when an import failed against a misconfigured token and
 /// the page's *other* message, the persistent one, explained the result wrongly.
 ///
@@ -1318,7 +1318,7 @@ fn every_page_a_flash_redirects_to_reads_one() {
 /// there, so the scope has to be inside the `<h1>` and has to say who.
 ///
 /// **The render test beside it cannot catch this.** It constructs `FilterTemplate` with a fixture
-/// `scope`, so it asserts the template renders whatever string it is handed — true and worth having,
+/// `scope`, so it asserts the template renders whatever string it is handed: true and worth having,
 /// and silent about whether the route builds a useful one. Dropping the player name from the
 /// `format!` passes every test in the crate.
 ///
@@ -1350,12 +1350,12 @@ fn the_slot_filter_heading_names_the_slot_and_the_player() {
 ///
 /// `port::reserved_pair` returns the pair's BASE port and the filtered listener is `base + 1`, so
 /// the whole difference between a correct patch and a wrong one is one addition in one expression.
-/// Removing it looks like a simplification — `base_port` is right there, already named, and the
+/// Removing it looks like a simplification: `base_port` is right there, already named, and the
 /// route still compiles, still serves, and still round-trips its own address.
 ///
 /// **Nothing else would notice.** `embed_server`'s tests assert the address it writes is the address
 /// it was given; the room page reads its own value; and the symptom is a player on a 500-slot room
-/// whose game client drowns in the full feed — which is the exact failure the `Filtered` setting
+/// whose game client drowns in the full feed, which is the exact failure the `Filtered` setting
 /// exists to prevent, arriving through the file that setting is supposed to configure.
 ///
 /// So the rule is pinned where it lives: the port handed to `embed_server` is derived, never the
@@ -1399,13 +1399,13 @@ fn a_patch_embeds_the_port_the_room_leads_with() {
 ///   multiworld's state is not public, and this is the one route here that answers without knowing
 ///   who is asking.
 /// - **`404`, never `403`.** A refusal that distinguishes a restricted tracker from an id that
-///   names nothing is itself an answer about which unguessable ids are real — the rule `access`
+///   names nothing is itself an answer about which unguessable ids are real, the rule `access`
 ///   already states and the reason it 404s a disabled tracker.
 /// - **No `Session`, which is what makes the response publicly cacheable.** Take one and the answer
 ///   can vary by viewer, and the `public` `Cache-Control` beside it silently becomes a way to hand
 ///   one viewer's document to another.
 ///
-/// The realistic regression is somebody folding this onto `access()` — which looks like removing a
+/// The realistic regression is somebody folding this onto `access()`, which looks like removing a
 /// duplicate, is how every other view here resolves, and quietly widens this one to `members`.
 /// Nothing else would notice: the route keeps working, and it works for more people.
 #[test]
@@ -1458,7 +1458,7 @@ fn the_text_summary_is_served_only_to_a_world_open_tracker() {
 /// like a failure:
 ///
 /// - **The template loses the class** and `.journal` has no height at all, so it grows with its
-///   records. On a room with a long history that is a page which is nothing but scrollbar — the
+///   records. On a room with a long history that is a page which is nothing but scrollbar, the
 ///   exact state this replaced, arrived at from the other direction.
 /// - **The stylesheet loses the rule** and the class is inert markup.
 ///
@@ -1552,7 +1552,7 @@ fn the_feed_page_is_sized_to_the_window() {
 ///
 /// A plain `contains` is not enough and the difference is not pedantic: renaming `.journal .daybreak`
 /// to `.journal .daybreak-unused` leaves the substring intact, so the lint kept passing over a class
-/// with no rule. Found by mutation — the check has to end at a character that cannot continue an
+/// with no rule. Found by mutation: the check has to end at a character that cannot continue an
 /// identifier.
 fn styles(css: &str, class: &str) -> bool {
     [format!(".journal .{class}"), format!(".item.{class}")]
@@ -1569,14 +1569,14 @@ fn styles(css: &str, class: &str) -> bool {
 
 /// **The whole-journal download refuses a filtered viewer, in the route.**
 ///
-/// The file carries `chat` — every line anybody typed in the room — and is therefore *where the
+/// The file carries `chat` (every line anybody typed in the room) and is therefore *where the
 /// records the socket withholds actually live*. So on a room whose policy is `feed`, serving the
 /// file hands over exactly what was just filtered, and the filter becomes decorative. That
 /// difference lives in one `if` that no unit test reaches: removing it left every test in
 /// `routes::journal` green while serving the room's chat to anyone holding the link.
 ///
-/// Found by mutation, which is the only reason this exists. The same shape as `a_restart_would_land`
-/// — a rule with a good test and an unpinned call site.
+/// Found by mutation, which is the only reason this exists. The same shape as `a_restart_would_land`:
+/// a rule with a good test and an unpinned call site.
 ///
 /// **Still one `if` after the policy became per-room**, because the policy is resolved into
 /// `Visibility` by `readable` and never re-read here. A route that branched on `journal_policy`
@@ -1601,7 +1601,7 @@ fn the_journal_download_is_gated_in_the_route() {
 /// **The feed's second gate is a refusal, and it is asked in `readable`.**
 ///
 /// `journal_policy` decides how much of the history a non-organizer gets, and `disabled` means
-/// none — but the whole of that decision is one `?` on an `Option` in a function whose other gate
+/// none, but the whole of that decision is one `?` on an `Option` in a function whose other gate
 /// looks very similar. Delete it and everything keeps working: the page renders, the socket
 /// streams, the download behaves, and the setting an organizer chose does nothing at all, on every
 /// room, silently.
@@ -1633,7 +1633,7 @@ fn a_disabled_journal_is_refused_where_the_room_is_resolved() {
 ///
 /// They came apart the moment the policy became per-room: a public tracker over a staff-only feed
 /// is an ordinary configuration, so a page keyed on `can_see_tracker` alone renders a link that
-/// 404s for every viewer of every such room. The failure is quiet from both ends — the page is
+/// 404s for every viewer of every such room. The failure is quiet from both ends: the page is
 /// valid, the route is correct, and only somebody who clicks finds out.
 ///
 /// Asserted against the route rather than the markup because the markup half is covered by a render
@@ -1654,13 +1654,13 @@ fn the_feed_link_is_gated_on_the_policy_as_well_as_the_tracker() {
 /// **No template reads a credential straight off the `Room`.**
 ///
 /// `RoomTemplate` and `PanelTemplate` both carry the whole `Room`, which has `password` and
-/// `admin_token` on it — so on the room page, which is **public**, the room's shared password and
+/// `admin_token` on it, so on the room page, which is **public**, the room's shared password and
 /// the bearer token that drives its admin API are both sitting in the rendering context of a page
 /// an anonymous visitor is looking at.
 ///
 /// Nothing renders them, and nothing may: the password goes out through `room_password`, a separate
 /// field the *route* fills in only for participants and staff. The distinction matters because a
-/// template cannot prove a negative — `{% if is_staff %}{{ room.password }}{% endif %}` looks like
+/// template cannot prove a negative: `{% if is_staff %}{{ room.password }}{% endif %}` looks like
 /// a gate and is one, right up until the condition is edited, moved, or copied into a branch that
 /// renders for somebody else. Deciding it in Rust means the value is simply absent.
 ///
@@ -1686,27 +1686,27 @@ fn no_template_renders_a_credential_off_the_room() {
 /// **`localtime.js` is the only file that decides how an instant is spelled.**
 ///
 /// A bare `toLocaleString` renders `24/08/2026, 06.07.58` for one reader, `8/24/2026, 6:07:58 AM`
-/// for another, and **no timezone for either** — so a date that is meant to say *how stale this is*
+/// for another, and **no timezone for either**, so a date that is meant to say *how stale this is*
 /// says something different to every reader and cannot be pasted, sorted or compared. `localtime.js`
 /// settled that at M26: fixed field order, and only the ZONE localized, because the zone is the one
 /// part a reader cannot infer.
 ///
-/// The tracker's stale-document banner used `toLocaleString` anyway — reported from a live room —
+/// The tracker's stale-document banner used `toLocaleString` anyway (reported from a live room),
 /// and nothing could have caught it. It renders, it is plausible, it is *correct* in the reader's own
 /// locale, and the ambiguity is invisible to whoever wrote it because their browser resolves it the
 /// way they expect. That is the whole argument for a lint rather than a code review: the failure is
-/// only visible to a reader in a different locale from the author, which on the tracker — the page
-/// built to be shared with an audience the organizers do not choose — is most of the audience.
+/// only visible to a reader in a different locale from the author, which on the tracker (the page
+/// built to be shared with an audience the organizers do not choose) is most of the audience.
 ///
 /// **Forbids the shape, not one spelling.** `toLocaleDateString` and `toLocaleTimeString` have the
 /// same defect, so the anchor is `.toLocale`; matching only the exact call this bug used would walk
 /// straight past the next one. That lesson is [[puna-silent-breakage]] #27's, from the `.json` lint.
 ///
 /// **Comments are stripped first**, and that guard is precautionary rather than currently
-/// load-bearing — stated precisely, because claiming otherwise would be the same class of error this
+/// load-bearing, stated precisely, because claiming otherwise would be the same class of error this
 /// file exists to catch. Today's explanations write `toLocaleString` without a leading dot, so they
-/// do not collide with the anchor. A comment that names the *call* — `d.as_of.toLocaleString()`, the
-/// natural way to explain what this rule refuses — does collide, and fails the lint on a correct
+/// do not collide with the anchor. A comment that names the *call* (`d.as_of.toLocaleString()`, the
+/// natural way to explain what this rule refuses) does collide, and fails the lint on a correct
 /// file without it. Verified by adding exactly that comment and watching the unguarded form reject
 /// `tracker.js`. Four lints in this project have shipped with that bug.
 #[test]
@@ -1743,12 +1743,12 @@ fn only_localtime_js_decides_how_an_instant_is_spelled() {
 ///
 /// A mismatched pair is the quietest possible failure: the button renders, it is focusable, it has
 /// a tooltip, and clicking it does *nothing at all*. No console error, no network request, no
-/// visual change — an operator would reasonably conclude the sanction had been applied and moved
+/// visual change: an operator would reasonably conclude the sanction had been applied and moved
 /// on. The browser gives no feedback because a `popovertarget` pointing at nothing is not an error,
 /// it is just a reference to an element that is not there.
 ///
 /// These ids are **templated** (`ban-{{ row.id }}`), so the check is a string comparison of the
-/// expressions rather than of rendered output — which is what makes it a source lint. Rendering
+/// expressions rather than of rendered output, which is what makes it a source lint. Rendering
 /// would work too, but only for the rows a test happened to build.
 #[test]
 fn every_popover_button_points_at_a_popover_that_exists() {
@@ -1811,15 +1811,15 @@ fn attribute_values<'a>(source: &'a str, attribute: &'a str) -> impl Iterator<It
 
 /// **Every `<table>` sits inside a `.scroll-x` wrapper.**
 ///
-/// The wrapper is what scrolls. It used to be the table itself — `display: block; overflow-x: auto`
-/// — and that carried two bugs worth not reintroducing. `overflow-x: auto` on an element whose
+/// The wrapper is what scrolls. It used to be the table itself (`display: block; overflow-x: auto`),
+/// and that carried two bugs worth not reintroducing. `overflow-x: auto` on an element whose
 /// `overflow-y` is `visible` forces the other axis to `auto` too, which is the overflow spec rather
 /// than a quirk, so every table was a vertical scroll container and any content exceeding its box by
 /// a fraction drew a bar down the page. And blockifying a table shrinks the table box inside it to
 /// its content, so `width: 100%` sized the wrapper and left the table hugging the left edge.
 ///
-/// Now that the scrolling lives on a wrapper, a table added without one does not degrade gracefully
-/// — it overflows `main` and gives the whole page a horizontal scrollbar, which is the thing all of
+/// Now that the scrolling lives on a wrapper, a table added without one does not degrade gracefully:
+/// it overflows `main` and gives the whole page a horizontal scrollbar, which is the thing all of
 /// this exists to avoid. The convention is invisible in the stylesheet, so it is asserted here.
 #[test]
 fn every_table_scrolls_inside_a_wrapper() {
@@ -1876,7 +1876,7 @@ fn every_table_scrolls_inside_a_wrapper() {
 ///
 /// `overflow-x: auto` does not leave `overflow-y` alone. The spec computes `visible` to `auto`
 /// whenever the other axis is a scrolling value, so a rule that mentions only `overflow-x` has
-/// quietly made its element a scroll container in **both** directions — and a box whose content
+/// quietly made its element a scroll container in **both** directions, and a box whose content
 /// exceeds it by a fraction of a pixel then draws a scrollbar nobody asked for.
 ///
 /// This has been written wrong twice in this file: once on `table` itself, and then again on the
@@ -1941,7 +1941,7 @@ fn code_only_css(css: &str) -> String {
 /// command was refused, and "409" on its own is not an answer somebody can act on.
 ///
 /// **That exception is only safe because of an invariant this asserts**: every 4xx in this crate is
-/// hand-built with `anyhow!(...)` — a literal, or a domain error's own `Display` — while everything
+/// hand-built with `anyhow!(...)` (a literal, or a domain error's own `Display`), while everything
 /// converted through `From` becomes a 500 and everything built from a foreign error is a 503. Add
 /// one `Error::new(Status::BadRequest, db_error.into())` and a diesel chain starts rendering in a
 /// dialog, with nothing failing anywhere.
@@ -2030,13 +2030,13 @@ fn a_client_error_never_carries_a_converted_error_chain() {
 /// one globally.
 ///
 /// `form { margin: 0 0 1.25rem }` is right for the forms that are page sections. It is inert on the
-/// ones marked `.inline`, because **vertical margins do not apply to an inline box** — and that is
+/// ones marked `.inline`, because **vertical margins do not apply to an inline box**, and that is
 /// exactly what makes the trap invisible: turning such a form into a flex container to line its
 /// contents up *re-enables* a margin that was doing nothing a moment earlier.
 ///
 /// It shipped on `/admin/users`. `td .actions form { display: flex; align-items: center }` was added
 /// to stop form-wrapped glyphs riding their text baseline, and the restored 1.25rem then had
-/// `align-items: center` center each form's **margin box** — floating every form-wrapped glyph about
+/// `align-items: center` center each form's **margin box**, floating every form-wrapped glyph about
 /// half that above the bare buttons beside it. Rows whose controls happened to be all forms or all
 /// buttons lined up perfectly, so it read as a row-height problem for two rounds of fixing.
 #[test]
@@ -2087,7 +2087,7 @@ fn a_form_made_into_a_block_resets_the_margin_this_stylesheet_gives_every_form()
 }
 
 /// A column of controls says what it is. An empty `<th>` leaves the reader counting cells to work
-/// out what the icons under it do — and it is invisible in review, because the table renders fine.
+/// out what the icons under it do, and it is invisible in review, because the table renders fine.
 #[test]
 fn every_column_has_a_heading() {
     let mut offenders = Vec::new();
@@ -2115,7 +2115,7 @@ fn every_column_has_a_heading() {
 /// **A checkbox bound to a Rust `bool` has to post a word Rocket can parse.**
 ///
 /// Rocket's `FromFormField for bool` accepts `""`, `"on"`, `"yes"` and `"true"` and **rejects
-/// `"1"`** — so a checkbox written `value="1"` beside one that already says so fails the *whole*
+/// `"1"`**, so a checkbox written `value="1"` beside one that already says so fails the *whole*
 /// submission, not just its own field. Every other control on the form is discarded with it, and
 /// only when the box is ticked, so the form works until somebody uses the new option.
 ///
@@ -2174,7 +2174,7 @@ fn a_checkbox_posts_something_its_rust_type_can_parse() {
 /// **Every progression a row can carry has a tint, and every tint belongs to one.**
 ///
 /// The class name is built in the client as `prog-${tone}` from a value the server sends, so the
-/// three sides — `ProgressionStatus::as_sql`, the template's radio values, and `puna.css` — agree
+/// three sides (`ProgressionStatus::as_sql`, the template's radio values, and `puna.css`) agree
 /// only because somebody kept them agreeing. A missing rule is silent: the chip renders in the
 /// default muted grey and looks like a chip that was never meant to be colored.
 ///
@@ -2243,7 +2243,7 @@ fn every_progression_has_a_tint_and_every_tint_a_progression() {
 ///
 /// A browser truncates a title from the right, so the surviving half has to be the half that
 /// distinguishes one of a room's tabs from another. Titles used to read `<room> &mdash; tracker`,
-/// which spent their first twenty characters on the thing every tab of that room had in common —
+/// which spent their first twenty characters on the thing every tab of that room had in common:
 /// `Friday async — con…` and `Friday async — mem…` are the same string to a reader.
 ///
 /// Two rules, and neither is expressible as "every title matches a format": some pages have no room
@@ -2312,7 +2312,7 @@ fn a_tab_names_its_page_before_the_room_it_belongs_to() {
 
 /// **The sort direction is `compare`'s to apply, and negating its answer breaks a rule it states.**
 ///
-/// `compare` puts nulls last *in both directions* — an untouched slot belongs at the end of "least
+/// `compare` puts nulls last *in both directions*: an untouched slot belongs at the end of "least
 /// recently seen" and of "most recently seen" alike, because it has no answer either way. A caller
 /// that multiplies the result by `-1` for a descending sort negates that too, so the nulls lead.
 ///
@@ -2369,12 +2369,12 @@ fn the_sort_direction_is_applied_inside_compare_rather_than_by_its_caller() {
 /// for a column whose display and its ordering differ. The two live in different files and are
 /// joined only by the string, so a rename in either one lands here:
 ///
-/// * an entry naming no header is dead — the column it was written for went back to the default,
+/// * an entry naming no header is dead: the column it was written for went back to the default,
 ///   which is what "checks" sorting by raw count looked like before it was fixed;
 /// * a header whose entry lost its name falls back to `row["held_by"]`, which is `undefined` on
 ///   every row, so every row compares equal and the table simply does not reorder.
 ///
-/// Both draw the arrow and neither logs anything. The reverse direction — a header with no entry —
+/// Both draw the arrow and neither logs anything. The reverse direction (a header with no entry)
 /// is deliberately **not** flagged: most columns want the default, and only a column whose key is
 /// not a field on the row needs one, which is not a thing this can see from here.
 #[test]
@@ -2419,7 +2419,7 @@ fn every_sort_override_names_a_column_that_exists() {
 /// two agree only because both read one flag. Building the cell from `r.owner` instead is the
 /// obvious simplification and is wrong in a way that is invisible on a healthy room: **an unclaimed
 /// slot carries no owner**, so those rows would get one fewer cell than the header declares and
-/// every column after it would slide left — checks under Game, status under Checks — on some rows
+/// every column after it would slide left (checks under Game, status under Checks) on some rows
 /// and not others.
 ///
 /// It reads as data rather than as a bug, which is why this forbids the shape rather than trusting
@@ -2455,13 +2455,13 @@ fn the_owner_cell_is_gated_on_the_flag_rather_than_on_the_data() {
 /// **The unclaimed tag has to test for `false`, not for falsiness**, and an author cannot see the
 /// difference.
 ///
-/// `claimed` is omitted from the JSON entirely for a viewer who may not know — the room's staff and
+/// `claimed` is omitted from the JSON entirely for a viewer who may not know: the room's staff and
 /// slot holders get it, nobody else does. So `r.claimed ? … : { tag: "unclaimed" }`, which is what
 /// this line was and what a tidy-up would restore, reads `undefined` as "not claimed" and tags
 /// **every slot** `unclaimed` for exactly the anonymous audience the server just declined to tell.
 ///
 /// Nothing catches that in practice. The server-side gate is what withholds the data and it has its
-/// own test; this is about the rendering, and the rendering is only wrong when *logged out* — which
+/// own test; this is about the rendering, and the rendering is only wrong when *logged out*, which
 /// is the one state somebody editing the tracker is least likely to be in. A page that reads
 /// correctly for its author and lies to everybody else is the exact shape this file exists for.
 ///
@@ -2494,7 +2494,7 @@ fn the_unclaimed_tag_distinguishes_withheld_from_unclaimed() {
 
 /// `tracker.js` returns an object from `summary` and looks each key up as `tfoot .KEY`; the template
 /// renders the cells. Rename one on either side and the lookup answers `null`, which `renderSummary`
-/// steps over deliberately — so the row still appears, still spans the right columns, and one cell
+/// steps over deliberately, so the row still appears, still spans the right columns, and one cell
 /// is silently blank. Nothing errors and nothing logs, which is the same shape as the
 /// `panel.dataset` and `popovertarget` lints.
 ///
@@ -2569,13 +2569,13 @@ fn the_tracker_summary_fills_every_cell_it_declares() {
 /// **Block containers have to close as often as they open.**
 ///
 /// Written after leaving a `<fieldset>` unclosed on the bulk panel, which nested the next one inside
-/// it and gave the page two legends for one box. **Browsers repair this silently** — the markup is
+/// it and gave the page two legends for one box. **Browsers repair this silently.** The markup is
 /// never rejected, nothing logs, and the rendered result is merely subtly wrong: a nested fieldset
 /// inherits the outer one's disabled state and border, and a screen reader announces the wrong
 /// grouping. It reads as a styling problem, which is the wrong place to look.
 ///
 /// Counting rather than parsing, because a real parser is not worth it here and an imbalance is the
-/// whole failure — a template where these agree can still be malformed, but every malformation of
+/// whole failure: a template where these agree can still be malformed, but every malformation of
 /// this shape shows up in the count.
 #[test]
 fn every_block_container_a_template_opens_is_closed() {
@@ -2613,7 +2613,7 @@ fn every_block_container_a_template_opens_is_closed() {
 /// **The bulk panel's buttons and its action table have to name the same set.**
 ///
 /// `ACTIONS` in `routes/bulk.rs` decides what the route will do; the buttons in `rooms/bulk.html`
-/// decide what an operator can ask for. Drift either way is silent in a different direction — an
+/// decide what an operator can ask for. Drift either way is silent in a different direction: an
 /// action in the table with no button is unreachable and looks like it was never built, and a button
 /// whose value is not in the table posts an action the route answers `400` to, from a control that
 /// looks exactly like the six beside it that work.
@@ -2679,13 +2679,13 @@ fn the_bulk_panel_offers_exactly_the_actions_its_route_implements() {
 /// **Every hook `moderation.js` reaches for has to exist in the markup.**
 ///
 /// The script addresses the dialog entirely through `[data-mod-…]` attributes, and most of those
-/// reads are unguarded — `form.querySelector("[data-mod-status]").value = …` throws on `null`. So a
+/// reads are unguarded: `form.querySelector("[data-mod-status]").value = …` throws on `null`. So a
 /// renamed or dropped attribute does not degrade one field, it throws inside the click handler and
 /// **every control in the moderation column stops doing anything**, with the only evidence in a
 /// console nobody has open. The same contract-across-two-files shape as the `panel.dataset` lint,
 /// and the same failure mode.
 ///
-/// Written the strict way round — the script is the authority, the template must satisfy it — since
+/// Written the strict way round (the script is the authority, the template must satisfy it), since
 /// an unused attribute in the markup is harmless and a missing one is not.
 #[test]
 fn the_moderation_dialog_renders_every_hook_its_script_reaches_for() {
@@ -2729,11 +2729,11 @@ fn the_moderation_dialog_renders_every_hook_its_script_reaches_for() {
 /// this is a lint rather than a comment:
 ///
 /// * A renamed `data-rule-*` hook makes `narrow()` return early, so the tag and subtype cells stop
-///   following the kind — and a tag left on a row that is no longer a bounce is then submitted and
+///   following the kind, and a tag left on a row that is no longer a bounce is then submitted and
 ///   refused, in a form that looked fine.
 /// * A renamed `data-empty-meaning` leaves the radios enabled and `required` while hidden, and the
 ///   browser then refuses to submit the form with a validation bubble it cannot point at anything.
-/// * A field named anything but `rules[N].…` still posts, and Rocket reads **nothing** — the route
+/// * A field named anything but `rules[N].…` still posts, and Rocket reads **nothing**: the route
 ///   sees an empty table and clears the filter that was on screen a moment ago.
 ///
 /// The template is checked against the script, and the field names against both.
@@ -2852,7 +2852,7 @@ fn the_rule_table_renders_every_hook_and_field_name_its_readers_expect() {
 /// Three files have to agree and each spells the contract differently, so no grep in one finds the
 /// others: a template renders `class="table-search"`, `table.js` adds `js-tables` to `<html>`, and
 /// `puna.css` reveals `.table-controls` from that class. Break any one and the box still renders,
-/// still takes focus, still accepts typing — and filters nothing, with no error anywhere. It is the
+/// still takes focus, still accepts typing, and filters nothing, with no error anywhere. It is the
 /// same failure `.theme` and `.copy` are gated against, and the same shape as the theme lint below.
 ///
 /// The room page's own comment asserted the box was "simply absent" without scripting for as long
@@ -2948,13 +2948,13 @@ fn a_filter_box_is_hidden_until_the_script_that_drives_it_arrives() {
 ///
 /// The sibling of the rule above, and the same three-way contract spelled three ways: a template
 /// renders `class="copy"`, `copy.js` puts `js-copy` on `<html>` once it has proved the clipboard is
-/// reachable, and `puna.css` reveals `.copy` from that class. The gate is deliberate — on plain HTTP
+/// reachable, and `puna.css` reveals `.copy` from that class. The gate is deliberate: on plain HTTP
 /// `navigator.clipboard` is absent, and a button that silently does nothing is worse than no button,
 /// because the value looks copied and the paste is whatever was there before.
 ///
 /// The failure this catches is the *other* way round: markup and stylesheet both correct, and the
 /// page loading no script that ever sets the class, so the control is hidden from everybody
-/// forever. The members page was exactly that the moment it grew an invite copy button — it had no
+/// forever. The members page was exactly that the moment it grew an invite copy button: it had no
 /// `{% block scripts %}` at all.
 #[test]
 fn a_copy_control_is_hidden_until_the_script_that_drives_it_arrives() {
@@ -3014,12 +3014,12 @@ fn a_copy_control_is_hidden_until_the_script_that_drives_it_arrives() {
 /// **Every shorthand duration carries the instant behind it**, and the three files that make that
 /// work have to agree.
 ///
-/// A cell reading "6d 2h" answers how long ago and cannot answer *when* — which is the question
+/// A cell reading "6d 2h" answers how long ago and cannot answer *when*, which is the question
 /// somebody has once they are correlating a row with a log line or somebody else's account. The
 /// exact moment goes in a `title`, rendered in the reader's own timezone, which is why it is the
 /// browser's job: the server has the instant and does not have the reader.
 ///
-/// Break any part and the page still renders perfectly — there is simply no tooltip, on hover, with
+/// Break any part and the page still renders perfectly: there is simply no tooltip, on hover, with
 /// nothing logged. So: the templates emit `data-at`, `localtime.js` reads it, and every page that
 /// renders one loads the file.
 #[test]

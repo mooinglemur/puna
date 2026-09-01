@@ -4,13 +4,13 @@
 //!
 //! Two properties the reference implementation has that a naive tracker page loses. A page whose
 //! JavaScript fetched `https://rooms.example.com:41234/api/tracker` would put **the room's address in
-//! view-source** — and the tracker is the link meant for broad sharing, so that hands the multiworld's
+//! view-source**, and the tracker is the link meant for broad sharing, so that hands the multiworld's
 //! address to a stream chat. And a URL of the form `/room/<id>/tracker` would leak the **room id**,
 //! so sharing a tracker would share the room page. Proxying from an independent id solves both, and
 //! there is no CORS in the picture at all because the page fetches its own origin.
 //!
 //! It is also the only thing that works. Pahoa gates the tracker whenever an admin token is
-//! configured — which every Puna room has — and sending `Authorization` makes a request non-simple,
+//! configured (which every Puna room has), and sending `Authorization` makes a request non-simple,
 //! which needs a preflight pahoa does not answer.
 //!
 //! ## The allowlist is a type, not a check
@@ -18,7 +18,7 @@
 //! [`Document`] has two variants and its `path` is a constant per variant. **No path, host or port
 //! from a request reaches this module**, so the "only these two upstream paths" rule is not a
 //! validation that could be forgotten but a thing that cannot be spelled. A general proxy here would
-//! be a confused deputy pointed at `/admin/v1/**` — and the tier holding this code can read
+//! be a confused deputy pointed at `/admin/v1/**`, and the tier holding this code can read
 //! `rooms.admin_token`, so it would be a confused deputy with the credential in hand.
 
 use std::time::Duration;
@@ -111,7 +111,7 @@ impl Upstream {
     /// Fetch one document from one room, **as bytes**.
     ///
     /// The client is built per fetch rather than shared, which is deliberate and cheap here: the
-    /// `resolve` override is per-client and per-room, and a fetch only happens on a cache miss —
+    /// `resolve` override is per-client and per-room, and a fetch only happens on a cache miss,
     /// at most once per room per cache window.
     pub async fn fetch(
         &self,
@@ -182,13 +182,13 @@ mod tests {
     /// because nothing observable distinguishes the two.
     ///
     /// `response.json()` and `response.text()` return the same document to every caller and differ
-    /// only in peak memory — by roughly an order of magnitude, since a `serde_json::Value` tree is
+    /// only in peak memory, by roughly an order of magnitude, since a `serde_json::Value` tree is
     /// millions of small allocations over what was 17.6 MiB of wire. That gap is invisible on the
     /// two-slot rooms every test and every hand-check uses, and is what OOM-killed the tracker tier
     /// on a 2000-slot room. So a later `.json()` here would look like a tidy-up, pass everything,
     /// and reinstate M36.
     /// Comment lines are stripped first, because the thing this lint forbids is also the thing the
-    /// code around it has to *name* in order to explain itself — and a lint that matches its own
+    /// code around it has to *name* in order to explain itself, and a lint that matches its own
     /// prose fails on a correct file, which teaches the next person to delete it.
     #[test]
     fn a_fetched_document_is_never_parsed_here() {

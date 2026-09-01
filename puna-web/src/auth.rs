@@ -63,7 +63,7 @@ pub struct Session {
     /// Set only while an administrator is viewing the site as somebody else.
     ///
     /// **While this is set, `user_id`, `username` and `is_admin` describe the person being viewed,
-    /// not the person looking** — so every guard, every query and every template resolves to them
+    /// not the person looking**, so every guard, every query and every template resolves to them
     /// with no special case anywhere. `is_admin` is forced to `false`, which is what stops an
     /// administrator seeing admin-only affordances through somebody else's eyes and mistaking them
     /// for what that person sees.
@@ -210,7 +210,7 @@ impl<'r> FromRequest<'r> for Session {
 ///
 /// **The session is deliberately stateless, and this is the one thing that reaches past it.** A
 /// cookie lasts 31 days, so a ban enforced only at login would let a banned account keep acting for
-/// a month — which is not a ban. The cost is one primary-key lookup per authenticated request, and
+/// a month, which is not a ban. The cost is one primary-key lookup per authenticated request, and
 /// the cache is what keeps it off the hot path.
 ///
 /// The TTL is the honest cost of the design: a ban takes effect within [`STANDING_TTL`] rather than
@@ -228,7 +228,7 @@ const STANDING_TTL: Duration = Duration::from_secs(10);
 ///
 /// Called by the admin route that sets it. **The cache is per process and there are two web
 /// replicas**, so this makes it immediate for the replica that served the form and leaves the other
-/// to expire — which is why the TTL is short rather than long, and why this is an optimization
+/// to expire, which is why the TTL is short rather than long, and why this is an optimization
 /// rather than the mechanism.
 pub fn forget_standing(discord_id: i64) {
     if let Ok(mut cache) = STANDING.lock() {
@@ -239,13 +239,13 @@ pub fn forget_standing(discord_id: i64) {
 /// This account's standing, from the cache or the database.
 ///
 /// **Fails CLOSED.** An `Err` means the answer could not be determined, and the caller refuses the
-/// request rather than letting it through — the same rule `CanCreateRoom` states for the same
+/// request rather than letting it through, the same rule `CanCreateRoom` states for the same
 /// lookup, and a check that fails open is not a check. The first draft of this returned `Option`
 /// and the caller skipped the ban on `None`, which meant a database blip briefly un-banned
 /// everybody: a security control whose failure mode is "grant the thing".
 ///
 /// It costs nothing real to fail closed here. Every route behind this guard reads the database
-/// anyway, so a pool that cannot answer is a request that was going to fail regardless — the only
+/// anyway, so a pool that cannot answer is a request that was going to fail regardless: the only
 /// difference is which error it fails with.
 async fn standing(
     request: &Request<'_>,
@@ -623,7 +623,7 @@ mod tests {
     ///
     /// Asserted through a real router with a real private cookie, because the rule lives in a
     /// request guard and nothing short of dispatching a request exercises it. The `POST` taking a
-    /// bare `Session` is the case that matters most — it is the shape `/room/<id>/start` has, and
+    /// bare `Session` is the case that matters most: it is the shape `/room/<id>/start` has, and
     /// a rule enforced one guard higher would leave exactly that route open while looking correct.
     #[test]
     fn a_write_is_refused_while_viewing_as_somebody_else() {
@@ -689,7 +689,7 @@ mod tests {
     /// An impersonated session names the person being viewed, and carries no admin rights.
     ///
     /// Serialization matters on its own: the cookie is the only place this state lives, so a field
-    /// that failed to round-trip would silently drop somebody back into their own identity — or
+    /// that failed to round-trip would silently drop somebody back into their own identity, or
     /// worse, leave them impersonating with no way back and no banner saying so.
     #[test]
     fn the_impersonation_state_round_trips_through_the_cookie() {

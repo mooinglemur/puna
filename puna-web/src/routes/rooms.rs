@@ -130,7 +130,7 @@ pub struct RoomTemplate {
     /// an authorization comparison anyway.
     is_staff: bool,
     is_organizer: bool,
-    /// The room's own filter as a hover summary, or `None` when there is none — or when the viewer
+    /// The room's own filter as a hover summary, or `None` when there is none, or when the viewer
     /// is not staff, which is decided here rather than in markup for the reason `SlotView`'s note
     /// gives: a template cannot prove it did not render something.
     ///
@@ -155,7 +155,7 @@ pub struct RoomTemplate {
     ///
     /// **Two gates, not one, which is why this is separate from `can_see_tracker`.** The feed
     /// routes ask `may_see_tracker` *and* the room's own `journal_policy`, so a room with a public
-    /// tracker and a `disabled` journal is an ordinary configuration — and a page keyed on the
+    /// tracker and a `disabled` journal is an ordinary configuration, and a page keyed on the
     /// tracker alone would offer a link that answers `404`. That is the failure this project has
     /// now met from both directions: a control with no door, and a door onto nothing.
     can_see_journal: bool,
@@ -183,7 +183,7 @@ pub struct RoomTemplate {
     /// visible to them, and the "only my slots" toggle is worth offering. Somebody holding none
     /// would get a control that hides every row.
     owns_a_slot: bool,
-    /// The room-wide password. Same field, same gate and same reason as [`PanelTemplate`]'s — this
+    /// The room-wide password. Same field, same gate and same reason as [`PanelTemplate`]'s: this
     /// page `{% include %}`s that template, so both structs must offer the name it renders.
     room_password: Option<String>,
     /// Same field and same reason as [`PanelTemplate`]'s. `is_organizer` is already above.
@@ -192,7 +192,7 @@ pub struct RoomTemplate {
     ///
     /// **Derived, with no `dismissed` column behind it.** The condition is "this room is associated
     /// with a lobby room *and* somebody still holds no slot", so it goes away when the problem does
-    /// rather than when somebody clicks it — and a dismiss flag would be a second source of truth
+    /// rather than when somebody clicks it, and a dismiss flag would be a second source of truth
     /// that outlives the thing it describes. `None` when there is nothing to say, which is every
     /// room that was never associated.
     ///
@@ -223,7 +223,7 @@ pub struct SlotView {
     /// **Two rules, because the room chooses between them.** Under `claimed` it is the slot's
     /// owner, the room's staff or an admin; under `open` it is everybody, which is what
     /// archipelago.gg does. Computed from the same function the guard calls, so the page cannot
-    /// hide a link the route would serve — which is the failure this project has now met from both
+    /// hide a link the route would serve, which is the failure this project has now met from both
     /// directions: a control with no door, and a door onto nothing.
     pub can_download: bool,
     /// This slot's own tracker id, and **only when the viewer owns the slot**.
@@ -264,14 +264,14 @@ pub struct SlotView {
     /// The gate is the same shape as `may_see_spoiler`'s `players` tier, and it exists because
     /// `GET /room/<id>` is public: without it, holding a room link would list everybody playing.
     pub owner_name: Option<String>,
-    /// True when the holder exists but has never signed in — the lobby-push case, where a slot is
+    /// True when the holder exists but has never signed in: the lobby-push case, where a slot is
     /// assigned to a Discord id that has no account here yet.
     pub owner_never_logged_in: bool,
     /// `<@id>` for the holder, to paste into Discord. **Staff only**, and a narrower tier than
     /// [`Self::owner_name`] beside it.
     ///
     /// A username is what the roster is *for*, so anybody in the room reads it. A mention carries
-    /// the **snowflake**, which the username does not, and which is the durable identity — so it is
+    /// the **snowflake**, which the username does not, and which is the durable identity, so it is
     /// held to the tier that already reaches every player's password and lock state. That is also
     /// the tracker's rule for its own owner column: staff get a contact whatever the holder's ping
     /// preference says, and this page has no preferences to consult.
@@ -288,7 +288,7 @@ pub struct SlotView {
     /// **Divergence from the room's filter, not "is filtered".** With a room filter in force every
     /// slot is filtered, so a chip meaning that would land on every row and distinguish nothing.
     /// `filtered` is a slot with rules of its own; `unfiltered` is one deliberately exempt from
-    /// rules everybody else has — opposite facts, so one word for both would be worse than none.
+    /// rules everybody else has: opposite facts, so one word for both would be worse than none.
     /// Staff only, for the same reason `is_locked` is: it means nothing to a player and this page
     /// is public.
     pub filter_chip: Option<&'static str>,
@@ -301,7 +301,7 @@ pub struct SlotView {
 /// What the roster needs to know about filtering: the room's state, and the slots that diverge.
 ///
 /// **Both, because neither answers the question alone.** A slot with rules of its own is remarkable
-/// for a different reason depending on whether the room filters — with a room filter it is *not
+/// for a different reason depending on whether the room filters: with a room filter it is *not
 /// running the room's*, and without one it is simply the only filtered slot. So this is one
 /// parameter rather than a ninth, which is the context struct the note below wants, arriving one
 /// field at a time.
@@ -456,16 +456,16 @@ fn slot_views(
 /// The roster half of the same job `claim` does, and **helper-guarded**: a player dropping out
 /// mid-async is the ordinary case this exists for, and making a helper fetch an organizer to hand
 /// the slot to somebody else is the bottleneck the tier exists to remove. The roster a helper may
-/// not touch is `room_members` — who is staff — which is a different table and a different route.
+/// not touch is `room_members` (who is staff), which is a different table and a different route.
 ///
 /// **A new claim token, not merely a cleared owner.** The old link was single-use and is already
-/// spent, so leaving the slot unclaimed with no token would produce a slot nobody can take — the
+/// spent, so leaving the slot unclaimed with no token would produce a slot nobody can take: the
 /// organizer would have to release it and then find some other way to hand it out. `slot::release`
 /// mints one in the same statement, which is why this route hands the page back rather than the
 /// token: the roster is where staff read claim links, and it now has one.
 ///
 /// It does **not** touch the room. A released slot's password is unchanged and its connection, if
-/// somebody is playing on it right now, is not dropped — releasing is a statement about who owns a
+/// somebody is playing on it right now, is not dropped: releasing is a statement about who owns a
 /// slot on the roster, not a kick. Removing them from the running room is `kick` in the console,
 /// which is a separate decision and says so.
 #[post("/room/<id>/slot/<n>/release")]
@@ -511,7 +511,7 @@ async fn release_slot(
 /// then live.
 ///
 /// **The web tier cannot do the last part itself, and that is structural rather than an oversight.**
-/// It has no egress to room pods at all — its NetworkPolicy says so and calls that the point — so
+/// It has no egress to room pods at all (its NetworkPolicy says so and calls that the point), so
 /// the only process that can reach a running room is the orchestrator. §6 says rotation is a direct
 /// call rather than a command; it was written before that boundary was drawn. See
 /// [`RoomCommand::RotatePassword`](puna_core::model::command::RoomCommand::RotatePassword).
@@ -520,7 +520,7 @@ async fn release_slot(
 /// to read past: §4 is explicit that for a room that is not running, writing the Secret alone is
 /// sufficient and correct.
 ///
-/// **The database half is shared with the console**, which can build the same command — one
+/// **The database half is shared with the console**, which can build the same command: one
 /// implementation of "write the row, then mark the Secret stale", because that ordering is the
 /// whole correctness argument and two copies of it is how one of them loses a step.
 #[post("/room/<id>/slot/<n>/rotate-password")]
@@ -626,7 +626,7 @@ struct CreateRoomForm {
     enhanced_tracker: bool,
     /// The lobby room this seed was rolled in. Optional, and blank when the organizer skipped it.
     ///
-    /// A URL or a bare id: both are things somebody has in hand, and only the id is used — see
+    /// A URL or a bare id: both are things somebody has in hand, and only the id is used. See
     /// [`crate::lobby::Lobby::room_id_from`], which discards the host so a link to a lobby this
     /// deployment does not know about cannot redirect the fetch.
     lobby_url: Option<String>,
@@ -987,7 +987,7 @@ async fn show(
 /// An ordinary room is startable by anyone holding its URL, and that is the design rather than an
 /// oversight: a room that idles out and comes back when somebody visits it is the whole point of
 /// the sticky port reservation, and requiring membership would strand every player whose async went
-/// quiet. A **closed** room inverts exactly that one rule and nothing else — the page still renders
+/// quiet. A **closed** room inverts exactly that one rule and nothing else: the page still renders
 /// for everybody, with their patches, their tracker and the roster.
 ///
 /// `role` is `Some(Organizer)` for a global admin, resolved by the caller.
@@ -1003,7 +1003,7 @@ fn may_start(room: &Room, role: Option<RoomRole>) -> bool {
 /// Not the same question as "is `state` a transient value", and the difference is a window that can
 /// last a full reconcile interval: a request writes `desired_state` and returns, and the observed
 /// state does not move until the orchestrator reaches the room. A panel rendered from `state` alone
-/// during that window shows the room exactly as it was — so somebody clicks Stop on a running room
+/// during that window shows the room exactly as it was, so somebody clicks Stop on a running room
 /// and is handed back the address table, then watches it change on its own some seconds later.
 ///
 /// That is a server-side fault rather than a scripting one: without JavaScript the same click
@@ -1016,8 +1016,8 @@ fn may_start(room: &Room, role: Option<RoomRole>) -> bool {
 /// Two deliberate exclusions:
 ///
 ///   * **`failed`** is at rest with an error and a retry time, even though its `desired_state` is
-///     usually still `running`. A spinner there would hide the one thing worth reading — why it
-///     failed — behind an animation, for up to the ten-minute backoff cap.
+///     usually still `running`. A spinner there would hide the one thing worth reading (why it
+///     failed) behind an animation, for up to the ten-minute backoff cap.
 ///   * **An idle room asked to close** is already where it is going. Nothing has to happen, so
 ///     showing it as in-flight would be waiting for an event that is never coming.
 fn is_working(room: &Room) -> bool {
@@ -1040,7 +1040,7 @@ fn is_working(room: &Room) -> bool {
 ///
 /// `state_changed_at` alone was the original bug: it times the state the room is **leaving**, so
 /// clicking Stop on a room that had been up all afternoon started the transition counter at all
-/// afternoon. `desired_at` alone was the fix and was wrong in the other direction — **it does not
+/// afternoon. `desired_at` alone was the fix and was wrong in the other direction: **it does not
 /// move on a redeploy**, because a redeploy never changes `desired_state`, so it still points at
 /// whenever the room was first asked to run. Navigating to the page after one showed a counter
 /// carried over from hours ago, and it did not reset as the phases advanced:
@@ -1055,13 +1055,13 @@ fn is_working(room: &Room) -> bool {
 /// stop reads zero even though it has been `running` for thirty-five minutes, and the count then
 /// restarts as the orchestrator moves it through `stopping`.
 ///
-/// **Monotonic across phases was the wrong goal**, and the argument for it — that a reset "reads as
-/// a stall" — did not survive contact with the page: a number that keeps climbing through a
+/// **Monotonic across phases was the wrong goal**, and the argument for it (that a reset "reads as
+/// a stall") did not survive contact with the page: a number that keeps climbing through a
 /// sentence change cannot say how long *this* step has taken, which is the question somebody
 /// watching a cold start is actually asking.
 ///
 /// `degraded` needs no special case under this rule, where it did under the last one: nobody asked
-/// for it, so `desired_at` is old, and the `max` picks the state change — which is when it started
+/// for it, so `desired_at` is old, and the `max` picks the state change, which is when it started
 /// failing.
 fn transition_began(room: &Room) -> chrono::DateTime<chrono::Utc> {
     if is_working(room) {
@@ -1073,7 +1073,7 @@ fn transition_began(room: &Room) -> chrono::DateTime<chrono::Utc> {
 
 /// This session's role in a room, with a global admin resolving to the top of the ladder.
 ///
-/// Factored out because `show` and `start` must answer it identically — the page decides whether to
+/// Factored out because `show` and `start` must answer it identically: the page decides whether to
 /// render a control from this, and the route decides whether to honor one.
 pub(crate) async fn resolve_role(
     conn: &mut diesel_async::AsyncPgConnection,
@@ -1093,7 +1093,7 @@ pub(crate) async fn resolve_role(
 ///
 /// **The same template file `show.html` includes**, which is the whole point: the page has one set
 /// of branches deciding what a room's state looks like and who is offered a control, and a second
-/// set written in JavaScript would be two things to keep in step — with the drifting one being the
+/// set written in JavaScript would be two things to keep in step, with the drifting one being the
 /// half nobody reviews. The page would go on working while telling somebody the wrong thing about
 /// their room.
 ///
@@ -1109,7 +1109,7 @@ pub struct PanelTemplate {
     is_working: bool,
     message: Option<&'static str>,
     elapsed: String,
-    /// The room-wide password, for the people entitled to it — `None` for everybody else, and for
+    /// The room-wide password, for the people entitled to it. `None` for everybody else, and for
     /// every room not in that mode.
     ///
     /// **Decided here and never in the template**, the same rule `SlotView` follows and for a
@@ -1125,7 +1125,7 @@ pub struct PanelTemplate {
     /// the organizer who chose it included.
     room_password: Option<String>,
     /// Whether this room asks for a shared password at all, which everybody may know even where the
-    /// value is withheld — a refused connection with no explanation reads as a broken room.
+    /// value is withheld: a refused connection with no explanation reads as a broken room.
     needs_password: bool,
     /// Whether this viewer may rotate it. The panel is rendered for anonymous visitors, so this is
     /// decided in the route like every other control's tier.
@@ -1134,7 +1134,7 @@ pub struct PanelTemplate {
 
 /// The room-wide password, for a viewer who may have it.
 ///
-/// **Participants and staff** — Troy's call, and the same tier the roster's usernames and the
+/// **Participants and staff.** Troy's call, and the same tier the roster's usernames and the
 /// `players` spoiler policy already use: the room's staff, or somebody who holds a slot in it.
 /// `GET /room/<id>` is public, so rendering it to everyone would make the password exactly as
 /// secret as the link and the mode meaningless.
@@ -1189,7 +1189,7 @@ async fn panel(id: RoomParam, session: Session, pool: &State<Pool>) -> Result<Pa
 /// The poll target behind the starting spinner. Two row reads, no template.
 ///
 /// `since_ms` is a **server-computed duration** rather than a timestamp, deliberately: a client
-/// whose clock is wrong — and a cold start is exactly when someone is watching a counter — would
+/// whose clock is wrong (and a cold start is exactly when someone is watching a counter) would
 /// otherwise render an elapsed time that is minutes out or negative.
 #[get("/room/<id>/status")]
 async fn status(id: RoomParam, pool: &State<Pool>) -> Result<Json<serde_json::Value>> {
@@ -1395,7 +1395,7 @@ pub struct MembersTemplate {
     members: Vec<member::Member>,
     /// **Empty for a helper, and that is a credential decision rather than a tidier page.**
     ///
-    /// An invite token *is* the grant — following the link confers the role — so an organizer
+    /// An invite token *is* the grant (following the link confers the role), so an organizer
     /// invite sitting in this list would let any helper who can read the page promote themselves,
     /// which is precisely what their tier withholds. Withheld at the query rather than hidden in
     /// markup, because a template cannot prove it did not render something.
@@ -1404,12 +1404,12 @@ pub struct MembersTemplate {
     may_manage: bool,
 }
 
-/// Who is staff here, and — for an organizer — the controls that change it.
+/// Who is staff here, and, for an organizer, the controls that change it.
 ///
 /// **Helper-guarded for the read, organizer for every write.** Knowing who else is staff is
 /// ordinary context for somebody who is staff: it is who to escalate to, and it is already
 /// inferable from the console's audit trail. What a helper must not gain is any way to add a
-/// member, demote an organizer, or elevate themselves — so the five write routes below stay
+/// member, demote an organizer, or elevate themselves, so the five write routes below stay
 /// `Organizer`, and the invite list is not loaded at all (see the field's note).
 #[get("/room/<id>/members")]
 async fn members(
@@ -1565,7 +1565,7 @@ async fn revoke_invite(
 /// does not name the tier**. The recipient learns it on the room page a moment later, where it is
 /// useful; in an unfurl it would be an advertisement, rendered to everyone who can see the message
 /// without any of them clicking. An invite mis-pasted into a busy channel is a link somebody might
-/// scroll past — the same link previewed as "become an organizer here" is one they will not.
+/// scroll past. The same link previewed as "become an organizer here" is one they will not.
 #[get("/invite/<token>")]
 async fn invite_page(token: &str, session: Session, pool: &State<Pool>) -> Result<RedeemTemplate> {
     let mut conn = pool.get().await?;
@@ -1610,11 +1610,11 @@ async fn redeem_invite(
 /// The landing page for a claim link.
 ///
 /// **Describes; never claims.** The slot, its game and its room, so the person who was sent this
-/// can see they were sent the right one before signing in — and so a chat client has something to
+/// can see they were sent the right one before signing in, and so a chat client has something to
 /// unfurl other than Discord's login page.
 ///
 /// Naming the slot and room here is a genuine widening: an unfurl renders to everyone who can see
-/// the message, not only to whoever clicks. It is a small one and worth it — both are already on
+/// the message, not only to whoever clicks. It is a small one and worth it: both are already on
 /// the public room page under the default policy, the card carries no link to that page, and the
 /// person the link was sent to has no other way to tell one claim link from another.
 #[get("/claim/<token>")]
@@ -1646,8 +1646,8 @@ async fn claim_page(token: &str, session: Session, pool: &State<Pool>) -> Result
 ///
 /// **Answers JSON to a scripted caller and a redirect to a form**, keyed on `Accept`, which is the
 /// convention `POST /room/<id>/command` already established. The roster's claim control is a
-/// one-click action for a person who is already looking at the slot — `room.js` posts it and
-/// rewrites the row in place — while the landing page's form and every unscripted caller get the
+/// one-click action for a person who is already looking at the slot (`room.js` posts it and
+/// rewrites the row in place), while the landing page's form and every unscripted caller get the
 /// redirect. One route, because they are the same operation seen by two clients.
 #[post("/claim/<token>")]
 async fn claim_slot(
@@ -1726,7 +1726,7 @@ async fn slot_password(
 /// used to redeem on that `GET`.** Two defects in one shape:
 ///
 ///   * **A single-use token was spent by whatever fetched it first.** Anything holding the
-///     reader's session — a browser prefetch, a corporate link scanner — consumed the link, and the
+///     reader's session (a browser prefetch, a corporate link scanner) consumed the link, and the
 ///     recipient arrived at one that had already worked.
 ///   * **Every chat client summarized Discord's login page**, because that is where the redirect
 ///     ended up. A claim link pasted into a channel unfurled as *"Discord — Group Chat that's all
@@ -1736,7 +1736,7 @@ async fn slot_password(
 /// crawler different bytes from a person is cloaking, and it fails silently in the direction nobody
 /// notices: Discord's agent string can change, and Slack, Signal, Telegram and Matrix each have
 /// their own, so an unlisted one falls straight back to the broken preview with nothing to say so.
-/// The redirect was also wrong for *people* — being thrown into a login without being told what you
+/// The redirect was also wrong for *people*: being thrown into a login without being told what you
 /// are accepting is worst on an invite, where what you accept is a role.
 ///
 /// So there is one page, the same for everybody, and the mutation moved to a `POST` behind it.
@@ -1747,7 +1747,7 @@ pub struct RedeemTemplate {
     /// The unfurl's title, and the page's heading. One string for both, so a card cannot say
     /// something the page does not.
     ///
-    /// **Not the `<title>`** — that is [`Self::page`] and [`Self::room_name`], which take the
+    /// **Not the `<title>`**: that is [`Self::page`] and [`Self::room_name`], which take the
     /// `<page>: <room>` shape the rest of the room's pages use. The two are separate because they
     /// are read in different places: a chat card wants "Claim Kai in Friday async", and a tab wants
     /// the half that survives truncation.
@@ -1772,7 +1772,7 @@ impl RedeemTemplate {
     /// A link that never existed, has expired, or is spent.
     ///
     /// **One answer for all three.** They want different words for whoever *minted* the link and
-    /// none at all for somebody holding a bad one — distinguishing them would answer "is this a
+    /// none at all for somebody holding a bad one. Distinguishing them would answer "is this a
     /// real token" for anyone who cared to ask, which is the only question a stranger has.
     fn spent(session: &Session, page: &'static str, headline: &str) -> Self {
         Self {
@@ -1795,14 +1795,14 @@ impl RedeemTemplate {
 /// The room's options, as a page rather than a strip of controls in the roster.
 ///
 /// **Two forms, split on whether pressing the button disconnects anybody.** That is the only
-/// division a reader cares about here, and it is not visible from the options themselves — a
+/// division a reader cares about here, and it is not visible from the options themselves: a
 /// password mode and a feed policy both look like settings, and one of them takes the room down for
 /// about a minute. Grouping them by that consequence is what lets each form's button carry an
 /// honest promise instead of a per-control warning nobody reads twice.
 ///
 /// **Deliberately not shared with the creation form**, though the markup is nearly the same. The
 /// wording is not: creating a room describes what it *will* do, and changing one describes what it
-/// will do *to a room people may be connected to right now* — "switching away discards every slot
+/// will do *to a room people may be connected to right now*: "switching away discards every slot
 /// password" is a footnote on a form for a room with no players and a warning on this one. A
 /// shared partial would have forced one voice on both.
 #[derive(askama::Template, askama_web::WebTemplate)]
@@ -1812,7 +1812,7 @@ pub struct OptionsTemplate {
     /// Same as [`RoomTemplate`]'s, and dropped for the same reason until 2026-08-28.
     notice: Option<crate::flash::Notice>,
     room: Room,
-    /// Whether a remote-admin password exists. **Never the value** — see
+    /// Whether a remote-admin password exists. **Never the value**: see
     /// [`room::has_server_password`].
     has_server_password: bool,
     /// Whether a change to the restart form would actually bounce the room now, or wait for
@@ -1822,7 +1822,7 @@ pub struct OptionsTemplate {
     /// template cannot offer a control that could only ever refuse.
     has_lobby: bool,
     /// The room server's own rules, for `rooms/_gameplay_options.html`. **Named identically to the
-    /// console's two fields**, because the include reads them out of whichever context renders it —
+    /// console's two fields**, because the include reads them out of whichever context renders it,
     /// and rendering the same table from two derivations is the one thing that must not happen
     /// here, since an organizer would compare the two and act on whichever they read second.
     gameplay_options: Vec<(String, String)>,
@@ -2010,7 +2010,7 @@ async fn set_live_options(
 ///
 /// **The mode is written only when it actually changes**, and that is not an optimization.
 /// `set_slot_auth` regenerates every slot password on its way into `per_slot`, so re-submitting the
-/// mode a room is already in would rotate the lot — invalidating a password every player is holding,
+/// mode a room is already in would rotate the lot, invalidating a password every player is holding,
 /// on a form somebody pressed to change something else entirely.
 #[post("/room/<id>/options/restart", data = "<form>")]
 async fn set_restart_options(
@@ -2075,19 +2075,19 @@ async fn set_restart_options(
 ///
 /// **This route requested no restart until M17, and that was a live security hole.** The plan said
 /// a mode change applies immediately, and nothing implemented it: the row changed, the sweep
-/// refreshed the Secret within the hour, and the pod was never bounced — so a room switched *to*
+/// refreshed the Secret within the hour, and the pod was never bounced, so a room switched *to*
 /// per-slot passwords went on accepting unauthenticated connections until something else happened
 /// to restart it. The person making that change is usually reacting to something, which is exactly
 /// when "it will apply eventually" is the wrong answer.
 /// Would a redeploy request actually restart this room, or sit waiting for somebody to start it?
 ///
 /// **`is_live`, not `state == "running"`**, because that is the set the *planner* sees: its redeploy
-/// arm fires only where a Deployment exists, so `starting` and `degraded` both take the request —
+/// arm fires only where a Deployment exists, so `starting` and `degraded` both take the request,
 /// and both would otherwise be told "next time it starts" while coming up on the Secret they
 /// already had.
 ///
 /// A room with no Deployment must **not** get one. The request would sit pending and fire the
-/// instant somebody started the room, bouncing it out from under them — the hazard `plan.rs` names
+/// instant somebody started the room, bouncing it out from under them: the hazard `plan.rs` names
 /// where it puts the reaper arm below the redeploy arm.
 ///
 /// Its own function so the rule has one definition and a test can hold it against `RoomState::ALL`
@@ -2100,7 +2100,7 @@ fn a_restart_would_land(state: &str) -> bool {
 ///
 /// **Organizer, where the per-slot rotation beside it is a helper's**, and the line is the one M20
 /// drew: a helper runs the multiworld, an organizer decides how it is configured and whether it
-/// runs at all. This costs a restart, which disconnects everybody — the same reason changing the
+/// runs at all. This costs a restart, which disconnects everybody, the same reason changing the
 /// mode is an organizer's.
 ///
 /// **It is a restart because pahoa has no live setter for this and will not get one**, so the room
@@ -2108,8 +2108,8 @@ fn a_restart_would_land(state: &str) -> bool {
 /// which is theirs and is good: the environment is authoritative precisely so a stale on-disk value
 /// cannot shadow it, and a setter that cannot persist reverts at the next start.
 ///
-/// A stopped room is not redeployed — there is nothing to restart, and its next start renders the
-/// Secret from the column — so the flash says which of the two happened rather than making the
+/// A stopped room is not redeployed (there is nothing to restart, and its next start renders the
+/// Secret from the column), so the flash says which of the two happened rather than making the
 /// organizer guess whether anybody was disconnected.
 #[post("/room/<id>/settings/rotate-password")]
 async fn rotate_room_password(
@@ -2262,19 +2262,19 @@ pub(crate) mod tests {
 
     /// **A per-slot password reaches its owner and the room's staff, and nobody else at all.**
     ///
-    /// `GET /room/<id>` is a PUBLIC page — the unguessable id is the whole authorization — so
+    /// `GET /room/<id>` is a PUBLIC page (the unguessable id is the whole authorization), so
     /// rendering the passwords into the slot table means the gate is the only thing between a
     /// shared room link and every player's credential. This is the rule `SlotAccess` applies to the
     /// JSON route, asserted here because the table now shows the value rather than linking to it.
     /// **The shared room password reaches participants and staff, and nobody else.**
     ///
     /// The mode's whole point is that the address alone is not enough to join, and `GET /room/<id>`
-    /// is public — so a viewer who merely holds the link must not get the value, or the password is
+    /// is public, so a viewer who merely holds the link must not get the value, or the password is
     /// exactly as secret as the link and the mode means nothing.
     ///
     /// The other half is the mode check, and it is not decoration: switching a room *away* from the
     /// shared password leaves nothing behind today, but a value stranded in the column by any
-    /// future path would otherwise render as though it were live — a password people would try, on
+    /// future path would otherwise render as though it were live: a password people would try, on
     /// a room that no longer wants one.
     #[test]
     fn the_room_password_reaches_participants_and_staff_and_nobody_else() {
@@ -2390,7 +2390,7 @@ pub(crate) mod tests {
     /// **Who is playing is roster information, and this page is public.**
     ///
     /// The tier is the same as `may_see_spoiler`'s `players`: the room's staff, or somebody who
-    /// holds a slot here — the people the roster is *for*. Without the gate, holding a room link
+    /// holds a slot here, the people the roster is *for*. Without the gate, holding a room link
     /// would list everybody in it by Discord username.
     #[test]
     fn usernames_reach_the_room_and_nobody_else() {
@@ -2449,7 +2449,7 @@ pub(crate) mod tests {
     /// **A mention is staff's, where a username is the whole room's**, and the two tiers are
     /// deliberately different: the mention carries the snowflake, which the name does not.
     ///
-    /// The case it exists for is the third assertion — a holder who has never signed in has no
+    /// The case it exists for is the third assertion: a holder who has never signed in has no
     /// handle to type, and `<@id>` is the only thing that reaches them. Nothing else on this page
     /// offers a way to do that.
     #[test]
@@ -2683,7 +2683,7 @@ pub(crate) mod tests {
     ///
     /// This is the whole reason the landing page exists. Both routes used to redirect an
     /// unauthenticated `GET` into Discord's OAuth, so every chat client that unfurled a claim link
-    /// rendered *Discord's login page* — the least informative summary available — and a person
+    /// rendered *Discord's login page* (the least informative summary available), and a person
     /// clicking it was thrown into a login having never been told what they were accepting.
     ///
     /// Asserted by rendering rather than by reading the route, because a crawler runs no
@@ -2729,7 +2729,7 @@ pub(crate) mod tests {
     ///
     /// **The three ways a link can be unusable are one answer here.** Never existed, expired and
     /// already used need different words for whoever *minted* it and none at all for a stranger
-    /// holding a bad one — telling them apart would answer "is this a real token" for anybody who
+    /// holding a bad one. Telling them apart would answer "is this a real token" for anybody who
     /// asked, which is the only question somebody guessing has.
     #[test]
     fn a_spent_link_offers_nothing_and_distinguishes_nothing() {
@@ -2766,7 +2766,7 @@ pub(crate) mod tests {
 
     /// **The room's own rules belong on the console and the options page, and NOWHERE here.**
     ///
-    /// `GET /room/<id>` is public — the unguessable id is the whole authorization — and a room's
+    /// `GET /room/<id>` is public (the unguessable id is the whole authorization), and a room's
     /// rules are staff-facing configuration rather than something a shared link should carry. It is
     /// also the page that would be worst to put them on: it is what a player opens to find an
     /// address and a patch, and eight rule names between those two is noise for every reader it is
@@ -2845,7 +2845,7 @@ pub(crate) mod tests {
 
     /// **The history has a door, and it opens exactly when the routes answer.**
     ///
-    /// The feed passes two gates — `may_see_tracker`, then the room's own `journal_policy` — and
+    /// The feed passes two gates (`may_see_tracker`, then the room's own `journal_policy`), and
     /// the page renders the link from the same two, so it cannot offer one the socket refuses or
     /// withhold one it would serve. Offering a link that 404s is a bug report; withholding a
     /// working one teaches people to guess URLs.
@@ -2911,7 +2911,7 @@ pub(crate) mod tests {
     ///
     /// Three things have to be true together and each fails differently: the prefix is what makes
     /// two of a room's own links tellable apart, the anchor is what leaves "copy link address"
-    /// working where there is no clipboard, and `data-copy` is what puts the whole URL on it —
+    /// working where there is no clipboard, and `data-copy` is what puts the whole URL on it,
     /// **beginning with `/`**, which is the character `copy.js` keys on to resolve against the
     /// origin. Without that it would copy a path, which is exactly the thing an organizer would
     /// then have to complete by hand.
@@ -3041,8 +3041,8 @@ pub(crate) mod tests {
 
     /// **The import's leftovers are told to staff, and to nobody else.**
     ///
-    /// A partial import is the design — refusing outright over two diverged names would send an
-    /// organizer back to a hundred claim links — so the leftovers have to surface somewhere they
+    /// A partial import is the design (refusing outright over two diverged names would send an
+    /// organizer back to a hundred claim links), so the leftovers have to surface somewhere they
     /// will be seen, and that is the page they land on the moment the room is created.
     ///
     /// Three things this pins, each silent if it goes:
@@ -3117,7 +3117,7 @@ pub(crate) mod tests {
     /// **The helper boundary, as the page draws it.**
     ///
     /// A helper runs the room and cannot change whether it runs or who runs it. Every control on
-    /// this page falls on one side or the other, and the split is only visible in markup — the
+    /// this page falls on one side or the other, and the split is only visible in markup: the
     /// routes enforce it, but a page offering a control the route refuses is how people learn the
     /// site is broken, and a page hiding one they may use is how a tier becomes useless.
     ///
@@ -3188,7 +3188,7 @@ pub(crate) mod tests {
     ///
     /// Pressing Enter in a text input activates the form's *first* submit button. The rename form
     /// holds two controls, and if the cancel one were a `<button>` placed first, Enter would
-    /// silently discard the edit — the worst possible outcome for the key everybody presses, and
+    /// silently discard the edit, the worst possible outcome for the key everybody presses, and
     /// invisible in review because both controls are correct on their own.
     ///
     /// Two things keep it right and both are asserted: the save button comes first, and cancel is
@@ -3240,7 +3240,7 @@ pub(crate) mod tests {
 
     /// A closed room, seen by somebody holding the link.
     ///
-    /// **The page still works** — that is the whole shape of the state. Patches, tracker and roster
+    /// **The page still works**: that is the whole shape of the state. Patches, tracker and roster
     /// are unchanged; what is gone is the door. Rendering the room as though it were merely idle
     /// would offer a button the route now refuses, which teaches people the site is broken.
     #[test]
@@ -3398,13 +3398,13 @@ pub(crate) mod tests {
     ///
     /// The two halves fail differently and both quietly. Without the values, a settings page
     /// silently omits half a room's settings and sends people to guess where the rest live. Without
-    /// a working link — or with one pointing at a page that has no such anchor — the values read as
+    /// a working link (or with one pointing at a page that has no such anchor), the values read as
     /// something this page could change, which is the one thing they are not: pahoa keeps its rules
     /// in the save, so a control here would write a value the next restart discards.
     ///
     /// The anchor is `#room-options` rather than `#cmd-option`, and deliberately: a browser scrolls
     /// a fragment to the top of the viewport, so pointing at the form would put the values just
-    /// above the fold — and the values are what somebody following this link came to see, with the
+    /// above the fold, and the values are what somebody following this link came to see, with the
     /// control underneath them.
     #[test]
     fn the_options_page_shows_the_rooms_own_rules_and_links_to_where_they_change() {
@@ -3459,7 +3459,7 @@ pub(crate) mod tests {
 
     /// **The options page is split on one question: does saving disconnect anybody?**
     ///
-    /// That division is invisible from the options themselves — a password mode and a feed policy
+    /// That division is invisible from the options themselves: a password mode and a feed policy
     /// both look like settings, and one of them takes the room down for about a minute. If a
     /// control ended up in the wrong form, its button would carry a promise that is simply false,
     /// and the page would still render perfectly.
@@ -3547,7 +3547,7 @@ pub(crate) mod tests {
     /// The warning that belongs to a transition rather than to a value.
     ///
     /// Leaving per-slot mode destroys every slot password irrecoverably, and the person who needs
-    /// to be told is whoever is *in* that mode — not whoever happens to hover the option. So it is
+    /// to be told is whoever is *in* that mode, not whoever happens to hover the option. So it is
     /// rendered on the room's current state, and a room that is not in per-slot mode has nothing to
     /// lose and is not warned about it.
     #[test]
@@ -3586,7 +3586,7 @@ pub(crate) mod tests {
     /// **One address leads, the other is behind a click, and each says which it is.**
     ///
     /// The two ports fail asymmetrically: the full one drops a client that cannot keep up and says
-    /// so, while the filtered one works perfectly and simply never shows anybody else's finds — so
+    /// so, while the filtered one works perfectly and simply never shows anybody else's finds, so
     /// a player on the wrong one concludes the multiworld is dead. That is why a room shows one
     /// address rather than two, and why the leading one is never unlabeled.
     ///
@@ -3652,7 +3652,7 @@ pub(crate) mod tests {
     ///
     /// `room.js` decides whether anything moved by comparing `panel.dataset.state` and
     /// `panel.dataset.desired` against the status JSON. If the wrapper stopped emitting either,
-    /// every comparison would be `undefined !== undefined` — false, forever — and the page would
+    /// every comparison would be `undefined !== undefined` (false, forever), and the page would
     /// poll happily and never update. Nothing would error and nothing would look wrong.
     ///
     /// Asserted from the script's own text so the two cannot drift: a renamed attribute has to be
@@ -3683,7 +3683,7 @@ pub(crate) mod tests {
     /// The running panel is a table of both spellings of the room, each copyable.
     ///
     /// The `data-copy` value is what actually lands in somebody's clipboard and then in a game
-    /// client, so it is asserted to be the whole `host:port` — a copy control that takes half the
+    /// client, so it is asserted to be the whole `host:port`: a copy control that takes half the
     /// address is worse than none, because it looks like it worked.
     #[test]
     fn a_running_panel_offers_both_ports_and_copies_them_whole() {
@@ -3769,8 +3769,8 @@ pub(crate) mod tests {
     ///
     /// The two ports fail asymmetrically. A client that cannot keep up on the standard port is
     /// dropped by pahoa, loudly, with a line in the room's log naming the reason. A player who
-    /// takes the *filtered* port by accident has everything work — their game plays, their own
-    /// items arrive — and simply never sees anybody else's finds, which reads as a dead multiworld
+    /// takes the *filtered* port by accident has everything work (their game plays, their own
+    /// items arrive) and simply never sees anybody else's finds, which reads as a dead multiworld
     /// and gives them no reason to suspect the address they pasted.
     ///
     /// So the guarded failure is somebody copying the first address they see without reading either
@@ -3888,7 +3888,7 @@ pub(crate) mod tests {
     ///
     /// A request writes `desired_state` and returns; the observed state does not move until the
     /// orchestrator reaches the room, which can be a full reconcile interval. A panel rendered from
-    /// `state` alone shows the room exactly as it was — so clicking Stop on a running room hands
+    /// `state` alone shows the room exactly as it was, so clicking Stop on a running room hands
     /// back the address table, and it changes on its own some seconds later. Reported from the live
     /// deployment as "it flickers and returns to the existing display".
     ///
@@ -3934,7 +3934,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// **The counter times the CURRENT state — each phase gets its own clock.**
+    /// **The counter times the CURRENT state: each phase gets its own clock.**
     ///
     /// Both columns are half right, so `transition_began` takes the later of them. This asserts all
     /// four cases, because each one is a bug that has actually been reported.
@@ -3998,7 +3998,7 @@ pub(crate) mod tests {
     ///
     /// `requested_stop` was recorded from the day the stop button existed and never had one, so
     /// clicking Stop fell through to the template's fallback and rendered **"This room is
-    /// running"** — the observed state, stated as though nothing had been asked. A kind with no
+    /// running"**, the observed state, stated as though nothing had been asked. A kind with no
     /// phrase is silent in exactly the moment somebody is watching for a message.
     #[test]
     fn every_requested_event_has_something_to_say() {
@@ -4057,7 +4057,7 @@ pub(crate) mod tests {
     /// `may_start` is the single decision the page and the route share.
     ///
     /// Asserted directly rather than only through markup, because the route calls it with a role it
-    /// resolves itself — a page that agreed with a route by coincidence would drift the first time
+    /// resolves itself: a page that agreed with a route by coincidence would drift the first time
     /// either changed.
     #[test]
     fn only_staff_may_start_a_closed_room() {
@@ -4079,8 +4079,8 @@ pub(crate) mod tests {
         assert!(may_start(&closed, Some(RoomRole::Organizer)));
     }
 
-    /// **The moderation column is staff-only.** `GET /room/<id>` is public — the unguessable id is
-    /// the whole authorization — so every control here is one a shared link must not hand out.
+    /// **The moderation column is staff-only.** `GET /room/<id>` is public (the unguessable id is
+    /// the whole authorization), so every control here is one a shared link must not hand out.
     ///
     /// The **width** is not staff-only and briefly was. This page is a heading, an address and a
     /// roster; the only long-form text sits inside a collapsed section, so there is no prose for the
@@ -4218,7 +4218,7 @@ pub(crate) mod tests {
     }
 
     /// **Locking is offered in every password mode**, which is the whole point of adopting pahoa's
-    /// own verb: the trick it replaced — withholding a slot from `PAHOA_SLOT_PASSWORDS` — needed
+    /// own verb: the trick it replaced (withholding a slot from `PAHOA_SLOT_PASSWORDS`) needed
     /// per-slot mode to exist at all, so a room with no password or one shared password could not
     /// bar anybody.
     ///
@@ -4246,7 +4246,7 @@ pub(crate) mod tests {
     /// something a 15px icon does. So the column that answers "who is shut out?" is the roster, and
     /// the glyph is only the control that changes it.
     ///
-    /// Staff-only because `slot_views` gates `is_locked` on the viewer's role — this page is public,
+    /// Staff-only because `slot_views` gates `is_locked` on the viewer's role: this page is public,
     /// and whether somebody has been barred is not a fact for everyone holding the link.
     #[test]
     fn a_locked_slot_is_named_in_the_roster_and_only_to_staff() {
@@ -4303,8 +4303,8 @@ pub(crate) mod tests {
 
     /// **The same slot state means two different things, and the chip has to say which.**
     ///
-    /// A slot with rules of its own is *not running the room's* — pahoa replaces rather than merges
-    /// — and that is the fact worth a chip. But it is only a fact when there IS a room filter: with
+    /// A slot with rules of its own is *not running the room's* (pahoa replaces rather than merges),
+    /// and that is the fact worth a chip. But it is only a fact when there IS a room filter: with
     /// none, "overrides room filter" names something that does not exist, and the slot is simply the
     /// only filtered one. So the word depends on the room, which is why `slot_views` takes the
     /// room's state alongside the slots'.
@@ -4377,7 +4377,7 @@ pub(crate) mod tests {
     /// **A room-wide filter has to be visible from the room, and to a helper as well.**
     ///
     /// Nothing on this page said one existed, so a room quietly dropping every DeathLink looked
-    /// exactly like a room where DeathLink was broken — and the helper fielding that question is
+    /// exactly like a room where DeathLink was broken, and the helper fielding that question is
     /// the person least equipped to find out, because the editor is an organizer's.
     ///
     /// So the chip is shown to both and is a **link for an organizer only**. A helper following it
@@ -4420,7 +4420,7 @@ pub(crate) mod tests {
 
     /// **Lock bars the next login and disconnects nobody**, and the control has to say so: the
     /// obvious reading of "Lock" is that it ejects somebody. The order that actually works against a
-    /// griefer is lock THEN kick — kicking first leaves a window to reconnect.
+    /// griefer is lock THEN kick: kicking first leaves a window to reconnect.
     #[test]
     fn the_lock_control_says_it_does_not_disconnect_anybody() {
         let mut staff = page_as(true, false);
@@ -4544,7 +4544,7 @@ mod db_tests {
     ///
     /// The redeploy half is the one worth a database: the planner's redeploy arm fires only where a
     /// Deployment exists, so requesting one on a room with none leaves it pending to fire the
-    /// instant somebody starts the room — bouncing it out from under them. `is_live` is the same
+    /// instant somebody starts the room, bouncing it out from under them. `is_live` is the same
     /// three states the planner sees, which is why the route uses it rather than `== "running"`.
     #[tokio::test]
     async fn rotating_the_room_password_needs_the_mode_and_restarts_only_a_live_room() {

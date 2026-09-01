@@ -54,7 +54,7 @@ pub struct ShowTemplate {
     /// Which port this seed's size recommends leading with.
     ///
     /// **Computed from the same function the room is stored with**, so the radio that arrives
-    /// preselected and the value written on submit cannot disagree — a form recommending one thing
+    /// preselected and the value written on submit cannot disagree: a form recommending one thing
     /// while creation did another would be worse than either.
     primary_port_default: puna_core::model::room::PrimaryPort,
     /// Whether this deployment has a lobby to import slot owners from.
@@ -247,8 +247,8 @@ async fn upload(
 /// Fill the tracker's name cache for a generation, from the seed just written to disk.
 ///
 /// **Never fatal, and that is the design rather than laziness.** A generation whose names did not
-/// cache is a perfectly usable generation with a slightly worse tracker — the tracker renders raw
-/// ids, exactly as the reference does for a name it cannot resolve — so refusing an upload over it
+/// cache is a perfectly usable generation with a slightly worse tracker (the tracker renders raw
+/// ids, exactly as the reference does for a name it cannot resolve), so refusing an upload over it
 /// would trade something that matters for something that does not. Every failure is warned with
 /// the generation id, and the repair is the admin rebuild.
 ///
@@ -360,7 +360,7 @@ async fn admin_generations(
 /// come out of a file on a volume Postgres cannot see, so the repair has to run somewhere with the
 /// mount. That is this tier and only this tier.
 ///
-/// Safe to run repeatedly — it only touches generations with nothing cached. A generation whose seed
+/// Safe to run repeatedly: it only touches generations with nothing cached. A generation whose seed
 /// is missing from disk is reported and skipped rather than failing the run, because one unreadable
 /// seed must not stop the other forty being repaired.
 #[post("/admin/generations/rebuild-names")]
@@ -415,7 +415,7 @@ async fn rebuild_all_names(
 
 /// Rebuild one generation's names whether or not it already has them.
 ///
-/// The repair for a cache that is present but wrong — which the backfill above deliberately will
+/// The repair for a cache that is present but wrong, which the backfill above deliberately will
 /// not touch, since from its side a wrong cache and a right one look the same.
 #[post("/admin/generations/<id>/rebuild-names")]
 async fn rebuild_names(
@@ -591,7 +591,7 @@ mod tests {
 
     /// **A source lint: the dedup notice must be built from the PER-USER answer.**
     ///
-    /// `Insertion::created` is global — were these bytes already indexed, by anyone — and rendering
+    /// `Insertion::created` is global (were these bytes already indexed, by anyone), and rendering
     /// it tells a second uploader that another account holds the same seed. `record_upload`'s
     /// answer is about the caller alone. The two are both plain `bool`s sitting three lines apart,
     /// so nothing in the type system separates them, and swapping one for the other produces a
@@ -682,7 +682,7 @@ mod tests {
     /// **The creation form presents five decisions, each preselected and each explained.**
     ///
     /// Every setting here is one the room then lives with, and three of them cost a restart to
-    /// change afterwards — so the panel's job is to make somebody choose rather than to be quick to
+    /// change afterwards, so the panel's job is to make somebody choose rather than to be quick to
     /// get past. What this pins is the part that fails silently: a default that moves, a radio
     /// group whose value no longer matches what the route parses, or a hint that stops being
     /// rendered for one of the options.

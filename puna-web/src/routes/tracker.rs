@@ -8,14 +8,14 @@
 //! ## The URL shape is the reference's, on purpose
 //!
 //! Third-party tools are written against `archipelago.gg`'s paths, and pahoa's documents mirror the
-//! reference field for field — so mirroring the paths too is what makes those tools work against a
+//! reference field for field, so mirroring the paths too is what makes those tools work against a
 //! Puna room with only a base URL changed. Getting this wrong would throw away the compatibility
 //! that made mirroring the documents worthwhile.
 //!
 //! ## Three cache layers, in the order they remove work
 //!
 //! 1. **`ETag` and `Cache-Control`**, so a browser stops re-fetching, or at least stops
-//!    re-downloading. **Which of those depends on what the response is made of** — see [`Caching`].
+//!    re-downloading. **Which of those depends on what the response is made of**: see [`Caching`].
 //!    A passthrough of pahoa's document may be reused for pahoa's own window without asking; a view
 //!    Puna derives from its own rows as well must revalidate, because those rows change when
 //!    somebody presses Save rather than on pahoa's schedule. The `ETag` is what makes revalidating
@@ -54,8 +54,8 @@ type Pool = puna_core::db::Pool;
 
 /// How long a document is held in this process before the shared cache is consulted again.
 ///
-/// Deliberately short. It exists to absorb a burst — a page load fetching both documents, twenty
-/// tabs refreshing at once — not to add staleness on top of the shared cache's.
+/// Deliberately short. It exists to absorb a burst (a page load fetching both documents, twenty
+/// tabs refreshing at once), not to add staleness on top of the shared cache's.
 const MEMO_TTL: Duration = Duration::from_secs(5);
 
 /// The in-process layer.
@@ -91,7 +91,7 @@ pub struct TrackerCacheMax(pub usize);
 
 /// How long a generation's name tables are held in this process.
 ///
-/// They are **static per generation** — the seed cannot change — so this could be forever. It is
+/// They are **static per generation** (the seed cannot change), so this could be forever. It is
 /// not, because an admin rebuild repairs a bad cache and a process that never re-read would ignore
 /// the repair until it restarted. Ten minutes makes the fix land on its own.
 const NAMES_TTL: Duration = Duration::from_secs(600);
@@ -103,8 +103,8 @@ type Games = Arc<BTreeMap<String, GameNames>>;
 ///
 /// **Worth having rather than querying per request**, and by a wide margin: measured on a real
 /// seed, one generation's tables are ~2.7 MB across 54 games. Reading that from Postgres on every
-/// poll of every tab would put the tracker tier's whole reason for existing — absorbing the most
-/// public, highest-volume surface Puna has — straight onto the database instead.
+/// poll of every tab would put the tracker tier's whole reason for existing (absorbing the most
+/// public, highest-volume surface Puna has) straight onto the database instead.
 #[derive(Default)]
 pub struct NameCache {
     entries: Mutex<HashMap<GenerationId, (Instant, Games)>>,
@@ -363,7 +363,7 @@ async fn document(
 struct Fetched {
     body: String,
     /// When this was true, if it is no longer. `Some` means **the room did not answer** and this is
-    /// the last thing it said — which for an async is most of its life, and is exactly what the
+    /// the last thing it said, which for an async is most of its life, and is exactly what the
     /// page's "as of" banner reports.
     stale_since: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -474,7 +474,7 @@ async fn obtain(
 /// `as_of` for a fresh document is *now* rather than the exact moment the shared cache was filled:
 /// that is accurate to within the document's own 60-second window, which is the resolution the
 /// client polls at anyway. For a **stale** one it is exact, and that is the case where precision
-/// matters — a room down for three days should say so.
+/// matters: a room down for three days should say so.
 fn freshness(stale_since: &[Option<DateTime<Utc>>], now: DateTime<Utc>) -> digest::Freshness {
     let oldest = stale_since.iter().flatten().min().copied();
     digest::Freshness {
@@ -551,7 +551,7 @@ async fn digestible(
 /// **`?slot=<n>` is honored only for a room's tracker id, and it discloses nothing new.** Holding
 /// that id already grants the whole multiworld's data, and the reference-compatible page
 /// `/tracker/<id>/0/<n>` has always rendered any single slot from it. The parameter exists because
-/// that page needs the per-slot views, and those resolve their scope from the *id* — which for this
+/// that page needs the per-slot views, and those resolve their scope from the *id*, which for this
 /// URL names the room.
 ///
 /// A slot's own id already names its slot, so combining it with a different one is two answers to
@@ -624,7 +624,7 @@ async fn view_hints(
 ///
 /// **`404` for a room's tracker id, by construction rather than by a check**: this is a per-slot
 /// question and a multiworld has no single answer to it. That is also what keeps the multiworld
-/// view free of any other slot's raw data — there is no endpoint that would serve it.
+/// view free of any other slot's raw data: there is no endpoint that would serve it.
 #[get("/api/puna/tracker/<id>/locations?<slot>")]
 async fn view_locations(
     id: TrackerParam,
@@ -704,7 +704,7 @@ fn only_slot(it: &Digestible) -> Result<&slot::Slot> {
 }
 
 /// Unparseable means the cache holds something this build cannot read. `null` digests to a view
-/// with empty tables rather than an error — the same fail-quiet the projection already takes.
+/// with empty tables rather than an error, the same fail-quiet the projection already takes.
 fn parsed(body: &str) -> serde_json::Value {
     serde_json::from_str(body).unwrap_or_default()
 }
@@ -741,7 +741,7 @@ pub struct TrackerTemplate {
     /// viewer is one of its people.
     ///
     /// The table skeleton is server-rendered and the bodies are the client's, so the column has to
-    /// exist here for `tracker.js` to fill — and its absence is what makes an outsider's page
+    /// exist here for `tracker.js` to fill, and its absence is what makes an outsider's page
     /// byte-identical to the one it was before the feature existed.
     /// Whatever the two write routes had to say. **The tracker page reads one now**, which it did
     /// not before it could be written to: a save that redirects with no word for it is a page that
@@ -751,15 +751,15 @@ pub struct TrackerTemplate {
     /// Where the two write forms post: `/tracker/<the id already in this URL>`.
     ///
     /// **Rendered rather than reconstructed in the browser**, for the reason `api_base` gives: the
-    /// two page URLs carry the id in different shapes — a slot's own, or the room's followed by
-    /// `/0/<n>` — and a client parsing `location.pathname` would have to know which. The id here is
+    /// two page URLs carry the id in different shapes (a slot's own, or the room's followed by
+    /// `/0/<n>`), and a client parsing `location.pathname` would have to know which. The id here is
     /// the one the visitor already holds, so this discloses nothing, and it is emphatically **not**
     /// the room's id, which this page must never carry.
     write_base: String,
     /// Whether to offer the preferences form: this viewer holds a slot here.
     ///
     /// **Not `is_staff`**, deliberately. A ping preference renders as a chip beside a slot's owner,
-    /// so somebody holding none has nothing to set — and offering the control anyway would be a
+    /// so somebody holding none has nothing to set, and offering the control anyway would be a
     /// form whose effect is invisible. Staff who also play get it, because they are players.
     owns_a_slot: bool,
     /// What they have said so far, so the form opens on their own answer rather than on the default.
@@ -794,7 +794,7 @@ async fn page(
 /// answering `!progress` while somebody streams a solo multiworld: one request, one line, no JSON
 /// to walk and no HTML to scrape. `digest::summary` owns the wording; this owns who may ask.
 ///
-/// **Served only where the tracker is open to the world, and `404` everywhere else** — including
+/// **Served only where the tracker is open to the world, and `404` everywhere else**, including
 /// to an organizer of a `members` room, which is the part worth stating because it looks like an
 /// oversight. Two reasons, and the second is the one that decides it:
 ///
@@ -803,21 +803,21 @@ async fn page(
 ///   in a browser and fails in the only place it is meant to be used.
 /// - **It is what lets the answer be the same for everybody.** No viewer identity can change this
 ///   response, so it needs no `Session` guard, cannot leak one viewer's document to another, and is
-///   `public` rather than `private` to any cache in front of it — unlike every other view here.
+///   `public` rather than `private` to any cache in front of it, unlike every other view here.
 ///
 /// `404` rather than `403` for the same reason [`access`] gives: a restricted tracker and an id
 /// that names nothing must be indistinguishable, or the refusal is itself an answer about which
 /// unguessable ids are real.
 ///
-/// A slot's own tracker id resolves to that slot alone, exactly as every other view scopes — so a
+/// A slot's own tracker id resolves to that slot alone, exactly as every other view scopes, so a
 /// player can hand out a summary URL for their world without handing over the multiworld's.
 ///
 /// ## The two modifiers
 ///
-/// * **`?s=1,2,4`** — only these slots, in the roster's order rather than the order asked for. That
+/// * **`?s=1,2,4`**: only these slots, in the roster's order rather than the order asked for. That
 ///   makes one set of slots one URL, which matters for a response a shared cache may hold and for a
 ///   bot diffing its own output.
-/// * **`?o`** — append an overall line. See [`flag`] for why the value is optional *and* forgiving.
+/// * **`?o`**: append an overall line. See [`flag`] for why the value is optional *and* forgiving.
 ///
 /// **Both live in the URL rather than in a session**, which is what keeps this response identical
 /// for every reader and therefore `public`-cacheable: a cache keys on the whole URL, so two
@@ -981,7 +981,7 @@ async fn render(
 
 /// Ask the room, and write what comes back into the shared cache.
 ///
-/// Returns the document's **text**, unparsed. Nothing on this path needs its structure — see
+/// Returns the document's **text**, unparsed. Nothing on this path needs its structure. See
 /// `upstream::Upstream::fetch`, where that decision lives.
 async fn fetch(
     conn: &mut diesel_async::AsyncPgConnection,
@@ -1036,7 +1036,7 @@ async fn fetch(
 /// Every per-player array in either document, keyed by `player`.
 ///
 /// Transcribed from pahoa's renderer rather than discovered by inspection, because a key this misses
-/// is a key that passes through unscoped — the failure is silent and in the wrong direction.
+/// is a key that passes through unscoped: the failure is silent and in the wrong direction.
 const PER_PLAYER_KEYS: &[&str] = &[
     // live
     "aliases",
@@ -1059,8 +1059,8 @@ const AGGREGATE_KEYS: &[&str] = &["total_checks_done", "datapackage"];
 
 /// Apply the slot scope, if there is one.
 ///
-/// Takes and returns the rendered body rather than a `Value`, so the whole-multiworld case — which
-/// is the common one — costs nothing at all: no parse, no re-render, just the string the cache
+/// Takes and returns the rendered body rather than a `Value`, so the whole-multiworld case (which
+/// is the common one) costs nothing at all: no parse, no re-render, just the string the cache
 /// already holds.
 fn project(body: String, scope: Option<i32>) -> String {
     let Some(slot_number) = scope else {
@@ -1078,7 +1078,7 @@ fn project(body: String, scope: Option<i32>) -> String {
 /// Narrow a document to one slot.
 ///
 /// **This is what makes a slot's tracker id worth having.** The id is independent of the room's so a
-/// player can share their own tracker without handing out the multiworld's — and that promise is
+/// player can share their own tracker without handing out the multiworld's, and that promise is
 /// only kept if the document behind it is theirs too. Everything keyed by player is filtered to that
 /// player; aggregates stay; anything unrecognized is **dropped**, because a key added upstream that
 /// this code has never seen is a key it cannot know is safe to forward.
@@ -1139,7 +1139,7 @@ fn unreachable_room(e: UpstreamError) -> Error {
 ///
 /// `?o` on its own is on, which is what somebody writing a bot's URL by hand reaches for. So is
 /// `?o=1`, and that is the whole reason this exists rather than a plain `bool` parameter: Rocket's
-/// `FromFormField for bool` accepts an empty value, `on`, `yes` and `true` — and **refuses `1`**,
+/// `FromFormField for bool` accepts an empty value, `on`, `yes` and `true`, and **refuses `1`**,
 /// with a 422 for the whole request. `1` is the most natural thing to type after `=`, and a
 /// hand-written URL failing with no explanation is a bad trade for four characters of parsing.
 ///
@@ -1169,7 +1169,7 @@ fn flag(name: &str, raw: Option<&str>) -> Result<bool> {
 ///
 /// **Refuses rather than ignores**, in both directions. A token that is not a number and a number
 /// that is not a slot of this room are both configuration mistakes in a URL somebody pasted into a
-/// bot once — and the alternative is a summary quietly listing fewer slots than were asked for,
+/// bot once, and the alternative is a summary quietly listing fewer slots than were asked for,
 /// which reads as the room having changed rather than as the URL being wrong.
 ///
 /// Blank (`?s=` or `?s=,,`) is treated as absent rather than as an empty selection: an empty one
@@ -1177,7 +1177,7 @@ fn flag(name: &str, raw: Option<&str>) -> Result<bool> {
 /// might be what somebody meant.
 ///
 /// **Order comes from the roster, never from the query.** `?s=4,1` and `?s=1,4` are the same
-/// request and must produce the same bytes — this response is `public`-cacheable and is diffed by
+/// request and must produce the same bytes: this response is `public`-cacheable and is diffed by
 /// bots, and two spellings of one selection producing two answers would be a needless difference.
 /// The filtering itself preserves roster order because it walks the digested rows.
 fn selection(
@@ -1230,8 +1230,8 @@ fn selection(
 ///
 /// Every response here once carried `max-age` from pahoa's own document window, which was exactly
 /// right while every response *was* pahoa's document. It is not right for the digested views: those
-/// are a function of the room's documents **and of Puna's own rows** — a slot's owner, its
-/// progression, its note, its holder's ping preference — and those change the instant somebody
+/// are a function of the room's documents **and of Puna's own rows** (a slot's owner, its
+/// progression, its note, its holder's ping preference), and those change the instant somebody
 /// presses Save rather than on pahoa's schedule.
 ///
 /// Under `max-age` the browser serves its own copy without a request, so saving an annotation and
@@ -1413,7 +1413,7 @@ struct PreferenceForm {
 ///
 /// **Their own, and only their own.** Staff may edit any note and no ping preference: it is the one
 /// field here that records what a person agreed to rather than a fact about a world, and
-/// `annotation::set_preference` takes no actor for that reason — there is no caller who could set
+/// `annotation::set_preference` takes no actor for that reason: there is no caller who could set
 /// somebody else's.
 ///
 /// Holding a slot is required, not merely being staff: the chip renders beside a slot's owner, so a
@@ -1474,8 +1474,8 @@ mod tests {
     /// open question about putting it under `/tracker/<id>/`: that space is otherwise the slot
     /// page's.
     ///
-    /// It does not, because the shapes differ in length — `/tracker/<id>/summary.txt` is three
-    /// segments and `/tracker/<id>/<team>/<player>` is four — but "differ in length" is a claim
+    /// It does not, because the shapes differ in length (`/tracker/<id>/summary.txt` is three
+    /// segments and `/tracker/<id>/<team>/<player>` is four), but "differ in length" is a claim
     /// about Rocket's matcher rather than about this file, and the next path added here may not be
     /// so lucky. Rocket refuses to ignite on a collision, so building the client **is** the
     /// assertion; the dispatches after it are what says each URL reaches the handler it names.
@@ -1742,8 +1742,8 @@ mod tests {
     ///
     /// The skeleton is server-rendered and the bodies are the client's, so the `<th>` and
     /// `tracker.js`'s cell array have to agree about how many columns there are. They agree because
-    /// both read one flag — the `<th>` from `{% if annotations %}` and the script from
-    /// `data-annotations` — and this asserts the two appear and disappear together.
+    /// both read one flag (the `<th>` from `{% if annotations %}` and the script from
+    /// `data-annotations`), and this asserts the two appear and disappear together.
     ///
     /// Getting it wrong does not fail: every cell after the missing one renders under the heading to
     /// its left, so checks appear under Game and the page looks like data rather than like a bug.
@@ -1846,7 +1846,7 @@ mod tests {
             .any(|n| (40000..=49999).contains(&n))
     }
 
-    /// **A bare `?o` is on, and so is `?o=1`** — which is the whole reason this is not a `bool`.
+    /// **A bare `?o` is on, and so is `?o=1`**, which is the whole reason this is not a `bool`.
     ///
     /// Rocket's `FromFormField for bool` accepts an empty value, `on`, `yes` and `true`, and
     /// **refuses `1`** by falling through to a `ParseBoolError`, which fails the entire request with
@@ -1879,7 +1879,7 @@ mod tests {
     ///
     /// Silently omitting an unknown slot is the failure worth avoiding: the summary would list
     /// fewer entries than were asked for, which reads as the room having changed rather than as the
-    /// URL being wrong — and this URL lives in a config somebody wrote once.
+    /// URL being wrong, and this URL lives in a config somebody wrote once.
     #[test]
     fn a_slot_selection_is_deduplicated_ordered_and_strict() {
         // Only the slot numbers matter here; `selection` reads nothing else off a roster.
@@ -1944,7 +1944,7 @@ mod tests {
     /// `respond` would still map `Derived` to `no-cache` correctly, and nothing would be asking it
     /// for `Derived`.
     ///
-    /// The same call-site shape this project has now been bitten by three times — a good test on a
+    /// The same call-site shape this project has now been bitten by three times: a good test on a
     /// rule, and nothing checking that the rule is invoked.
     #[test]
     fn the_digested_views_ask_to_be_revalidated() {
@@ -1970,8 +1970,8 @@ mod tests {
     ///
     /// This is a fix rather than a preference. Every response here used to carry `max-age` from
     /// pahoa's window, which is right only while the response *is* pahoa's document. The digested
-    /// views also read Puna's own rows — a slot's owner, its note, its progression, its holder's
-    /// ping preference — and those change when somebody presses Save. Under `max-age` the browser
+    /// views also read Puna's own rows (a slot's owner, its note, its progression, its holder's
+    /// ping preference), and those change when somebody presses Save. Under `max-age` the browser
     /// answered its own fetch without asking, so saving an annotation and landing back on the
     /// tracker showed the previous body for the rest of the window.
     ///
@@ -2037,7 +2037,7 @@ mod tests {
     /// Build a tracker page for one slot, or for the whole multiworld.
     /// **A slot's tracker and the multiworld's are two tabs, and were titled identically.**
     ///
-    /// A player watching their own world beside the room's had no way to tell them apart — the same
+    /// A player watching their own world beside the room's had no way to tell them apart, the same
     /// complaint that put the page name in front of the room name everywhere on 2026-08-31, and the
     /// one case where the page name alone still would not have been enough.
     ///
@@ -2147,7 +2147,7 @@ mod tests {
     /// **The items column is named for what it counts**, and the collapse toggle remembers itself.
     ///
     /// Three files have to agree for that toggle to work at all: the template names a key, and
-    /// `toggles.js` restores it while `tracker.js` reacts to it. Every mismatch is silent — the box
+    /// `toggles.js` restores it while `tracker.js` reacts to it. Every mismatch is silent: the box
     /// renders, ticks, and does nothing, or does something and forgets by the next page load.
     #[test]
     fn the_items_table_is_ordered_and_collapsible() {
@@ -2191,7 +2191,7 @@ mod tests {
     ///
     /// It is on both trackers, and its toggle asks a different question on each: on a slot's page
     /// "what am I still waiting for", on the multiworld's "what is outstanding anywhere". One shared
-    /// key would make a choice on one page silently change the other — which looks like the setting
+    /// key would make a choice on one page silently change the other, which looks like the setting
     /// not persisting, rather than like two views sharing state.
     #[test]
     fn a_remembered_preference_is_scoped_to_the_page_it_was_made_on() {
@@ -2247,17 +2247,17 @@ mod tests {
     /// These are the first mutations this tier has ever accepted, and every guard on them is a
     /// separate refusal with no other symptom if it goes missing:
     ///
-    /// * `sees_annotations()` — the room opted in, and the caller is one of its people. Without it
+    /// * `sees_annotations()`: the room opted in, and the caller is one of its people. Without it
     ///   the feature is reachable by POST on a room that never turned it on: a control nobody can
     ///   see is still a route anybody can construct.
-    /// * a signed-in caller — there is no annotation without somebody to attribute it to.
-    /// * for a slot, `is_staff || slot.owner_id == Some(actor)` — otherwise any participant edits
+    /// * a signed-in caller: there is no annotation without somebody to attribute it to.
+    /// * for a slot, `is_staff || slot.owner_id == Some(actor)`: otherwise any participant edits
     ///   any slot, which is the quiet one, because the page would look correct to whoever did it.
-    /// * for a preference, `owns_a_slot` and **no actor parameter at all** — the writer takes only
+    /// * for a preference, `owns_a_slot` and **no actor parameter at all**: the writer takes only
     ///   the caller's own id, so setting somebody else's is unspellable rather than merely refused.
     ///
     /// A source lint because there is no unit test that reaches a Rocket route's body, and the
-    /// alternative — a full router harness per guard — is what M21 built once and is far more than
+    /// alternative (a full router harness per guard) is what M21 built once and is far more than
     /// this needs.
     #[test]
     fn both_writes_check_the_room_the_caller_and_the_slot() {
@@ -2304,12 +2304,12 @@ mod tests {
     /// **The one response here that a shared cache may hold must not depend on who asked.**
     ///
     /// `summary.txt` is served `public`-cacheable precisely because it is identical for every
-    /// reader — that is what lets a bot with no session ask for it and what makes a cache in front
+    /// reader: that is what lets a bot with no session ask for it and what makes a cache in front
     /// of it free rate limiting rather than a way to hand one viewer another's document. Every JSON
     /// view beside it is per-viewer and is not cacheable that way.
     ///
     /// So this path passes `sees_claims: false` unconditionally. `summary` renders no claim state
-    /// today, so flipping it would leak nothing *now* — which is exactly why it needs a lint rather
+    /// today, so flipping it would leak nothing *now*, which is exactly why it needs a lint rather
     /// than a behavioral test: the mutation compiles, changes no output, and arms the leak for
     /// whoever next adds a column to `digest::summary`. Two edits in different files, neither
     /// wrong on its own.

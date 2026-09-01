@@ -267,7 +267,7 @@ fn filename(seed_name: &str, entry: &generation::Slot, member: &str) -> String {
 
 /// Alphanumerics, `-` and `_`. **No `.`**, deliberately.
 ///
-/// The extension is appended separately, so the stem never needs one — and excluding it makes `..`
+/// The extension is appended separately, so the stem never needs one, and excluding it makes `..`
 /// unspellable rather than merely harmless-in-practice, and stops a name that begins with a dot from
 /// arriving as a hidden file. Anything else becomes `_` rather than being dropped, so two players
 /// whose names differ only in punctuation still get different files.
@@ -355,7 +355,7 @@ mod tests {
     /// A stem that sanitizes away entirely still has to be a filename.
     ///
     /// Tested against `sanitize` rather than `filename`, because `filename` always contributes
-    /// `_P<n>_` and so can never produce one — asserting it through the caller would be a test that
+    /// `_P<n>_` and so can never produce one: asserting it through the caller would be a test that
     /// passes for the wrong reason.
     #[test]
     fn a_stem_with_nothing_usable_in_it_falls_back() {

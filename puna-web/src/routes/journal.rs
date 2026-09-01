@@ -14,10 +14,10 @@
 //!
 //! An organizer reads everything under all three, so the column names what the tier below them
 //! gets. **The line `feed` draws is gameplay against the room's operation**: item movements, the
-//! Link conventions, goals, and a world released or collected in bulk — the wall of *"X sent Y to Z
+//! Link conventions, goals, and a world released or collected in bulk: the wall of *"X sent Y to Z
 //! (location)"* the room already broadcasts to every unfiltered client, plus the lines that explain
-//! why one suddenly emptied into it. The rest — `chat` above all, every line anybody typed, and the
-//! moderation and configuration beside it — is the part a room may reasonably want to keep among its
+//! why one suddenly emptied into it. The rest (`chat` above all, every line anybody typed, and the
+//! moderation and configuration beside it) is the part a room may reasonably want to keep among its
 //! participants, or may not.
 //!
 //! One field crosses that line inside a record it is otherwise on the right side of, and is the only
@@ -25,7 +25,7 @@
 //!
 //! **Why this is a room's decision rather than a constant.** The feed link is rendered on the room
 //! page wherever the tracker link is, so the people holding it are the people holding the room
-//! link — which for most rooms means withholding the history protects nobody and only makes the
+//! link, which for most rooms means withholding the history protects nobody and only makes the
 //! ordinary case need a setting change. For a streamed race it is the opposite. Neither answer is
 //! right for every room, and a single default was wrong for one of them whichever way it pointed.
 //!
@@ -35,12 +35,12 @@
 //!
 //! ## This module previously said the opposite, and the mistake is worth keeping
 //!
-//! An earlier version of this file asserted the journal held "exactly three record types — `check`,
-//! `options` and `gap` — with no chat, no hints and no cheats anywhere in it", and used that to put
+//! An earlier version of this file asserted the journal held "exactly three record types, `check`,
+//! `options` and `gap`, with no chat, no hints and no cheats anywhere in it", and used that to put
 //! the whole file at the tracker tier. It was read off a real 250 MB journal from the dev cluster.
 //!
 //! **The file was accurate and unrepresentative.** It was produced by `room-load`, a synthetic
-//! client that sends `LocationChecks` and `StatusUpdate` and nothing else — so the only records it
+//! client that sends `LocationChecks` and `StatusUpdate` and nothing else, so the only records it
 //! could ever contain are the ones a robot can generate. An empty category in a sample is not an
 //! absent category in a format, and the sample was drawn from something with no mouth. pahoa caught
 //! it before it shipped.
@@ -79,7 +79,7 @@ const POLL: std::time::Duration = std::time::Duration::from_secs(1);
 /// How often the server pings an idle feed.
 ///
 /// **Not optional.** The route runs behind Envoy, which applies a stream idle timeout and will close
-/// a connection that has said nothing — and a journal feed on a quiet room says nothing for minutes
+/// a connection that has said nothing, and a journal feed on a quiet room says nothing for minutes
 /// at a time, which is its normal condition rather than an edge case. The server pings because the
 /// server is the side that knows the connection is meant to stay open; a browser will answer a ping
 /// without any script running.
@@ -88,32 +88,32 @@ const PING: std::time::Duration = std::time::Duration::from_secs(30);
 /// Record types a viewer at the `feed` tier may see.
 ///
 /// **Transcribed from pahoa's `docs/journal.md`**, which is the authoritative table, not from a
-/// corpus — see the module note. Every entry here describes *a cross-game effect landing on
+/// corpus. See the module note. Every entry here describes *a cross-game effect landing on
 /// somebody*, which is the thing this feed is for:
 ///
-///   * `check` — an item moved. The wall of "X sent Y to Z", and the reason the page exists.
-///   * `gap` — pahoa's own marker that records were dropped. **Never filtered under any policy**:
+///   * `check`: an item moved. The wall of "X sent Y to Z", and the reason the page exists.
+///   * `gap`: pahoa's own marker that records were dropped. **Never filtered under any policy**:
 ///     it is the only evidence the history is incomplete, and a viewer that dropped it would
 ///     present a partial history as a whole one.
-///   * `deathlink`, `traplink`, `ringlink` — the three link conventions. A link is the same kind of
+///   * `deathlink`, `traplink`, `ringlink`: the three link conventions. A link is the same kind of
 ///     event as a check: discrete, player-affecting and cross-game, and *"why did I get a trap I
 ///     never earned"* is exactly what a feed is opened to answer. DeathLink was only ever the
 ///     popular one rather than the only one; upstream has three, pahoa records them from one table,
 ///     and treating them differently here would be an editorial guess rather than a property of
 ///     the protocol.
 ///
-///   * `goal` — a slot finished. pahoa writes it **before** the auto-release and auto-collect it
+///   * `goal`: a slot finished. pahoa writes it **before** the auto-release and auto-collect it
 ///     triggers, deliberately, so the flood of `check` records those produce sits underneath the
 ///     line that explains them. Withholding it left a public feed where a world empties out for no
 ///     stated reason, which is the one thing a reader most wants explained.
 ///
-///   * `release`, `collect` — a world's items sent out, or pulled in, in bulk. Each is written
+///   * `release`, `collect`: a world's items sent out, or pulled in, in bulk. Each is written
 ///     **before** the checks it produces, the same ordering `goal` follows, so the flood sits under
 ///     the line that explains it.
 ///
 ///     These did not exist until pahoa added them at Puna's request. Before that a release reached
-///     this feed only as its checks, and the announcement everybody knows — *"X has released all
-///     remaining items from their world."* — was broadcast as a `PrintJSON` and never journaled at
+///     this feed only as its checks, and the announcement everybody knows, *"X has released all
+///     remaining items from their world."*, was broadcast as a `PrintJSON` and never journaled at
 ///     all. Worth keeping because the obvious place to look for it was `chat`, and `chat` is
 ///     player-typed `Say` only: an in-game `!release` recorded what somebody TYPED, identically
 ///     whether the room carried it out or refused it.
@@ -123,7 +123,7 @@ const PING: std::time::Duration = std::time::Duration::from_secs(30);
 /// `admin`, `cheat`, `hints`, `connected`, `disconnected`, `tags_changed`, `started`, `stopped`,
 /// `options`, `option_changed`, `slot_password_changed`.
 ///
-/// **pahoa proposed a wider set** — `started`, `stopped`, `goal` and `disconnected`. `goal` is now
+/// **pahoa proposed a wider set**: `started`, `stopped`, `goal` and `disconnected`. `goal` is now
 /// taken, on its own merits above. The other three are not: they are true statements about the
 /// room's *operation* rather than about play, and a room that wants them public has `full` to say
 /// so.
@@ -143,16 +143,16 @@ pub const PUBLIC_KINDS: [&str; 8] = [
 /// **`trigger` is deliberately absent**, and this is a decision against pahoa's own recommendation
 /// rather than an oversight. Their letter argued for rendering it: `goal`, `admin`, `player` and
 /// `group` carry no operator text, and *"gave up on their world"* reads differently from *"an
-/// organizer cleared it"*. Both true — and that is exactly why it is withheld at this tier. The
+/// organizer cleared it"*. Both true, and that is exactly why it is withheld at this tier. The
 /// distinction is about the ROOM'S OPERATION, which is the line `feed` draws everywhere else: a
 /// public feed says a world was released; who decided to release it is the organizers' business.
 ///
 /// **An organizer keeps it**, because discriminating costs one parameter here and the record is
-/// already in front of us — so the narrowing applies where the argument for it applies, rather than
+/// already in front of us, so the narrowing applies where the argument for it applies, rather than
 /// to everyone because that was simpler to write.
 ///
 /// **An allowlist, not a blocklist**, so the omission survives pahoa adding a field. A blocklist
-/// naming `trigger` would pass through whatever arrives next — an operator's reason, say — which is
+/// naming `trigger` would pass through whatever arrives next (an operator's reason, say), which is
 /// the direction this module refuses everywhere else. The cost is that a genuinely useful new field
 /// is invisible to the public tier until somebody adds it here, which is a change that gets
 /// noticed; the other failure is silent.
@@ -160,7 +160,7 @@ const PUBLIC_BULK_FIELDS: [&str; 6] = ["type", "at", "team", "slot", "player", "
 
 /// One record as this viewer may see it.
 ///
-/// Almost always the record unchanged — visibility is a whole-record decision for every type but
+/// Almost always the record unchanged: visibility is a whole-record decision for every type but
 /// two. `release` and `collect` are the exception: public to a `feed` viewer, and narrowed to
 /// [`PUBLIC_BULK_FIELDS`] for them alone.
 ///
@@ -205,7 +205,7 @@ pub fn is_public(event: &serde_json::Value) -> bool {
 /// How much of the history this viewer gets.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Visibility {
-    /// What happened in the games: items, Links, goals, and bulk releases and collects — the last
+    /// What happened in the games: items, Links, goals, and bulk releases and collects, the last
     /// two without their `trigger`. Anyone the room's `tracker_policy` admits. See [`PUBLIC_KINDS`]
     /// and [`PUBLIC_BULK_FIELDS`].
     Feed,
@@ -250,7 +250,7 @@ async fn readable(
 
 /// How much of the history a role may read under a room's policy.
 ///
-/// Its own function so the rule is testable without a database and stated once — the page, the
+/// Its own function so the rule is testable without a database and stated once: the page, the
 /// socket and the download all reach it through [`readable`], so none of them can hold a different
 /// opinion about what a viewer is owed.
 ///
@@ -312,7 +312,7 @@ async fn page(
 
 /// A streamed, gzipped journal with a filename attached.
 ///
-/// Hand-rolled rather than `#[derive(Responder)]`, which cannot hold a `ByteStream!` — the macro
+/// Hand-rolled rather than `#[derive(Responder)]`, which cannot hold a `ByteStream!`: the macro
 /// produces an opaque type and a struct field has to be nameable. Building the response here is
 /// three lines and keeps the body a stream rather than a `Vec`, which is the whole point.
 struct Journal {
@@ -345,11 +345,11 @@ impl<'r> Responder<'r, 'r> for Journal {
 /// The whole journal, gzipped on the way out.
 ///
 /// **Streamed and never buffered**, which is not a style preference: these files are routinely
-/// hundreds of megabytes — 250 MB on the cluster's load-test rooms — and reading one into a `Vec`
+/// hundreds of megabytes (250 MB on the cluster's load-test rooms), and reading one into a `Vec`
 /// the way the patch route does would be a quarter of a gigabyte of web-tier memory per click.
 ///
 /// Gzipped because it is worth 7.5× on real data (48.8 MiB of records became 6.5 MiB) and because
-/// this is ordinary HTTP, where compression is available — unlike the feed below, which cannot have
+/// this is ordinary HTTP, where compression is available, unlike the feed below, which cannot have
 /// it. The encoder runs on a blocking thread and hands finished blocks to the response, so a slow
 /// client backs the work up rather than occupying a runtime worker with it.
 #[get("/journal/<id>/download")]
@@ -417,14 +417,14 @@ async fn download(
 /// What the saved file is called.
 ///
 /// **Never the room's id.** The whole point of the feed having an id of its own is that holding the
-/// link does not hand over the room — and a `Content-Disposition` naming `room.id` would have put it
+/// link does not hand over the room, and a `Content-Disposition` naming `room.id` would have put it
 /// back, in a file that outlives the page and gets forwarded. That is the same class of leak as a
 /// tracker page rendering the room's address: the capability escapes through the artifact rather
 /// than through the URL.
 ///
 /// The room's **name** is fine and is what a person wants when three of these are in one downloads
 /// folder: it is already rendered on this page and on the public room page, and it names nothing
-/// that can be navigated to. Sanitized the way patch downloads are — an allowlist, with no `.` at
+/// that can be navigated to. Sanitized the way patch downloads are: an allowlist, with no `.` at
 /// all, so `..` and a leading dot are unspellable rather than merely filtered.
 fn download_name(room: &room::Room) -> String {
     let stem: String = room
@@ -456,7 +456,7 @@ struct Anchor {
     lines: Option<usize>,
     /// Or everything at or after this instant, in unix seconds.
     at: Option<f64>,
-    /// Or everything after this byte offset — **what a RECONNECT sends**, being the `cursor` the
+    /// Or everything after this byte offset, **what a RECONNECT sends**, being the `cursor` the
     /// page already has.
     ///
     /// A byte offset rather than the `at` beside it, because this one has to join exactly: `since`
@@ -472,8 +472,8 @@ struct FeedRequest {
     /// Page **backwards**: the records immediately before this byte offset.
     ///
     /// Sent repeatedly by the page's "load the whole feed" control, each time with the `start` the
-    /// previous answer reported, until that reaches zero. The server holds no per-viewer position —
-    /// the offset the client returns *is* the position — so a viewer that reconnects mid-backfill
+    /// previous answer reported, until that reaches zero. The server holds no per-viewer position
+    /// (the offset the client returns *is* the position), so a viewer that reconnects mid-backfill
     /// simply carries on, and two tabs backfilling at once cost nothing between them.
     before: Option<u64>,
 }
@@ -484,14 +484,14 @@ struct FeedRequest {
 /// the default tail, so a viewer whose script failed to send still sees a page with history on it.
 /// The first read a feed makes, from whatever the client anchored on.
 ///
-/// **A resume can decline to be one, and `start` is how it says so.** `read_from` is uncapped — the
-/// follow loop calls it every poll, so its increments are a handful of lines — but a resume's gap is
+/// **A resume can decline to be one, and `start` is how it says so.** `read_from` is uncapped (the
+/// follow loop calls it every poll, so its increments are a handful of lines), but a resume's gap is
 /// however long the viewer was away, and a laptop that slept through a mass release would ask for
 /// six figures of records in one frame. Past the cap this serves a fresh tail instead.
 ///
 /// So the contract with the page is: **`start == after` means the resume joined**, and anything else
 /// means it got a tail and must replace what it is showing rather than extend it. The other fallback
-/// rides the same signal for free — `read_from` already answers a truncated file (a room whose save
+/// rides the same signal for free: `read_from` already answers a truncated file (a room whose save
 /// was reset) with a tail, and that tail's `start` is not the offset asked for either.
 ///
 /// Falling back *silently* is the shape being avoided. Either fallback appended to a page that kept
@@ -718,7 +718,7 @@ async fn feed(
 /// One frame of events, filtered to what this viewer may see.
 ///
 /// **The filter is here rather than in the page**, and that is the whole tier. A viewer at the feed
-/// tier is never *sent* a chat line, so no amount of reading the socket in a console recovers one —
+/// tier is never *sent* a chat line, so no amount of reading the socket in a console recovers one,
 /// where a client-side filter would be markup proving a negative, which this codebase has decided
 /// twice already it cannot do.
 ///
@@ -783,8 +783,8 @@ mod tests {
     ///
     /// This is the test the whole module exists around, and it is here because the first version of
     /// this file got it wrong: it put the entire journal at the tracker tier on the belief that the
-    /// file held item movements only. It does not — `chat` is player-typed free text, one record per
-    /// line anybody says — and the belief came from a 250 MB sample produced by a synthetic client
+    /// file held item movements only. It does not (`chat` is player-typed free text, one record per
+    /// line anybody says), and the belief came from a 250 MB sample produced by a synthetic client
     /// that can only check locations.
     ///
     /// So the assertion is deliberately about the *bytes on the wire* rather than about a flag: the
@@ -848,7 +848,7 @@ mod tests {
     /// saying why. Publishing the line is the whole point, so it is asserted rather than assumed.
     ///
     /// `trigger` is the deliberate exception, and it is a decision against pahoa's own
-    /// recommendation — see `PUBLIC_BULK_FIELDS`. Everything else on the record is what lets the
+    /// recommendation. See `PUBLIC_BULK_FIELDS`. Everything else on the record is what lets the
     /// line read: who, and how many.
     #[test]
     fn a_release_reaches_a_public_viewer_without_saying_who_ordered_it() {
@@ -887,8 +887,8 @@ mod tests {
 
     /// **The narrowing is an allowlist, so a field pahoa adds later is withheld by default.**
     ///
-    /// A blocklist naming `trigger` would pass through whatever arrives next — an operator's
-    /// reason, a note, anything — and it would do it silently, on the tier that is meant to be
+    /// A blocklist naming `trigger` would pass through whatever arrives next (an operator's
+    /// reason, a note, anything), and it would do it silently, on the tier that is meant to be
     /// shareable with an audience the organizers did not choose. The cost of the allowlist is a
     /// useful new field going unseen until somebody adds it, which is a change that gets noticed.
     #[test]
@@ -928,11 +928,11 @@ mod tests {
         assert!(parsed.get("withheld").is_none());
     }
 
-    /// The feed itself — the screenshot — is `check`, the three link conventions, and `gap`.
+    /// The feed itself, the screenshot, is `check`, the three link conventions, and `gap`.
     ///
     /// **The links belong here for the same reason a check does**: a discrete cross-game effect
     /// landing on somebody. DeathLink was only ever the popular convention rather than the only
-    /// one — pahoa records all three from one table — so admitting one and withholding the others
+    /// one (pahoa records all three from one table), so admitting one and withholding the others
     /// would be an editorial guess rather than a property of the protocol, and *"why did I get a
     /// trap I never earned"* is precisely what a reader opens a feed to answer.
     ///
@@ -1012,7 +1012,7 @@ mod tests {
     /// An organizer reads the whole file whatever the room says, and nobody else does.
     ///
     /// The download route is what this guards, and its refusal is additionally pinned by a source
-    /// lint in `tests/templates.rs` — a mutation removing the check from the route left every test
+    /// lint in `tests/templates.rs`: a mutation removing the check from the route left every test
     /// here green, which is the same gap `a_restart_would_land` had.
     ///
     /// **A helper is not an organizer here**, which is the one place this tier disagrees with M20's
@@ -1043,7 +1043,7 @@ mod tests {
     ///
     /// Its own test because the failure is silent in the direction that matters: `visibility_for`
     /// returning `Some(Feed)` instead of `None` leaves every caller working, the page still
-    /// renders, the socket still streams — and the setting an organizer just chose does nothing at
+    /// renders, the socket still streams, and the setting an organizer just chose does nothing at
     /// all. Nothing else in the suite would notice, because `Feed` is a legitimate answer
     /// everywhere it appears.
     #[test]
@@ -1061,13 +1061,13 @@ mod tests {
 
     /// **The page offers the file exactly where the socket is not filtering.**
     ///
-    /// The route refuses regardless, so this is about not offering a link that would 404 — but it
+    /// The route refuses regardless, so this is about not offering a link that would 404, but it
     /// is also the page saying, in words, what is in the file. A viewer who cannot have it should
     /// not be left wondering whether it is missing.
     ///
     /// The flag it renders is `visibility == Everything`, so it tracks the room's policy without
     /// the template ever seeing one: `may_download` is decided in the handler, which is the same
-    /// rule `SlotView` follows and for the same reason — a template cannot prove it withheld
+    /// rule `SlotView` follows and for the same reason: a template cannot prove it withheld
     /// something.
     #[test]
     fn the_file_is_offered_only_where_nothing_is_being_withheld() {
@@ -1106,7 +1106,7 @@ mod tests {
     /// **A feed link hands over the feed and not the room.**
     ///
     /// The page is addressed by `journal_id`, which is derivable from neither the room's id nor its
-    /// tracker's — so this asserts what the markup must not carry. It is the same property M8b
+    /// tracker's, so this asserts what the markup must not carry. It is the same property M8b
     /// asserts for the tracker, and it is asserted by rendering rather than by reading, because the
     /// leak that matters is whatever reaches the browser: an `href` back to the room, a `data-`
     /// attribute the script reads, a download URL with the id in its path.
@@ -1219,7 +1219,7 @@ mod tests {
     ///
     /// A reconnect used to ask for a tail, so a page that already showed the last hundred records
     /// got them again and rendered them twice. Confirmed happening on a re-rollout of the web tier,
-    /// where it reads as a busy room rather than as a fault — which is why it survived.
+    /// where it reads as a busy room rather than as a fault, which is why it survived.
     ///
     /// Resuming at the cursor returns **only what arrived while the socket was down**, and `start`
     /// equal to the offset asked for is what tells the page it may keep what it is showing.
@@ -1261,7 +1261,7 @@ mod tests {
     /// Nothing happened while the socket was down: an empty frame that still joins.
     ///
     /// Worth its own case because it is the common one on a fast rollout, and because an empty
-    /// replay must not read as a failed join — `start` still has to come back equal to the ask.
+    /// replay must not read as a failed join: `start` still has to come back equal to the ask.
     #[test]
     fn a_resume_with_nothing_new_still_joins() {
         let lines: Vec<String> = (0..5).map(|n| line(&format!("check{n}"))).collect();

@@ -11,7 +11,7 @@
 //!
 //! `GET /api/room/<id>` already returns, per YAML, `player_name`, `discord_id` (the snowflake, which
 //! is what `room_slots.owner_id` is) and a `slot_number`. It is guarded by `LoggedInSession`, and
-//! the lobby's `session.rs` accepts `X-Api-Key: <its ADMIN_TOKEN>` as an admin session — so this is
+//! the lobby's `session.rs` accepts `X-Api-Key: <its ADMIN_TOKEN>` as an admin session, so this is
 //! a read of an endpoint that exists rather than a contract anybody has to implement.
 //!
 //! ## The join is on the NAME, and the slot number is deliberately ignored
@@ -21,14 +21,14 @@
 //! **The lobby sends the raw yaml name and the generator's is cut to sixteen characters**, so the
 //! two agree for every name that fits and for no name that does not. `/api/room/<id>` serves
 //! `yamls.player_name`, which is the `name:` field exactly as submitted; the lobby does have an
-//! Archipelago-resolved name — `get_ap_player_name`, a faithful port of `handle_name` down to the
-//! `.strip()[:16].strip()` — but it computes that for its own room page and does not put it on the
+//! Archipelago-resolved name (`get_ap_player_name`, a faithful port of `handle_name` down to the
+//! `.strip()[:16].strip()`), but it computes that for its own room page and does not put it on the
 //! wire. A player submitting `betterthanyou_Pupupu` is `betterthanyou_Pu` in the seed, and this
 //! read it as a name the lobby had never heard of.
 //!
 //! So the match runs twice: on the strings as they stand, then on whatever is left over against
 //! [`ap_name`], which is the generator's own cut. The second pass takes a yaml **only where it is
-//! the one candidate** — two names cut to one string is a question for a person rather than a coin
+//! the one candidate**: two names cut to one string is a question for a person rather than a coin
 //! toss. It should never arise, because the lobby refuses a yaml whose resolved name collides with
 //! one already in the room, but [`plan`] is pure and matches whatever list it is handed.
 //!
@@ -36,7 +36,7 @@
 //! and Archipelago's `%number%`/`%player%` reach us as the template rather than as what it became,
 //! and no amount of cutting turns one into the other; reproducing the substitution would mean
 //! reproducing a counter that walks the generator's file order rather than ours. Each leaves a name
-//! that matches nothing, which is a slot that keeps its claim link — exactly where it was before
+//! that matches nothing, which is a slot that keeps its claim link, exactly where it was before
 //! the import ran.
 //!
 //! ## A miss is not a failure
@@ -56,7 +56,7 @@ use puna_core::model::slot::Slot;
 /// **One lobby, from the environment.** Puna does not accept a host from a request: the URL an
 /// organizer pastes is read for its room id and nothing else, so a link to somebody else's lobby
 /// cannot make this tier fetch from it with our token attached. That is the same rule
-/// [`crate::upstream`] follows for rooms, and for the same reason — this module holds a credential.
+/// [`crate::upstream`] follows for rooms, and for the same reason: this module holds a credential.
 #[derive(Debug, Clone)]
 pub struct Lobby {
     /// Base URL, e.g. `https://lobby.example.com`. No trailing slash.
@@ -64,7 +64,7 @@ pub struct Lobby {
     /// The lobby's own `ADMIN_TOKEN`, presented as `X-Api-Key`.
     ///
     /// **Outbound**: what Puna sends to the lobby. Not to be confused with the inbound key, which is
-    /// what the lobby will send to Puna when the push lands — different secret, opposite direction.
+    /// what the lobby will send to Puna when the push lands: different secret, opposite direction.
     pub token: String,
     pub timeout: Duration,
 }
@@ -103,7 +103,7 @@ pub enum LobbyError {
 pub struct LobbyRoom {
     /// The Discord account that created the room in the lobby.
     ///
-    /// **`-1` is the lobby's sentinel for "nobody"**, not a user id — `db/room.rs` uses it where the
+    /// **`-1` is the lobby's sentinel for "nobody"**, not a user id: `db/room.rs` uses it where the
     /// column is null and the API flattens `Option<i64>` to a bare number on the way out. Treated as
     /// absent everywhere here, which matters because it would otherwise be a perfectly valid
     /// argument to `user::ensure_exists`.
@@ -132,7 +132,7 @@ pub struct LobbyYaml {
 impl Lobby {
     /// Read the room id out of whatever the organizer pasted.
     ///
-    /// A full URL or a bare uuid, because both are things somebody genuinely has in hand — the
+    /// A full URL or a bare uuid, because both are things somebody genuinely has in hand: the
     /// address bar of the lobby room they were just looking at, or an id copied out of it. The
     /// **host is discarded either way**: only the id travels, and the request goes to the
     /// configured lobby. So pasting a link to a lobby Puna does not know about fetches the same id
@@ -234,13 +234,13 @@ pub struct Plan {
     ///
     /// **Its own bucket, because folding it into `unused` said something untrue.** A yaml whose slot
     /// is already claimed matched perfectly; reporting it as "matched no slot here" told an organizer
-    /// to go looking for a mismatch that does not exist — and in the ordinary case, a room where
+    /// to go looking for a mismatch that does not exist, and in the ordinary case, a room where
     /// people have been claiming their own slots, it described *most* of the roster that way.
     pub already_claimed: usize,
     /// Lobby YAMLs that named no slot in this room.
     ///
     /// Usually the sign that the wrong lobby room was associated, which is the one mistake here that
-    /// looks like success — every slot unmatched and every yaml unused. That signal only works if
+    /// looks like success: every slot unmatched and every yaml unused. That signal only works if
     /// this bucket means what it says, which is why `already_claimed` is separate.
     pub unused: usize,
 }
@@ -254,7 +254,7 @@ pub struct Plan {
 ///
 /// **Sixteen CHARACTERS, not bytes.** Python slices code points, and Rust makes the difference easy
 /// to get wrong in the direction that panics. It is unobservable through the lobby, which refuses a
-/// non-ASCII name outright — but it is Archipelago that produced the string being matched against,
+/// non-ASCII name outright, but it is Archipelago that produced the string being matched against,
 /// so Archipelago's rule is the one to hold, whatever reaches this from where.
 ///
 /// Deliberately **no substitution**: `{number}` and friends are the generator's, and reproducing
@@ -272,23 +272,23 @@ pub fn ap_name(submitted: &str) -> String {
 
 /// Work out the assignment. **Pure**, so every rule below is testable without a lobby.
 ///
-/// Two passes, exact then [`ap_name`] — see the module docs for why the lobby's name and the
+/// Two passes, exact then [`ap_name`]. See the module docs for why the lobby's name and the
 /// generator's diverge past sixteen characters, and why the second pass takes a yaml only where it
 /// is the sole candidate.
 ///
 /// Two things it will not do:
 ///
 /// * **Touch a slot that already has an owner.** Backfill is re-runnable and must never take a slot
-///   off somebody who claimed it in the meantime — including on the first run, where a player may
+///   off somebody who claimed it in the meantime, including on the first run, where a player may
 ///   have used their claim link between the room opening and the organizer pressing the button.
 ///   That slot is counted under `already_claimed`, not treated as if the lobby had never named it.
 /// * **Match case-insensitively.** Archipelago's own uniqueness rule is case-insensitive, so two
-///   slots cannot differ by case alone — but the generator's output is the authority on the exact
+///   slots cannot differ by case alone, but the generator's output is the authority on the exact
 ///   string, and loosening the comparison would only ever paper over a divergence worth seeing.
 ///
 /// **Spectators are claimed like anybody else**, which reverses an earlier rule here. The argument
 /// for skipping them was that the lobby's yamls are players, so a spectator matching one would be a
-/// coincidence of naming — and that is simply not how the two systems work. A spectator slot exists
+/// coincidence of naming, and that is simply not how the two systems work. A spectator slot exists
 /// because somebody submitted a yaml for it, the lobby names that account, and everything downstream
 /// already treats a spectator as an ordinary connectable slot: it takes an owner, a claim link, a
 /// per-slot password and a tracker id like any other. Skipping it left the one slot the organizer
@@ -386,11 +386,11 @@ pub fn plan(roster: &[Slot], yamls: &[LobbyYaml]) -> Plan {
 /// Three inputs and one decision:
 ///
 /// * **A site admin passes regardless.** They can already read every room here and, holding the
-///   outbound token, every room there — so the gate would withhold nothing from them.
+///   outbound token, every room there, so the gate would withhold nothing from them.
 /// * **No author fails.** The lobby records `-1` where a room has none, and `author()` has already
 ///   turned that into `None`; an absent author is nobody to have standing.
 /// * **Otherwise the author must be an ORGANIZER**, not merely a member. A helper is trusted to run
-///   this room, not to decide which lobby room it is bound to — and binding is what hands a
+///   this room, not to decide which lobby room it is bound to, and binding is what hands a
 ///   stranger's player list to this roster.
 fn may_import(
     is_admin: bool,
@@ -412,7 +412,7 @@ pub struct Imported {
     /// Planned, then not claimed, because somebody took the slot between the read and the write.
     ///
     /// Its own count rather than folded into `claimed`, because the two mean different things to an
-    /// organizer: one is the lobby's answer landing, the other is a player who beat it to it — and
+    /// organizer: one is the lobby's answer landing, the other is a player who beat it to it, and
     /// the second is not a problem to investigate.
     pub taken_first: usize,
     pub unmatched: Vec<String>,
@@ -425,7 +425,7 @@ pub struct Imported {
 ///
 /// Creation-time import and the options page's backfill are the same call. That is deliberate: the
 /// creation case is this run once and automatically, so a lobby that is down at that moment costs
-/// nothing — the room opens and the organizer presses the button, through code that has already
+/// nothing: the room opens and the organizer presses the button, through code that has already
 /// been exercised.
 pub async fn import(
     conn: &mut diesel_async::AsyncPgConnection,
@@ -481,7 +481,7 @@ impl Imported {
     ///
     /// **Every clause has to be true of the room, not just of this run.** The first version read
     /// "No slots were claimed from the lobby; 4 lobby YAML(s) matched no slot here" about a room
-    /// where all four matched and three were already claimed — so the two facts it stated were the
+    /// where all four matched and three were already claimed, so the two facts it stated were the
     /// two an organizer would act on, and both were wrong. The clauses below are ordered by what
     /// somebody wants to know: what changed, what was already fine, and what still needs a person.
     pub fn message(&self) -> String {
@@ -695,7 +695,7 @@ mod tests {
     }
 
     /// **The reported case.** A 65-slot room imported from the prod lobby claimed 63 and reported
-    /// *"no lobby YAML matched betterthanyou_Pu, betterthanyou_SM"* — two players whose yaml names
+    /// *"no lobby YAML matched betterthanyou_Pu, betterthanyou_SM"*: two players whose yaml names
     /// ran past sixteen characters, which the lobby sends whole and the generator had already cut.
     #[test]
     fn a_name_the_generator_cut_still_matches_its_yaml() {
@@ -747,7 +747,7 @@ mod tests {
     /// The shape has to be contrived, and that is worth knowing rather than hiding: for a yaml to
     /// cut down to some *other* slot's name it must be padded, since anything short enough to match
     /// a slot exactly is short enough to survive the cut unchanged. So the two passes cannot
-    /// genuinely compete for one yaml, and their separation is structure rather than a fix — which
+    /// genuinely compete for one yaml, and their separation is structure rather than a fix, which
     /// is exactly why the preference is pinned here instead of resting on that argument.
     #[test]
     fn a_name_spelled_in_full_beats_one_that_only_matches_cut() {
@@ -768,7 +768,7 @@ mod tests {
     }
 
     /// **Re-runnable, and it must never take a slot back.** Between the room opening and an
-    /// organizer pressing backfill, a player may have used their claim link — and the lobby's answer
+    /// organizer pressing backfill, a player may have used their claim link, and the lobby's answer
     /// is older than that.
     #[test]
     fn a_slot_that_already_has_an_owner_is_never_touched() {
@@ -816,7 +816,7 @@ mod tests {
     /// The reported case, end to end: four slots, all four named by the lobby, three already
     /// claimed, and the fourth a spectator.
     ///
-    /// It produced *"No slots were claimed from the lobby; 4 lobby YAML(s) matched no slot here"* —
+    /// It produced *"No slots were claimed from the lobby; 4 lobby YAML(s) matched no slot here"*:
     /// both clauses false, and the one slot that needed claiming was the one deliberately skipped.
     #[test]
     fn a_mostly_claimed_room_claims_the_rest_and_says_so_truthfully() {
@@ -892,14 +892,14 @@ mod tests {
     /// **A redirect is a refusal, and it must not be followed.**
     ///
     /// Both lobbies answer `/api/room/<id>` with `303` to `/auth/login` when the `X-Api-Key` is
-    /// wrong or absent — a bad key is treated exactly like no key — and that login redirects on to
+    /// wrong or absent (a bad key is treated exactly like no key), and that login redirects on to
     /// `https://discord.com/oauth2/authorize`. reqwest follows redirects by default and strips only
     /// the headers it knows are sensitive, which does not include a custom `X-Api-Key`, so the
     /// lobby's own ADMIN_TOKEN was being re-sent along the chain.
     ///
     /// Asserted at the transport rather than as a source lint, because both halves of the failure
     /// are reachable here: without `Policy::none()` the client follows to the second endpoint,
-    /// parses its HTML as JSON, and reports `Unreadable` — so an unsynced credential presented as
+    /// parses its HTML as JSON, and reports `Unreadable`, so an unsynced credential presented as
     /// the lobby returning something broken.
     ///
     /// `std::net` on a thread rather than `tokio::net`, deliberately: the workspace's tokio does not

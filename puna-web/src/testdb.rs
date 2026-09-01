@@ -6,7 +6,7 @@
 //! `puna-orchestrator/src/testdb.rs` is the same harness for the same reason, and its fixtures want
 //! rooms with ports, uids and spec hashes, which nothing here has an opinion about. Sharing would
 //! mean moving it into `puna-core` behind a feature and having that crate dev-depend on itself to
-//! compile its own tests — more machinery than the sixty lines it saves.
+//! compile its own tests: more machinery than the sixty lines it saves.
 //!
 //! ## What it is for
 //!
@@ -116,7 +116,7 @@ where
 /// Somebody to act as, since every write here records who did it.
 pub const ACTOR: i64 = 4_931_000_000_000_000_001;
 
-/// Idempotent, because a test that builds several rooms wants the same actor for all of them —
+/// Idempotent, because a test that builds several rooms wants the same actor for all of them,
 /// and a fixture that can only be called once constrains tests for no reason anybody would guess.
 pub async fn insert_user(conn: &mut AsyncPgConnection, id: i64) {
     diesel::sql_query(

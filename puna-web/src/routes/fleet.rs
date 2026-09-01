@@ -37,7 +37,7 @@ pub struct Row {
     pub desired_state: String,
     /// Who opened it, already resolved to something printable: a username, `"never logged in"` for
     /// an id with no login yet, or `None` where there is nobody to name. The raw Discord id is
-    /// deliberately not rendered — it identifies a person and reads as noise in a column.
+    /// deliberately not rendered: it identifies a person and reads as noise in a column.
     pub created_by: Option<String>,
     pub running_image: Option<String>,
     /// Just the tag, where the image has one. A full registry path repeated down a column is noise
@@ -90,7 +90,7 @@ pub struct RoomsTemplate {
     rows: Vec<Row>,
     drifted: usize,
     /// How many stopped or closed rooms exist, for the collapsed heading. They are **not** loaded
-    /// with this page — see [`resting`].
+    /// with this page: see [`resting`].
     resting: i64,
     /// The sentence the last POST left behind, shown once. See [`crate::flash`].
     notice: Option<Notice>,
@@ -156,8 +156,8 @@ fn ago(at: chrono::DateTime<chrono::Utc>) -> String {
 /// Who opened a room, in words.
 ///
 /// Three cases and they are genuinely different: nobody recorded (an early row, or an account that
-/// is gone), somebody with a row but no login yet — the lobby-push case, where a slot is assigned
-/// to a Discord id that has never been here — and an ordinary username. The stand-in is spelled
+/// is gone), somebody with a row but no login yet (the lobby-push case, where a slot is assigned
+/// to a Discord id that has never been here), and an ordinary username. The stand-in is spelled
 /// out rather than shown raw, for the same reason the room page does it: a bare snowflake in a
 /// column is not an answer to "who made this".
 fn creator(room: &FleetRoom) -> Option<String> {
@@ -423,7 +423,7 @@ mod tests {
         );
     }
 
-    /// `None` on the desired hash means "the hourly lane has not computed one", never "unchanged" —
+    /// `None` on the desired hash means "the hourly lane has not computed one", never "unchanged":
     /// the same rule the planner's backoff interrupt follows. Getting it backwards would flag every
     /// room in the environment as drifted for the first hour after a deploy.
     #[test]
@@ -435,7 +435,7 @@ mod tests {
         assert_eq!(it.drift(Some(CONFIGURED)), Some(Drift::Spec));
     }
 
-    /// The gap every healthy room has — pod scheduling plus restoring the save — must not fill the
+    /// The gap every healthy room has (pod scheduling plus restoring the save) must not fill the
     /// column with noise, or the one case worth seeing is lost among them.
     #[test]
     fn a_normal_startup_gap_does_not_read_as_a_restart() {
@@ -453,7 +453,7 @@ mod tests {
     }
 
     /// The page has to render, the drifted room has to be visibly drifted, and the control has to
-    /// be reachable — a button nobody can find is the failure this codebase has already shipped
+    /// be reachable: a button nobody can find is the failure this codebase has already shipped
     /// twice.
     #[test]
     fn the_table_shows_drift_and_offers_a_redeploy() {
@@ -627,7 +627,7 @@ mod tests {
     ///
     /// **This is the assertion that catches a silently wrong sort.** "6d 2h" against "40m" compares
     /// as text with the `4` before the `6`, so the oldest room in the fleet lands in the middle of
-    /// an age-sorted column — and nothing about that looks broken.
+    /// an age-sorted column, and nothing about that looks broken.
     #[test]
     fn the_age_columns_carry_a_numeric_sort_key() {
         let overview = Overview {
@@ -664,7 +664,7 @@ mod tests {
     /// **The Idle column reports a running room's quiet, and nothing else's.**
     ///
     /// A stopped room's `last_activity_at` is whenever somebody last spoke *before it came down*,
-    /// which grows forever — so reporting it would show every resting room as steadily more idle,
+    /// which grows forever, so reporting it would show every resting room as steadily more idle,
     /// which is both false and alarming. Nothing is idling on a room that is already off.
     ///
     /// The fallback to `started_at` matches the reaper exactly. If the two disagreed, this table

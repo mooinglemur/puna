@@ -3,7 +3,7 @@
 //! ## Two scopes, two tiers
 //!
 //! A **room-wide** filter changes what every player in the room experiences and persists into the
-//! save, so it outlives whoever set it — which is the `option` argument almost word for word, and
+//! save, so it outlives whoever set it, which is the `option` argument almost word for word, and
 //! `option` is the one organizer-only command. A **per-slot** filter is one slot's traffic, which
 //! is the `lock` argument, so it is a helper's.
 //!
@@ -13,7 +13,7 @@
 //!
 //! ## The two warnings, which are the whole reason this is not just a form
 //!
-//! pahoa replaces rather than merges, and Puna does not paper over that — so both directions of the
+//! pahoa replaces rather than merges, and Puna does not paper over that, so both directions of the
 //! consequence have to be said at the moment of editing, because neither is visible in the rule
 //! being typed:
 //!
@@ -21,7 +21,7 @@
 //!   are listed by name, because "this change affects 197 of 200 slots" is the fact and a silent
 //!   success is not.
 //! * **Giving a SLOT its own rules** stops the room's rules reaching it, and **removing them** makes
-//!   the room's apply at once — a subtraction that adds something, which is the more surprising of
+//!   the room's apply at once: a subtraction that adds something, which is the more surprising of
 //!   the two.
 //!
 //! ## One table, saved in one go
@@ -34,7 +34,7 @@
 //! that, and the second is the interesting one:
 //!
 //! * **An empty table has to be told apart**, for a slot. No rules means either "follows the room"
-//!   or "exempt from everything", and those are opposites — so when the table empties, the page
+//!   or "exempt from everything", and those are opposites, so when the table empties, the page
 //!   asks which, and refuses to save until it is answered. That question used to be two buttons
 //!   that were reachable whatever the table held; now it is asked exactly when it is ambiguous.
 //! * **Nothing here needs JavaScript.** A blank row is always rendered, so a rule can be added per
@@ -62,17 +62,17 @@ use crate::tpl::TplContext;
 
 /// One rule as the page **states** it: the sentence that says what it does.
 ///
-/// Used for what is in force rather than for what is being edited — the editor is a table of
+/// Used for what is in force rather than for what is being edited: the editor is a table of
 /// fields, and this is the prose above it.
 pub struct RuleView {
-    /// The effect in words. **Never the bare probability** — `p` is the fraction dropped and the
+    /// The effect in words. **Never the bare probability**: `p` is the fraction dropped and the
     /// opposite reading is equally natural, so the number alone invites whichever meaning the
     /// reader arrived with.
     pub describes: String,
 }
 
 /// **The subject comes from the scope, not from the rule.** A room-wide rule described as "sent by
-/// this slot" reads as though one slot had been singled out, on a page with no slot on it — and the
+/// this slot" reads as though one slot had been singled out, on a page with no slot on it, and the
 /// room's page names its own exceptions underneath, so "any slot" is not an overclaim there.
 fn views(rules: &[Rule], subject: Subject) -> Vec<RuleView> {
     rules
@@ -88,8 +88,8 @@ fn views(rules: &[Rule], subject: Subject) -> Vec<RuleView> {
 /// Shared with the bulk panel through `rooms/_rule_table.html`, so both pages offer the same knobs
 /// spelled the same way.
 pub struct RuleRow {
-    /// The `rules[N]` index. Only ever has to be distinct between neighbors — Rocket starts a new
-    /// element when the index changes — but it is distinct throughout, so removing a row never
+    /// The `rules[N]` index. Only ever has to be distinct between neighbors (Rocket starts a new
+    /// element when the index changes), but it is distinct throughout, so removing a row never
     /// renumbers the ones after it.
     pub index: usize,
     pub direction: &'static str,
@@ -104,7 +104,7 @@ pub struct RuleRow {
     /// submitted, so a tag left over from when the row was a bounce cannot ride along.
     pub tag_enabled: bool,
     pub subtype_enabled: bool,
-    /// The blank row at the end, which is what makes adding a rule work with no script — and which
+    /// The blank row at the end, which is what makes adding a rule work with no script, and which
     /// `filters.js` clones when it adds more.
     ///
     /// **Built here rather than written a second time in the template.** The two were separate
@@ -117,7 +117,7 @@ pub struct RuleRow {
 
 /// `p` as a percentage, without the float noise.
 ///
-/// `0.07 * 100.0` is `7.000000000000001` and `0.29 * 100.0` is `28.999999999999996` — a cell
+/// `0.07 * 100.0` is `7.000000000000001` and `0.29 * 100.0` is `28.999999999999996`: a cell
 /// reading either is a cell somebody retypes, and a value that walks a little further from where it
 /// started every time the form is saved. Rounded to four decimal places, which is finer than any
 /// percentage a person enters and coarse enough to absorb the representation error.
@@ -176,7 +176,7 @@ pub(crate) fn editor_rows(rules: &[Rule]) -> Vec<RuleRow> {
 pub struct MissedSlot {
     pub slot_number: i32,
     pub player_name: String,
-    /// `has its own rules` or `is exempt from everything` — opposite facts, and a warning that said
+    /// `has its own rules` or `is exempt from everything`: opposite facts, and a warning that said
     /// only "diverges" would leave an operator unable to tell which.
     pub because: &'static str,
 }
@@ -191,7 +191,7 @@ pub struct FilterTemplate {
     /// **inside the `<h1>`**, because a slot named only in the dimmed line under the room name is a
     /// slot readers do not see.
     ///
-    /// **No longer the `<title>`** — see [`Self::page`], which is the short form. This one stays
+    /// **No longer the `<title>`**: see [`Self::page`], which is the short form. This one stays
     /// long on purpose, and the two are separate fields because a heading and a tab are truncated
     /// by different things: nothing truncates the heading, and everything truncates the tab.
     scope: String,
@@ -199,7 +199,7 @@ pub struct FilterTemplate {
     ///
     /// The player's name is deliberately absent here where [`Self::scope`] carries it. A title is
     /// read at a glance and cut from the right, so every character before the room name is one the
-    /// room name may not survive — and the player is named twice on the page itself, in the heading
+    /// room name may not survive, and the player is named twice on the page itself, in the heading
     /// and in the roster the reader came from.
     page: String,
     /// `None` for the room's own filter; the slot number otherwise. The template branches on it for
@@ -207,7 +207,7 @@ pub struct FilterTemplate {
     slot: Option<i32>,
     /// What is stored at this scope, as editable rows, plus the blank one.
     rules: Vec<RuleRow>,
-    /// Whether any rule is stored. **Not `rules.is_empty()`** — that list always carries the blank
+    /// Whether any rule is stored. **Not `rules.is_empty()`**: that list always carries the blank
     /// row, so asking it would say "this table has rules" about an empty editor and hide the
     /// question an empty table exists to ask.
     has_rules: bool,
@@ -235,7 +235,7 @@ pub struct FilterTemplate {
     /// Whether an empty table is a question (a slot) or a statement (a room).
     empty_means_choice: bool,
     /// Which answer to that question is already true, so a state somebody already chose is not
-    /// asked again — and a table just emptied by hand, which is the genuinely open case, is.
+    /// asked again, and a table just emptied by hand, which is the genuinely open case, is.
     empty_choice: Option<&'static str>,
     /// Whether the radios carry `required`. True here, because this form has one submit button.
     empty_choice_required: bool,
@@ -248,7 +248,7 @@ pub struct FilterTemplate {
 /// to cost nothing.
 ///
 /// `remove` comes from the row's remove **button**, which is a submit carrying this field as its own
-/// `name`/`value` — only the clicked submit contributes those, so the pressed row names itself and
+/// `name`/`value`: only the clicked submit contributes those, so the pressed row names itself and
 /// nothing has to carry an index. With scripting the button never submits: the row leaves the table
 /// and simply is not in the next save.
 #[derive(FromForm, Default)]
@@ -327,7 +327,7 @@ fn build_rule(fields: &RuleFields) -> std::result::Result<Rule, String> {
 /// Whether a row is one nobody filled in.
 ///
 /// **`direction` is deliberately not consulted.** It is a `<select>` with no blank option, so the
-/// browser always submits one — a row is untouched when it names nothing to drop and carries no
+/// browser always submits one: a row is untouched when it names nothing to drop and carries no
 /// narrowing or probability.
 fn is_untouched(fields: &RuleFields) -> bool {
     blank(&fields.kind).is_none()
@@ -338,7 +338,7 @@ fn is_untouched(fields: &RuleFields) -> bool {
 
 /// Turn a submitted table into the ruleset it describes.
 ///
-/// **Shared with the bulk panel**, which renders the same table and must read it the same way — a
+/// **Shared with the bulk panel**, which renders the same table and must read it the same way: a
 /// second reader would be a second set of refusals and a second place for the percentage-to-fraction
 /// conversion to be got backwards.
 ///
@@ -380,7 +380,7 @@ pub(crate) fn collect_rules(rules: &[RuleFields]) -> std::result::Result<Vec<Rul
 
 /// What a slot's submission means, including the answer to an empty table.
 ///
-/// **Shared with the bulk panel**, which renders the same table and the same pair of radios — so
+/// **Shared with the bulk panel**, which renders the same table and the same pair of radios, so
 /// "no rules" is read the same way whether it was typed for one slot or for two hundred.
 pub(crate) fn slot_state_from(
     rules: &[RuleFields],
@@ -410,7 +410,7 @@ pub(crate) struct Vocabulary {
     pub directions: Vec<(&'static str, &'static str)>,
     /// `(wire value, the name a person reads, what it narrows with, the directions it can travel)`.
     ///
-    /// The second is [`Kind::label`] — a picker offering `print_json` names it in a spelling only
+    /// The second is [`Kind::label`]: a picker offering `print_json` names it in a spelling only
     /// pahoa's filter API uses, where every client log and the protocol document say `PrintJSON`.
     ///
     /// The last is space-separated, and it is what stops the editor building a rule that can never
@@ -446,13 +446,13 @@ pub(crate) fn vocabulary() -> Vocabulary {
 /// Tell the running room, if there is one.
 ///
 /// **The web tier cannot reach a room pod at all**, so this queues `ApplyFilters` and the
-/// orchestrator does the pushing — the same shape a password rotation takes, and for the same
+/// orchestrator does the pushing, the same shape a password rotation takes, and for the same
 /// reason. The command carries only the scope; the dispatcher reads the tables this request has
 /// just written, so the queue row cannot hold a ruleset that disagrees with the stored one.
 ///
 /// A room that is not running is told nothing and that is not a failure: `reapply_filters` asserts
 /// everything at the next start, so the durable half has already landed. Queueing anyway would
-/// produce a `rejected` row saying the room is down — true, and nothing to act on.
+/// produce a `rejected` row saying the room is down: true, and nothing to act on.
 async fn tell_the_room(
     conn: &mut diesel_async::AsyncPgConnection,
     room: &puna_core::model::room::Room,
@@ -769,7 +769,7 @@ mod tests {
     /// A row for `kind`, travelling a direction that kind can actually travel.
     ///
     /// **Derived rather than hardcoded, and the first version was not**: it said `from_slot` for
-    /// everything, so `row("print_json", …)` built the very pairing pahoa refuses — and once
+    /// everything, so `row("print_json", …)` built the very pairing pahoa refuses, and once
     /// `validate` learned to refuse it too, these tests started asserting against a rule no editor
     /// can produce. An unknown kind keeps `from_slot`, since those are refused before direction is
     /// ever considered.
@@ -1054,7 +1054,7 @@ mod tests {
     /// **The slot is named in the heading, not only in the line under it.**
     ///
     /// Reported after the first look at this page: the room name is the boldest thing on it, so a
-    /// reader's eye stops there and the slot — in dimmed text below — gets skipped entirely. The
+    /// reader's eye stops there and the slot, in dimmed text below, gets skipped entirely. The
     /// fix is only a fix if it is inside the `<h1>`, which is what this pins.
     #[test]
     fn the_slot_being_edited_is_named_in_the_heading() {
@@ -1095,7 +1095,7 @@ mod tests {
     }
 
     /// **The cell a kind does not narrow with is DISABLED, from the server**, before any script
-    /// runs — which is what stops a tag left over from when a row was a bounce being submitted and
+    /// runs, which is what stops a tag left over from when a row was a bounce being submitted and
     /// refused. Greying it is the visible half; not submitting it is the half that matters.
     #[test]
     fn a_rules_narrowing_cells_arrive_matching_its_kind() {
@@ -1156,7 +1156,7 @@ mod tests {
     /// **The radios are disabled while the table has rules, not merely hidden.**
     ///
     /// They are `required`, and a required control inside a hidden fieldset blocks submission with
-    /// a validation message the browser cannot point at anything — so this form would simply refuse
+    /// a validation message the browser cannot point at anything, so this form would simply refuse
     /// to save, silently, for every slot that has a rule.
     #[test]
     fn the_empty_table_question_cannot_block_a_table_that_has_rules() {

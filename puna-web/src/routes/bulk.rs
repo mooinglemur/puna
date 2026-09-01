@@ -16,7 +16,7 @@
 //! ## Every action here is already a helper's
 //!
 //! Including the roster's claim release. So this page needs no tier of its own beyond the console's
-//! floor — worth stating, because a bulk panel that quietly widened one would be the worst possible
+//! floor. Worth stating, because a bulk panel that quietly widened one would be the worst possible
 //! place to do it. The per-command check still runs, so a command that changes tier later is caught
 //! here by the same expression that catches it everywhere else.
 //!
@@ -84,7 +84,7 @@ pub struct BulkTemplate {
     subtype_suggestions: Vec<&'static str>,
     /// **Always just the blank row, and that is the whole difference from the per-slot editor.**
     /// The panel builds a ruleset to impose rather than editing one that exists, because the staged
-    /// slots do not share a filter to start from — showing any one of theirs would be showing a
+    /// slots do not share a filter to start from: showing any one of theirs would be showing a
     /// state most of them are not in.
     rules: Vec<crate::routes::filters::RuleRow>,
     has_rules: bool,
@@ -93,7 +93,7 @@ pub struct BulkTemplate {
     /// False, unlike the editors: this form carries eight other action buttons and a `required`
     /// control blocks every submit in its form, not only the one it belongs to.
     empty_choice_required: bool,
-    /// Whether this room filters at all — the panel says what a slot filter costs only when there
+    /// Whether this room filters at all: the panel says what a slot filter costs only when there
     /// is something to lose, the same rule the per-slot editor follows.
     room_filters: bool,
     notice: Option<Notice>,
@@ -118,7 +118,7 @@ pub struct BatchTemplate {
 pub struct BatchRow {
     pub slot: Option<i32>,
     pub player_name: String,
-    /// `succeeded`, `refused`, `failed` or `outstanding` — the stylesheet keys off it and so does
+    /// `succeeded`, `refused`, `failed` or `outstanding`: the stylesheet keys off it and so does
     /// the reader. **Not the raw `command_state`**, which calls a refusal `ok`.
     pub bucket: &'static str,
     pub lines: Vec<String>,
@@ -127,7 +127,7 @@ pub struct BatchRow {
 /// What the panel can do, and how each one becomes work.
 ///
 /// A table rather than a match scattered through the route, so adding an action means naming its
-/// command here — the same shape `MENU` gives the console.
+/// command here, the same shape `MENU` gives the console.
 const ACTIONS: &[(&str, &str)] = &[
     ("rotate_passwords", "Rotate Passwords"),
     ("release_claims", "Release Claims"),
@@ -745,12 +745,12 @@ mod db_tests {
     /// This is the bug this test was written for. The panel built `LockSlot` commands and queued
     /// them without ever calling `record_lock`, so the slots locked in the room and
     /// `room_slots.locked_at` stayed `NULL`. Two consequences, and the second is the serious one:
-    /// the roster showed no "locked" chip, because `slot_views` reads that column — and
+    /// the roster showed no "locked" chip, because `slot_views` reads that column, and
     /// `steps::reapply_locks` re-asserts locks from that column on every transition to `running`,
     /// so the lock would have quietly lapsed at the next restart. pahoa's own copy lives in
     /// `room.save`, which a save reset takes with it.
     ///
-    /// Asserted through `prepare_command`, which is the single entry point both routes now share —
+    /// Asserted through `prepare_command`, which is the single entry point both routes now share,
     /// so this covers the console's path and the panel's at once, and any command that grows a
     /// Puna-side half later is covered by adding it there rather than here.
     #[tokio::test]

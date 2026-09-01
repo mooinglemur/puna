@@ -43,7 +43,7 @@ use crate::error::{Error, forbidden, not_found, unauthorized};
 ///
 /// **This is D8**, and the hazard it exists for is specific: pasting a room link into Discord makes
 /// Discord fetch the page to build an unfurl. If `GET /room/<id>` starts an idle room, an unfurl
-/// spins up a pod — so does a search crawler, a link checker, and every preview pane the URL passes
+/// spins up a pod. So does a search crawler, a link checker, and every preview pane the URL passes
 /// through on its way to the players.
 ///
 /// Two headers, and both are needed. `Sec-Fetch-Mode: navigate` is sent by every current browser on
@@ -77,7 +77,7 @@ impl<'r> FromRequest<'r> for Navigation {
 ///
 /// One route can then answer a form post with a redirect and a scripted control with a result, so
 /// the tier check and the whole command path exist once. **Asked of `Accept` rather than the path**,
-/// because the two callers are the same operation seen by different clients — a second URL would be
+/// because the two callers are the same operation seen by different clients: a second URL would be
 /// a second thing to keep in step, and the one that drifts is the one nobody reviews.
 ///
 /// Deliberately not `Sec-Fetch-Mode`, unlike [`Navigation`]: that guard is about whether a *person*
@@ -149,8 +149,8 @@ impl<M: MinRole> RoomAccess<M> {
 /// segment 1. Reading it as "the first dynamic parameter" is the obvious misreading, it compiles,
 /// and it makes every guarded route answer **404 for everybody**.
 ///
-/// It did, from M5 until 2026-08-20: eleven `RoomAccess` routes — stop, clone, members, invites,
-/// settings, the whole console — plus the two `SlotAccess` ones. Nothing caught it because
+/// It did, from M5 until 2026-08-20: eleven `RoomAccess` routes (stop, clone, members, invites,
+/// settings, the whole console) plus the two `SlotAccess` ones. Nothing caught it because
 /// `/room/<id>` itself takes its id as a handler argument rather than through this guard, so the
 /// room page worked perfectly and everything behind it did not. It surfaced when somebody went
 /// looking for a console link.
@@ -292,7 +292,7 @@ impl SlotAccess {
 /// may publish it to everybody, as archipelago.gg does; a slot's password never is.
 ///
 /// The first version keyed on the request path ending in `/patch`, which is the same decision made
-/// implicitly — and it would have gone on compiling, passing and silently applying the wrong rule
+/// implicitly, and it would have gone on compiling, passing and silently applying the wrong rule
 /// the day somebody renamed the route or added a second one. A route asks for the capability it
 /// needs by naming its type.
 pub struct PatchAccess(pub SlotAccess);
@@ -337,7 +337,7 @@ impl<'r> FromRequest<'r> for SlotAccess {
 
 /// Resolve the room, the slot and the caller's role, then apply one predicate.
 ///
-/// Shared by both slot guards so the resolution — and every refusal shape below it — exists once.
+/// Shared by both slot guards so the resolution, and every refusal shape below it, exists once.
 /// The predicate is the whole difference between them.
 async fn resolve_slot(
     request: &Request<'_>,
@@ -519,7 +519,7 @@ mod tests {
     }
 
     /// **The bug, pinned.** `param` is segment-indexed, so `param(0)` is the literal `"room"` and
-    /// can never parse as a uuid — which made every guarded route 404 for everybody, for months.
+    /// can never parse as a uuid, which made every guarded route 404 for everybody, for months.
     ///
     /// Exercised through Rocket's real router rather than by asserting the constant, because the
     /// constant was not the thing that was wrong: the *reading* of the API was.

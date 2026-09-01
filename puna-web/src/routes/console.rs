@@ -8,8 +8,8 @@
 //! ## The tier check happens once, on the command
 //!
 //! The route is `Helper`-gated because that is the floor for reaching the console at all, and then
-//! each command is checked against [`RoomCommand::required_role`]. One table, checked in one place —
-//! so adding a command means answering "which tier?" rather than remembering to guard a route.
+//! each command is checked against [`RoomCommand::required_role`]. One table, checked in one place.
+//! So adding a command means answering "which tier?" rather than remembering to guard a route.
 //!
 //! ## What the UI must not do
 //!
@@ -59,7 +59,7 @@ pub struct ConsoleTemplate {
     /// one anyway is the failure this flag exists to avoid.
     uncertain: bool,
     /// Whether to offer `option`, which is the one command a helper may not run. Hidden rather than
-    /// disabled — a visible control that refuses teaches people the tool is broken — and the route
+    /// disabled (a visible control that refuses teaches people the tool is broken), and the route
     /// re-checks regardless, since it is reachable by anyone who can construct a POST.
     is_organizer: bool,
     /// A command and a slot chosen in advance, from the room page's moderation controls.
@@ -71,13 +71,13 @@ pub struct ConsoleTemplate {
     ///
     /// The links also carry a `#cmd-<kind>` fragment, which is what actually *scrolls* to the form
     /// on a page of fifteen. The two are not redundant: the fragment moves the viewport and never
-    /// reaches the server, and this marks which form is the one — so a link opened in a new tab, a
+    /// reaches the server, and this marks which form is the one, so a link opened in a new tab, a
     /// bookmark saved without the fragment, or a browser that declines to scroll all still arrive
     /// somewhere legible.
     preselect_kind: Option<String>,
     preselect_slot: Option<i32>,
     /// The room's own rules, flattened for `rooms/_gameplay_options.html`. **Read from the room's
-    /// last probe, never from Puna's configuration** — see [`room::gameplay_option_rows`].
+    /// last probe, never from Puna's configuration**: see [`room::gameplay_option_rows`].
     ///
     /// The field names here and on the options page have to match, because the include reads them
     /// out of whichever context it is rendered in.
@@ -90,7 +90,7 @@ impl ConsoleTemplate {
     ///
     /// **The leading space is inside the Rust string on purpose.** Written in the template as
     /// `class="cmd {% if … %}chosen{% endif %}"` the separator sits next to a tag, and `askama.toml`
-    /// sets `whitespace = "suppress"` — so it would be eaten and the class would render as
+    /// sets `whitespace = "suppress"`, so it would be eaten and the class would render as
     /// `cmdchosen`, which matches no rule and fails silently. Returning the space with the word
     /// keeps it out of the template's reach entirely.
     fn chosen(&self, kind: &str) -> &'static str {
@@ -201,7 +201,7 @@ async fn show(
 /// said. `None` where the room has never answered, in which case there is nothing to stamp.
 ///
 /// Plain UTC rather than the `data-at` shorthand `localtime.js` renders, because neither page that
-/// uses this loads that script and a duration is the wrong shape here anyway — "17 hours ago" reads
+/// uses this loads that script and a duration is the wrong shape here anyway: "17 hours ago" reads
 /// as staleness where a room that has simply been stopped since yesterday is not stale, it is off.
 pub fn probe_stamp(room: &puna_core::model::room::Room) -> Option<String> {
     room.probed_at
@@ -222,7 +222,7 @@ pub fn probe_stamp(room: &puna_core::model::room::Room) -> Option<String> {
 /// slot is already in front of you, and nothing in the first group has one anywhere else.
 ///
 /// **`send_multiple` is deliberately absent, and it is still reachable.** It is not a command an
-/// operator picks — it is `send_item` with a number beside it — so it is a field on that command
+/// operator picks (it is `send_item` with a number beside it), so it is a field on that command
 /// rather than a second entry describing the same act. [`build`] chooses the verb from the count.
 ///
 /// [`the_console_and_the_template_offer_the_same_commands`]:
@@ -260,7 +260,7 @@ pub struct CommandForm {
     item: Option<String>,
     /// For `hint_location` and `send_location`. A separate field from `item` rather than one
     /// "name" box, because they are looked up in different tables and an autocomplete has to know
-    /// which — and because pahoa matches **exactly**, so offering the wrong kind of name produces a
+    /// which, and because pahoa matches **exactly**, so offering the wrong kind of name produces a
     /// refusal rather than a near miss.
     location: Option<String>,
     seconds: Option<i64>,
@@ -295,7 +295,7 @@ pub struct CommandForm {
 
 /// Turn the form into a typed command, naming the field that is missing.
 ///
-/// Hand-built rather than derived so a missing field says which one — the same reasoning pahoa's
+/// Hand-built rather than derived so a missing field says which one, the same reasoning pahoa's
 /// own parser gives, and for the same audience.
 fn build(form: &CommandForm) -> std::result::Result<RoomCommand, String> {
     let slot = || form.slot.ok_or_else(|| "choose a slot".to_string());
@@ -450,7 +450,7 @@ pub(crate) enum Prepared {
     /// Written, and there is no process to tell. It takes effect the next time the room starts,
     /// because a start renders the Secret from the row.
     Stored(&'static str),
-    /// Written — and the room began starting while it was being written, so whether the pod read
+    /// Written, and the room began starting while it was being written, so whether the pod read
     /// the new map is a coin toss.
     ///
     /// **Reported as "we do not know" rather than as either outcome.** The tempting answers are
@@ -473,19 +473,19 @@ impl Prepared {
 ///
 /// [`RoomCommand::RotatePassword`] and [`RoomCommand::LockSlot`] are the two commands that are not
 /// pahoa's: each writes `room_slots` here and then asks the orchestrator to make the room agree.
-/// The value never travels on the queue — the orchestrator reads the row — which is what keeps a
+/// The value never travels on the queue (the orchestrator reads the row), which is what keeps a
 /// credential out of the audit trail.
 ///
 /// **`mark_secret_stale` is the durable half and is not optional.** Without it the change lives only
-/// in a running pod's memory and lapses at the next restart — silently, and restarts happen for
+/// in a running pod's memory and lapses at the next restart, silently, and restarts happen for
 /// reasons nobody decided, like a reap or an image bump.
 ///
 /// ## A room in transition is refused, and nothing is written
 ///
 /// The credential reaches a pod two ways: through the Secret, which the pod reads **once**, when its
 /// container starts; and through the live endpoint, which needs a room that is answering. A room
-/// that is `starting` has neither — the pod may have already read the old map, and it is not yet
-/// accepting requests — so there is no honest thing to say about a change made then. It would be
+/// that is `starting` has neither (the pod may have already read the old map, and it is not yet
+/// accepting requests), so there is no honest thing to say about a change made then. It would be
 /// stored and possibly not in force, with the page claiming it takes effect at a start that has
 /// already happened.
 ///
@@ -656,7 +656,7 @@ pub enum Ran {
 ///
 /// **Only for statuses below 500.** The [`Error`] responder deliberately sends no body at all,
 /// because an `anyhow` chain from a database failure can name tables, columns and connection
-/// strings — and every such error arrives through `From`, which always builds a `500`. A 4xx here
+/// strings, and every such error arrives through `From`, which always builds a `500`. A 4xx here
 /// is always hand-built with a message written for the person reading it, so the two cases are
 /// distinguishable and only the authored one is repeated back.
 fn refusal_as_json(error: &Error) -> serde_json::Value {
@@ -874,7 +874,7 @@ async fn one(
 ///
 /// ## Why this exists at all
 ///
-/// **pahoa matches exactly, never fuzzily** — the caller is a program, so a near miss should be a
+/// **pahoa matches exactly, never fuzzily**: the caller is a program, so a near miss should be a
 /// visible error rather than a silent decision to act on something else. That is the right rule and
 /// it makes a text box hostile: an operator typing "Progressive Sword " gets a refusal and no idea
 /// which character was wrong. Suggestions turn an exact-match API into something a person can drive.
@@ -883,12 +883,12 @@ async fn one(
 ///
 /// Not a convenience: it is the resolution rule M16 transcribed from the reference. An item sent to
 /// or hinted for a slot resolves in **that slot's** game, and a location in that slot's own world
-/// likewise — so the one game this reads is the one game the command will be interpreted in.
+/// likewise, so the one game this reads is the one game the command will be interpreted in.
 /// Offering the whole seed's names would suggest things the room will refuse.
 ///
 /// ## Disclosure
 ///
-/// A game's datapackage is public knowledge — it ships with the world, not with the seed — and it
+/// A game's datapackage is public knowledge (it ships with the world, not with the seed), and it
 /// carries no information about *this* multiworld: not what is where, not who holds what. It is
 /// `Helper`-guarded regardless, because that is the tier the controls it feeds belong to and there
 /// is no reason to widen it.
@@ -1049,7 +1049,7 @@ mod tests {
     ///   unscripted paths do **different things**, which is the worst of the three because both
     ///   work;
     /// * a command with no `COMMANDS` entry hits `if (!spec) return` and the glyph does nothing at
-    ///   all — no dialog, no navigation, no error;
+    ///   all: no dialog, no navigation, no error;
     /// * a `#cmd-…` fragment naming no form leaves the no-script path at the top of a page of
     ///   fifteen forms, with the right one somewhere below the fold and nothing having failed.
     #[test]
@@ -1106,12 +1106,12 @@ mod tests {
     /// other rather than reviewed.
     ///
     /// Drift is silent in both directions and differently each way. A command in `MENU` with no
-    /// form is one the console cannot run, while `?kind=` still claims to mark it — so a moderation
+    /// form is one the console cannot run, while `?kind=` still claims to mark it, so a moderation
     /// link for it lands on a page where nothing is highlighted and nothing is wrong. A form
     /// missing from `MENU` is worse: it still builds and still runs, so the console works, and the
     /// only casualty is that `show` filters that `kind` out and the link's highlight vanishes.
     ///
-    /// **Order is asserted, not just membership**, because the order *is* the page's two groups —
+    /// **Order is asserted, not just membership**, because the order *is* the page's two groups:
     /// room-wide, then per-slot. A command that drifts into the wrong group renders under a heading
     /// that says the opposite of what it does, and "these also live on the roster" becomes false
     /// for something that has no control there.
@@ -1184,7 +1184,7 @@ mod tests {
     /// into `send_item` means.
     ///
     /// Both directions are asserted because both fail quietly. One copy arriving as
-    /// `SendMultiple { amount: 1 }` would work — pahoa accepts it — and would move every ordinary
+    /// `SendMultiple { amount: 1 }` would work (pahoa accepts it) and would move every ordinary
     /// send onto the other verb, so the command history, the metrics and the journal would all stop
     /// saying `send_item` with nothing visibly wrong. Several copies arriving as `SendItem` would
     /// send **one** and report success, which is the failure the old no-default rule existed to
@@ -1250,14 +1250,14 @@ mod tests {
     /// **The page is fifteen forms, and every one of them has to be a whole form.**
     ///
     /// The lints above read the template as text, which is what catches a command that drifts out of
-    /// one list or the other. None of them renders it — and every failure this test covers survives
+    /// one list or the other. None of them renders it, and every failure this test covers survives
     /// a text scan intact:
     ///
     /// * a `{% call slot_picker(…) %}` that silently produced nothing would leave a form posting no
     ///   slot at all, which `build()` refuses with "choose a slot" for a command the operator plainly
     ///   chose a slot for;
     /// * `self.chosen()` losing its leading space renders `class="cmdchosen"`, which matches no rule,
-    ///   so the marked form is simply not marked — the exact failure the helper's doc comment
+    ///   so the marked form is simply not marked: the exact failure the helper's doc comment
     ///   describes, asserted rather than argued;
     /// * the organizer gate is checked as source above; here it is checked as *output*, which is the
     ///   thing that actually reaches a helper.
@@ -1336,7 +1336,7 @@ mod tests {
     /// **The room's rules are shown to everybody who can reach the console, not only to whoever may
     /// change them.**
     ///
-    /// The natural mistake is to render the values inside the organizer gate, beside the form —
+    /// The natural mistake is to render the values inside the organizer gate, beside the form:
     /// they belong together on screen, and the form is organizer-only. But changing a rule is an
     /// organizer's and *knowing what the rules are* is not: a helper fielding "why did my release
     /// do nothing" is answering a question about `release_mode`, and making them find an organizer
@@ -1370,7 +1370,7 @@ mod tests {
     ///
     /// **Absent is not empty**, and the difference is the whole content of the sentence: a room with
     /// no rules is not a thing that exists, so a blank table would state something false. What this
-    /// actually means is that nobody has managed to ask — a room that has never run, or one on an
+    /// actually means is that nobody has managed to ask: a room that has never run, or one on an
     /// image too old to answer.
     #[test]
     fn a_room_that_has_never_reported_its_rules_says_so() {
@@ -1470,7 +1470,7 @@ mod credential_tests {
     ///
     /// The rule Troy gave, and the reason it is a refusal rather than either confident answer: a
     /// `starting` pod may already have read the old password map and is not yet answering, so
-    /// "it worked" may be false and "it takes effect at the next start" is false by construction —
+    /// "it worked" may be false and "it takes effect at the next start" is false by construction:
     /// the start it refers to is the one already in flight. Failing is an acceptable answer;
     /// claiming a lock is in force when it may not be is not.
     ///
@@ -1542,7 +1542,7 @@ mod credential_tests {
     /// holds an `idle` snapshot while the row now says `starting`, which is what the function
     /// compares.
     ///
-    /// It must not report `Stored` — that would promise the change takes effect at a start which
+    /// It must not report `Stored`: that would promise the change takes effect at a start which
     /// has already begun.
     #[tokio::test]
     async fn a_room_that_starts_underneath_the_change_is_reported_as_uncertain() {
@@ -1568,7 +1568,7 @@ mod credential_tests {
         .await;
     }
 
-    /// **Locking records intent and nothing else.** No Secret, no password mode, no ordering — it is
+    /// **Locking records intent and nothing else.** No Secret, no password mode, no ordering: it is
     /// an ordinary passthrough command now, and the row is what makes the intent durable across a
     /// save that pahoa loses.
     #[tokio::test]
@@ -1686,7 +1686,7 @@ mod credential_tests {
         .await;
     }
 
-    /// Everything else passes through untouched — this function must not have opinions about the
+    /// Everything else passes through untouched: this function must not have opinions about the
     /// twelve commands that are pahoa's.
     #[tokio::test]
     async fn an_ordinary_command_is_left_alone() {
