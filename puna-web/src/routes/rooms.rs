@@ -198,6 +198,17 @@ pub struct RoomTemplate {
     ///
     /// Zero is not `Some(0)`: a room where the import named everybody says nothing at all.
     unclaimed_after_import: Option<usize>,
+    /// Why this viewer may not open a room from this seed, if they may not.
+    ///
+    /// Cloning is behind the creation gate like any other room, so being staff *here* is not
+    /// standing to open another one: a restricted account, a closed gate or an allowlist refuses a
+    /// member exactly as it refuses a stranger. From [`gate::refusal_notice`], the same function
+    /// the clone route is guarded by, so the reason on the page and the reason in the refusal are
+    /// one decision rather than two.
+    ///
+    /// `None` for anybody who is not staff, since the control is theirs alone and asking would be
+    /// a query for a section that does not render.
+    creation_refused: Option<String>,
 }
 
 /// One row of the room page's slot table.
@@ -950,6 +961,21 @@ async fn show(
         }
         _ => Vec::new(),
     };
+    // Staff only, because the clone control is: the section this answers for does not render for
+    // anybody else, and this is a query.
+    let creation_refused = match session.user_id {
+        Some(user_id) if role.is_some() => {
+            crate::gate::refusal_notice(
+                &mut conn,
+                puna_core::model::RoomSource::Direct,
+                user_id,
+                session.is_admin,
+            )
+            .await?
+        }
+        _ => None,
+    };
+
     let message = event::latest(&mut conn, room.id)
         .await?
         .and_then(|e| phrase(&e.kind));
@@ -960,6 +986,7 @@ async fn show(
         base: TplContext::new(&session),
         notice: crate::flash::Notice::take(flash),
         unclaimed_after_import,
+        creation_refused,
         // Both from `may_start`, so the page and the route cannot disagree about who gets a door.
         is_closed,
         may_start: may_start(&room, role),
@@ -3017,6 +3044,8 @@ pub(crate) mod tests {
             // The ordinary room: never associated with a lobby, so it says nothing about one.
             // The notice's own test sets this.
             unclaimed_after_import: None,
+            // An open gate, so the clone control renders. The gate's own test sets this.
+            creation_refused: None,
         }
     }
 
@@ -3037,6 +3066,45 @@ pub(crate) mod tests {
                 "the room page offers no way to reach {what}"
             );
         }
+    }
+
+    /// **A control somebody may not use is replaced by the reason, not left to answer `403`.**
+    ///
+    /// Cloning passes the creation gate like any other room, so a member of this room can be its
+    /// organizer and still be refused: the gate is closed, the allowlist does not name them, or
+    /// their account is restricted. Until this landed the page offered the form regardless, and
+    /// the only way to find out was to name the new room, press Create, and get an empty `403`
+    /// page with nothing on it at all.
+    ///
+    /// Both directions, because each fails silently in its own way: keeping the form is the
+    /// original bug, and losing it when the gate is open takes cloning away from everybody.
+    #[test]
+    fn the_clone_control_is_replaced_by_the_reason_it_is_refused() {
+        use askama::Template;
+
+        let open = page(true).render().expect("renders");
+        assert!(
+            open.contains("/clone"),
+            "an open gate has taken the clone control away from staff"
+        );
+
+        let mut refused = page(true);
+        refused.creation_refused = Some(
+            "Opening rooms and uploading generations are \
+                                        turned off here. Ask an administrator to enable them."
+                .into(),
+        );
+        let html = refused.render().expect("renders");
+        assert!(
+            !html.contains("/clone"),
+            "the clone form is still offered to somebody the route would refuse, so the only \
+             answer they get is a bare 403"
+        );
+        assert!(
+            html.contains("Ask an administrator to enable them."),
+            "the control went and took the explanation with it, which is the bare 403 again with \
+             the page one click earlier"
+        );
     }
 
     /// **The import's leftovers are told to staff, and to nobody else.**

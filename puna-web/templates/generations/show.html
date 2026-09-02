@@ -62,9 +62,17 @@ before rather than a second copy of it.</p>
    The hints under each group are rendered for EVERY option and revealed one at a time by
    `options-form.js`, which the room's own options page shares. Server-rendered rather than built
    in script so the page explains itself with
-   nothing loaded: unscripted, all of them show, which is verbose and never wrong. #}
+   nothing loaded: unscripted, all of them show, which is verbose and never wrong.
+
+   **The panel is replaced by the reason when the gate refuses, not disabled and not hidden.**
+   Hidden, somebody who uploaded a seed and cannot see how to open a room from it has nothing to
+   read; left in place, filling twelve fields in and pressing Create answers `403` with an empty
+   page. The heading stays either way, so the page still says what this part of it is for. #}
 <section class="panel create-room">
 <h2>Open a room from this seed</h2>
+{% if let Some(why) = creation_refused %}
+<p class="notice">{{ why }}</p>
+{% else %}
 <p class="hint">One generation can back any number of rooms. They are independent multiworlds
 sharing the same seed, and a second one costs no storage.</p>
 
@@ -215,6 +223,7 @@ everybody's finds is the whole point of those.</p>
 <button type="reset" class="secondary">Reset to defaults</button>
 </div>
 </form>
+{% endif %}
 </section>
 {% endblock %}
 

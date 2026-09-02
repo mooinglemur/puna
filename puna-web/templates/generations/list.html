@@ -6,6 +6,8 @@
 {% if generations.is_empty() %}
 <p>You have not uploaded a generation yet.</p>
 {% else %}
+{# The table stays whatever the gate says. A generation somebody uploaded before the gate closed
+   is still theirs, still backs their rooms, and is still what a patch is served from. #}
 <div class="scroll-x">
 <table class="generations">
 <thead><tr><th>Seed</th><th>Slots</th><th>Games</th><th>Uploaded</th></tr></thead>
@@ -27,5 +29,14 @@
 </div>
 {% endif %}
 
+{# **The explanation goes where the link was**, rather than beside it. An offer somebody cannot
+   accept is worse than no offer: following it answers `403` with an empty page, which is how this
+   deployment told people they were not allowed to upload for as long as the gate has existed.
+   `creation_refused` is the route's answer, from the same function the upload form is guarded by,
+   so the sentence here and the refusal there are one decision. #}
+{% if let Some(why) = creation_refused %}
+<p class="notice">{{ why }}</p>
+{% else %}
 <p><a href="/generations/new">Upload another</a></p>
+{% endif %}
 {% endblock %}

@@ -2,7 +2,7 @@
 //!
 //! The repository was written with a dash joining clauses in comments, doc comments, rendered
 //! markup and user-facing strings, in two spellings that no single search finds. Removing them took
-//! nine passes and about 1,700 edits; this is what stops the tenth.
+//! nine passes and about 2,500 edits; this is what stops the tenth.
 //!
 //! ## Two spellings, and searching for one is why this needed nine passes
 //!

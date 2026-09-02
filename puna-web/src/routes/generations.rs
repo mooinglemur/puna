@@ -9,7 +9,7 @@
 //! because the volume is shared and quota'd across every room in the environment.
 
 use puna_core::artifact::{self, IngestError};
-use puna_core::model::{generation, names};
+use puna_core::model::{RoomSource, generation, names};
 use rocket::form::Form;
 use rocket::fs::TempFile;
 use rocket::http::Status;
@@ -20,7 +20,7 @@ use rocket::{FromForm, State, get, post, routes, uri};
 use crate::auth::{AdminSession, LoggedInSession};
 use crate::error::{Error, Result};
 use crate::flash::Notice;
-use crate::gate::{CanCreateRoom, Direct};
+use crate::gate::{self, CanCreateRoom, Direct};
 use crate::tpl::TplContext;
 use crate::{DataDir, UploadLimit};
 
@@ -62,6 +62,10 @@ pub struct ShowTemplate {
     /// Decided in the route from configuration, so a deployment standing alone renders no field at
     /// all rather than one whose only possible answer is "no lobby is configured".
     has_lobby: bool,
+    /// Why this reader may not open a room from this seed, if they may not. Same field, same
+    /// source and same reason as [`ListTemplate`]'s: the form below is guarded and this page is
+    /// not, so without it the only answer to "why is Create doing nothing" is a bare `403`.
+    creation_refused: Option<String>,
 }
 
 #[derive(Template, WebTemplate)]
@@ -71,6 +75,12 @@ pub struct ListTemplate {
     /// Uploads rather than generations: each carries the reader's OWN upload time, which for a
     /// generation somebody else uploaded first is not the generation's.
     generations: Vec<generation::Upload>,
+    /// Why this reader may not upload, if they may not, from [`gate::refusal_notice`].
+    ///
+    /// **This page is ungated and the upload form is not**, so before this existed the only way
+    /// anybody learned they were not allowed to upload was to follow the link and meet a bare
+    /// `403`. The sentence goes where the link was.
+    creation_refused: Option<String>,
 }
 
 #[derive(FromForm)]
@@ -94,9 +104,17 @@ fn new_form(gate: CanCreateRoom<Direct>) -> UploadTemplate {
 async fn list(session: LoggedInSession, pool: &State<puna_core::db::Pool>) -> Result<ListTemplate> {
     let mut conn = pool.get().await?;
     let generations = generation::list_for_user(&mut conn, session.user_id(), 50).await?;
+    let creation_refused = gate::refusal_notice(
+        &mut conn,
+        RoomSource::Direct,
+        session.user_id(),
+        session.is_admin(),
+    )
+    .await?;
     Ok(ListTemplate {
         base: TplContext::new(session.session()),
         generations,
+        creation_refused,
     })
 }
 
@@ -124,6 +142,13 @@ async fn show(
     // Read before the move into the template, and off `generations.slots` rather than the rows
     // above: that column is what `room::create` reads to make the same recommendation.
     let primary_port_default = puna_core::model::room::PrimaryPort::for_slots(generation.slots);
+    let creation_refused = gate::refusal_notice(
+        &mut conn,
+        RoomSource::Direct,
+        session.user_id(),
+        session.is_admin(),
+    )
+    .await?;
 
     Ok(ShowTemplate {
         base: TplContext::new(session.session()),
@@ -132,6 +157,7 @@ async fn show(
         deduplicated: dedup.unwrap_or(false),
         primary_port_default,
         has_lobby: lobby.0.is_some(),
+        creation_refused,
         default_room_name: format!(
             "{}'s multiworld {}",
             session.session().username.as_deref().unwrap_or("a"),
@@ -665,6 +691,7 @@ mod tests {
                 },
                 uploaded_at: uploaded,
             }],
+            creation_refused: None,
         };
 
         let html = page.render().expect("renders");
@@ -702,6 +729,7 @@ mod tests {
             has_lobby: true,
             primary_port_default: puna_core::model::room::PrimaryPort::Full,
             default_room_name: "troy's multiworld 2026-08-29".into(),
+            creation_refused: None,
         }
         .render()
         .expect("renders");
@@ -776,6 +804,7 @@ mod tests {
                 primary_port_default: puna_core::model::room::PrimaryPort::for_slots(slots),
                 default_room_name: "n".into(),
                 has_lobby: true,
+                creation_refused: None,
             }
             .render()
             .expect("renders");
@@ -833,6 +862,84 @@ mod tests {
             !html.contains("spoiler_policy"),
             "the creation form offers a spoiler setting, which is a decision to make on purpose \
              rather than in passing"
+        );
+    }
+
+    /// **Both creation controls are replaced by the reason, rather than leading to a bare `403`.**
+    ///
+    /// Neither of these pages is gated and both offer something that is: the upload link and the
+    /// form that opens a room. For as long as the gate has existed, somebody it refuses saw the
+    /// same page as everybody else, followed the control, and got an empty `403` with no
+    /// explanation anywhere on it. The sentence goes where the control was.
+    ///
+    /// Asserted in both directions on both pages. Withholding the control is what removes the dead
+    /// end; rendering the sentence is what makes the refusal readable; and the open case is what
+    /// stops a mistake here taking uploads away from a deployment whose gate is open.
+    #[test]
+    fn a_refused_reader_is_told_why_where_the_control_would_be() {
+        use askama::Template;
+
+        const WHY: &str = "Opening rooms and uploading generations are limited to approved \
+                           accounts. Ask an administrator for access.";
+
+        let list = |creation_refused: Option<String>| {
+            ListTemplate {
+                base: crate::tpl::TplContext::new(&crate::auth::Session::default()),
+                generations: Vec::new(),
+                creation_refused,
+            }
+            .render()
+            .expect("renders")
+        };
+
+        assert!(
+            list(None).contains("/generations/new"),
+            "an open gate has taken the upload link away"
+        );
+        let refused = list(Some(WHY.into()));
+        assert!(
+            !refused.contains("/generations/new"),
+            "the upload link is still offered to somebody the form would refuse"
+        );
+        assert!(
+            refused.contains("Ask an administrator for access."),
+            "the link went and left nothing in its place, which is the bare 403 one page earlier"
+        );
+
+        let show = |creation_refused: Option<String>| {
+            ShowTemplate {
+                base: crate::tpl::TplContext::new(&crate::auth::Session::default()),
+                generation: a_generation(),
+                slots: Vec::new(),
+                deduplicated: false,
+                has_lobby: false,
+                primary_port_default: puna_core::model::room::PrimaryPort::Full,
+                default_room_name: "a room".into(),
+                creation_refused,
+            }
+            .render()
+            .expect("renders")
+        };
+
+        assert!(
+            show(None).contains(r#"action="/rooms""#),
+            "an open gate has taken the creation form away"
+        );
+        let refused = show(Some(WHY.into()));
+        assert!(
+            !refused.contains(r#"action="/rooms""#),
+            "the creation form is still offered to somebody it would refuse, so the answer to \
+             twelve filled-in fields is an empty 403 page"
+        );
+        assert!(
+            refused.contains("Ask an administrator for access."),
+            "the form went and took the explanation with it"
+        );
+        // The heading stays, so the page still says what this part of it is for rather than
+        // simply being shorter than the one everybody else sees.
+        assert!(
+            refused.contains("Open a room from this seed"),
+            "the section vanished entirely, which explains nothing"
         );
     }
 

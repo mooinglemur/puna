@@ -91,13 +91,20 @@ impl Refusal {
     ///
     /// Deliberately does not distinguish "closed" from "you specifically are not on the list" any
     /// more than it must: both say who to ask, neither invites a retry.
+    ///
+    /// **A whole sentence, and it names both actions**, because this is what a page renders where
+    /// a control would otherwise be, not only what a `403` carries into the log. One gate governs
+    /// opening a room and uploading a generation, so a message naming one of them would be read on
+    /// the page for the other as an answer to a different question.
     pub fn message(self) -> &'static str {
         match self {
             Self::Disabled => {
-                "room creation is currently disabled; ask an administrator to enable it"
+                "Opening rooms and uploading generations are turned off here. Ask an administrator \
+                 to enable them."
             }
             Self::NotAllowlisted => {
-                "room creation is limited to approved accounts; ask an administrator for access"
+                "Opening rooms and uploading generations are limited to approved accounts. Ask an \
+                 administrator for access."
             }
         }
     }

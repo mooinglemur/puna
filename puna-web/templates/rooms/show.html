@@ -761,6 +761,12 @@ which port the page leads with</li>
 <li><a href="/room/{{ room.id }}/members">Members and invites</a></li>
 </ul>
 
+{# Cloning goes through the same creation gate as an upload, so a member of this room can be
+   staff here and still not be allowed to open another room. The reason replaces the form rather
+   than the form answering `403` after somebody has named the new room. #}
+{% if let Some(why) = creation_refused %}
+<p class="notice">{{ why }}</p>
+{% else %}
 <form method="post" action="/room/{{ room.id }}/clone">
 <p>
 <label for="name">Create a new room from this seed</label>
@@ -769,6 +775,7 @@ which port the page leads with</li>
 <button type="submit">Create</button>
 </p>
 </form>
+{% endif %}
 
 {% if is_organizer %}
 {# Stop and Close are the same instruction to the orchestrator and differ only in who may undo

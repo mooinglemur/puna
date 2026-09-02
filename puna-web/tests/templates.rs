@@ -3065,6 +3065,57 @@ fn a_shorthand_duration_carries_the_instant_behind_it() {
     );
 }
 
+/// **A page that offers a creation control can explain a refusal of it.**
+///
+/// Three controls pass the creation gate: the upload link, the form that opens a room from a seed,
+/// and the clone form on a room page. None of the pages carrying them is itself gated, so for as
+/// long as the gate has existed a refused reader saw exactly the page everybody else saw, followed
+/// the control, and got a `403` with an empty body and no explanation anywhere on it.
+///
+/// The fix is per page and so is the way it rots: a fourth creation control added later renders
+/// unconditionally, works for everybody the gate admits, and sends everybody else back to the dead
+/// end. Nothing about that fails, and it is invisible to whoever adds it, because they can create
+/// rooms.
+///
+/// So this asserts only the weak form, which is the part a lint can see: a template offering one of
+/// these controls names `creation_refused` somewhere. What it does with it is the render tests'
+/// business, in `routes::generations` and `routes::rooms`.
+#[test]
+fn every_creation_control_sits_beside_the_reason_it_can_be_refused() {
+    // The markup a reader clicks, not the routes: what is being pinned is that the PAGE knows the
+    // gate exists. `action="/rooms"` rather than `/rooms`, which every "your rooms" link contains.
+    const CONTROLS: &[(&str, &str)] = &[
+        ("/generations/new", "the upload form"),
+        (r#"action="/rooms""#, "opening a room from a seed"),
+        ("/clone", "cloning a room"),
+    ];
+
+    let mut found = 0;
+    for path in templates() {
+        let source = std::fs::read_to_string(&path).expect("a readable template");
+        for (marker, what) in CONTROLS {
+            if !source.contains(marker) {
+                continue;
+            }
+            found += 1;
+            assert!(
+                source.contains("creation_refused"),
+                "{}: offers {what} without asking whether this reader may, so somebody the gate \
+                 refuses is shown the control and answered with a bare 403",
+                label(&path)
+            );
+        }
+    }
+
+    // A lint that finds nothing passes, and this one is a search for three strings.
+    assert_eq!(
+        found,
+        CONTROLS.len(),
+        "expected one page per creation control and found {found}: either a control moved or this \
+         lint is looking at nothing"
+    );
+}
+
 /// A template with every `{% include "x" %}` replaced by the file it names.
 ///
 /// One level deep, which is all this codebase has. Anything unreadable is left as the include tag,

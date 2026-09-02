@@ -10,12 +10,23 @@
 //! from the request manifest, so it cannot pass through a cookie-shaped guard and calls
 //! `settings::evaluate` directly. This type is the web tier's adapter onto that decision, not a
 //! second copy of it.
+//!
+//! ## The refusal has to reach a page, not only a status code
+//!
+//! The guard answers `403` with an empty body, which for as long as it has existed was the *only*
+//! way somebody learned they were not allowed to upload a generation or open a room: the pages
+//! offering those controls are ungated, so the link was always there and always led to a blank
+//! refusal. So [`standing`] is a function rather than something the guard does inline, and
+//! [`refusal_notice`] is the shape a page asks it in. A page renders the sentence where the
+//! control would be; the route renders the same sentence into the `403` it still answers to
+//! anybody who posts anyway. One decision, one wording, two places it can be met.
 
 use std::marker::PhantomData;
 
+use diesel_async::AsyncPgConnection;
 use puna_core::db::Pool;
 use puna_core::model::RoomSource;
-use puna_core::model::settings::{self, Decision, Grant};
+use puna_core::model::settings::{self, Decision, Grant, Refusal};
 use rocket::State;
 use rocket::http::Status;
 use rocket::request::{FromRequest, Outcome};
@@ -70,6 +81,95 @@ impl<S: GateSource> CanCreateRoom<S> {
     }
 }
 
+/// Why a caller may not create, if they may not.
+///
+/// Two refusals that arrive from different places and read as one thing to the person refused:
+/// their account's own standing, and the source's gate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Denial {
+    /// The account is restricted, with whatever note the administrator left.
+    Restricted(Option<String>),
+    /// The gate refused, for one of its two reasons.
+    Gate(Refusal),
+}
+
+impl Denial {
+    /// The sentence a refused caller is shown, wherever they meet the refusal.
+    ///
+    /// One message for the page that withholds the control and the route that would answer `403`,
+    /// so what somebody is told when a button is missing and what they are told if they post
+    /// anyway cannot be two different explanations.
+    pub fn message(&self) -> String {
+        match self {
+            Self::Restricted(Some(why)) => {
+                format!("This account cannot open rooms or upload generations. {why}")
+            }
+            Self::Restricted(None) => {
+                "This account cannot open rooms or upload generations.".to_string()
+            }
+            Self::Gate(refusal) => refusal.message().to_string(),
+        }
+    }
+}
+
+/// What to say where a creation control would be, or `None` when there is nothing to say.
+///
+/// The page-side shape of [`standing`]: a page asks this, renders the sentence in place of the
+/// button, and never has to know which of the three refusals it is looking at.
+pub async fn refusal_notice(
+    conn: &mut AsyncPgConnection,
+    source: RoomSource,
+    user_id: i64,
+    is_admin: bool,
+) -> Result<Option<String>, Error> {
+    Ok(standing(conn, source, user_id, is_admin)
+        .await?
+        .err()
+        .map(|denial| denial.message()))
+}
+
+/// The creation decision for one caller and one source.
+///
+/// **One function, two callers**, the same rule `room::may_see_spoiler` follows: the guard below
+/// turns a refusal into a `403`, and a page that offers a creation control calls this to decide
+/// whether to offer it and what to say instead. A page reaching its own conclusion would be one
+/// edit away from offering a control the route refuses, or hiding one it would serve.
+///
+/// A read that fails is not permission: both errors answer `503`, matching what the gate policy
+/// itself does with a missing or unreadable row.
+pub async fn standing(
+    conn: &mut AsyncPgConnection,
+    source: RoomSource,
+    user_id: i64,
+    is_admin: bool,
+) -> Result<Result<Grant, Denial>, Error> {
+    // **A restricted account is refused here and nowhere else**, because this guard is already
+    // the only door onto both things `restricted` withholds: opening a room and uploading a
+    // generation. Checked BEFORE the gate so the answer does not depend on whether creation
+    // happens to be open, and **before the admin bypass**, which is the point that matters: an
+    // administrator who has been restricted is restricted, or the sanction means nothing the
+    // moment it is applied to somebody who can turn it off.
+    match puna_core::model::user::status_of(conn, user_id).await {
+        Ok(Some((status, note))) if !status.may_create() => {
+            return Ok(Err(Denial::Restricted(note)));
+        }
+        Ok(_) => {}
+        // Unreadable standing is not permission to create. The gate below fails closed for the
+        // same reason and this must not be the softer of the two.
+        Err(e) => {
+            return Err(Error::new(Status::ServiceUnavailable, e.into()));
+        }
+    }
+
+    match settings::evaluate(conn, source, user_id, is_admin).await {
+        Ok(Decision::Allowed(grant)) => Ok(Ok(grant)),
+        Ok(Decision::Refused(refusal)) => Ok(Err(Denial::Gate(refusal))),
+        // A gate that cannot be read is not a gate that permits. `settings::evaluate` already
+        // fails closed on a missing or unrecognized row; this is the connection-level case.
+        Err(e) => Err(Error::new(Status::ServiceUnavailable, e.into())),
+    }
+}
+
 #[rocket::async_trait]
 impl<'r, S: GateSource> FromRequest<'r> for CanCreateRoom<S> {
     type Error = Error;
@@ -104,53 +204,14 @@ impl<'r, S: GateSource> FromRequest<'r> for CanCreateRoom<S> {
             }
         };
 
-        // **A restricted account is refused here and nowhere else**, because this guard is already
-        // the only door onto both things `restricted` withholds: opening a room and uploading a
-        // generation. Checked BEFORE the gate so the answer does not depend on whether creation
-        // happens to be open, and **before the admin bypass**, which is the point that matters: an
-        // administrator who has been restricted is restricted, or the sanction means nothing the
-        // moment it is applied to somebody who can turn it off.
-        match puna_core::model::user::status_of(&mut conn, session.user_id()).await {
-            Ok(Some((status, note))) if !status.may_create() => {
-                let message = match note {
-                    Some(why) => {
-                        format!("This account cannot create rooms or upload generations. {why}")
-                    }
-                    None => "This account cannot create rooms or upload generations.".to_string(),
-                };
-                return Outcome::Error((
-                    Status::Forbidden,
-                    Error::new(Status::Forbidden, anyhow::anyhow!(message)),
-                ));
-            }
-            Ok(_) => {}
-            // Unreadable standing is not permission to create. The gate below fails closed for the
-            // same reason and this must not be the softer of the two.
-            Err(e) => {
-                return Outcome::Error((
-                    Status::ServiceUnavailable,
-                    Error::new(Status::ServiceUnavailable, e.into()),
-                ));
-            }
-        }
-
-        let decision =
-            match settings::evaluate(&mut conn, S::SOURCE, session.user_id(), session.is_admin())
-                .await
-            {
-                Ok(decision) => decision,
-                // A gate that cannot be read is not a gate that permits. `settings::evaluate` already
-                // fails closed on a missing or unrecognized row; this is the connection-level case.
-                Err(e) => {
-                    return Outcome::Error((
-                        Status::ServiceUnavailable,
-                        Error::new(Status::ServiceUnavailable, e.into()),
-                    ));
-                }
+        let standing =
+            match standing(&mut conn, S::SOURCE, session.user_id(), session.is_admin()).await {
+                Ok(standing) => standing,
+                Err(e) => return Outcome::Error((e.status, e)),
             };
 
-        match decision {
-            Decision::Allowed(grant) => {
+        match standing {
+            Ok(grant) => {
                 tracing::debug!(
                     user_id = session.user_id(),
                     source = S::SOURCE.as_sql(),
@@ -163,20 +224,69 @@ impl<'r, S: GateSource> FromRequest<'r> for CanCreateRoom<S> {
                     _source: PhantomData,
                 })
             }
-            Decision::Refused(refusal) => {
+            Err(denial) => {
                 // Logged at info rather than debug: a refusal is the signal an administrator
                 // wants when someone reports that they cannot upload.
                 tracing::info!(
                     user_id = session.user_id(),
                     source = S::SOURCE.as_sql(),
-                    ?refusal,
-                    "room creation refused by the gate"
+                    ?denial,
+                    "room creation refused"
                 );
                 Outcome::Error((
                     Status::Forbidden,
-                    Error::new(Status::Forbidden, anyhow::anyhow!(refusal.message())),
+                    Error::new(Status::Forbidden, anyhow::anyhow!(denial.message())),
                 ))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **Every refusal says what was refused and what to do next**, because these sentences are
+    /// now rendered on a page rather than only carried into a log line.
+    ///
+    /// Two properties, and the second is the one that would rot. Each message names *both* things
+    /// the gate governs, since one gate withholds opening a room and uploading a generation and
+    /// the same sentence is read on both pages. And none of them is a bare statement of fact: a
+    /// refusal a reader cannot act on is the bare `403` again with a nicer typeface, so each one
+    /// points at the administrator who can change it.
+    #[test]
+    fn every_refusal_names_both_actions_and_says_what_to_do_next() {
+        let all = [
+            Denial::Restricted(None),
+            Denial::Restricted(Some("Uploaded somebody else's seed.".into())),
+            Denial::Gate(Refusal::Disabled),
+            Denial::Gate(Refusal::NotAllowlisted),
+        ];
+
+        for denial in &all {
+            let message = denial.message();
+            assert!(
+                message.contains("rooms") && message.contains("generations"),
+                "{denial:?} names only part of what it withholds: {message}"
+            );
+            assert!(
+                message.contains("administrator") || message.contains("account"),
+                "{denial:?} states a fact and leaves the reader nowhere to go: {message}"
+            );
+            assert!(
+                message.ends_with('.'),
+                "{denial:?} is a fragment, and it is rendered as a sentence: {message}"
+            );
+        }
+
+        // An administrator's note is the whole reason a restricted account's refusal is not a
+        // constant: it is the one place a person is told what THEY did, rather than what the
+        // deployment is doing.
+        assert!(
+            Denial::Restricted(Some("Uploaded somebody else's seed.".into()))
+                .message()
+                .contains("somebody else's seed"),
+            "the note an administrator left is dropped, so the sanction cannot be explained"
+        );
     }
 }
