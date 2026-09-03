@@ -43,6 +43,7 @@ fn the_orchestrator_exports_exactly_the_families_it_owns() {
 fn the_family_tables_are_disjoint_and_free_of_duplicates() {
     let all: Vec<&str> = metrics::SHARED_FAMILIES
         .iter()
+        .chain(metrics::HTTP_FAMILIES)
         .chain(metrics::WEB_FAMILIES)
         .chain(metrics::TRACKER_FAMILIES)
         .chain(metrics::ORCHESTRATOR_FAMILIES)

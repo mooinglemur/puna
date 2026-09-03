@@ -263,6 +263,7 @@ async fn access(
     conn: &mut diesel_async::AsyncPgConnection,
     session: &Session,
     id: TrackerId,
+    tag: &crate::http_metrics::RoomTag,
 ) -> Result<Access> {
     let target = tracker::resolve(conn, id)
         .await?
@@ -302,6 +303,12 @@ async fn access(
         });
     }
 
+    // **The tracker's id is deliberately not the room's**, so this is the only point at which a
+    // request under `/tracker/` or `/api/**/tracker/` can be attributed to a room. A parameter
+    // rather than a call somebody remembers: adding it here made the compiler visit all six of
+    // this function's callers.
+    tag.set(room.id);
+
     Ok(Access {
         room,
         target,
@@ -319,8 +326,9 @@ async fn live(
     conditional: IfNoneMatch,
     pool: &State<Pool>,
     state: TrackerState<'_>,
+    tag: &crate::http_metrics::RoomTag,
 ) -> Result<Json> {
-    document(id, session, conditional, pool, state, Document::Live).await
+    document(id, session, conditional, pool, state, Document::Live, tag).await
 }
 
 /// The static document: games, location totals, datapackage checksums.
@@ -331,8 +339,9 @@ async fn statics(
     conditional: IfNoneMatch,
     pool: &State<Pool>,
     state: TrackerState<'_>,
+    tag: &crate::http_metrics::RoomTag,
 ) -> Result<Json> {
-    document(id, session, conditional, pool, state, Document::Static).await
+    document(id, session, conditional, pool, state, Document::Static, tag).await
 }
 
 async fn document(
@@ -342,9 +351,10 @@ async fn document(
     pool: &State<Pool>,
     state: TrackerState<'_>,
     which: Document,
+    tag: &crate::http_metrics::RoomTag,
 ) -> Result<Json> {
     let mut conn = pool.get().await?;
-    let access = access(&mut conn, &session, id.0).await?;
+    let access = access(&mut conn, &session, id.0, tag).await?;
 
     // Scoping happens after every cache layer, so the caches hold ONE document per room per kind
     // and a slot view is a projection of it, rather than one cached document per slot, which
@@ -518,8 +528,9 @@ async fn digestible(
     session: &Session,
     id: TrackerId,
     requested: Option<i32>,
+    tag: &crate::http_metrics::RoomTag,
 ) -> Result<Digestible> {
-    let access = access(conn, session, id).await?;
+    let access = access(conn, session, id, tag).await?;
     let scope = scope_of(&access, requested)?;
     let roster = slot::list(conn, access.room.id).await?;
     let people = if access.sees_annotations() {
@@ -573,9 +584,10 @@ async fn view_slots(
     conditional: IfNoneMatch,
     pool: &State<Pool>,
     state: TrackerState<'_>,
+    tag: &crate::http_metrics::RoomTag,
 ) -> Result<Json> {
     let mut conn = pool.get().await?;
-    let it = digestible(&mut conn, &session, id.0, slot).await?;
+    let it = digestible(&mut conn, &session, id.0, slot, tag).await?;
 
     // Both documents: progress comes from one, and the location totals from the other.
     let live = obtain(&mut conn, &state, &it.room, Document::Live).await?;
@@ -603,9 +615,10 @@ async fn view_hints(
     conditional: IfNoneMatch,
     pool: &State<Pool>,
     state: TrackerState<'_>,
+    tag: &crate::http_metrics::RoomTag,
 ) -> Result<Json> {
     let mut conn = pool.get().await?;
-    let it = digestible(&mut conn, &session, id.0, slot).await?;
+    let it = digestible(&mut conn, &session, id.0, slot, tag).await?;
     let live = obtain(&mut conn, &state, &it.room, Document::Live).await?;
     let names = names_for(&mut conn, state.names, it.room.generation_id).await?;
 
@@ -633,9 +646,10 @@ async fn view_locations(
     conditional: IfNoneMatch,
     pool: &State<Pool>,
     state: TrackerState<'_>,
+    tag: &crate::http_metrics::RoomTag,
 ) -> Result<Json> {
     let mut conn = pool.get().await?;
-    let it = digestible(&mut conn, &session, id.0, slot).await?;
+    let it = digestible(&mut conn, &session, id.0, slot, tag).await?;
     let slot = only_slot(&it)?;
 
     let live = obtain(&mut conn, &state, &it.room, Document::Live).await?;
@@ -668,9 +682,10 @@ async fn view_items(
     conditional: IfNoneMatch,
     pool: &State<Pool>,
     state: TrackerState<'_>,
+    tag: &crate::http_metrics::RoomTag,
 ) -> Result<Json> {
     let mut conn = pool.get().await?;
-    let it = digestible(&mut conn, &session, id.0, slot).await?;
+    let it = digestible(&mut conn, &session, id.0, slot, tag).await?;
     let slot = only_slot(&it)?;
 
     let live = obtain(&mut conn, &state, &it.room, Document::Live).await?;
@@ -781,9 +796,10 @@ async fn page(
     session: Session,
     flash: Option<rocket::request::FlashMessage<'_>>,
     pool: &State<Pool>,
+    tag: &crate::http_metrics::RoomTag,
 ) -> Result<TrackerTemplate> {
     let mut conn = pool.get().await?;
-    let access = access(&mut conn, &session, id.0).await?;
+    let access = access(&mut conn, &session, id.0, tag).await?;
     let scope = access.target.slot_number();
     render(&mut conn, &session, id.0, access, scope, flash).await
 }
@@ -906,9 +922,10 @@ async fn slot_page(
     session: Session,
     flash: Option<rocket::request::FlashMessage<'_>>,
     pool: &State<Pool>,
+    tag: &crate::http_metrics::RoomTag,
 ) -> Result<TrackerTemplate> {
     let mut conn = pool.get().await?;
-    let access = access(&mut conn, &session, id.0).await?;
+    let access = access(&mut conn, &session, id.0, tag).await?;
 
     // Pahoa rooms are single-team, as the reference's own default is. Accepting only team 0 keeps
     // the URL honest rather than silently ignoring a segment somebody meant.
@@ -1335,9 +1352,10 @@ async fn set_annotation(
     session: Session,
     form: rocket::form::Form<AnnotationForm>,
     pool: &State<Pool>,
+    tag: &crate::http_metrics::RoomTag,
 ) -> Result<rocket::response::Flash<rocket::response::Redirect>> {
     let mut conn = pool.get().await?;
-    let access = access(&mut conn, &session, id.0).await?;
+    let access = access(&mut conn, &session, id.0, tag).await?;
 
     // The room has to have opted in. Without this the feature would be reachable by POST on a room
     // that never turned it on: a control nobody can see is still a route anybody can construct.
@@ -1424,9 +1442,10 @@ async fn set_ping_preference(
     session: Session,
     form: rocket::form::Form<PreferenceForm>,
     pool: &State<Pool>,
+    tag: &crate::http_metrics::RoomTag,
 ) -> Result<rocket::response::Flash<rocket::response::Redirect>> {
     let mut conn = pool.get().await?;
-    let access = access(&mut conn, &session, id.0).await?;
+    let access = access(&mut conn, &session, id.0, tag).await?;
 
     if !access.sees_annotations() {
         return Err(not_found("this room does not use the enhanced tracker"));

@@ -76,6 +76,109 @@ macro_rules! register {
     }};
 }
 
+// --- HTTP, as the two web roles serve it --------------------------------------------------------
+//
+// **`kind` is a closed vocabulary and `room` is a resolved id, and both of those are cardinality
+// decisions rather than style.** A label taken verbatim from a request line lets anybody who can
+// reach the port mint series until the scrape falls over, which is a public listener's version of a
+// memory leak. So `kind` comes from a `match` over the first path segments whose arms ARE the
+// vocabulary below, and `room` is either an id a handler resolved or one the response proved real
+// by answering it: see `puna-web`'s `http_metrics`.
+//
+// Three families and no `status`, no `method` and no per-route label. pahoa's `pahoa_http_*` carries
+// a templated route because a room serves one small closed surface; Puna serves dozens of routes and
+// the question these answer is "which part of Puna, for which room", which is the granularity a
+// capacity or abuse question is actually asked at.
+
+/// What part of Puna a request was for. The `kind` label's whole domain.
+///
+/// `static` and `health` are here rather than folded into `other` because both are high-volume and
+/// neither is application traffic: the kubelet polls readiness every few seconds forever, and asset
+/// requests outnumber page requests several to one. Left in `other`, they would be nearly all of it,
+/// and "everything else" would answer nothing.
+pub const HTTP_KINDS: &[&str] = &[
+    "generations",
+    "room",
+    "journal",
+    "tracker",
+    "static",
+    "health",
+    "other",
+];
+
+/// The kinds `PUNA_ROLE=web` can serve, which is every kind except the tracker's.
+///
+/// Seeded per role rather than seeding [`HTTP_KINDS`] everywhere, for the reason the module docs
+/// give: a zero published by a process that cannot serve the thing looks like an answer. The
+/// tracker routes are mounted only under the tracker role, so a `kind="tracker"` zero on the web
+/// tier would say that nobody is using the tracker.
+pub const WEB_HTTP_KINDS: &[&str] = &[
+    "generations",
+    "room",
+    "journal",
+    "static",
+    "health",
+    "other",
+];
+
+/// The kinds `PUNA_ROLE=tracker` can serve. It mounts the tracker routes, the shared assets and the
+/// two probes, and nothing else.
+pub const TRACKER_HTTP_KINDS: &[&str] = &["tracker", "static", "health", "other"];
+
+/// Requests served, by part of Puna and by room.
+pub static HTTP_REQUESTS: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register!(
+        IntCounterVec::new(
+            Opts::new(
+                "puna_http_requests_total",
+                "HTTP requests served, by part of Puna and room"
+            ),
+            &["kind", "room"],
+        )
+        .unwrap()
+    )
+});
+
+/// Request body bytes, from `Content-Length`.
+///
+/// **What the client said it was sending, not what was read.** A request whose body is refused
+/// (over the upload limit) still counts what it announced, which is the honest answer for a
+/// capacity question and the wrong one for a "what did we accept" question. A chunked request
+/// announces nothing and counts zero; nothing Puna serves is uploaded that way.
+pub static HTTP_REQUEST_BYTES: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register!(
+        IntCounterVec::new(
+            Opts::new(
+                "puna_http_request_bytes_total",
+                "HTTP request body bytes received, by part of Puna and room"
+            ),
+            &["kind", "room"],
+        )
+        .unwrap()
+    )
+});
+
+/// Response body bytes, counted as they leave.
+///
+/// A sized body is counted from its own length; a streamed one is counted through a wrapper, so the
+/// two responses that matter most here (a patch and a gzipped journal, both streamed rather than
+/// buffered) are not the two this cannot see. **The journal's WebSocket frames are counted here
+/// too**, under `kind="journal"`: they are the feed's actual traffic, and a number that covered the
+/// page but not the socket would be wrong by orders of magnitude on exactly the room somebody is
+/// asking about.
+pub static HTTP_RESPONSE_BYTES: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register!(
+        IntCounterVec::new(
+            Opts::new(
+                "puna_http_response_bytes_total",
+                "HTTP response body bytes sent, by part of Puna and room"
+            ),
+            &["kind", "room"],
+        )
+        .unwrap()
+    )
+});
+
 /// Rooms by observed state. The shape of the fleet at a glance.
 pub static ROOMS: LazyLock<IntGaugeVec> = LazyLock::new(|| {
     register!(
@@ -865,15 +968,30 @@ pub fn publish_probe_capabilities(capabilities: &crate::probe::ProbeCapabilities
 /// answer "is Postgres slow" for a third of the traffic.
 pub const SHARED_FAMILIES: &[&str] = &["diesel_query_seconds"];
 
-/// Families only `puna-web` exports. Empty today.
+/// Families **both roles of the web binary** export, and the orchestrator does not.
 ///
-/// The HTTP request fairing (§11) lands here when it is built, and this is the list it goes in.
+/// Its own table rather than a repeat in the two below, because the family tables have to
+/// *partition* the registry: a name in two of them makes `families()` describe an ownership that
+/// is not real, and the disjointness test says so. These three have one real owner and it is "the
+/// tier that serves HTTP", which is two components.
+///
+/// Not [`SHARED_FAMILIES`] either: the orchestrator's only listener is its health and metrics
+/// server, so a request count from it would answer a different question in the same name.
+pub const HTTP_FAMILIES: &[&str] = &[
+    "puna_http_requests_total",
+    "puna_http_request_bytes_total",
+    "puna_http_response_bytes_total",
+];
+
+/// Families only `puna-web` exports. Empty today: what it serves that the tracker does not is
+/// measured by [`HTTP_FAMILIES`]'s `kind` label rather than by families of its own.
 pub const WEB_FAMILIES: &[&str] = &[];
 
 /// Families only `puna-tracker` exports. Empty today.
 ///
-/// Upstream fetch counts and cache hit rates belong here (the numbers that say whether the
-/// three cache layers are doing their job) when there is something to attach them to.
+/// Upstream fetch counts and cache hit rates belong here (the numbers that say whether the three
+/// cache layers are doing their job) when there is something to attach them to. Its HTTP traffic is
+/// in [`HTTP_FAMILIES`], which the web role exports too.
 pub const TRACKER_FAMILIES: &[&str] = &[];
 
 /// Families only `puna-orchestrator` exports.
@@ -969,12 +1087,18 @@ pub const DEFERRED_FAMILIES: &[&str] = &[
 /// Used by the scope tests, and by anyone writing an alert who needs to know which job a series
 /// can legitimately come from.
 pub fn families(component: Component) -> Vec<&'static str> {
-    let own = match component {
-        Component::Web => WEB_FAMILIES,
-        Component::Tracker => TRACKER_FAMILIES,
-        Component::Orchestrator => ORCHESTRATOR_FAMILIES,
+    let (http, own) = match component {
+        Component::Web => (HTTP_FAMILIES, WEB_FAMILIES),
+        Component::Tracker => (HTTP_FAMILIES, TRACKER_FAMILIES),
+        // Not a tier that serves HTTP: its listener is health and metrics, nothing else.
+        Component::Orchestrator => (&[][..], ORCHESTRATOR_FAMILIES),
     };
-    SHARED_FAMILIES.iter().chain(own).copied().collect()
+    SHARED_FAMILIES
+        .iter()
+        .chain(http)
+        .chain(own)
+        .copied()
+        .collect()
 }
 
 /// The families `component` renders on a freshly started process, before anything has happened.
@@ -1011,11 +1135,22 @@ pub fn init(component: Component) {
     let _ = REGISTRY.register(Box::new(crate::db::QUERY_HISTOGRAM.clone()));
 
     match component {
-        // Nothing yet beyond the shared families. When the request fairing lands, force it here
-        // and add it to WEB_FAMILIES: the scope test fails if only one of those happens.
-        Component::Web => {}
-        Component::Tracker => {}
+        Component::Web => init_http(WEB_HTTP_KINDS),
+        Component::Tracker => init_http(TRACKER_HTTP_KINDS),
         Component::Orchestrator => init_orchestrator(),
+    }
+}
+
+/// The two web roles' request accounting, seeded for the kinds this role can actually serve.
+///
+/// Seeded with an empty `room`, which is a real label value here rather than a placeholder: it is
+/// what every request that is not about one room carries, and on the roomless kinds it is the only
+/// value they will ever have.
+fn init_http(kinds: &[&str]) {
+    for kind in kinds {
+        HTTP_REQUESTS.with_label_values(&[kind, ""]).reset();
+        HTTP_REQUEST_BYTES.with_label_values(&[kind, ""]).reset();
+        HTTP_RESPONSE_BYTES.with_label_values(&[kind, ""]).reset();
     }
 }
 

@@ -85,6 +85,9 @@ const POLL: std::time::Duration = std::time::Duration::from_secs(1);
 /// without any script running.
 const PING: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// The heartbeat's frame, named once so what is sent and what is counted are the same string.
+const HEARTBEAT_FRAME: &str = r#"{"kind":"heartbeat"}"#;
+
 /// Record types a viewer at the `feed` tier may see.
 ///
 /// **Transcribed from pahoa's `docs/journal.md`**, which is the authoritative table, not from a
@@ -228,6 +231,7 @@ async fn readable(
     conn: &mut diesel_async::AsyncPgConnection,
     session: &Session,
     id: JournalParam,
+    tag: &crate::http_metrics::RoomTag,
 ) -> Result<(room::Room, Visibility)> {
     // **Resolved by the feed's own id, never the room's.** That is the whole reason the column
     // exists: `/journal/<id>` is the link handed to a stream chat, and the room it belongs to must
@@ -245,6 +249,10 @@ async fn readable(
     }
     let visibility = visibility_for(role, room.journal_policy)
         .ok_or_else(|| not_found("this room's history is not available"))?;
+    // **The feed's id is not the room's**, so this is the only place a request under `/journal/`
+    // can be attributed to a room at all. A PARAMETER rather than something a handler remembers to
+    // call: all three of this function's callers had to be visited to add it.
+    tag.set(room.id);
     Ok((room, visibility))
 }
 
@@ -294,9 +302,10 @@ async fn page(
     session: Session,
     pool: &State<Pool>,
     data_dir: &State<DataDir>,
+    tag: &crate::http_metrics::RoomTag,
 ) -> Result<JournalTemplate> {
     let mut conn = pool.get().await?;
-    let (room, visibility) = readable(&mut conn, &session, id).await?;
+    let (room, visibility) = readable(&mut conn, &session, id, tag).await?;
     let size = tokio::fs::metadata(journal::path(&data_dir.0, room.id))
         .await
         .ok()
@@ -358,9 +367,10 @@ async fn download(
     session: Session,
     pool: &State<Pool>,
     data_dir: &State<DataDir>,
+    tag: &crate::http_metrics::RoomTag,
 ) -> Result<Journal> {
     let mut conn = pool.get().await?;
-    let (room, visibility) = readable(&mut conn, &session, id).await?;
+    let (room, visibility) = readable(&mut conn, &session, id, tag).await?;
     // **The file is where the withheld records are**, so it goes only to a viewer entitled to all
     // of them: an organizer, or anybody at all on a `full` room. Serving it to a `Feed` viewer
     // would hand over precisely what the socket just filtered, which is the one combination
@@ -520,12 +530,19 @@ async fn feed(
     pool: &State<Pool>,
     data_dir: &State<DataDir>,
     shutdown: rocket::Shutdown,
+    tag: &crate::http_metrics::RoomTag,
 ) -> Result<ws::Channel<'static>> {
     let mut conn = pool.get().await?;
     // **Authorized before the upgrade**, so a refused viewer gets an ordinary 404 rather than an
     // open socket that says nothing.
-    let (room, visibility) = readable(&mut conn, &session, id).await?;
+    let (room, visibility) = readable(&mut conn, &session, id, tag).await?;
     let path = journal::path(&data_dir.0, room.id);
+    // **Held for the life of the socket and incremented per frame**, because that is where this
+    // room's feed traffic actually is: the upgrade's own response body is empty, and everything
+    // below flows afterwards over a connection the fairing never sees again. Counted as each frame
+    // goes out rather than at the end, since a feed connection lives for hours and a redeploy ends
+    // every one of them at once, which is exactly when the bytes are worth having.
+    let sent = crate::http_metrics::feed_bytes(room.id);
 
     Ok(ws.channel(move |mut stream| {
         Box::pin(async move {
@@ -574,11 +591,9 @@ async fn feed(
                     // watchdog shorter than the heartbeat tears down a healthy connection on a
                     // timer.
                     frame["heartbeat_ms"] = (PING.as_millis() as u64).into();
-                    if stream
-                        .send(ws::Message::Text(frame.to_string()))
-                        .await
-                        .is_err()
-                    {
+                    let frame = frame.to_string();
+                    sent.inc_by(frame.len() as u64);
+                    if stream.send(ws::Message::Text(frame)).await.is_err() {
                         return Ok(());
                     }
                     cursor
@@ -586,11 +601,9 @@ async fn feed(
                 // A room that has never run has no file, which is not an error worth closing over:
                 // say so and follow, because the file appears the moment it starts.
                 _ => {
-                    let _ = stream
-                        .send(ws::Message::Text(
-                            r#"{"kind":"empty","message":"no history yet"}"#.to_string(),
-                        ))
-                        .await;
+                    let frame = r#"{"kind":"empty","message":"no history yet"}"#.to_string();
+                    sent.inc_by(frame.len() as u64);
+                    let _ = stream.send(ws::Message::Text(frame)).await;
                     0
                 }
             };
@@ -643,6 +656,7 @@ async fn feed(
                         }
                         cursor = replay.cursor;
                         let frame = batch("append", &replay.lines, cursor, None, visibility);
+                        sent.inc_by(frame.len() as u64);
                         if stream.send(ws::Message::Text(frame)).await.is_err() {
                             return Ok(());
                         }
@@ -670,8 +684,12 @@ async fn feed(
                         if stream.send(ws::Message::Ping(Vec::new())).await.is_err() {
                             return Ok(());
                         }
+                        // Counted like any other frame: on a quiet room it is the only traffic
+                        // there is, and a feed that costs nothing should say so rather than show a
+                        // flat zero that could equally mean the socket has died.
+                        sent.inc_by(HEARTBEAT_FRAME.len() as u64);
                         if stream.send(ws::Message::Text(
-                            r#"{"kind":"heartbeat"}"#.to_string()
+                            HEARTBEAT_FRAME.to_string()
                         )).await.is_err() {
                             return Ok(());
                         }
@@ -701,7 +719,9 @@ async fn feed(
                             ))
                             .unwrap_or_default();
                             frame["start"] = page.start.into();
-                            if stream.send(ws::Message::Text(frame.to_string())).await.is_err() {
+                            let frame = frame.to_string();
+                            sent.inc_by(frame.len() as u64);
+                            if stream.send(ws::Message::Text(frame)).await.is_err() {
                                 return Ok(());
                             }
                         }

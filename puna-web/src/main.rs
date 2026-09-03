@@ -15,6 +15,7 @@ mod error;
 mod flash;
 mod gate;
 mod guards;
+mod http_metrics;
 mod journal;
 mod lobby;
 mod metrics_listener;
@@ -277,7 +278,12 @@ fn build(
     // Both roles, though only the web role sets cookies today: the tracker reads the session but
     // never writes one. Symmetry costs nothing and means a cookie added to the tracker's 401 path
     // later is covered without anyone remembering this.
-    rocket.attach(cookies::SecureCookies)
+    // Request accounting for both roles: one fairing, three families, labeled by part of Puna and
+    // by room. Attached alongside the cookie fairing rather than inside the role match, because
+    // both roles serve HTTP and the tracker tier is the one whose volume the numbers exist for.
+    rocket
+        .attach(cookies::SecureCookies)
+        .attach(http_metrics::HttpMetrics)
 }
 
 #[rocket::main]
