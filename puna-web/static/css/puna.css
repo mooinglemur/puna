@@ -1710,6 +1710,57 @@ h1 .scope {
    its place across a long location name. */
 .journal .entry:nth-child(even) { background: var(--feed-stripe); }
 
+/* --- A LINE ARRIVING, and only one that arrived live --------------------------------------------
+   The row opens from nothing to its one line while the text fades in over it, so a record landing
+   on a quiet feed is something the eye catches rather than a line that was suddenly always there.
+
+   `journal.js` adds `arriving` to rows from an `append` frame and to nothing else. That matters
+   more than it looks: a replay lands a hundred rows in one batch, and animating those would open
+   the entire page at once on every connect and every reconnect, which is a flourish rather than a
+   signal. A backfill is worse still, since those rows go on the FRONT and their growth would shove
+   the reader's place down the screen.
+
+   It is deliberately not `transition`: there is no state to move between. The row is created at its
+   final state and the animation runs once as it enters, which is also why nothing has to remove the
+   class afterwards. */
+.journal .entry.arriving {
+  animation: feed-arrive 100ms ease-out;
+}
+
+/* **The cells fade, not the row**, which is what keeps the stripe static. Opacity on the row would
+   take its background with it, so every other arrival would flash a band of color in and the
+   alternating ground would announce itself instead of sitting still under the text. */
+.journal .entry.arriving > * {
+  animation: feed-ink 100ms ease-out;
+}
+
+@keyframes feed-arrive {
+  from { height: 0; }
+  /* Exactly one line, which is what a record is: `white-space: pre` above means an entry never
+     wraps, so this is the row's own height rather than a guess at it. Named rather than left to an
+     implicit `to`, because the underlying `height` is `auto` and `0 -> auto` does not interpolate.
+
+     Nothing clips the text while the box is short, and that is a choice rather than an oversight.
+     Clipping one axis forces the other away from `visible`, which is the whole reason this
+     stylesheet has a lint about naming both: every row would become its own horizontal scroller and
+     the sideways scroll the feed reads by would be gone. What overflows instead is a fading line at
+     the bottom of the log, over the container's own padding, for a tenth of a second. */
+  to { height: 1lh; }
+}
+
+@keyframes feed-ink {
+  from { opacity: 0; }
+}
+
+/* The same reasoning as the spinner's: the feed loses nothing by holding still. A record arriving
+   is legible from the record being there, and this is a page somebody watches for a long time. */
+@media (prefers-reduced-motion: reduce) {
+  .journal .entry.arriving,
+  .journal .entry.arriving > * {
+    animation: none;
+  }
+}
+
 .journal .when { color: var(--feed-dim); }
 .journal .verb { color: var(--feed-verb); }
 .journal .who { color: var(--feed-who); }

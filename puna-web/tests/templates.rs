@@ -933,6 +933,68 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
         );
     }
 
+    // --- A LINE ARRIVING, whose three halves each fail without a symptom -------------------------
+    // The row opens and its text fades in over 100ms, and every piece of that is silent when it
+    // breaks: the class renders as an ordinary row, a renamed keyframe is an animation the browser
+    // simply does not run, and losing the follow leaves the newest line sitting BELOW the fold,
+    // which reads as the feed having stopped rather than as an animation being wrong.
+    assert!(
+        code.contains("\" arriving\""),
+        "journal.js no longer marks a live row, so nothing on the page animates"
+    );
+    assert!(
+        code.contains(r#"frame.kind === "append""#),
+        "journal.js no longer distinguishes the live frame from the replay, so either every \
+         reconnect opens a hundred rows at once or nothing opens at all"
+    );
+    // **Anchored inside `append`, not on the name.** The first version of this asserted the file
+    // mentioned `followBottom()` anywhere, which its own `function followBottom()` satisfies: the
+    // call was deleted and the lint passed. Same trap as `scheduleReconnect` above, found the same
+    // way.
+    let appending = code
+        .split_once("function append(")
+        .map(|(_, rest)| rest.split_once("\n  }").map_or(rest, |(body, _)| body))
+        .expect("journal.js no longer has an append");
+    assert!(
+        appending.contains("followBottom()"),
+        "append no longer holds the bottom while a row is opening, so the line that just arrived \
+         lands below the fold and stays there until the next one pushes it up"
+    );
+
+    let plain = code_only_css(&css);
+    for rule in [
+        ".journal .entry.arriving {",
+        ".journal .entry.arriving > * {",
+    ] {
+        let body = plain
+            .split_once(rule)
+            .unwrap_or_else(|| {
+                panic!("puna.css has no `{rule}` rule, so a live row renders as an ordinary one")
+            })
+            .1;
+        let body = body.split_once('}').expect("an unclosed rule").0;
+        let name = body
+            .split_once("animation:")
+            .unwrap_or_else(|| panic!("`{rule}` no longer animates anything"))
+            .1
+            .split_whitespace()
+            .next()
+            .expect("an animation name");
+        assert!(
+            plain.contains(&format!("@keyframes {name}")),
+            "`{rule}` names `{name}` and puna.css defines no such keyframes, so the browser runs \
+             nothing at all and the rule looks correct"
+        );
+    }
+
+    // Vestibular disorders are a real reason somebody turns animation off, and a feed is a page
+    // people leave open for hours. Held here rather than trusted, because the rule that honors it
+    // is three sections away from the rules it turns off.
+    assert!(
+        reduced_motion_blocks(&plain).any(|block| block.contains(".entry.arriving")),
+        "no `prefers-reduced-motion` rule turns the arriving animation off"
+    );
+
     // The scheme is derived, never written: hardcoding either breaks in exactly one environment,
     // and it is the one nobody develops in.
     assert!(
@@ -1919,6 +1981,31 @@ fn a_rule_that_scrolls_one_axis_names_the_other() {
 }
 
 /// CSS with `/* ... */` comments removed, so prose about a property is not read as setting it.
+/// Every `@media (prefers-reduced-motion: reduce)` block's body, as text.
+///
+/// Brace-counted rather than split on `}`, since these blocks wrap whole rules. Comments are the
+/// caller's problem: pass [`code_only_css`] output, or a brace inside prose ends a block early.
+fn reduced_motion_blocks(css: &str) -> impl Iterator<Item = &str> {
+    const OPEN: &str = "@media (prefers-reduced-motion: reduce) {";
+    css.match_indices(OPEN).map(|(at, _)| {
+        let body = &css[at + OPEN.len()..];
+        let mut depth = 1;
+        let mut end = body.len();
+        for (i, c) in body.char_indices() {
+            if c == '{' {
+                depth += 1;
+            } else if c == '}' {
+                depth -= 1;
+                if depth == 0 {
+                    end = i;
+                    break;
+                }
+            }
+        }
+        &body[..end]
+    })
+}
+
 fn code_only_css(css: &str) -> String {
     let mut out = String::with_capacity(css.len());
     let mut rest = css;

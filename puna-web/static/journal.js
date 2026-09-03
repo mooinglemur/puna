@@ -254,9 +254,12 @@
     return span;
   }
 
-  function line(event) {
+  // `arriving` is the stylesheet's cue to open the row and fade its text in, and it is passed
+  // through rather than decided here: only a record that landed on a live feed is new to the
+  // reader. See the `arriving` rules in puna.css for what animating a replay would look like.
+  function line(event, arriving) {
     var row = document.createElement("div");
-    row.className = "entry " + (event.type || "unknown");
+    row.className = "entry " + (event.type || "unknown") + (arriving ? " arriving" : "");
 
     var when = at(event.at);
     var stamp = cell(row, "", "when");
@@ -578,7 +581,50 @@
     return log.scrollHeight - log.scrollTop - log.clientHeight < 40;
   }
 
-  function append(events) {
+  // How long to hold the bottom after a live row lands.
+  //
+  // **Deliberately longer than the animation rather than equal to it**, so this is a ceiling on how
+  // long the feed follows itself and not a second copy of a duration the stylesheet owns. The
+  // asymmetry is what makes that safe: overshooting costs nothing, since the follow stops the moment
+  // the reader scrolls away, while undershooting leaves the newest line below the fold.
+  var FOLLOW_MS = 250;
+
+  var followUntil = 0;
+  var following = false;
+
+  // Keep the bottom pinned while an arriving row is still growing.
+  //
+  // A live row opens from no height, so the position that was the bottom when it was inserted stops
+  // being the bottom on the very next frame: the browser clamps `scrollTop` when content shrinks
+  // under it and does not put it back when the content grows again. Pinning once is therefore not
+  // enough, and without this the line that just arrived would sit below the fold until the one after
+  // it pushed it into view. Following for the length of the animation is also what produces the
+  // effect the animation is for: the feed slides up as the row opens.
+  function followBottom() {
+    followUntil = Date.now() + FOLLOW_MS;
+    if (following) return;
+    following = true;
+    requestAnimationFrame(function step() {
+      // **The reader always wins.** Following is a courtesy and fighting a wheel event is the one
+      // thing a live feed must never do, so a scroll away from the bottom ends it immediately
+      // rather than at the deadline. Same predicate `append` decides with, so "away" means the same
+      // thing in both places.
+      if (!nearBottom()) {
+        following = false;
+        return;
+      }
+      log.scrollTop = log.scrollHeight;
+      if (Date.now() < followUntil) {
+        requestAnimationFrame(step);
+      } else {
+        following = false;
+      }
+    });
+  }
+
+  // `live` is true only for an `append` frame: those are the records that arrived while the reader
+  // was watching, and they are the only ones worth animating.
+  function append(events, live) {
     if (!events.length) return;
     stuckToBottom = nearBottom();
 
@@ -595,7 +641,7 @@
           lastDay = key;
         }
       }
-      batch.appendChild(line(event));
+      batch.appendChild(line(event, live));
     });
     log.appendChild(batch);
 
@@ -606,7 +652,12 @@
     }
     // Only follow if the reader was already at the bottom. Yanking the view back down while
     // somebody is reading upward is the single most annoying thing a live feed can do.
-    if (stuckToBottom) log.scrollTop = log.scrollHeight;
+    if (stuckToBottom) {
+      log.scrollTop = log.scrollHeight;
+      // And keep following for as long as the row is opening. Replay and backfill do not animate,
+      // so they have nothing to follow.
+      if (live) followBottom();
+    }
   }
 
   // Older records, on the front.
@@ -879,7 +930,9 @@
         resumed = false;
       }
 
-      append(frame.events || []);
+      // `append` is the live frame and `replay` is the tail on connect; only the first is new to
+      // whoever is watching, so only the first opens a row.
+      append(frame.events || [], frame.kind === "append");
       noteFiltering(frame.withheld);
       if (frame.kind === "replay") {
         // The backoff resets on a connection that got as far as a replay, not on one that merely
