@@ -581,6 +581,15 @@
     return log.scrollHeight - log.scrollTop - log.clientHeight < 40;
   }
 
+  // How many records may arrive together and still open one at a time.
+  //
+  // The animation exists so a record landing on a quiet feed is something the eye catches. A release
+  // lands hundreds at once, where nothing is individually perceivable, the effect degrades into the
+  // whole block sliding, and the cost is a few hundred simultaneous height animations invalidating
+  // the log's layout every frame, during the busiest thing a room ever does. Past a handful it is a
+  // burst rather than an event, and the rows simply appear.
+  var ARRIVE_MAX = 10;
+
   // How long to hold the bottom after a live row lands.
   //
   // **Deliberately longer than the animation rather than equal to it**, so this is a ceiling on how
@@ -591,6 +600,43 @@
 
   var followUntil = 0;
   var following = false;
+  // The scroll position this page last WROTE, read back after writing it because the browser clamps
+  // what it is given. `-1` means it has written none. See `readerMoved`.
+  var pinnedAt = -1;
+
+  // Put the view at the bottom and remember where that was.
+  //
+  // One function for every place that pins, so `pinnedAt` cannot go stale behind a raw assignment:
+  // a pin the page forgot it made is indistinguishable, one frame later, from the reader having
+  // scrolled there.
+  function pinBottom() {
+    log.scrollTop = log.scrollHeight;
+    pinnedAt = log.scrollTop;
+  }
+
+  // **Has the READER moved the view, as opposed to the page's own rows moving under it?**
+  //
+  // It takes BOTH signals, and each on its own has now been wrong here in a different direction.
+  //
+  // Distance alone was the shipped bug. The follow gave up when the view was no longer near the
+  // bottom, which is exactly what a batch of opening rows makes true: one row growing is 22 pixels
+  // and stays inside the 40-pixel tolerance, so a quiet feed looked perfect, while a release lands
+  // a few hundred at once, they grow by hundreds of pixels between two frames, and the follow read
+  // its own animation as a reader scrolling away. The feed then sat where it had been left, and
+  // every later batch measured `nearBottom()` as false and never pinned again.
+  //
+  // Position alone is wrong the other way, which a simulation of that release caught before this
+  // shipped twice: **the browser moves `scrollTop` too.** A row opening from no height makes the
+  // content shorter for a frame, and the view is clamped to the new end, so the position the page
+  // last wrote is gone through nobody's doing.
+  //
+  // Together they are exact. A clamp leaves the view AT the end, so the distance answers it; growth
+  // leaves `scrollTop` untouched, so the position answers that. Only a reader changes the position
+  // to somewhere that is not the end. Two pixels of slack for fractional scroll offsets on a scaled
+  // display, which are the page's own value rounded rather than anybody's intent.
+  function readerMoved() {
+    return pinnedAt >= 0 && Math.abs(log.scrollTop - pinnedAt) > 2 && !nearBottom();
+  }
 
   // Keep the bottom pinned while an arriving row is still growing.
   //
@@ -606,14 +652,13 @@
     following = true;
     requestAnimationFrame(function step() {
       // **The reader always wins.** Following is a courtesy and fighting a wheel event is the one
-      // thing a live feed must never do, so a scroll away from the bottom ends it immediately
-      // rather than at the deadline. Same predicate `append` decides with, so "away" means the same
-      // thing in both places.
-      if (!nearBottom()) {
+      // thing a live feed must never do, so a scroll of their own ends it immediately rather than at
+      // the deadline.
+      if (readerMoved()) {
         following = false;
         return;
       }
-      log.scrollTop = log.scrollHeight;
+      pinBottom();
       if (Date.now() < followUntil) {
         requestAnimationFrame(step);
       } else {
@@ -626,7 +671,12 @@
   // was watching, and they are the only ones worth animating.
   function append(events, live) {
     if (!events.length) return;
-    stuckToBottom = nearBottom();
+    // **Mid-animation counts as being at the bottom.** A batch landing while the last one is still
+    // opening measures a distance the page's own rows are creating, so `nearBottom()` on its own
+    // would read a busy feed as a reader who had scrolled away and stop following after the first
+    // frame of it. A follow still running that the reader has not interrupted is this page saying it
+    // is still at the bottom.
+    stuckToBottom = nearBottom() || (following && !readerMoved());
 
     var batch = document.createDocumentFragment();
     events.forEach(function (event) {
@@ -653,7 +703,9 @@
     // Only follow if the reader was already at the bottom. Yanking the view back down while
     // somebody is reading upward is the single most annoying thing a live feed can do.
     if (stuckToBottom) {
-      log.scrollTop = log.scrollHeight;
+      // After the trim, never before it: removing lines from the top moves the bottom, and a
+      // remembered position from before that is a position the reader never occupied.
+      pinBottom();
       // And keep following for as long as the row is opening. Replay and backfill do not animate,
       // so they have nothing to follow.
       if (live) followBottom();
@@ -931,8 +983,9 @@
       }
 
       // `append` is the live frame and `replay` is the tail on connect; only the first is new to
-      // whoever is watching, so only the first opens a row.
-      append(frame.events || [], frame.kind === "append");
+      // whoever is watching, so only the first opens a row. A BURST does not either: see ARRIVE_MAX.
+      var events = frame.events || [];
+      append(events, frame.kind === "append" && events.length <= ARRIVE_MAX);
       noteFiltering(frame.withheld);
       if (frame.kind === "replay") {
         // The backoff resets on a connection that got as far as a replay, not on one that merely
@@ -960,7 +1013,10 @@
           return;
         }
 
-        log.scrollTop = log.scrollHeight;
+        // Through `pinBottom` like every other pin, so the position the page believes it wrote is
+        // the one it actually wrote. A raw assignment here would leave a stale one behind for the
+        // first live row to misread.
+        pinBottom();
 
         // **Re-anchored on every replay that REPLACES the page**: a first connect, or a resume the
         // server could not stitch, both of which start from a tail. The page's oldest line is

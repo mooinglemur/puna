@@ -960,6 +960,46 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
         "append no longer holds the bottom while a row is opening, so the line that just arrived \
          lands below the fold and stays there until the next one pushes it up"
     );
+    assert!(
+        !appending.contains("log.scrollTop ="),
+        "append pins the bottom without recording where it put it, so the next frame reads the \
+         page's own pin as a reader who scrolled there"
+    );
+
+    // **The follow gives up on the reader's own scroll and on nothing else, and that needs BOTH
+    // signals.** Each has been wrong here in a different direction: distance alone was the shipped
+    // bug, where a release's opening rows grew the content and the follow read its own animation as
+    // a reader leaving; position alone misreads the browser's clamp, which moves the view by itself
+    // whenever a row starts at no height. Either simplification looks tidier and reintroduces one of
+    // them, and the failure is a feed that stops following exactly when the room is busiest.
+    let moved = code
+        .split_once("function readerMoved(")
+        .map(|(_, rest)| rest.split_once("\n  }").map_or(rest, |(body, _)| body))
+        .expect("journal.js no longer has a readerMoved");
+    assert!(
+        moved.contains("pinnedAt") && moved.contains("nearBottom()"),
+        "readerMoved decides on one signal; it takes the position this page last wrote AND the \
+         distance from the end, or it mistakes either the browser's clamp or its own animation for \
+         somebody scrolling"
+    );
+    let follow = code
+        .split_once("function followBottom(")
+        .map(|(_, rest)| rest.split_once("\n  }").map_or(rest, |(body, _)| body))
+        .expect("journal.js no longer has a followBottom");
+    assert!(
+        follow.contains("readerMoved()") && !follow.contains("nearBottom()"),
+        "the follow decides for itself whether the reader moved, rather than asking the one \
+         function that knows how to tell that from the page's own rows growing"
+    );
+
+    // A burst is not an event: past a handful of records arriving together nothing is individually
+    // perceivable, and the animation becomes a few hundred simultaneous height changes on the
+    // busiest thing a room ever does.
+    assert!(
+        code.contains("ARRIVE_MAX"),
+        "journal.js no longer caps how many rows may open at once, so a release animates every line \
+         of itself"
+    );
 
     let plain = code_only_css(&css);
     for rule in [
