@@ -1001,6 +1001,37 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
          of itself"
     );
 
+    // **The first paint pins LAST, and the order is the whole of a reported bug.** The backfill
+    // control is rendered hidden, and revealing it takes its height out of the feed, which is the
+    // flex item holding this page's slack. Pinned before that, the feed opened one line short of the
+    // bottom on every single load, which is inside the 40-pixel tolerance and therefore a coin toss
+    // about whether the page then thought it was following at all. Both calls are correct in
+    // isolation, so only their order says anything.
+    let replay = code
+        .split_once(r#"if (frame.kind === "replay") {"#)
+        .map(|(_, rest)| rest.split_once("\n      }").map_or(rest, |(body, _)| body))
+        .expect("journal.js no longer has a replay branch");
+    let reveals = replay
+        .find("setEarlier(oldest")
+        .expect("the replay branch no longer decides the backfill control");
+    let pins = replay
+        .rfind("pinBottom()")
+        .expect("the replay branch no longer pins the bottom, so the feed opens mid-history");
+    assert!(
+        pins > reveals,
+        "the first paint pins the bottom before the backfill control is revealed, so the control's \
+         own height leaves the feed short of the end"
+    );
+
+    // The safety net for every other thing that will ever change height above the feed: a window
+    // resize, a phone rotating, a status line wrapping to two lines. Guarded, since a missing
+    // observer must cost the net rather than the page.
+    assert!(
+        code.contains("window.ResizeObserver"),
+        "nothing watches the feed's own height, so anything that shrinks it leaves the view short \
+         of the bottom, which is the shape of the bug the pin order above fixes one instance of"
+    );
+
     let plain = code_only_css(&css);
     for rule in [
         ".journal .entry.arriving {",

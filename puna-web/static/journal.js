@@ -614,6 +614,15 @@
     pinnedAt = log.scrollTop;
   }
 
+  // The view is exactly where this page last put it, which is to say nobody has moved it since.
+  //
+  // Every pin is written at a bottom, so this is also "the reader is at the bottom" stated in a way
+  // that survives the bottom moving, which is the whole difficulty: growth, a trim and a clamp all
+  // move the end while leaving the reader where they were.
+  function atOwnPin() {
+    return pinnedAt >= 0 && Math.abs(log.scrollTop - pinnedAt) <= 2;
+  }
+
   // **Has the READER moved the view, as opposed to the page's own rows moving under it?**
   //
   // It takes BOTH signals, and each on its own has now been wrong here in a different direction.
@@ -635,7 +644,7 @@
   // to somewhere that is not the end. Two pixels of slack for fractional scroll offsets on a scaled
   // display, which are the page's own value rounded rather than anybody's intent.
   function readerMoved() {
-    return pinnedAt >= 0 && Math.abs(log.scrollTop - pinnedAt) > 2 && !nearBottom();
+    return pinnedAt >= 0 && !atOwnPin() && !nearBottom();
   }
 
   // Keep the bottom pinned while an arriving row is still growing.
@@ -656,6 +665,9 @@
       // the deadline.
       if (readerMoved()) {
         following = false;
+        // The view is theirs now. Forgetting the pin is what stops anything later reading a stale
+        // one as permission to scroll them back.
+        pinnedAt = -1;
         return;
       }
       pinBottom();
@@ -665,6 +677,25 @@
         following = false;
       }
     });
+  }
+
+  // **Anything above the feed changing height knocks the view off the bottom, and this page does it
+  // to itself.** The backfill control is rendered hidden, since until a replay lands there is
+  // nothing to say about earlier records, and revealing it takes its height out of the feed, which
+  // is the flex item holding the page's slack. Reported on the deployed page and reproducible every
+  // time: the feed opened one line short of the bottom. A window resize and a phone rotating do
+  // exactly the same thing, and so will whatever gets added above the feed next.
+  //
+  // The ordering fix in the replay branch handles the known case. This handles the class: the feed's
+  // own height changing re-pins, unless the reader has taken the view somewhere themselves. Guarded
+  // rather than assumed, because it is not in Safari before 13.1 and a missing observer costs the
+  // safety net rather than the page.
+  if (window.ResizeObserver) {
+    // Constructed off the same reference the guard tested, which is also this file's idiom for
+    // anything it does not own (see `window.PunaTime`).
+    new window.ResizeObserver(function () {
+      if (atOwnPin() || nearBottom()) pinBottom();
+    }).observe(log);
   }
 
   // `live` is true only for an `append` frame: those are the records that arrived while the reader
@@ -1013,11 +1044,6 @@
           return;
         }
 
-        // Through `pinBottom` like every other pin, so the position the page believes it wrote is
-        // the one it actually wrote. A raw assignment here would leave a stale one behind for the
-        // first live row to misread.
-        pinBottom();
-
         // **Re-anchored on every replay that REPLACES the page**: a first connect, or a resume the
         // server could not stitch, both of which start from a tail. The page's oldest line is
         // whatever that replay began with, and carrying the previous `start` across would ask for a
@@ -1029,6 +1055,18 @@
         } else {
           setEarlier(oldest === null || oldest > 0, "");
         }
+
+        // **Pinned LAST, after the backfill control has been decided.** That control is rendered
+        // hidden, because until a replay lands there is nothing to say about earlier records, and
+        // revealing it takes its own height out of the feed: the feed is the flex item holding this
+        // page's slack (see `.feed-page`). Pinned before it, the view ended up one line short of
+        // the bottom on every first load, close enough to the 40-pixel tolerance to be a coin toss
+        // about whether the page then considered itself to be following at all.
+        //
+        // Through `pinBottom` like every other pin, so the position the page believes it wrote is
+        // the one it actually wrote. A raw assignment here would leave a stale one behind for the
+        // first live row to misread.
+        pinBottom();
       }
     });
 

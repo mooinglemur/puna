@@ -189,6 +189,32 @@ check:
     - cargo clippy --workspace --all-targets -- -D warnings
     - cargo test --workspace
 
+# The JavaScript, which the Rust build does not parse and therefore does not check.
+#
+# `puna-web/static/` holds thirteen scripts, and a syntax error in one of them ships: the page
+# renders, the behavior silently goes, and nothing anywhere logs. That alone would justify the job.
+# What earns it a node image is the journal feed's follow loop, whose properties are sequences over
+# animation frames -- two bugs have shipped in it that no assertion over the source text could have
+# seen, and a third was caught by this harness before it shipped.
+#
+# `node:24-trixie-slim`, matching the Debian base the rust image is on, and no npm install of any
+# kind: the runner and the tests are dependency-free on purpose. This repository's stack was chosen
+# to have no npm in it, and a test runner is not the thing to break that for.
+#
+# Its own job rather than a line in `check:`, because it shares nothing with that one: no cargo, no
+# registry cache, no Postgres service, and a container a tenth the size. A failure here also says
+# something completely different from a Rust failure, which is worth reading off the job name.
+js:
+  <<: *always
+  stage: check
+  image: docker.io/library/node:24-trixie-slim
+  tags:
+    - linux
+    - k8s
+  script:
+    - node --version
+    - node puna-web/tests/js/run.js
+
 # schema.rs is generated and checked in. This asserts the committed copy still matches what the
 # migrations produce, so a migration edited without regenerating cannot merge.
 #
