@@ -34,7 +34,7 @@
 //! A bad zip becomes a 400 on the upload form rather than a room whose pod crashloops minutes
 //! later with the reason buried in a container log. That is worth the request latency.
 
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 
 use crate::artifact::GenerationMeta;
@@ -307,8 +307,18 @@ fn read_member(
             member: member.to_string(),
             source,
         })?;
-    let mut buf = Vec::with_capacity(file.size() as usize);
-    io(file.read_to_end(&mut buf), format!("reading {member}"))?;
+    // **Bounded, even though `inspect` has already accepted this archive.** Promotion re-reads the
+    // uploaded bytes, and the declared member size it would otherwise hand to `with_capacity` is
+    // still a number out of a stranger's central directory. Sharing the cap with ingest means the
+    // two cannot disagree about what a member may weigh, which is the way this would rot: a limit
+    // raised in one place and a promotion that then fails on a file the upload accepted.
+    let declared = file.size();
+    let buf = super::ingest::read_member_bounded(&mut file, declared, member).map_err(|e| {
+        StorageError::Io {
+            context: format!("reading {member}"),
+            source: std::io::Error::other(e.to_string()),
+        }
+    })?;
     Ok(buf)
 }
 

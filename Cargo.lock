@@ -2503,6 +2503,7 @@ dependencies = [
  "diesel",
  "diesel-async",
  "diesel_migrations",
+ "flate2",
  "futures-util",
  "pahoa-multidata",
  "prometheus",

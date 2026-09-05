@@ -44,7 +44,7 @@ fn promoted_seed(bytes: &[u8]) -> (tempfile::TempDir, Vec<u8>, MultiData) {
 
     let paths = artifact::GenerationPaths::new(dir.path(), &meta.sha256);
     let seed = std::fs::read(paths.seed()).expect("the promoted seed");
-    let data = MultiData::parse(&seed).expect("the seed parses");
+    let data = artifact::parse_multidata(&seed).expect("the seed parses");
     (dir, seed, data)
 }
 

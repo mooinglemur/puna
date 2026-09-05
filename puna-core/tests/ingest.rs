@@ -39,7 +39,10 @@ fn multidata(bytes: &[u8]) -> MultiData {
         .unwrap()
         .read_to_end(&mut raw)
         .unwrap();
-    MultiData::parse(&raw).expect("multidata parses")
+    // Through the bounded door, like every parse in the crates that serve requests. A test helper
+    // reading a fixture is not an attack surface, but reading the fixture the way production reads
+    // it is free and means the bound is exercised by every seed test rather than only by its own.
+    artifact::parse_multidata(&raw).expect("multidata parses")
 }
 
 fn shellexpand_tilde(p: &str) -> String {

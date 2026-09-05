@@ -19,6 +19,10 @@ deadpool.workspace = true
 diesel.workspace = true
 diesel-async.workspace = true
 diesel_migrations.workspace = true
+# Already in the graph under `zip` and `pahoa-multidata`; named here because `artifact::ingest`
+# inflates a multidata ITSELF, with a cap, before handing the same bytes to a parser whose own
+# inflate is unbounded. See the bounds section there.
+flate2 = "1.1.9"
 futures-util.workspace = true
 pahoa-multidata.workspace = true
 prometheus.workspace = true

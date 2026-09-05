@@ -99,8 +99,148 @@ pub enum IngestError {
     )]
     BannedFile { member: String },
 
+    #[error(
+        "{member} unpacks to more than {limit} bytes. \
+         Generation output never contains a file that large, and an archive that claims one is \
+         how a small upload turns into an out-of-memory kill."
+    )]
+    MemberTooLarge { member: String, limit: u64 },
+
+    #[error(
+        "the .archipelago file unpacks to more than {limit} bytes, from {compressed} compressed. \
+         No real seed expands like that; this is the shape of a decompression bomb."
+    )]
+    MultidataTooLarge { limit: u64, compressed: usize },
+
+    #[error(
+        "this seed declares {items} pre-collected items across its slots, over the {limit} limit. \
+         A start inventory is tens of items; a number like this is not a seed anybody generated, \
+         and a room loading it would spend a gigabyte of memory on it."
+    )]
+    TooManyPrecollectedItems { items: usize, limit: usize },
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
+}
+
+// --- BOUNDS ON UNTRUSTED INPUT -------------------------------------------------------------------
+//
+// **Everything below this line exists because a generation zip is a stranger's file.** It arrives
+// over the internet from anybody the gate admits, it is a container of containers of compressed
+// data, and every layer of it is a place where a small upload can ask for a large allocation.
+//
+// The concrete case, and the numbers are Puna's own rather than a report's: a 38,559-byte
+// `.archipelago` file inflates to 22,871,873 bytes of pickle, 11,422,802 opcodes of which are
+// one-byte integers, and `MultiData::parse` on it peaks at **732 MiB of resident memory over three
+// seconds**. The web tier's limit is 1Gi. One upload gets close enough to that to matter; a
+// slightly larger one, or two at once, does not need to get close. The same file is reported to
+// have cost an upstream MultiServer about a gigabyte per room, because eleven million start
+// inventory codes become eleven million Python objects held for the room's lifetime.
+//
+// Three separate multipliers were available to it, and each is capped below:
+//
+// 1. **The zip's declared member size**, which is a number in the central directory that nobody
+//    verified. `Vec::with_capacity(file.size())` allocated it before reading a byte, so a zip
+//    claiming a four-gigabyte member cost four gigabytes with no bomb at all. Now the declared
+//    size is a hint, clamped, and the read itself is bounded.
+// 2. **zlib**, whose maximum ratio is about 1032:1. A 256 MiB upload could therefore ask for 264
+//    GiB of inflate, and `read_to_end` on a `ZlibDecoder` will try.
+// 3. **The pickle**, where every two bytes can become an object several times that size.
+//
+// The third is the one Puna cannot bound from outside, and it is the reason the ratio cap below
+// matters as well as the absolute one: this parser lives in `pahoa-multidata` and builds a whole
+// `PyObj` tree before any typing happens, so cost is a function of opcode COUNT rather than of
+// input size. Puna's own bound on it is the byte cap, at roughly 32 bytes of tree per opcode.
+//
+// **State the residual rather than implying it is gone.** At those numbers a 32 MiB inflate can
+// still cost about a gigabyte of tree, and reaching it takes an upload of roughly 1.6 MB, which the
+// ratio cap does nothing about. So this turns an unbounded, 38-KB-and-free attack into a bounded and
+// expensive one, and the remaining gigabyte is a question for whoever owns the tier's memory limit
+// (1Gi today) until pahoa carries a budget of its own. That budget is the first ask in the handoff.
+
+/// The largest single member Puna will unpack from a generation zip.
+///
+/// Measured against the corpus: the largest member across fifteen real generation zips is 7.66 MB,
+/// a patch. This is eight times that, so it bounds a hostile archive without being a number anybody
+/// generating a seed for a big game will meet.
+pub const MAX_MEMBER_BYTES: u64 = 64 * 1024 * 1024;
+
+/// The largest multidata Puna will inflate.
+///
+/// Measured: the largest real seed in the corpus inflates to 5.94 MB, and a synthetic 500-slot,
+/// 200,000-placement seed to 4.2 MB, which extrapolates to about 11 MiB for a 2,000-slot sync.
+/// This is five times the first and three times the second.
+pub const MAX_MULTIDATA_BYTES: usize = 32 * 1024 * 1024;
+
+/// How much bigger than its compressed self a multidata may inflate.
+///
+/// **The absolute cap above bounds the worst case; this is what makes the cheap attack fail
+/// early.** Real seeds compress between 2.9:1 and 4.6:1 across the corpus, because a multidata is
+/// mostly names and ids. The poisoned file is 593:1, being eleven million copies of one integer.
+/// Twenty is four times the highest ratio anything real has shown and a thirtieth of what the
+/// attack needs, so that file is refused after inflating 771 KB rather than 22.9 MB.
+///
+/// It does not lower the ceiling for somebody willing to upload a megabyte, which is what the
+/// absolute cap is for. Two bounds, because they fail differently.
+pub const MAX_MULTIDATA_RATIO: usize = 20;
+
+/// The largest start inventory, summed across every slot.
+///
+/// The byte caps above do not bind this one usefully: an integer is two bytes of pickle, so a
+/// multidata inside the cap can still declare sixteen million pre-collected items, and every one
+/// of them becomes an item the room hands somebody at connect. The corpus's largest real start
+/// inventory is 552 items across all slots. This is 180 times that.
+pub const MAX_PRECOLLECTED_ITEMS: usize = 100_000;
+
+/// Read one zip member, bounded.
+///
+/// **The declared size is a hint and nothing more.** It is clamped before it reaches
+/// `with_capacity`, so a lying header costs a bounded allocation rather than the one it asked for,
+/// and the read itself stops one byte past the cap so a member that lies *small* is caught too.
+pub fn read_member_bounded(
+    file: &mut impl Read,
+    declared: u64,
+    member: &str,
+) -> Result<Vec<u8>, IngestError> {
+    let mut buf = Vec::with_capacity(declared.min(MAX_MEMBER_BYTES) as usize);
+    file.take(MAX_MEMBER_BYTES + 1).read_to_end(&mut buf)?;
+    if buf.len() as u64 > MAX_MEMBER_BYTES {
+        return Err(IngestError::MemberTooLarge {
+            member: member.to_string(),
+            limit: MAX_MEMBER_BYTES,
+        });
+    }
+    Ok(buf)
+}
+
+/// Parse a multidata from untrusted bytes, with a bound on what it may inflate to.
+///
+/// **The single door onto `MultiData::parse` in this codebase**, so no caller can forget the cap:
+/// upload, the name cache and the room-creation re-check all come through here.
+///
+/// The file is inflated twice, once here to measure it and once inside the parser. That is
+/// deliberate and it is cheap: the second inflate is bounded by the first having passed, and the
+/// alternative is reaching past `MultiData::parse` into `pahoa_pickle` to build the typed value
+/// from a buffer Puna already holds, which would make Puna's parse pipeline a second
+/// implementation of pahoa's. M32's rule stands: run pahoa's function, do not transcribe it.
+pub fn parse_multidata(raw: &[u8]) -> Result<MultiData, IngestError> {
+    // The parser reads a format byte and then inflates the rest. An empty file has neither, and
+    // slicing it here would panic where the parser answers an error, so it is left to the parser.
+    if raw.len() > 1 {
+        let allowed = MAX_MULTIDATA_BYTES.min(raw.len().saturating_mul(MAX_MULTIDATA_RATIO));
+        let mut sink = std::io::sink();
+        let inflated = std::io::copy(
+            &mut flate2::read::ZlibDecoder::new(&raw[1..]).take(allowed as u64 + 1),
+            &mut sink,
+        )?;
+        if inflated as usize > allowed {
+            return Err(IngestError::MultidataTooLarge {
+                limit: allowed as u64,
+                compressed: raw.len(),
+            });
+        }
+    }
+    MultiData::parse(raw).map_err(|e| IngestError::Multidata(e.to_string()))
 }
 
 /// What a slot is, for the slots Puna keeps.
@@ -200,12 +340,14 @@ struct PatchManifest {
 /// Read `archipelago.json` from a patch that is itself a zip.
 ///
 /// Returns `None` when the member is not a zip (`.apmanual` and friends) or carries no manifest.
+/// A patch is a zip inside a zip, so its manifest is read bounded like any other member: the outer
+/// archive's size limit says nothing about what a member of a member declares.
 fn read_patch_manifest(bytes: &[u8]) -> Option<PatchManifest> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).ok()?;
     let mut file = archive.by_name("archipelago.json").ok()?;
-    let mut raw = String::new();
-    file.read_to_string(&mut raw).ok()?;
-    serde_json::from_str(&raw).ok()
+    let declared = file.size();
+    let raw = read_member_bounded(&mut file, declared, "archipelago.json").ok()?;
+    serde_json::from_slice(&raw).ok()
 }
 
 /// Is the byte at `i` a separator, or off either end of `s`?
@@ -297,9 +439,37 @@ fn slot_from_filename(name: &str) -> Option<u32> {
 /// The margin makes that trade cheap rather than merely defensible: every seed in the corpus
 /// demands 0.5.0 while pahoa reports 0.6.8, so this arm binds only on a seed from the future.
 pub fn load_refusal(data: &MultiData) -> Option<String> {
+    if let Some(reason) = bomb_refusal(data) {
+        return Some(reason);
+    }
     data.validate(data.minimum_server_version)
         .err()
         .map(|e| e.to_string())
+}
+
+/// Why this seed is a weapon rather than a seed, or `None`.
+///
+/// **The one check here that is Puna's own rather than pahoa's**, and it sits inside
+/// [`load_refusal`] rather than beside it so that it inherits both of that function's call sites:
+/// the upload, and the re-check when a room is opened from a seed already on the volume. A separate
+/// function would have needed remembering twice, and the second site is the one that matters for
+/// anything ingested before this existed.
+///
+/// It bounds what the byte caps cannot. An integer is two bytes of pickle, so a multidata well
+/// inside [`MAX_MULTIDATA_BYTES`] can still declare millions of pre-collected items, and every one
+/// of them is an item a room hands somebody at connect: the reported upstream crash is eleven
+/// million of them costing about a gigabyte per room, held for the room's whole life.
+///
+/// Ordered before `validate` because it is the cheaper question and the more serious answer.
+fn bomb_refusal(data: &MultiData) -> Option<String> {
+    let items: usize = data.precollected_items.values().map(Vec::len).sum();
+    (items > MAX_PRECOLLECTED_ITEMS).then(|| {
+        IngestError::TooManyPrecollectedItems {
+            items,
+            limit: MAX_PRECOLLECTED_ITEMS,
+        }
+        .to_string()
+    })
 }
 
 /// [`load_refusal`], for a seed already promoted to the volume.
@@ -310,7 +480,10 @@ pub fn load_refusal(data: &MultiData) -> Option<String> {
 /// volume was last checked under the previous rules. A room opened from one of them is the case
 /// the upload check cannot cover, so it is checked again where a room is opened.
 pub fn seed_refusal(seed: &[u8]) -> Result<Option<String>, IngestError> {
-    let data = MultiData::parse(seed).map_err(|e| IngestError::Multidata(e.to_string()))?;
+    // Through the bounded door like every other parse, and this one is not merely tidiness: a seed
+    // promoted before the caps existed is exactly as untrusted as one arriving now, and a room is
+    // opened from it long after whoever uploaded it has gone.
+    let data = parse_multidata(seed)?;
     Ok(load_refusal(&data))
 }
 
@@ -350,13 +523,11 @@ pub fn inspect(bytes: &[u8], size_limit: u64) -> Result<GenerationMeta, IngestEr
 
     let multidata_bytes = {
         let mut file = archive.by_name(&multidata_member)?;
-        let mut buf = Vec::with_capacity(file.size() as usize);
-        file.read_to_end(&mut buf)?;
-        buf
+        let declared = file.size();
+        read_member_bounded(&mut file, declared, &multidata_member)?
     };
 
-    let data =
-        MultiData::parse(&multidata_bytes).map_err(|e| IngestError::Multidata(e.to_string()))?;
+    let data = parse_multidata(&multidata_bytes)?;
 
     // Before anything is attributed, because a seed no room will load has nothing worth indexing,
     // and because the whole point of doing this at upload is that it is a sentence on a form
@@ -401,9 +572,7 @@ pub fn inspect(bytes: &[u8], size_limit: u64) -> Result<GenerationMeta, IngestEr
 
         let member_bytes = {
             let mut file = archive.by_index(i)?;
-            let mut buf = Vec::with_capacity(member_size as usize);
-            file.read_to_end(&mut buf)?;
-            buf
+            read_member_bounded(&mut file, member_size, &name)?
         };
 
         // The patch's own manifest first: authoritative, and immune to every naming convention.
@@ -663,7 +832,7 @@ mod tests {
             .find("if let Some(reason) = load_refusal(&data)")
             .expect("`inspect` no longer runs the load-time checks a room runs before it starts");
         let parse = source
-            .find("MultiData::parse(&multidata_bytes)")
+            .find("parse_multidata(&multidata_bytes)")
             .expect("the parse call was renamed; re-point this lint rather than deleting it");
         // Ordering is not incidental: the checks read the parsed seed, and everything after them
         // (patch attribution, the slot list, the games) is work on a seed no room will load.
@@ -674,6 +843,112 @@ mod tests {
         assert!(
             source[call..].contains("IngestError::WillNotLoad"),
             "the refusal must reach the uploader as a rejection, not a log line"
+        );
+    }
+
+    /// **A member's declared size is a claim, and believing it was the cheapest attack of the
+    /// three.**
+    ///
+    /// `Vec::with_capacity(file.size())` allocated whatever a zip's central directory said, before
+    /// reading a byte and with no compression involved at all: a header claiming four gigabytes cost
+    /// four gigabytes. No bomb, no payload, and a few hundred bytes on the wire.
+    ///
+    /// Both directions, because a size can lie either way. A capacity assertion is the only way to
+    /// see the first one from outside: the read succeeds identically whether or not the clamp is
+    /// there, and what differs is a number nothing renders.
+    #[test]
+    fn a_members_declared_size_is_never_believed() {
+        let small = b"a handful of bytes";
+
+        let buf = read_member_bounded(&mut &small[..], 4 * 1024 * 1024 * 1024, "liar")
+            .expect("a small member reads");
+        assert_eq!(buf, small);
+        assert!(
+            (buf.capacity() as u64) <= MAX_MEMBER_BYTES,
+            "a zip header claiming four gigabytes allocated {} bytes, which is the whole attack",
+            buf.capacity()
+        );
+
+        // And a member that lies the other way: the declared size is tiny, the content is not.
+        let huge = std::io::repeat(0u8).take(MAX_MEMBER_BYTES + 64);
+        let err = read_member_bounded(&mut huge.take(u64::MAX), 12, "bomb")
+            .expect_err("a member over the cap must be refused");
+        assert!(
+            matches!(err, IngestError::MemberTooLarge { .. }),
+            "refused for the wrong reason: {err}"
+        );
+    }
+
+    /// **`parse_multidata` is the only door onto the parser, in the whole workspace.**
+    ///
+    /// The cap is a property of the call site rather than of the parser: `MultiData::parse` inflates
+    /// with an unbounded `read_to_end` and builds a `PyObj` tree with no budget, so a second call
+    /// site anywhere is a second unbounded one. A new one would look completely ordinary next to the
+    /// existing code, would pass every test, and would be discovered when a pod died.
+    ///
+    /// Read over the crate sources rather than asserted from a test that calls the wrapper, for the
+    /// same reason the lint above exists: a wrapper nobody calls still works perfectly.
+    #[test]
+    fn nothing_reaches_the_parser_except_through_the_bounded_door() {
+        let mut offenders = Vec::new();
+        let mut checked = 0;
+
+        fn walk(dir: &std::path::Path, into: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, into);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    into.push(path);
+                }
+            }
+        }
+
+        // **The three crates that serve requests**, plus their tests, because a route or a helper
+        // that parsed a seed itself would be exactly this bug and would look ordinary.
+        //
+        // `puna-tools` is deliberately outside the scope rather than exempted by accident: its two
+        // binaries read a zip whose path the operator typed, it deliberately does not depend on
+        // `puna-core` (see the workspace manifest), so it cannot reach this door, and nothing it
+        // does is reachable from the internet. If it ever grows a network input, it comes back in.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("the crate sits in the workspace root")
+            .to_path_buf();
+        let mut sources = Vec::new();
+        for member in ["puna-core", "puna-web", "puna-orchestrator"] {
+            walk(&root.join(member).join("src"), &mut sources);
+            walk(&root.join(member).join("tests"), &mut sources);
+        }
+
+        for path in &sources {
+            let text = std::fs::read_to_string(path).expect("a readable source file");
+            checked += 1;
+            for (number, line) in text.lines().enumerate() {
+                // The definition itself, and the prose that has to name what it wraps.
+                let is_the_door = path.ends_with("artifact/ingest.rs");
+                if line.contains("MultiData::parse(")
+                    && !line.trim_start().starts_with("//")
+                    && !line.trim_start().starts_with("///")
+                    && !is_the_door
+                {
+                    offenders.push(format!("{}:{}", path.display(), number + 1));
+                }
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "MultiData::parse is called outside the bounded wrapper, so a hostile seed reaches an \
+             unbounded inflate there: {}",
+            offenders.join(", ")
+        );
+        assert!(
+            checked > 50,
+            "only {checked} source files scanned: this lint is no longer looking at anything"
         );
     }
 }

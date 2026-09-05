@@ -77,7 +77,10 @@ impl NameTables {
 /// A rebuild that re-derived this some other way would be a second implementation of the thing
 /// most worth having only one of.
 pub fn from_seed(seed: &[u8]) -> Result<NameTables, IngestError> {
-    let data = MultiData::parse(seed).map_err(|e| IngestError::Multidata(e.to_string()))?;
+    // Bounded, like every parse here: this reads a file off the volume, and a file being ours does
+    // not make it trustworthy when a stranger uploaded it. The admin rebuild route reaches this
+    // with whatever was ingested, including under older rules.
+    let data = super::ingest::parse_multidata(seed)?;
     Ok(from_multidata(&data))
 }
 
