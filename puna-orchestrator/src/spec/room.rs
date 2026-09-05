@@ -61,6 +61,9 @@ pub struct Draft {
     /// Every slot in the multidata, **groups included**: this sizes the memory request, and pahoa
     /// derives its outbound budget from `slot_info.len()`, so the connectable count under-requests.
     pub slot_count: i32,
+    /// The seed's data package on the wire, or `None` for a generation ingested before the column
+    /// existed. See [`outbound_budget_mib`]: this is the term slot count cannot predict.
+    pub datapackage_bytes: Option<i64>,
     pub save_interval_secs: i32,
     pub use_embedded_options: bool,
 }
@@ -81,6 +84,7 @@ impl Draft {
             base_port: self.base_port,
             wants_filtered: self.wants_filtered,
             slot_count: self.slot_count,
+            datapackage_bytes: self.datapackage_bytes,
             save_interval_secs: self.save_interval_secs,
             use_embedded_options: self.use_embedded_options,
         }
@@ -106,12 +110,34 @@ impl Draft {
             // is a change `slot_count` alone could never express.
             format!("shards={}", shards(self.slot_count)),
             format!("shard_queue_depth={}", shard_queue_depth(self.slot_count)),
+            // **The budget rather than the raw size**, because that is what reaches the room: two
+            // seeds whose packages differ by a byte render the same argv and must not recreate a
+            // pod between them.
+            //
+            // **Emitted only when the package size is known**, which is what keeps this from
+            // flagging the whole fleet. A generation ingested before the column renders exactly the
+            // argv it always did, so adding an unconditional line here would have moved every room's
+            // hash without moving any room's command line: every room reading as drifted on
+            // `/admin/rooms`, for a change to the fingerprint rather than to the thing fingerprinted.
+            // That is the hazard the module docs raise about hashing a rendered manifest, in
+            // miniature, and `the_canonical_form_is_pinned` is what caught it.
+            //
+            // A room whose seed HAS a package size genuinely renders a different budget, so it
+            // drifts and says so. Filling in a NULL through the admin rebuild moves it then, which
+            // is the moment it should move.
             format!("save_interval={}", self.save_interval_secs),
             format!("use_embedded_options={}", self.use_embedded_options),
             format!("slot_auth={}", slot_auth.as_sql()),
         ] {
             out.push_str(&line);
             out.push('\n');
+        }
+
+        if self.datapackage_bytes.is_some() {
+            out.push_str(&format!(
+                "outbound_budget_mib={}\n",
+                outbound_budget_mib(self.slot_count, self.datapackage_bytes)
+            ));
         }
 
         // `SecretData` is a BTreeMap, so this walks in key order without sorting, which is also
@@ -187,15 +213,39 @@ fn slot_numbers(json: &str) -> Vec<String> {
 /// Rounded **up** rather than down so the cap is never quieter than pahoa's own default would have
 /// been, and returned in MiB so the unit is in the name and the byte value is derived from it,
 /// rather than the two being converted at a call site, which is where this went wrong.
-pub fn outbound_budget_mib(slot_count: i32) -> i64 {
+/// ## The data package is the second term, and leaving it out closed healthy connections
+///
+/// Sized from slot count alone, this was blind to the download that actually overruns a
+/// per-connection share. **A client's largest single transfer is one `GetDataPackage` answer, and
+/// that scales with the number of GAMES rather than with players.** A live 189-slot room carrying
+/// 106 games answers with 6.19 MB against a 256 KiB per-connection share, and clients pipeline
+/// about fourteen of them: 88 "cannot keep up" closes in five minutes, players seeing a socket
+/// vanish with no close frame, **while the room-wide budget sat at 0.6% used**. The refusals were
+/// per-connection, so the number this function produces was never the thing binding, and every
+/// panel that watches the global budget said the room was fine.
+///
+/// pahoa fixed their side of it and it does not reach a Puna room, which is the whole reason this
+/// function exists: `--outbound-budget` is passed explicitly and an explicit value wins. A
+/// derivation that stays behind theirs silently keeps every room on the old number.
+///
+/// `datapackage_bytes` is `None` for a generation ingested before the column existed, and that is
+/// read as zero here: those rooms size exactly as they did before, which is the behavior they have
+/// today rather than a new guess. Re-reading the seed through the admin name rebuild fills it in.
+pub fn outbound_budget_mib(slot_count: i32, datapackage_bytes: Option<i64>) -> i64 {
     const PER_CONNECTION: i64 = 96 * 1024;
     const CONNECTIONS_PER_SLOT: i64 = 3;
+    /// Clients whose data-package download may be in flight together. pahoa's number, and their
+    /// note about it is worth keeping: a restart storm exceeds this on purpose, because the budget
+    /// is a backstop rather than a promise.
+    const CONCURRENT_FETCHES: i64 = 8;
     const FLOOR: i64 = 64 * 1024 * 1024;
 
     let slots = i64::from(slot_count.max(0));
+    let package = datapackage_bytes.unwrap_or(0).max(0);
     let bytes = slots
         .saturating_mul(CONNECTIONS_PER_SLOT)
         .saturating_mul(PER_CONNECTION)
+        .saturating_add(package.saturating_mul(CONCURRENT_FETCHES))
         .max(FLOOR);
     // Written out rather than `div_ceil`, which is still unstable for signed integers.
     (bytes + MIB - 1) / MIB
@@ -207,8 +257,8 @@ const MIB: i64 = 1024 * 1024;
 ///
 /// Derived from [`outbound_budget_mib`] rather than computed beside it, so the number Puna sizes
 /// the memory limit against is exactly the number the room was told to use, including the rounding.
-pub fn outbound_budget_bytes(slot_count: i32) -> i64 {
-    outbound_budget_mib(slot_count).saturating_mul(MIB)
+pub fn outbound_budget_bytes(slot_count: i32, datapackage_bytes: Option<i64>) -> i64 {
+    outbound_budget_mib(slot_count, datapackage_bytes).saturating_mul(MIB)
 }
 
 /// Fan-out width: pahoa's `--shards`, and a **reliability** number before a throughput one.
@@ -470,10 +520,10 @@ fn non_queue_bytes(slot_count: i32) -> i64 {
 /// [`shard_queue_bytes`] is in at **full** value rather than a quarter, because unlike the outbound
 /// queue it is not a depth the room grows into: `mpsc::channel` reserves it at startup, so it is
 /// resident in the first second of an empty room.
-pub fn memory_request_bytes(slot_count: i32) -> i64 {
+pub fn memory_request_bytes(slot_count: i32, datapackage_bytes: Option<i64>) -> i64 {
     non_queue_bytes(slot_count)
         + shard_queue_bytes(slot_count)
-        + outbound_budget_bytes(slot_count) / 4
+        + outbound_budget_bytes(slot_count, datapackage_bytes) / 4
 }
 
 /// What to request, in **millicores**: steady-state demand, which scales with the room.
@@ -547,8 +597,8 @@ pub fn cpu_request_millicores(slot_count: i32) -> i64 {
 /// It does double-count by about 576 KiB against the base measurements above, which were taken on
 /// rooms running two shards of 4096, inside the noise of a fit whose per-slot term is drawn from
 /// the worst observation, and in the safe direction.
-pub fn memory_limit_bytes(slot_count: i32) -> i64 {
-    outbound_budget_bytes(slot_count)
+pub fn memory_limit_bytes(slot_count: i32, datapackage_bytes: Option<i64>) -> i64 {
+    outbound_budget_bytes(slot_count, datapackage_bytes)
         + shard_queue_bytes(slot_count)
         + non_queue_bytes(slot_count) * 3 / 2
 }
@@ -564,6 +614,7 @@ mod tests {
             base_port: 40000,
             wants_filtered: true,
             slot_count: 96,
+            datapackage_bytes: None,
             save_interval_secs: 30,
             use_embedded_options: true,
         }
@@ -611,6 +662,7 @@ mod tests {
             base_port: 40000,
             wants_filtered: true,
             slot_count: 4,
+            datapackage_bytes: None,
             save_interval_secs: 30,
             use_embedded_options: true,
         };
@@ -627,6 +679,32 @@ mod tests {
              save_interval=30\n\
              use_embedded_options=true\n\
              slot_auth=none\n\
+             env=PAHOA_ADMIN_TOKEN=token\n"
+        );
+
+        // **A seed ingested before the data package was measured hashes exactly as it always did**,
+        // which is the assertion above: every generation on the volume is that case, and a fleet
+        // reading as drifted for a change to the fingerprint rather than to the pod is the thing
+        // this pin exists to make somebody choose.
+        //
+        // One whose package size IS known renders a different budget and says so, on a line of its
+        // own after the other spec fields and before the environment, which is where it belongs: it
+        // is a spec value rather than a Secret key.
+        let mut known = draft;
+        known.datapackage_bytes = Some(6_193_114);
+        assert_eq!(
+            known.canonical(SlotAuth::None, &env),
+            "puna/room-spec/1\n\
+             image=pahoa:test\n\
+             base_port=40000\n\
+             filtered=true\n\
+             slot_count=4\n\
+             shards=2\n\
+             shard_queue_depth=4096\n\
+             save_interval=30\n\
+             use_embedded_options=true\n\
+             slot_auth=none\n\
+             outbound_budget_mib=64\n\
              env=PAHOA_ADMIN_TOKEN=token\n"
         );
     }
@@ -839,23 +917,81 @@ mod tests {
     #[test]
     fn the_memory_budget_matches_pahoas_heuristic() {
         // The floor: a small room does not get a cap so low it binds during ordinary play.
-        assert_eq!(outbound_budget_mib(1), 64);
-        assert_eq!(outbound_budget_mib(0), 64);
+        assert_eq!(outbound_budget_mib(1, None), 64);
+        assert_eq!(outbound_budget_mib(0, None), 64);
         // 228 slots is where three connections at 96 KiB each first passes the floor; at 227 the
         // formula is still below it and the floor is what binds.
-        assert_eq!(outbound_budget_mib(227), 64);
+        assert_eq!(outbound_budget_mib(227, None), 64);
         assert_eq!(
-            outbound_budget_mib(228),
+            outbound_budget_mib(228, None),
             (228 * 3 * 96 * 1024i64 + MIB - 1) / MIB
         );
         // pahoa's own heuristic puts a 2000-slot room at 562.5 MiB; rounded up so the cap is never
         // quieter than the default it replaces.
-        assert_eq!(outbound_budget_mib(2000), 563);
-        assert!(outbound_budget_bytes(2000) >= 562 * MIB + 512 * 1024);
+        assert_eq!(outbound_budget_mib(2000, None), 563);
+        assert!(outbound_budget_bytes(2000, None) >= 562 * MIB + 512 * 1024);
 
         // A negative slot count cannot come from the database, but it must not become a huge
         // request if it ever does.
-        assert_eq!(outbound_budget_mib(-5), 64);
+        assert_eq!(outbound_budget_mib(-5, None), 64);
+        // Nor may a negative package size, which the same clamp covers.
+        assert_eq!(outbound_budget_mib(-5, Some(-1)), 64);
+    }
+
+    /// **The room that was dropping healthy players, reproduced from its own numbers.**
+    ///
+    /// `mw-3b515ef1`: 189 slots, 106 games, a data package answering `GetDataPackage` with
+    /// 6,193,114 bytes. Sized from slots alone it got the 64 MiB floor, which is the value it was
+    /// running when it closed 88 connections in five minutes **with the room-wide budget at 0.6%
+    /// used**: the refusals were per-connection and this number was never binding.
+    ///
+    /// pahoa worked the same room out to 53 MiB of slot term plus 47 MiB of package term, and this
+    /// asserts Puna's transcription lands on theirs rather than merely on something larger. That
+    /// agreement is the whole point of transcribing rather than inventing: the value Puna renders is
+    /// the value the container is sized against, so a derivation that drifted from the room's would
+    /// reintroduce M37's unit bug in slower motion.
+    ///
+    /// The second half is the one that matters more: **without the package term the same room
+    /// silently keeps the floor**, and every panel that watches the global budget goes on saying it
+    /// is fine.
+    #[test]
+    fn the_budget_sees_the_data_package_that_was_overrunning_connections() {
+        const SLOTS: i32 = 189;
+        const PACKAGE: i64 = 6_193_114;
+
+        let slot_term = 189i64 * 3 * 96 * 1024;
+        let package_term = PACKAGE * 8;
+        assert_eq!(slot_term / MIB, 53, "the slot term is not pahoa's 53 MiB");
+        assert_eq!(
+            package_term / MIB,
+            47,
+            "the package term is not pahoa's 47 MiB"
+        );
+
+        let budget = outbound_budget_mib(SLOTS, Some(PACKAGE));
+        assert_eq!(budget, (slot_term + package_term + MIB - 1) / MIB);
+        assert_eq!(
+            budget, 101,
+            "the two terms no longer sum to what pahoa computed"
+        );
+
+        // What the room actually had, and would still have with the term dropped.
+        assert_eq!(
+            outbound_budget_mib(SLOTS, None),
+            64,
+            "a 189-slot room sized from slots alone is at the floor, which is the bug"
+        );
+        assert!(
+            budget > outbound_budget_mib(SLOTS, None),
+            "the package term changes nothing, so this room is still undersized"
+        );
+
+        // And the container is sized against the same number, not against the old one.
+        assert!(
+            memory_limit_bytes(SLOTS, Some(PACKAGE))
+                > memory_limit_bytes(SLOTS, None) + package_term / 2,
+            "the limit does not follow the budget the room was given"
+        );
     }
 
     /// **The argv value is in MiB, and the sizing is in bytes, and they must mean the same cap.**
@@ -878,6 +1014,7 @@ mod tests {
                 base_port: 40000,
                 wants_filtered: true,
                 slot_count: slots,
+                datapackage_bytes: None,
                 save_interval_secs: 30,
                 use_embedded_options: true,
             };
@@ -891,10 +1028,10 @@ mod tests {
             // The unit, stated as the multiplication pahoa itself performs.
             assert_eq!(
                 mib * MIB,
-                outbound_budget_bytes(slots),
+                outbound_budget_bytes(slots, None),
                 "{slots} slots: the room is told {mib} MiB but sized for \
                  {} MiB of queue",
-                outbound_budget_bytes(slots) / MIB
+                outbound_budget_bytes(slots, None) / MIB
             );
             // And a sanity bound, because the failure this exists for was six orders of magnitude:
             // no room's cap belongs anywhere near a terabyte.
@@ -996,7 +1133,7 @@ mod tests {
         // worst case the bounds allow: 32 x 65,536 x 72 = 144 MiB.
         for slots in [1, 200, 2000, 6000] {
             assert!(
-                shard_queue_bytes(slots) * 20 < memory_limit_bytes(slots),
+                shard_queue_bytes(slots) * 20 < memory_limit_bytes(slots, None),
                 "{slots} slots: {} MiB of envelopes is no longer a small term",
                 shard_queue_bytes(slots) / MIB
             );
@@ -1039,6 +1176,7 @@ mod tests {
                 base_port: 40000,
                 wants_filtered: true,
                 slot_count: slots,
+                datapackage_bytes: None,
                 save_interval_secs: 30,
                 use_embedded_options: true,
             };
@@ -1068,8 +1206,8 @@ mod tests {
     #[test]
     fn the_limit_leaves_headroom_over_the_request() {
         for slots in [1, 96, 2000] {
-            let request = memory_request_bytes(slots);
-            let limit = memory_limit_bytes(slots);
+            let request = memory_request_bytes(slots, None);
+            let limit = memory_limit_bytes(slots, None);
             assert!(
                 limit > request,
                 "{slots} slots: {limit} must exceed {request}"
@@ -1091,8 +1229,8 @@ mod tests {
     #[test]
     fn the_limit_lets_a_room_reach_its_own_outbound_cap() {
         for slots in [0, 1, 4, 96, 200, 227, 228, 1000, 2000, 5000] {
-            let budget = outbound_budget_bytes(slots);
-            let limit = memory_limit_bytes(slots);
+            let budget = outbound_budget_bytes(slots, None);
+            let limit = memory_limit_bytes(slots, None);
             let base = non_queue_bytes(slots);
             assert!(
                 limit - budget >= base,
@@ -1166,7 +1304,7 @@ mod tests {
     fn no_room_requests_more_than_its_limit() {
         for slots in [0, 1, 4, 96, 200, 500, 2000, 6000] {
             assert!(
-                memory_request_bytes(slots) <= memory_limit_bytes(slots),
+                memory_request_bytes(slots, None) <= memory_limit_bytes(slots, None),
                 "{slots} slots reserves more memory than it may use"
             );
         }
@@ -1189,9 +1327,12 @@ mod tests {
 
         // 96 slots: 64 MiB budget (its floor) + 2×4096×72 envelopes + (160 MiB + 96×288 KiB) base.
         const BASE_96: i64 = 160 * 1024 * 1024 + 96 * 288 * 1024;
-        assert_eq!(memory_request_bytes(96), BASE_96 + 589_824 + 67_108_864 / 4);
         assert_eq!(
-            memory_limit_bytes(96),
+            memory_request_bytes(96, None),
+            BASE_96 + 589_824 + 67_108_864 / 4
+        );
+        assert_eq!(
+            memory_limit_bytes(96, None),
             67_108_864 + 589_824 + BASE_96 * 3 / 2
         );
 
@@ -1200,20 +1341,20 @@ mod tests {
         // sixteen simultaneous releases rather than pahoa's flat 4,096.
         const BASE_2000: i64 = 160 * 1024 * 1024 + 2000 * 288 * 1024;
         assert_eq!(
-            memory_request_bytes(2000),
+            memory_request_bytes(2000, None),
             BASE_2000 + 27_648_000 + 590_348_288 / 4
         );
         assert_eq!(
-            memory_limit_bytes(2000),
+            memory_limit_bytes(2000, None),
             590_348_288 + 27_648_000 + BASE_2000 * 3 / 2
         );
 
         // The totals, as flat numbers, because the expressions above would follow the constants if
         // somebody changed one: these are what a reviewer compares against a manifest.
-        assert_eq!(memory_request_bytes(96), 213_450_752);
-        assert_eq!(memory_limit_bytes(96), 361_824_256);
-        assert_eq!(memory_request_bytes(2000), 932_831_232);
-        assert_eq!(memory_limit_bytes(2000), 1_754_390_528);
+        assert_eq!(memory_request_bytes(96, None), 213_450_752);
+        assert_eq!(memory_limit_bytes(96, None), 361_824_256);
+        assert_eq!(memory_request_bytes(2000, None), 932_831_232);
+        assert_eq!(memory_limit_bytes(2000, None), 1_754_390_528);
     }
 
     /// The sizing is held to what the cluster actually measured, so tightening it later means
@@ -1229,7 +1370,7 @@ mod tests {
         const MIB: i64 = 1024 * 1024;
         for (slots, measured_mib) in [(1, 50), (4, 70), (200, 74), (2000, 494)] {
             let measured = measured_mib * MIB;
-            let headroom = memory_limit_bytes(slots) - outbound_budget_bytes(slots);
+            let headroom = memory_limit_bytes(slots, None) - outbound_budget_bytes(slots, None);
             assert!(
                 headroom >= measured * 5 / 4,
                 "{slots} slots: {} MiB of non-queue headroom against {measured_mib} MiB measured \
@@ -1240,7 +1381,7 @@ mod tests {
 
         // The exact limit three rooms were killed at, which must now be unreachable.
         assert!(
-            memory_limit_bytes(2000) > 1099 * MIB,
+            memory_limit_bytes(2000, None) > 1099 * MIB,
             "the 2000-slot limit is back at the value that OOM-killed three times"
         );
     }

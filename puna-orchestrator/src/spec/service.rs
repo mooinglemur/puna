@@ -238,6 +238,7 @@ mod tests {
                 base_port: 40000,
                 wants_filtered: true,
                 slot_count: 4,
+                datapackage_bytes: None,
                 save_interval_secs: 30,
                 use_embedded_options: true,
             },

@@ -77,6 +77,27 @@ async fn refuse_unloadable_seed(
         },
     )?;
 
+    // **Backfilled here because this path already parses the seed**, and because a room opened from
+    // a generation that predates the column would otherwise be sized as though its data package
+    // weighed nothing: the exact condition that was dropping healthy players on a 106-game room.
+    // Only when the column is empty, so an ordinary creation costs one `SELECT` and nothing else.
+    //
+    // The admin name rebuild repairs generations whose rooms already exist; this repairs the next
+    // room anybody opens, which is the case that would otherwise reintroduce the bug quietly on a
+    // fleet that had already been fixed.
+    if generation.datapackage_bytes.is_none()
+        && let Ok(bytes) = artifact::seed_datapackage_bytes(&seed)
+        && let Err(e) = generation::record_datapackage_bytes(conn, generation_id, bytes).await
+    {
+        // Not fatal: the room opens, sized as it would have been before. Worth a line, because the
+        // next thing somebody asks is why one room got the new budget and another did not.
+        tracing::warn!(
+            generation = %generation_id,
+            error = %e,
+            "could not record the seed's data package size; this room sizes as before"
+        );
+    }
+
     match artifact::seed_refusal(&seed) {
         Ok(None) => Ok(()),
         Ok(Some(reason)) => {

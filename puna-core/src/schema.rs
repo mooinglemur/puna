@@ -144,6 +144,7 @@ diesel::table! {
         min_server_version -> Nullable<Text>,
         first_ingested_by -> Nullable<Int8>,
         created_at -> Timestamptz,
+        datapackage_bytes -> Nullable<Int8>,
     }
 }
 

@@ -8,7 +8,7 @@ pub mod storage;
 pub use ingest::{
     GenerationMeta, IngestError, MAX_MEMBER_BYTES, MAX_MULTIDATA_BYTES, MAX_MULTIDATA_RATIO,
     MAX_PRECOLLECTED_ITEMS, SlotEntry, SlotKind, inspect, load_refusal, parse_multidata,
-    seed_refusal,
+    seed_datapackage_bytes, seed_refusal,
 };
 pub use names::{NameTables, from_seed as seed_names};
 pub use patch::{Credential, PatchError, embed_server};

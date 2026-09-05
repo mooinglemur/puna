@@ -286,7 +286,10 @@ fn resources(spec: &RoomSpec) -> ResourceRequirements {
             ),
             (
                 "memory".to_string(),
-                quantity_bytes(crate::spec::room::memory_request_bytes(spec.slot_count)),
+                quantity_bytes(crate::spec::room::memory_request_bytes(
+                    spec.slot_count,
+                    spec.datapackage_bytes,
+                )),
             ),
         ])),
         limits: Some(BTreeMap::from([
@@ -294,7 +297,10 @@ fn resources(spec: &RoomSpec) -> ResourceRequirements {
             ("cpu".to_string(), Quantity("2".to_string())),
             (
                 "memory".to_string(),
-                quantity_bytes(crate::spec::room::memory_limit_bytes(spec.slot_count)),
+                quantity_bytes(crate::spec::room::memory_limit_bytes(
+                    spec.slot_count,
+                    spec.datapackage_bytes,
+                )),
             ),
         ])),
         ..Default::default()
@@ -344,6 +350,7 @@ mod tests {
             base_port: 40000,
             wants_filtered: true,
             slot_count: 96,
+            datapackage_bytes: None,
             save_interval_secs: 30,
             use_embedded_options: true,
         }
@@ -579,11 +586,17 @@ mod tests {
 
         assert_eq!(
             requests["memory"],
-            quantity_bytes(crate::spec::room::memory_request_bytes(spec.slot_count))
+            quantity_bytes(crate::spec::room::memory_request_bytes(
+                spec.slot_count,
+                spec.datapackage_bytes
+            ))
         );
         assert_eq!(
             limits["memory"],
-            quantity_bytes(crate::spec::room::memory_limit_bytes(spec.slot_count))
+            quantity_bytes(crate::spec::room::memory_limit_bytes(
+                spec.slot_count,
+                spec.datapackage_bytes
+            ))
         );
         // A 96-slot room sits on pahoa's 64 MiB budget floor, so its request is the base
         // (160 MiB plus 96 slots at 288 KiB) plus a quarter of that budget, plus the 576 KiB of

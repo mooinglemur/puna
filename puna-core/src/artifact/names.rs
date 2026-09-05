@@ -43,6 +43,15 @@ pub struct NameTables {
     /// Sorted because the tracker renders them in a stable order and a client sorting a few
     /// thousand rows on load is work that can be done once here instead.
     pub slot_locations: BTreeMap<i32, Vec<i64>>,
+    /// What the merged package weighs on the wire, from pahoa's own estimate.
+    ///
+    /// **Carried here because the same resolution produces it**, and the rebuild path is the only
+    /// thing that re-reads a promoted seed. `generations.datapackage_bytes` is NULL for everything
+    /// ingested before the column existed, and those rooms size their outbound budget as if the
+    /// data package weighed nothing, which for a game-heavy room is the bug the column exists to
+    /// fix. Filling it in here means the repair somebody already runs for names repairs this too,
+    /// rather than needing a second walk over the volume.
+    pub datapackage_bytes: i64,
 }
 
 impl NameTables {
@@ -133,5 +142,8 @@ pub fn from_multidata(data: &MultiData) -> NameTables {
     NameTables {
         games,
         slot_locations,
+        // From the same resolved package the names came out of, so the number a room is sized
+        // against and the names a tracker renders can never describe two different packages.
+        datapackage_bytes: package.wire_size_estimate() as i64,
     }
 }

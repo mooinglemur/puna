@@ -90,6 +90,22 @@ pub async fn store(
                 .await?;
             }
 
+            // **The backfill, and it rides here because this is the only thing that re-reads a
+            // promoted seed.** Every generation ingested before `datapackage_bytes` existed has a
+            // NULL, and a room opened from one sizes its outbound budget as though the data package
+            // weighed nothing, which for a game-heavy room is the whole bug. Running the admin name
+            // rebuild now repairs both, rather than the column needing a second walk over the volume
+            // that somebody would have to remember to run.
+            //
+            // In the same transaction as the names for the reason the transaction exists: these come
+            // from one resolution of one package, and half of them landing would be a room sized
+            // against a package whose names say something else.
+            diesel::sql_query("UPDATE generations SET datapackage_bytes = $1 WHERE id = $2")
+                .bind::<BigInt, _>(tables.datapackage_bytes)
+                .bind::<SqlUuid, _>(generation_id)
+                .execute(conn)
+                .await?;
+
             Ok(())
         }
         .scope_boxed()

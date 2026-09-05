@@ -11,6 +11,7 @@ mod common;
 use std::collections::BTreeMap;
 
 use common::{insert_generation, with_db};
+use diesel_async::RunQueryDsl;
 use puna_core::artifact::names::{GameNames, NameTables};
 use puna_core::model::names;
 
@@ -44,6 +45,10 @@ fn tables() -> NameTables {
     NameTables {
         games,
         slot_locations,
+        // A number with no relation to the tables above, deliberately: `store` writes it to a
+        // different table, and a fixture that made it derivable from the names would hide a write
+        // that took its value from the wrong place.
+        datapackage_bytes: 1_234_567,
     }
 }
 
@@ -56,6 +61,32 @@ async fn names_round_trip_and_stay_scoped_to_their_game() {
         names::store(&mut conn, generation, &tables())
             .await
             .expect("store");
+
+        // **The rebuild backfills the data package's size, which is the only path that can.**
+        // A generation ingested before that column existed has a NULL, and a room opened from one
+        // sizes its outbound budget as though the package weighed nothing: the exact case that was
+        // closing healthy connections on a 106-game room. Nothing else re-reads a promoted seed, so
+        // if this write is lost the repair has no other route and the fleet stays undersized with
+        // nothing saying so.
+        #[derive(diesel::QueryableByName)]
+        struct Row {
+            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::BigInt>)]
+            datapackage_bytes: Option<i64>,
+        }
+        let rows: Vec<Row> =
+            diesel::sql_query("SELECT datapackage_bytes FROM generations WHERE id = $1")
+                .bind::<diesel::sql_types::Uuid, _>(generation)
+                .load(&mut conn)
+                .await
+                .expect("query");
+        // `into_iter().next()`, never `.first()`: with `RunQueryDsl` in scope that resolves to
+        // diesel's own `first` rather than the slice's, and the error is about `Vec<Row>` not
+        // implementing `Table`. Third time in this codebase.
+        assert_eq!(
+            rows.into_iter().next().and_then(|r| r.datapackage_bytes),
+            Some(1_234_567),
+            "the name rebuild did not fill in the data package size, so it has no repair path"
+        );
 
         let alttp = names::game(&mut conn, generation, "A Link to the Past")
             .await

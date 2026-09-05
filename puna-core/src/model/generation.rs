@@ -87,8 +87,8 @@ pub async fn insert(
             let inserted: Vec<Row> = diesel::sql_query(
                 "INSERT INTO generations
                     (id, sha256, size_bytes, seed_name, slots, locations, games, race_mode,
-                     spoiler_member, min_server_version, first_ingested_by)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                     spoiler_member, min_server_version, first_ingested_by, datapackage_bytes)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                  ON CONFLICT (sha256) DO NOTHING
                  RETURNING id",
             )
@@ -106,6 +106,10 @@ pub async fn insert(
             .bind::<Nullable<Text>, _>(meta.spoiler_member.as_deref())
             .bind::<Nullable<Text>, _>(meta.min_server_version.as_deref())
             .bind::<BigInt, _>(first_ingested_by)
+            // Sizes the ROOM's outbound budget rather than anything on this page: see the migration.
+            // Written here rather than left for the spec to derive, because deriving it needs the
+            // parsed seed and the reconcile pass has only the row.
+            .bind::<BigInt, _>(meta.datapackage_bytes)
             .load(conn)
             .await?;
 
@@ -185,6 +189,9 @@ pub struct Generation {
     pub seed_name: String,
     pub slots: i32,
     pub locations: i64,
+    /// What the seed's data package weighs on the wire, or `None` for a generation ingested before
+    /// the column existed. Sizes a room's outbound budget; see `spec::room::outbound_budget_mib`.
+    pub datapackage_bytes: Option<i64>,
     pub games: Vec<String>,
     pub race_mode: bool,
     pub has_spoiler: bool,
@@ -213,6 +220,8 @@ struct GenerationRow {
     spoiler_member: Option<String>,
     #[diesel(sql_type = diesel::sql_types::Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    datapackage_bytes: Option<i64>,
 }
 
 impl From<GenerationRow> for Generation {
@@ -228,12 +237,33 @@ impl From<GenerationRow> for Generation {
             race_mode: row.race_mode,
             has_spoiler: row.spoiler_member.is_some(),
             created_at: row.created_at,
+            datapackage_bytes: row.datapackage_bytes,
         }
     }
 }
 
+/// Record what a seed's data package weighs, for a generation ingested before the column existed.
+///
+/// **A backfill rather than a setter**, and both callers reach it from a parse they were doing
+/// anyway: the admin name rebuild, which re-reads every promoted seed, and room creation, which
+/// re-checks that a room would load one. Nothing else re-reads a seed, so without those two the
+/// column would stay NULL forever on everything already on the volume, and those rooms would go on
+/// sizing their outbound budget as though the data package weighed nothing.
+pub async fn record_datapackage_bytes(
+    conn: &mut AsyncPgConnection,
+    id: GenerationId,
+    bytes: i64,
+) -> Result<(), diesel::result::Error> {
+    diesel::sql_query("UPDATE generations SET datapackage_bytes = $1 WHERE id = $2")
+        .bind::<BigInt, _>(bytes)
+        .bind::<SqlUuid, _>(id)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
 const GENERATION_COLUMNS: &str = "id, sha256, size_bytes, seed_name, slots, locations, games, \
-                                  race_mode, spoiler_member, created_at";
+                                  race_mode, spoiler_member, created_at, datapackage_bytes";
 
 /// The same columns, prefixed for a join. Derived from [`GENERATION_COLUMNS`] rather than written
 /// out again, so a column added there cannot be missing here, which would fail at runtime, in the

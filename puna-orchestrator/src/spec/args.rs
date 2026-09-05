@@ -260,7 +260,7 @@ pub fn serve(spec: &RoomSpec) -> Vec<String> {
     // `room::outbound_budget_mib`, which is named for its unit because of it.
     args.value(
         "--outbound-budget",
-        crate::spec::room::outbound_budget_mib(spec.slot_count),
+        crate::spec::room::outbound_budget_mib(spec.slot_count, spec.datapackage_bytes),
     );
 
     // The fan-out, for the same reason and one more.
@@ -332,6 +332,7 @@ mod tests {
             base_port: 40000,
             wants_filtered: true,
             slot_count: 96,
+            datapackage_bytes: None,
             save_interval_secs: 30,
             use_embedded_options: true,
         }

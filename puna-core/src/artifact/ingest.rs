@@ -300,6 +300,16 @@ pub struct GenerationMeta {
     /// different question and deliberately a different number.
     pub slot_count: i32,
     pub locations: i64,
+    /// What this seed's merged data package weighs on the wire, from pahoa's own estimate.
+    ///
+    /// **The term a room's outbound budget was blind to.** A client's largest single download is one
+    /// `GetDataPackage` answer and it scales with the number of GAMES, not with players: a 189-slot,
+    /// 106-game room answers with 6.19 MB against a 256 KiB per-connection share, and rooms were
+    /// dropping healthy players over it while the room-wide budget sat at 0.6% used.
+    ///
+    /// Computed here because ingest already holds the parsed seed, rather than at spec-render time,
+    /// where it would cost a parse of the whole multidata on a reconcile pass.
+    pub datapackage_bytes: i64,
     /// Distinct games being PLAYED, so a spectator's `Archipelago` pseudo-game is not among them.
     /// This is the "12 games" a room page shows, and counting the watcher would be wrong there.
     pub games: Vec<String>,
@@ -499,6 +509,21 @@ fn bomb_refusal(data: &MultiData) -> Option<String> {
     })
 }
 
+/// What a promoted seed's data package weighs on the wire.
+///
+/// Its own function because two callers want it from a file rather than from a zip: the admin name
+/// rebuild, which re-reads every seed anyway, and room creation, which parses one to re-check that a
+/// room would load it. Both exist to repair the same gap, which is that every generation ingested
+/// before the column had one is sized as though its package weighed nothing.
+///
+/// Bounded like every other parse here, and pahoa's own estimate rather than a second one.
+pub fn seed_datapackage_bytes(seed: &[u8]) -> Result<i64, IngestError> {
+    Ok(parse_multidata(seed)?
+        .resolve_datapackage()
+        .0
+        .wire_size_estimate() as i64)
+}
+
 /// [`load_refusal`], for a seed already promoted to the volume.
 ///
 /// The upload check is not the whole answer, and the reason is not the rows that predate it: it
@@ -673,6 +698,11 @@ pub fn inspect(bytes: &[u8], size_limit: u64) -> Result<GenerationMeta, IngestEr
         seed_name: data.seed_name.clone(),
         slot_count: data.slot_info.len() as i32,
         locations: data.locations.len() as i64,
+        // **The MERGED package, which is what a client is actually served**, so this resolves the
+        // same way `names::from_multidata` does rather than measuring the embedded one. pahoa's own
+        // estimate rather than a second one: a limit sized against a number the room disagrees with
+        // is how the `--outbound-budget` unit bug reached the cluster.
+        datapackage_bytes: data.resolve_datapackage().0.wire_size_estimate() as i64,
         games,
         race_mode: data.race_mode,
         min_server_version: Some(data.minimum_server_version.to_string()),

@@ -110,6 +110,13 @@ pub struct RoomSpec {
     /// Every slot in the multidata, groups included: pahoa sizes its outbound budget from
     /// `slot_info.len()`, so the connectable count would under-request memory.
     pub slot_count: i32,
+    /// What the seed's data package weighs on the wire, or `None` for a generation ingested before
+    /// the column existed.
+    ///
+    /// **The second term of the outbound budget**, and the one slot count cannot predict: a client's
+    /// largest single download scales with the number of games. `None` sizes as before, which is
+    /// what those rooms already do.
+    pub datapackage_bytes: Option<i64>,
     pub save_interval_secs: i32,
     pub use_embedded_options: bool,
 }

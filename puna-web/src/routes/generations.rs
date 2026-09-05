@@ -688,6 +688,7 @@ mod tests {
                     race_mode: false,
                     has_spoiler: false,
                     created_at: created,
+                    datapackage_bytes: None,
                 },
                 uploaded_at: uploaded,
             }],
@@ -955,6 +956,7 @@ mod tests {
             race_mode: false,
             has_spoiler: false,
             created_at: chrono::Utc::now(),
+            datapackage_bytes: None,
         }
     }
 }

@@ -16,7 +16,7 @@
 //! connection and a vacuum horizon for nothing.
 
 use chrono::Utc;
-use diesel::sql_types::{Bool, Integer, Nullable, Text, Timestamptz, Uuid as SqlUuid};
+use diesel::sql_types::{BigInt, Bool, Integer, Nullable, Text, Timestamptz, Uuid as SqlUuid};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use puna_core::Environment;
 use puna_core::ids::RoomId;
@@ -198,6 +198,9 @@ struct StartInputs {
     /// `generations.slots`: **every** slot, groups included, because pahoa sizes its outbound
     /// budget from `slot_info.len()` and the connectable count would under-request memory.
     slot_count: i32,
+    /// The seed's data package on the wire; `None` for a generation ingested before the column.
+    /// Sizes the outbound budget alongside the slot count, which alone was blind to it.
+    datapackage_bytes: Option<i64>,
 }
 
 async fn start(ctx: &Context<'_>, action: &Action) -> anyhow::Result<Outcome> {
@@ -648,6 +651,7 @@ pub(crate) async fn render_spec(
         base_port,
         wants_filtered: room.wants_filtered,
         slot_count: inputs.slot_count,
+        datapackage_bytes: inputs.datapackage_bytes,
         save_interval_secs: inputs.save_interval_secs,
         use_embedded_options: inputs.use_embedded_options,
     }
@@ -690,10 +694,13 @@ async fn start_inputs(
         use_embedded_options: bool,
         #[diesel(sql_type = Integer)]
         slot_count: i32,
+        #[diesel(sql_type = Nullable<BigInt>)]
+        datapackage_bytes: Option<i64>,
     }
 
     let rows: Vec<Row> = diesel::sql_query(
-        "SELECT r.save_interval_secs, r.use_embedded_options, g.slots AS slot_count
+        "SELECT r.save_interval_secs, r.use_embedded_options, g.slots AS slot_count,
+                g.datapackage_bytes
            FROM rooms r JOIN generations g ON g.id = r.generation_id
           WHERE r.id = $1",
     )
@@ -707,6 +714,7 @@ async fn start_inputs(
             save_interval_secs: row.save_interval_secs,
             use_embedded_options: row.use_embedded_options,
             slot_count: row.slot_count,
+            datapackage_bytes: row.datapackage_bytes,
         })
         .ok_or(diesel::result::Error::NotFound)
 }
