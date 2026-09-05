@@ -2119,7 +2119,7 @@ dependencies = [
 [[package]]
 name = "pahoa-datastore"
 version = "0.1.0"
-source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=f327594149dccee2bec2ff389c1904a493927d90#f327594149dccee2bec2ff389c1904a493927d90"
+source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=f4c8827da7199aee87d74c7ead86cc695d77933b#f4c8827da7199aee87d74c7ead86cc695d77933b"
 dependencies = [
  "serde_json",
  "thiserror 2.0.20",
@@ -2128,7 +2128,7 @@ dependencies = [
 [[package]]
 name = "pahoa-multidata"
 version = "0.1.0"
-source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=f327594149dccee2bec2ff389c1904a493927d90#f327594149dccee2bec2ff389c1904a493927d90"
+source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=f4c8827da7199aee87d74c7ead86cc695d77933b#f4c8827da7199aee87d74c7ead86cc695d77933b"
 dependencies = [
  "flate2",
  "pahoa-pickle",
@@ -2140,7 +2140,7 @@ dependencies = [
 [[package]]
 name = "pahoa-net"
 version = "0.1.0"
-source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=f327594149dccee2bec2ff389c1904a493927d90#f327594149dccee2bec2ff389c1904a493927d90"
+source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=f4c8827da7199aee87d74c7ead86cc695d77933b#f4c8827da7199aee87d74c7ead86cc695d77933b"
 dependencies = [
  "bytes",
  "flate2",
@@ -2161,7 +2161,7 @@ dependencies = [
 [[package]]
 name = "pahoa-pickle"
 version = "0.1.0"
-source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=f327594149dccee2bec2ff389c1904a493927d90#f327594149dccee2bec2ff389c1904a493927d90"
+source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=f4c8827da7199aee87d74c7ead86cc695d77933b#f4c8827da7199aee87d74c7ead86cc695d77933b"
 dependencies = [
  "thiserror 2.0.20",
 ]
@@ -2169,7 +2169,7 @@ dependencies = [
 [[package]]
 name = "pahoa-proto"
 version = "0.1.0"
-source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=f327594149dccee2bec2ff389c1904a493927d90#f327594149dccee2bec2ff389c1904a493927d90"
+source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=f4c8827da7199aee87d74c7ead86cc695d77933b#f4c8827da7199aee87d74c7ead86cc695d77933b"
 dependencies = [
  "pahoa-multidata",
  "serde",
@@ -2180,7 +2180,7 @@ dependencies = [
 [[package]]
 name = "pahoa-pyrandom"
 version = "0.1.0"
-source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=f327594149dccee2bec2ff389c1904a493927d90#f327594149dccee2bec2ff389c1904a493927d90"
+source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=f4c8827da7199aee87d74c7ead86cc695d77933b#f4c8827da7199aee87d74c7ead86cc695d77933b"
 dependencies = [
  "sha2 0.10.9",
 ]
@@ -2188,7 +2188,7 @@ dependencies = [
 [[package]]
 name = "pahoa-room"
 version = "0.1.0"
-source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=f327594149dccee2bec2ff389c1904a493927d90#f327594149dccee2bec2ff389c1904a493927d90"
+source = "git+https://git.mooinglemur.com/mooinglemur/pahoa.git?rev=f4c8827da7199aee87d74c7ead86cc695d77933b#f4c8827da7199aee87d74c7ead86cc695d77933b"
 dependencies = [
  "flate2",
  "pahoa-datastore",
@@ -2506,6 +2506,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "pahoa-multidata",
+ "pahoa-pickle",
  "prometheus",
  "prometheus-parse",
  "rand 0.8.7",

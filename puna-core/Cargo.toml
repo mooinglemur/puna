@@ -51,6 +51,10 @@ zip = "7"
 # they link against puna-core's public API and cannot reach its private dependency graph. The
 # ingest test needs it to read slot types straight out of a real multidata.
 pahoa-multidata.workspace = true
+# For ONE assertion: `tests/poisoned.rs` holds Puna's bounds against pahoa's, and the object budget
+# lives in the pickle reader rather than in the multidata crate. Read at the pinned rev instead of
+# transcribed, which is the whole point of them being public.
+pahoa-pickle.workspace = true
 # Content-addressed promotion is filesystem behavior -- atomic rename, EEXIST as success, fsync
 # ordering -- so it is tested against a real filesystem rather than a trait. One temp dir per test
 # keeps them parallel-safe, the same shape as the database-per-test harness.

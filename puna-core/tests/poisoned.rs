@@ -145,6 +145,42 @@ fn an_absurd_start_inventory_is_refused_even_inside_the_byte_bounds() {
     );
 }
 
+// --- PUNA REFUSES NO LATER THAN THE ROOM DOES ----------------------------------------------------
+//
+// Two sides now carry limits on the same untrusted file, which is the arrangement that was asked
+// for and the one that rots without saying anything. The rule is one-directional: Puna is the edge
+// and may be as strict as it likes, but a seed Puna ACCEPTS must be one the room can load, or the
+// refusal moves from a sentence on an upload form to a pod that exits at startup with the reason in
+// a container log. That is the failure this whole path exists to prevent.
+//
+// **Compile-time, not a `#[test]`**, which is the form pahoa used for the same class of invariant on
+// their side: these compare constants, so a pin bump that lowers one of theirs should fail the
+// BUILD rather than a test run somebody might not have got to yet. They are also read at the pinned
+// rev rather than transcribed, which is what makes them worth having public.
+const _: () = assert!(
+    artifact::MAX_MULTIDATA_BYTES as u64 <= pahoa_multidata::MAX_PICKLE_BYTES,
+    "Puna would inflate a multidata that pahoa refuses to parse, so a seed could pass the upload \
+     form and fail at room start"
+);
+const _: () = assert!(
+    artifact::MAX_PRECOLLECTED_ITEMS <= pahoa_multidata::MAX_PRECOLLECTED_ITEMS,
+    "Puna would accept a start inventory a room refuses"
+);
+// **The object budget has no Puna-side equivalent and cannot have one**: it counts what the parser
+// builds, which is knowable only inside the parser. Held here anyway, because it is the tightest of
+// the three by a wide margin and the only one a legitimate seed can reach.
+//
+// The floor is **Puna's own measurement, not pahoa's**: `make-generation --slots 3000 --locations
+// 250` produces a seed of 3,857,136 opcodes, which clears the 4,000,000 budget by 1.04x. A
+// 2000-slot sync, which this fleet has already load-tested, sits at 2,572,136 and 1.56x. So the
+// budget binds somewhere between three and four thousand slots, and Puna's own tooling can build
+// the seed that meets it. That is reported back rather than worked around; see the handoff.
+const _: () = assert!(
+    pahoa_pickle::MAX_OBJECTS >= 3_857_136,
+    "pahoa's object budget no longer clears a 3000-slot seed this repository's own generator can \
+     produce, so a legitimate multiworld would be refused at upload"
+);
+
 /// **A real seed still passes, which is the half that a bound gets wrong quietly.**
 ///
 /// Skips without the fixture, like every other seed-gated test here: a bound that refused real

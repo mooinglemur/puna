@@ -147,16 +147,22 @@ pub enum IngestError {
 //    GiB of inflate, and `read_to_end` on a `ZlibDecoder` will try.
 // 3. **The pickle**, where every two bytes can become an object several times that size.
 //
-// The third is the one Puna cannot bound from outside, and it is the reason the ratio cap below
-// matters as well as the absolute one: this parser lives in `pahoa-multidata` and builds a whole
-// `PyObj` tree before any typing happens, so cost is a function of opcode COUNT rather than of
-// input size. Puna's own bound on it is the byte cap, at roughly 32 bytes of tree per opcode.
+// The third was the one Puna could not bound from outside, and it is the reason the ratio cap below
+// matters as well as the absolute one: the parser builds a whole `PyObj` tree before any typing
+// happens, so cost is a function of opcode COUNT rather than of input size, and a caller can cap
+// what it hands over but not what is built from it.
 //
-// **State the residual rather than implying it is gone.** At those numbers a 32 MiB inflate can
-// still cost about a gigabyte of tree, and reaching it takes an upload of roughly 1.6 MB, which the
-// ratio cap does nothing about. So this turns an unbounded, 38-KB-and-free attack into a bounded and
-// expensive one, and the remaining gigabyte is a question for whoever owns the tier's memory limit
-// (1Gi today) until pahoa carries a budget of its own. That budget is the first ask in the handoff.
+// **pahoa now carries that bound, which is what closes the residual this file used to describe.**
+// As of `f4c8827` the parser refuses on its own: `MAX_PICKLE_BYTES` (64 MiB) on the inflate,
+// `pahoa_pickle::MAX_OBJECTS` (4,000,000) on the tree, and `MAX_PRECOLLECTED_ITEMS` (100,000) on the
+// start inventory. Their measurement of the worst case that survives all three is 495 MiB, where
+// this file previously recorded an unbounded one and estimated a gigabyte.
+//
+// **The caps below are still Puna's own, and are deliberately tighter.** Refusing costs 3 MiB and
+// 0.01 s here against 495 MiB and 0.17 s there, and the cheapest attack of the three never reaches
+// a parser at all: pahoa never sees the zip, so the header clamp has no equivalent on that side and
+// cannot have one. An edge that knows its own upload limits should refuse earlier than the
+// last-resort backstop a standalone room has instead of it.
 
 /// The largest single member Puna will unpack from a generation zip.
 ///
@@ -170,6 +176,11 @@ pub const MAX_MEMBER_BYTES: u64 = 64 * 1024 * 1024;
 /// Measured: the largest real seed in the corpus inflates to 5.94 MB, and a synthetic 500-slot,
 /// 200,000-placement seed to 4.2 MB, which extrapolates to about 11 MiB for a 2,000-slot sync.
 /// This is five times the first and three times the second.
+///
+/// **Half `pahoa_multidata::MAX_PICKLE_BYTES`, deliberately.** pahoa measured an actual 2,000-slot
+/// seed at 6.94 MiB, so the extrapolation above was pessimistic by nearly two and their 64 MiB is
+/// the backstop for a standalone room. This is the policy of an edge that knows what it lets people
+/// upload; a test holds the relationship rather than the two numbers being independently plausible.
 pub const MAX_MULTIDATA_BYTES: usize = 32 * 1024 * 1024;
 
 /// How much bigger than its compressed self a multidata may inflate.
@@ -189,7 +200,14 @@ pub const MAX_MULTIDATA_RATIO: usize = 20;
 /// The byte caps above do not bind this one usefully: an integer is two bytes of pickle, so a
 /// multidata inside the cap can still declare sixteen million pre-collected items, and every one
 /// of them becomes an item the room hands somebody at connect. The corpus's largest real start
-/// inventory is 552 items across all slots. This is 180 times that.
+/// inventory is 552 items across all slots, and pahoa's own sixteen-seed corpus reaches 2,975.
+///
+/// **The same number pahoa chose, on purpose, and today they refuse first.** They took this value
+/// so the two sides cannot disagree about what a room may be asked to load, and their check runs
+/// inside `from_py`, which every parse here goes through: [`bomb_refusal`] is therefore a backstop
+/// rather than the operative check. It stays because the numbers are two decisions rather than one
+/// (pahoa invited evidence to move theirs), and a test asserts this one is never the LOOSER of the
+/// pair, which is the only direction that would matter.
 pub const MAX_PRECOLLECTED_ITEMS: usize = 100_000;
 
 /// Read one zip member, bounded.
@@ -426,23 +444,32 @@ fn slot_from_filename(name: &str) -> Option<u32> {
 /// authenticate as with no world behind it), a group listing a member that does not exist, and a
 /// slot on a team other than 0, which nothing can generate and neither server can serve.
 ///
-/// **The version arm is deliberately made vacuous, by handing `validate` the seed's own floor.**
-/// That arm asks "is *this server* new enough", and Puna is not the server: the room's version is
-/// whatever `PUNA_PAHOA_IMAGE` resolves to, which only the orchestrator names and only the probe
-/// can read back, and neither is available at upload. The alternative is a version constant
-/// transcribed from another repository, and its failure runs the wrong way: a constant that goes
-/// stale LOW makes Puna refuse a seed the room would happily serve, blaming the seed for a number
-/// in Puna's source. A seed genuinely demanding a newer server is left to the room, which refuses
-/// it by name on stderr. The honest fix is for `pahoa-multidata` to export `SERVER_VERSION`, which
-/// today lives a crate above it; that is asked for in the handoff.
+/// **The version arm is real now, and it was vacuous for a reason worth remembering.**
 ///
-/// The margin makes that trade cheap rather than merely defensible: every seed in the corpus
-/// demands 0.5.0 while pahoa reports 0.6.8, so this arm binds only on a seed from the future.
+/// It asks "is *this server* new enough", and Puna is not the server, so it used to be handed the
+/// seed's own floor to make it a no-op. The alternative then was a version constant transcribed
+/// from another repository, whose failure runs the wrong way: a copy that goes stale LOW refuses a
+/// seed the room would happily serve, blaming the seed for a number in Puna's source. The handoff
+/// asked for the constant to move down into the crate Puna already links, and it has:
+/// `pahoa_multidata::SERVER_VERSION` is now the definition, with `pahoa_room::SERVER_VERSION`
+/// derived from it rather than written out again.
+///
+/// So this is read at the pinned rev rather than copied, which removes the staleness the old note
+/// was worried about but not the approximation underneath it: **the linked crate's version is the
+/// room's version only while `PUNA_PAHOA_IMAGE` and this pin are in step**, which is the operating
+/// rule (an argv change moves both together) rather than something enforced. The two failure
+/// directions are not symmetric, and this is the better half of the trade: pinned OLDER than the
+/// deployed image, Puna refuses a seed the room would serve, which is loud and wrong at the upload
+/// form; pinned NEWER, Puna accepts one the room refuses, which is exactly the behavior the vacuous
+/// arm had, so nothing is worse than it was.
+///
+/// The margin makes it cheap either way: every seed in the corpus demands 0.5.0 against pahoa's
+/// 0.6.7, so this binds only on a seed from the future.
 pub fn load_refusal(data: &MultiData) -> Option<String> {
     if let Some(reason) = bomb_refusal(data) {
         return Some(reason);
     }
-    data.validate(data.minimum_server_version)
+    data.validate(pahoa_multidata::SERVER_VERSION)
         .err()
         .map(|e| e.to_string())
 }

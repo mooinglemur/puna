@@ -57,12 +57,21 @@ puna-core = { path = "puna-core" }
 # Bumped e810ae8a -> f3275941 for `pahoa-net`'s client below. Nothing under `crates/pahoa-multidata`
 # or `crates/pahoa-pickle` changed in that range -- `git diff --stat` over those two paths is empty
 # -- so how Puna reads a seed is byte-for-byte what it was.
-pahoa-multidata = { git = "https://git.mooinglemur.com/mooinglemur/pahoa.git", rev = "f327594149dccee2bec2ff389c1904a493927d90" }
+#
+# Bumped f3275941 -> f4c8827d for the multidata bounds checks, which is the one bump here that
+# changes what Puna ACCEPTS rather than only what it can call. The parser now refuses a
+# decompression bomb on its own: an inflate cap, an object budget in the pickle reader, and a limit
+# on precollected items. Four public constants and three error variants are added; the API delta is
+# otherwise purely additive, and the only removals are two `pub use` lines being re-formed and the
+# unbounded `read_to_end` this exists to remove. All 15 corpus zips ingest identically across the
+# bump, checked rather than assumed, and `SERVER_VERSION` moving down into this crate is what lets
+# `artifact::load_refusal` stop being vacuous about versions.
+pahoa-multidata = { git = "https://git.mooinglemur.com/mooinglemur/pahoa.git", rev = "f4c8827da7199aee87d74c7ead86cc695d77933b" }
 # The untyped layer under `pahoa-multidata`, taken directly so `puna-tools` can BUILD a `PyObj`
 # tree and write it back out as pickle. **The rev must equal the one above** -- two revs would mean
 # two incompatible `PyObj` types in one graph, and the error would be about a trait not being
 # implemented rather than about a version skew.
-pahoa-pickle = { git = "https://git.mooinglemur.com/mooinglemur/pahoa.git", rev = "f327594149dccee2bec2ff389c1904a493927d90" }
+pahoa-pickle = { git = "https://git.mooinglemur.com/mooinglemur/pahoa.git", rev = "f4c8827da7199aee87d74c7ead86cc695d77933b" }
 # pahoa's WebSocket layer, for `puna-tools` alone -- **the only client anywhere that negotiates
 # permessage-deflate against a pahoa room.** `tungstenite` rejects a frame with RSV1 set outright
 # (`protocol/mod.rs:643`), so a load run through it is a population the room can share no
@@ -73,7 +82,7 @@ pahoa-pickle = { git = "https://git.mooinglemur.com/mooinglemur/pahoa.git", rev 
 #
 # It is a load-tool dependency and reaches no shipped tier -- `puna-core` and the two binaries do
 # not name it.
-pahoa-net = { git = "https://git.mooinglemur.com/mooinglemur/pahoa.git", rev = "f327594149dccee2bec2ff389c1904a493927d90" }
+pahoa-net = { git = "https://git.mooinglemur.com/mooinglemur/pahoa.git", rev = "f4c8827da7199aee87d74c7ead86cc695d77933b" }
 
 anyhow = "1.0"
 async-trait = "0.1"
