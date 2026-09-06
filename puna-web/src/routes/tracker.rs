@@ -1858,6 +1858,102 @@ mod tests {
         );
     }
 
+    /// **The ping preference is the multiworld page's, and everything else in the enhanced tracker
+    /// is both pages'.**
+    ///
+    /// One value per person per room, not per slot, so a form on every slot's page is the same
+    /// setting wearing a different URL: several forms posting one value to their own `write_base`,
+    /// and two open tabs where saving in one silently staled the other.
+    ///
+    /// The second half is the one that needs a test rather than an argument, because it is what a
+    /// careless narrowing would take with it: the Held by column, the note and progression chips
+    /// and the edit pencil are gated on `annotations` alone and must keep rendering on a slot's own
+    /// page for anybody entitled to them. Nothing in the condition being changed says so, which is
+    /// exactly why it is asserted from the rendered page rather than read off the template.
+    #[test]
+    fn the_preferences_form_is_the_multiworld_pages_and_the_rest_of_the_tracker_is_not() {
+        let render = |slot: Option<i32>| {
+            TrackerTemplate {
+                base: TplContext {
+                    is_logged_in: true,
+                    is_admin: false,
+                    username: "troy".into(),
+                    site_name: "puna",
+                    version: "test",
+                    static_version: "test",
+                    view_as: None,
+                },
+                room_name: "Friday async".into(),
+                slot_name: slot.map(|_| "Troy".into()),
+                api_base: "/api/puna/tracker/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into(),
+                notice: None,
+                // A room running the enhanced tracker, seen by one of its own players: the only
+                // viewer for whom either half of this is visible at all.
+                annotations: true,
+                write_base: "/tracker/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into(),
+                owns_a_slot: true,
+                my_preference: "unknown",
+                ping_choices: annotation::PingPreference::ALL
+                    .into_iter()
+                    .map(|p| (p.as_sql(), p.label(), p.explanation()))
+                    .collect(),
+                progression_choices: annotation::ProgressionStatus::ALL
+                    .into_iter()
+                    .map(|p| (p.as_sql(), p.label()))
+                    .collect(),
+                note_limit: 1000,
+                slot,
+            }
+            .render()
+            .expect("renders")
+        };
+
+        let multiworld = render(None);
+        assert!(
+            multiworld.contains("/preference"),
+            "the multiworld page no longer offers a player their ping preference, which is now the \
+             only page that does"
+        );
+
+        let one_slot = render(Some(1));
+        assert!(
+            !one_slot.contains("/preference"),
+            "a slot's page carries a second copy of a preference that is one value per room"
+        );
+        assert!(
+            !one_slot.contains("Ping preference"),
+            "the preferences form's legend survives on a slot's page"
+        );
+
+        // --- AND EVERYTHING ELSE STAYS ---------------------------------------------------------
+        // Each of these is a distinct piece of the enhanced tracker, and all of them are gated on
+        // `annotations` rather than on scope. A narrowing that caught them would leave a player
+        // unable to read or set their own note on their own slot's page.
+        for (fragment, what) in [
+            (
+                r#"data-annotations="1""#,
+                "the flag tracker.js builds the owner cell from",
+            ),
+            (
+                r#"data-write="#,
+                "the address the annotation dialog posts to",
+            ),
+            (
+                r#"<th data-key="held_by">"#,
+                "the Held by column, which carries the note and BK chips",
+            ),
+            (
+                r#"<dialog id="annotate""#,
+                "the dialog the edit pencil opens",
+            ),
+        ] {
+            assert!(
+                one_slot.contains(fragment),
+                "a slot's own page lost {what}, so the enhanced tracker is now half a feature there"
+            );
+        }
+    }
+
     /// A crude port-shaped-number check, so the leak test does not need a regex dependency.
     fn regex_free_port_like(html: &str) -> bool {
         html.split(|c: char| !c.is_ascii_digit())

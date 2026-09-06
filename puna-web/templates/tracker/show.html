@@ -53,8 +53,20 @@ need to.</p>
 
    **Only for somebody holding a slot here.** A ping preference renders as a chip beside a slot's
    owner, so a viewer holding none has nothing to set and the form would be a control with no
-   visible effect. Staff who also play get it, because they are players. #}
-{% if annotations && owns_a_slot %}
+   visible effect. Staff who also play get it, because they are players.
+
+   **And only on the multiworld view.** The preference is one value per person per room, not per
+   slot, so a copy on every slot's page is the same setting wearing a different URL: several forms
+   posting one value, each to its own `write_base`, and a reader with two tabs open watching one of
+   them go stale. The multiworld page is where a player's relationship to the room lives, and it is
+   one click away from every slot page through the table.
+
+   **The rest of the enhanced tracker stays on a slot's page**, which is the half worth stating
+   because it is not obvious from this condition: the Held by column, the note and progression chips
+   and the edit pencil are all gated on `annotations` alone, so a slot's own page carries every one
+   of them for a viewer entitled to it. Only the preferences form is scoped here, and a test renders
+   both pages to hold that line. #}
+{% if annotations && owns_a_slot && slot.is_none() %}
 <section class="panel preferences">
 <h2>Player preferences</h2>
 <form method="post" action="{{ write_base }}/preference">
