@@ -82,6 +82,24 @@ need to.</p>
     {% if slot.is_none() %}
     <div class="table-controls">
       <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter slots">
+      {# The room page's roster toggle, on the page most people actually watch. **Offered only to
+         somebody who holds a slot here**, the same rule the roster's own follows and for the same
+         reason: for anybody else it hides every row, which reads as a broken control rather than
+         as an empty answer. `owns_a_slot` is the route's call, not the markup's.
+
+         Keyed `tracker.room.*` per M26's rule: this table exists on both tracker pages asking
+         different questions, so a key shared with the slot view would make a choice on one silently
+         change the other, which reads as the setting not persisting. It is moot today, since the
+         box renders only on the multiworld view, and the rule is what stops that being an accident.
+
+         `mine` on the row is what it filters by, and the field is deliberately not `editable`:
+         staff may edit every row, so that would give an organizer who plays a filter that hides
+         nothing. See `digest::SlotRow`. #}
+      {% if owns_a_slot %}
+      <label class="only-mine">
+        <input type="checkbox" data-toggle="tracker.room.slots.mine"> only my slots
+      </label>
+      {% endif %}
     </div>
     {% endif %}
     <div class="table-scroll">

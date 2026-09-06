@@ -119,6 +119,22 @@ pub struct SlotRow {
     /// editing anything carries nothing about editing at all.
     #[serde(skip_serializing_if = "is_false")]
     pub editable: bool,
+    /// Whether this row is one of the viewer's own slots, for the tracker's "only my slots" filter.
+    ///
+    /// **Not `editable`, which is the near-miss worth naming**: that is "may change the annotation",
+    /// which a room's staff get on *every* row. A staff member who also plays would find "only my
+    /// slots" hiding nothing at all, which reads as a broken control rather than as a wide
+    /// permission. This is ownership and only ownership.
+    ///
+    /// **Decided here rather than by the client comparing ids**, the same rule `editable` states
+    /// next door and for the same reason: the alternative is sending every viewer their own id and
+    /// every row's owner id and trusting the comparison, on the page built to be handed to
+    /// strangers. This field is about the reader and nobody else, so it discloses nothing.
+    ///
+    /// Absent rather than `false`, like `editable`: a row for somebody with no slots here carries
+    /// nothing about whose it is.
+    #[serde(skip_serializing_if = "is_false")]
+    pub mine: bool,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -418,6 +434,8 @@ pub fn slot_rows(
                     }),
                 note: viewer.people.and_then(|_| slot.note.clone()),
                 editable: viewer.may_edit(slot),
+                // Ownership and nothing else: not staff, not `may_edit`. See the field's note.
+                mine: viewer.id.is_some_and(|me| slot.owner_id == Some(me)),
             }
         })
         .collect()
@@ -944,6 +962,65 @@ mod tests {
 
     fn names_of(games: &BTreeMap<String, GameNames>) -> Names<'_> {
         Names { games }
+    }
+
+    /// **"Mine" is ownership, and the near-miss beside it belongs to everybody.**
+    ///
+    /// `editable` is one field away and answers "may change this slot's annotation", which a room's
+    /// **staff** get on every row. Keying the tracker's "only my slots" filter on that would hand an
+    /// organizer who also plays a control that hides nothing, and it would look like the filter
+    /// being broken rather than like a permission being wide. The roster's own toggle on the room
+    /// page has always meant ownership; this is the same word and has to mean the same thing.
+    ///
+    /// Slot 1 is Troy's (owner 7) and slot 2 is unclaimed, so a staff viewer whose id is 7 must come
+    /// back `mine` on the first and not the second, while `editable` is true on both.
+    #[test]
+    fn only_my_slots_means_mine_rather_than_editable() {
+        let of =
+            |viewer: &Viewer<'_>| slot_rows(&roster(), &live(), &statics(), None, now(), viewer);
+        // `may_edit` additionally requires the enhanced tracker to be on, so the contrast below
+        // needs a room that has it: without one `editable` is false everywhere and the assertion
+        // that the two differ would pass by both being absent.
+        let people = people(PingPreference::Yes);
+
+        let staff_who_plays = of(&Viewer {
+            id: Some(7),
+            participant: true,
+            staff: true,
+            people: Some(&people),
+        });
+        assert!(
+            staff_who_plays[0].mine,
+            "the viewer's own slot is not theirs"
+        );
+        assert!(
+            !staff_who_plays[1].mine,
+            "a slot this viewer does not hold is reported as theirs, so the filter would show \
+             somebody else's world"
+        );
+        assert!(
+            staff_who_plays[0].editable && staff_who_plays[1].editable,
+            "the fixture no longer distinguishes the two: staff may edit every row, which is the \
+             whole reason `mine` is not `editable`"
+        );
+
+        // Somebody signed in who holds nothing here: every row false, so the control is offered to
+        // nobody and would hide everything if it were.
+        let stranger = of(&Viewer {
+            id: Some(999),
+            participant: false,
+            staff: false,
+            people: None,
+        });
+        assert!(stranger.iter().all(|row| !row.mine));
+
+        // Signed out. `viewer.id` is `None`, so no comparison can accidentally match an unclaimed
+        // slot's `None` owner, which is the one way this could have said "yours" to everybody.
+        let anonymous = of(&Viewer::outsider());
+        assert!(
+            anonymous.iter().all(|row| !row.mine),
+            "an anonymous viewer is told an unclaimed slot is theirs, which is `None == None`"
+        );
     }
 
     /// A viewer who is one of the room's people but not staff, and whose room has the enhanced
@@ -1522,6 +1599,7 @@ mod tests {
             hints: 0,
             claimed: Some(false),
             editable: false,
+            mine: false,
             owner: None,
             progression: None,
             note: None,

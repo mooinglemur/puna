@@ -171,6 +171,16 @@
           seen: age(mostRecent(rows)),
         };
       },
+      // "Only my slots", the room page's roster toggle on the page most people actually watch.
+      //
+      // **`mine`, never `editable`.** The row next door carries both and they differ on exactly the
+      // reader most likely to want this: a room's staff may edit every row, so keying on `editable`
+      // would give an organizer who also plays a filter that hides nothing.
+      //
+      // `mine` is absent rather than false for a viewer holding no slots, so `!r.mine` is true for
+      // every row: the correct answer for a control that is not rendered for them anyway, rather
+      // than one that depends on the server having sent a field.
+      exclude: (r) => !r.mine,
       // Only on the multiworld page, and built from the id already in this URL rather than from
       // anything the server sent: a slot's own tracker id is deliberately never in the JSON.
       href: (r) => (slotQuery ? null : `/tracker/${idFromApi()}/0/${r.slot}`),

@@ -2932,6 +2932,65 @@ fn the_tracker_summary_fills_every_cell_it_declares() {
     );
 }
 
+/// **The tracker's "only my slots" box and the predicate behind it, which fail apart silently.**
+///
+/// Three files hold one control. `tracker.js` filters a view when its section carries a
+/// `[data-toggle]` *and* the view declares an `exclude`, and either half alone is a checkbox that
+/// ticks, is remembered across reloads, and changes nothing:
+///
+///   * a box with no `exclude` sets `toggled`, finds neither a `collapse` nor an `exclude`, and
+///     renders the identical table;
+///   * an `exclude` with no box is a predicate nothing calls.
+///
+/// And the predicate has a near-miss one field away. `mine` and `editable` sit next to each other on
+/// the row and differ on exactly the reader most likely to use this: a room's staff may edit every
+/// row, so `!r.editable` would hide nothing at all for an organizer who also plays. Nothing in the
+/// Rust build parses this file and the substitution compiles.
+#[test]
+fn the_tracker_slot_filter_has_a_box_a_predicate_and_the_right_field() {
+    let template =
+        std::fs::read_to_string(source("templates/tracker/show.html")).expect("the tracker page");
+    let script = std::fs::read_to_string(source("static/tracker.js")).expect("tracker.js");
+    let code: String = script
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Scoped to the slots section: this template holds four tables and three of them already carry
+    // a toggle of their own, so a whole-file search would pass on any of those.
+    let slots = template
+        .split_once("data-view=\"slots\"")
+        .expect("the slots table is gone")
+        .1
+        .split_once("</section>")
+        .expect("unterminated slots section")
+        .0;
+    assert!(
+        slots.contains(r#"data-toggle="tracker.room.slots.mine""#),
+        "the slot table has no \"only my slots\" box, or its key was renamed, which forgets the \
+         choice on every reload while the two toggles beside it keep theirs"
+    );
+    assert!(
+        code.contains("exclude: (r) => !r.mine"),
+        "the slots view declares no `exclude` for it, so the box ticks and the table is identical"
+    );
+    // The substitution that compiles, renders, and is wrong only for staff.
+    assert!(
+        !code.contains("!r.editable"),
+        "the slot filter keys on `editable`, which a room's staff have on every row: an organizer \
+         who plays would tick \"only my slots\" and see the whole multiworld"
+    );
+
+    // **Offered only to somebody who holds a slot here**, decided in the route. For anybody else it
+    // hides every row, which reads as the tracker having broken rather than as an empty answer.
+    assert!(
+        slots.contains("{% if owns_a_slot %}"),
+        "the box is no longer gated on the viewer holding a slot, so a spectator or a stranger is \
+         offered a filter that empties the table"
+    );
+}
+
 /// **Block containers have to close as often as they open.**
 ///
 /// Written after leaving a `<fieldset>` unclosed on the bulk panel, which nested the next one inside
