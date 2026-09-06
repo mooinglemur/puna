@@ -1422,6 +1422,36 @@ fn the_journal_filters_agree_across_the_markup_script_stylesheet_and_route() {
          until the reader toggles something"
     );
 
+    // --- THE SEARCH BOX, WHICH IS THE ONE FILTER CSS CANNOT EXPRESS ---------------------------------
+    // There is no selector for "contains this text", so this half is decided per row: at build time
+    // for a row arriving, and over the whole feed when the needle moves. Three pieces, and each
+    // fails without a symptom.
+    assert!(
+        markup.contains(r#"id="journal-filter-search""#),
+        "the feed has no filter box, or its id moved, in which case `getElementById` answers null \
+         and the box types into nothing"
+    );
+    assert!(
+        code.contains("SEARCH_HIDES") && css.contains(".unmatched"),
+        "the search's class is no longer spelled in both files, so either nothing is hidden or the \
+         count describes rows that are still on screen"
+    );
+    // **Applied where a row is BUILT, not only where the needle changes.** Without this a search
+    // set before a record arrives lets that record through: the feed keeps tailing, which is the
+    // point, and the filter silently stops applying to exactly the lines a reader is watching for.
+    let built = code
+        .split_once("function line(event, arriving)")
+        .expect("journal.js no longer has a line builder")
+        .1
+        .split_once("\n  }")
+        .expect("an unterminated line builder")
+        .0;
+    assert!(
+        built.contains("applySearch(row)") && built.contains("row.searchText"),
+        "a row is built without being matched against the current search, so every line arriving \
+         after the box was typed into is shown regardless of it"
+    );
+
     // Rendered hidden and revealed by the script, the same bargain `#journal-earlier` makes: a box
     // that ticks and does nothing is worse than an absent one. Both halves are silent on their own,
     // and losing the reveal is the worse of the two, since the feature simply is not there.
@@ -3303,11 +3333,20 @@ fn a_filter_box_is_hidden_until_the_script_that_drives_it_arrives() {
         "nothing reveals `.table-controls`, so the box never appears at all"
     );
 
-    // **Every page with a filter box must load something that reveals it.** This is the half that
-    // was missing, and it cost exactly what it protects: the tracker has its own `tracker.js` and
-    // does not load `table.js`, so wrapping one of its boxes in `.table-controls` hid the box AND
-    // the toggle beside it, gated by a class nothing on that page ever set. The markup was right,
-    // the stylesheet was right, and the control was invisible.
+    // **Every page whose filter box is inside `.table-controls` must load something that reveals
+    // it.** This is the half that was missing, and it cost exactly what it protects: the tracker
+    // has its own `tracker.js` and does not load `table.js`, so wrapping one of its boxes in
+    // `.table-controls` hid the box AND the toggle beside it, gated by a class nothing on that page
+    // ever set. The markup was right, the stylesheet was right, and the control was invisible.
+    //
+    // **Keyed on the CONTAINER, not on `.table-search`**, which is a correction: the box's class is
+    // styling and carries no gate, and the container is the thing `display: none` is on. The
+    // journal page found the difference by having a `.table-search` in a row of its own that
+    // `journal.js` reveals by clearing `hidden`. Under the old spelling that was a failure, and
+    // "make journal.js add `js-tables`" would have been a class asserting something untrue about a
+    // page with no sortable table on it. Its reveal is pinned by
+    // `the_journal_filters_agree_across_the_markup_script_stylesheet_and_route` instead.
+    let mut gated = 0;
     for path in templates() {
         let raw = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("could not read {path:?}: {e}"));
@@ -3321,9 +3360,10 @@ fn a_filter_box_is_hidden_until_the_script_that_drives_it_arrives() {
             continue;
         }
         let page = expand_includes(&raw);
-        if !page.contains("class=\"table-search\"") {
+        if !page.contains("class=\"table-controls\"") {
             continue;
         }
+        gated += 1;
         let raw = page;
 
         // Which scripts this page pulls in, and whether any of them says the class.
@@ -3343,6 +3383,16 @@ fn a_filter_box_is_hidden_until_the_script_that_drives_it_arrives() {
             label(&path)
         );
     }
+
+    // A lint that walks a directory looking for a shape passes by finding nothing, and this one had
+    // no floor until the shape it looks for was narrowed. Five pages carry `.table-controls` today;
+    // the floor is deliberately below that, so one page legitimately losing its controls is not a
+    // failure while the lint scanning nothing still is.
+    assert!(
+        gated >= 3,
+        "only {gated} pages were found carrying `.table-controls`; this lint has stopped looking \
+         at the pages it exists for"
+    );
 
     // And every box names a table that exists in the same template, the way a `popovertarget` must.
     // A typo here is a box that renders, focuses, and filters nothing.

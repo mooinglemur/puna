@@ -22,9 +22,21 @@
   var feed = status.dataset.feed;
   if (!feed) return;
 
-  // The last hundred records, or everything if the room is younger than that. The server caps this
-  // regardless; asking for more here would only be refused further away.
-  var REPLAY_LINES = 100;
+  // The last five hundred records, or everything if the room is younger than that.
+  //
+  // **Sized against the trim below rather than against the wire.** At 500 a page opens with a
+  // quarter of what it is willing to hold, so there is room for a busy room to run for a while
+  // before anything is dropped off the top, and a reader arriving mid-release has the lines that
+  // explain it rather than the tail of the flood. It also gives the filter box something to filter:
+  // a narrow search over a hundred lines usually finds nothing and reads as broken.
+  //
+  // The cost is one burst on connect, and it was measured before this moved: a 500-line replay is
+  // ~124 KiB raw, and `rocket_ws` sits on a tungstenite with no permessage-deflate, so that is what
+  // crosses the wire. A page load rather than a problem, and the follow after it is a trickle.
+  //
+  // The server clamps this to `journal::MAX_REPLAY_LINES` (5,000) whatever is asked for, so this is
+  // comfortably inside what it will serve rather than up against it.
+  var REPLAY_LINES = 500;
 
   // How many lines stay in the document.
   //
@@ -47,16 +59,28 @@
   var progress = document.getElementById("journal-progress");
 
   // --- THE VIEW FILTERS ---------------------------------------------------------------------------
-  // Three checkboxes over what is already on the page. Nothing here refetches, nothing here is
-  // authorization, and every row a filter hides was sent to this reader and is one click away.
+  // A search box and three checkboxes over what is already on the page. Nothing here refetches,
+  // nothing here is authorization, and every row a filter hides was sent to this reader and is one
+  // keystroke or one click away.
   //
-  // **The hiding is the stylesheet's.** Each row is painted with marker classes as it is built, and
-  // a box toggles one class on the feed, so a filter costs a class change on one element rather
-  // than a pass over two thousand rows. That is also what makes it correct for rows that have not
-  // arrived yet: a record landing in ten minutes carries its own markers and is hidden or not
-  // without anything having to remember which boxes are ticked.
+  // **The hiding is the stylesheet's, and the two halves get there differently.** A checkbox is a
+  // property of the RECORD, so each row is painted with marker classes as it is built and the box
+  // toggles one class on the feed: a class change on one element, and a record landing in ten
+  // minutes is hidden or shown by the same rule with nothing having to remember what is ticked.
+  //
+  // A substring is a property of the ROW'S TEXT and CSS has no selector for it, so that one is
+  // decided per row: at build time for a row arriving, and over the whole feed when the needle
+  // changes. Both ends put the same class on, so the rule and the count stay one rule.
   var filters = document.getElementById("journal-filters");
   var filterNote = document.getElementById("journal-filter-note");
+  var filterSearch = document.getElementById("journal-filter-search");
+
+  // The current search, trimmed and lower-cased once rather than per row per keystroke.
+  var needle = "";
+
+  // The rows a non-empty search is hiding, spelled the way `puna.css` spells it. See `FILTERS`,
+  // whose `hides` entries this joins for the count.
+  var SEARCH_HIDES = ".entry:not(.unfilterable).unmatched";
 
   // **Both come from the server, and neither is retyped here.** `gameplay` is `PUBLIC_KINDS` out of
   // `routes/journal.rs`, the same list that decides what a public viewer is SENT: a second copy in
@@ -187,6 +211,47 @@
   function isFiller(event) {
     if (event.type !== "check" && event.type !== "cheat") return false;
     return !event.flags;
+  }
+
+  // What the reader typed, reduced to what a row is compared against.
+  //
+  // **Its own function so the normalization is somewhere a test can reach.** Trimming and
+  // lower-casing here rather than per row is the cheap half of the reason; the deciding half is
+  // that case-insensitivity is a property somebody would assert, and with this inline in the input
+  // handler the only thing that could exercise it is a browser. A test written against the
+  // comparison alone would pass whatever the handler did, which is a check on nothing.
+  //
+  // Once per keystroke rather than once per row per keystroke, which on a feed somebody has loaded
+  // in full is the difference between one `toLowerCase` and a hundred and sixty thousand.
+  function setNeedle(raw) {
+    needle = String(raw || "")
+      .trim()
+      .toLowerCase();
+  }
+
+  // Whether one row survives the current search.
+  //
+  // **`unfilterable` is exempt here as it is everywhere else**, which is also what makes the
+  // `searchText` below safe to read without a guard: every row that reaches the comparison came out
+  // of `line`, and the day headings, which do not, never reach it.
+  //
+  // Matched against the RENDERED text rather than the record's fields, the same rule `table.js`
+  // states: what you can see is what you can search, and a field the feed does not show cannot
+  // match invisibly. So "sword" finds the item, "lemur" finds the player, and a timestamp finds
+  // the minute.
+  function applySearch(row) {
+    if (row.classList.contains("unfilterable")) return;
+    row.classList.toggle("unmatched", needle !== "" && row.searchText.indexOf(needle) === -1);
+  }
+
+  // Every row again, for a needle that changed.
+  //
+  // O(rows) per keystroke, which is why `line` caches each row's text: `textContent` walks and
+  // concatenates a row's spans every time it is read, and this page can be holding the whole feed
+  // if somebody pressed the button. The cached string turns a keystroke into a run of
+  // `indexOf`.
+  function refreshSearch() {
+    for (var i = 0; i < log.children.length; i++) applySearch(log.children[i]);
   }
 
   function marks(event) {
@@ -608,6 +673,17 @@
         cell(row, event.type || "unknown", "kind");
         cell(row, " " + JSON.stringify(event), "hint");
     }
+    // **Read once, here, where the row is finished and before it is in the document.**
+    //
+    // An expando rather than a `data-` attribute deliberately: this is a search index, not markup,
+    // and a `dataset` write would serialize a copy of every line into the DOM for a reader to
+    // stumble over in devtools and for nothing to read but this file.
+    //
+    // The saving is real rather than theoretical. `textContent` walks and concatenates a row's
+    // spans on every read, and a search over a feed somebody has loaded in full would do that for
+    // every row on every keystroke.
+    row.searchText = row.textContent.toLowerCase();
+    applySearch(row);
     return row;
   }
 
@@ -930,6 +1006,10 @@
     }).map(function (f) {
       return f.hides;
     });
+    // **The search counts as a filter here, which is the whole point of the number.** With a narrow
+    // needle on a busy room the total climbs every second while the shown count sits still, and
+    // that pair is the only thing on screen saying the feed is alive rather than stopped.
+    if (needle !== "") hides.push(SEARCH_HIDES);
     if (!hides.length) {
       filterNote.textContent = "";
       return;
@@ -950,15 +1030,19 @@
     }
   }
 
-  // Read the boxes and put their classes on the feed.
+  // Read the boxes and put their classes on the feed, and say what is hidden.
   //
-  // `filtering` is a fourth class carrying none of the rules: it is what the stylesheet keys the
-  // alternating ground off, because `:nth-child(even)` counts rows the filter has hidden and a
-  // filtered feed striped that way comes out in runs of two and three, which reads as a rendering
-  // fault rather than as a filter. See the `.journal.filtering` rules.
+  // `filtering` carries none of the rules: it is what the stylesheet keys the alternating ground
+  // off, because `:nth-child(even)` counts rows a filter has hidden and a filtered feed striped
+  // that way comes out in runs of two and three, which reads as a rendering fault rather than as a
+  // filter. **The search counts toward it too**, since a searched feed has the same gaps in it.
+  // See the `.journal.filtering` rules.
+  //
+  // The search's own per-row class is not set here: it is set where a row is built and by
+  // `refreshSearch` when the needle moves, because CSS cannot ask whether text contains a string.
   function applyFilters() {
     if (!filters) return;
-    var any = false;
+    var any = needle !== "";
     FILTERS.forEach(function (f) {
       var box = document.getElementById(f.input);
       var on = !!(box && box.checked);
@@ -986,6 +1070,26 @@
         if (wasFollowing) pinBottom();
       });
     });
+
+    if (filterSearch) {
+      filterSearch.addEventListener("input", function () {
+        // The same measure-first rule the boxes follow, and it matters more here: a needle is
+        // narrowed a character at a time, so a reader watching the bottom of a live feed would be
+        // dropped out of following on the first keystroke and have no idea why.
+        var wasFollowing = nearBottom();
+        setNeedle(filterSearch.value);
+        refreshSearch();
+        applyFilters();
+        if (wasFollowing) pinBottom();
+      });
+      // **Whatever is already in the box, applied before anything is drawn.** The browser restores
+      // a search box's value from session history on a reload, and restoring fires no `input`: the
+      // exact bug `table.js` shipped on the room page, which came back as a populated box over an
+      // unfiltered table. Read here so a needle that survived a reload is in force from the first
+      // replayed row rather than from the reader's next keystroke.
+      setNeedle(filterSearch.value);
+    }
+
     // `toggles.js` has already restored each box from localStorage and dispatches no event of its
     // own, so this is what applies a remembered filter to the first paint. Without it the boxes
     // come up ticked over an unfiltered feed, which is the shape of every "my setting did not

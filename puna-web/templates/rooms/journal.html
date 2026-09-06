@@ -91,6 +91,20 @@ nothing.{% endif %}</p>
    template here once rendered `<trdata-mine>`. #}
 <p class="feed-filters" id="journal-filters" hidden
    data-gameplay-kinds="{{ gameplay_kinds }}" data-my-slots="{{ my_slots }}">
+{# **First, and the checkboxes and the count read to its right.** The same `.table-search` box every
+   other table on this site is filtered with, so a reader who has used one has used this one.
+
+   It is the one filter here CSS cannot express: a checkbox asks something about the record and can
+   be a class on the feed, where a substring asks about the row's rendered text and there is no
+   selector for that. So `journal.js` decides it per row. That is invisible from here and is why the
+   two are described together in that file rather than each beside its own control.
+
+   No `name` and no form around it: nothing here is submitted, and a stray `name` on a control
+   inside a page's only paragraph would be a field looking for a form to belong to. #}
+<input type="search" class="table-search" id="journal-filter-search" placeholder="Filter&hellip;"
+       aria-label="Filter the feed" title="Show only lines containing this text. Matched against
+what is on screen, so a player's name, an item, a location or a time of day all work. The feed
+keeps following while it is set.">
 {% if sees_everything %}
 <label title="Show only what happened in the games: items, links, goals, and worlds released or
 collected. This is what a viewer at this room's public feed tier is sent.">

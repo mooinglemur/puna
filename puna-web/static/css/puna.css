@@ -1762,6 +1762,14 @@ h1 .scope {
   display: none;
 }
 
+/* The search box's half, and it is keyed differently on purpose: there is no selector for "contains
+   this text", so `journal.js` puts `unmatched` on a row itself rather than a mode on the feed. That
+   makes the class self-sufficient (it is only ever present while a needle is), so this rule needs no
+   `.journal.searching` to hang off and clearing the box is the same walk that set it. */
+.journal .entry:not(.unfilterable).unmatched {
+  display: none;
+}
+
 /* **The zebra cannot survive a filter, and this is why it is replaced rather than patched.**
    `:nth-child(even)` counts rows the filter has hidden, so a filtered feed stripes in runs of two
    and three and reads as a rendering fault. Restriping the visible rows from script would be a walk
@@ -1793,6 +1801,21 @@ h1 .scope {
   gap: 0.35rem;
   /* The label is one control: a box and its words must not break across a line from each other. */
   white-space: nowrap;
+}
+
+/* The search box leads the row, with the checkboxes and the count to its right. `.table-search`
+   already caps its width, and `flex: 0 1 auto` is what keeps it from growing into the space the
+   count needs on a wide window while still letting it give way on a narrow one, where the row
+   wraps. */
+.feed-filters .table-search {
+  flex: 0 1 auto;
+}
+
+/* Pushed to the far end, so a number that changes every second is not moving the controls beside
+   it. `margin-left: auto` rather than `justify-content: space-between`, which would spread the
+   checkboxes as well. */
+.feed-filters #journal-filter-note {
+  margin-left: auto;
 }
 
 /* --- A LINE ARRIVING, and only one that arrived live --------------------------------------------

@@ -40,17 +40,29 @@ function lift() {
   return src.slice(start, end);
 }
 
+const SEARCH_HIDES = ".entry:not(.unfilterable).unmatched";
+
 // `boxes` is which inputs the page rendered, and what state `toggles.js` restored them to. An id
 // that is absent from it does not exist on that page, which is the case under test.
-function harness(boxes) {
+//
+// `search` is the box beside them: a needle, and how many of the six rows it is keeping off the
+// screen. The needle lives above this slice and `applyFilters` consults it, so it is passed in;
+// `journal-search.test.js` owns which rows it picks.
+function harness(boxes, search) {
+  const needle = (search && search.needle) || "";
+  const unmatched = (search && search.hidden) || 0;
   const classes = new Set();
   const log = {
     classList: {
       contains: (c) => classes.has(c),
       toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)),
     },
-    // Three rows and no headings, which is all the note needs to count.
-    querySelectorAll: (selector) => (selector.indexOf(":not(.daybreak)") !== -1 ? [0, 1, 2] : []),
+    // Six rows and no headings. The note counts by selector, so this answers the two it builds:
+    // every record, and whichever of them the active filters hide.
+    querySelectorAll: (selector) => {
+      if (selector.indexOf(":not(.daybreak)") !== -1) return [0, 1, 2, 3, 4, 5];
+      return selector.indexOf(".unmatched") !== -1 ? new Array(unmatched).fill(0) : [];
+    },
   };
   const filterNote = { textContent: "" };
   const document = { getElementById: (id) => (id in boxes ? { checked: boxes[id] } : null) };
@@ -60,9 +72,11 @@ function harness(boxes) {
     "filterNote",
     "filters",
     "document",
+    "needle",
+    "SEARCH_HIDES",
     lift() + "\nreturn applyFilters;"
   );
-  make(log, filterNote, {}, document)();
+  make(log, filterNote, {}, document, needle, SEARCH_HIDES)();
   return { classes, note: filterNote.textContent };
 }
 
@@ -104,5 +118,33 @@ exports.run = function (t) {
   {
     const h = harness({ "journal-filter-personal": false, "journal-filter-filler": false });
     t.check("boxes that are rendered and unticked filter nothing", h.classes.size === 0);
+  }
+
+  // --- THE SEARCH COUNTS AS A FILTER, WHICH IS WHAT THE NUMBER IS FOR ---------------------------
+  // With a narrow needle on a busy room the total climbs every second while the shown count sits
+  // still. That pair is the only thing on screen saying the feed is alive rather than stopped, so
+  // a note that ignored the search would report "all 6 loaded lines" over a table showing one.
+  {
+    const h = harness({}, { needle: "sword", hidden: 5 });
+    t.check("a search alone marks the feed as filtered", h.classes.has("filtering"));
+    t.check("and the note counts what it is hiding", h.note === "Showing 1 of 6 loaded lines.");
+  }
+
+  // A needle that matches nothing has to say so rather than showing an empty frame, which is
+  // otherwise indistinguishable from a socket that quietly stopped.
+  {
+    const h = harness({}, { needle: "nothing here", hidden: 6 });
+    t.check(
+      "a needle that matches nothing says so",
+      h.note === "Nothing loaded matches these filters (6 lines hidden)."
+    );
+  }
+
+  // And it composes with a box rather than replacing it: `querySelectorAll` is given one
+  // comma-joined selector, so a row both of them hide is counted once.
+  {
+    const h = harness({ "journal-filter-filler": true }, { needle: "sword", hidden: 5 });
+    t.check("a search and a box are one count", h.note === "Showing 1 of 6 loaded lines.");
+    t.check("with both classes on the feed", h.classes.has("hide-filler") && h.classes.has("filtering"));
   }
 };
