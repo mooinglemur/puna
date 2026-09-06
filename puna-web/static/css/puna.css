@@ -1710,6 +1710,59 @@ h1 .scope {
    its place across a long location name. */
 .journal .entry:nth-child(even) { background: var(--feed-stripe); }
 
+/* --- THE THREE VIEW FILTERS ---------------------------------------------------------------------
+   `journal.js` paints a marker class onto every row as it builds it and puts one of these classes
+   on the feed when a box is ticked, so filtering is a class change on ONE element and a record that
+   has not arrived yet is filtered by the same rule with nothing having to remember what is ticked.
+
+   **`.unfilterable` is exempt from all three, by construction rather than by each rule remembering
+   to say so.** It carries pahoa's `gap` marker, which is the only evidence a history is incomplete
+   and which `routes/journal.rs` refuses to filter at any policy, and the day headings, which are
+   not records: a filtered feed that lost its calendar would read as one where the clock runs
+   backwards. A heading left standing over rows that are all hidden is the deliberate cost, and it
+   is a true statement about the day.
+
+   These selectors are spelled in `journal.js` too, where the "showing N of M" count needs to name
+   the same rows this hides, and `tests/templates.rs` holds the two files to them. */
+.journal.only-gameplay .entry:not(.unfilterable):not(.gameplay),
+.journal.only-personal .entry:not(.unfilterable):not(.personal),
+.journal.hide-filler .entry:not(.unfilterable).filler {
+  display: none;
+}
+
+/* **The zebra cannot survive a filter, and this is why it is replaced rather than patched.**
+   `:nth-child(even)` counts rows the filter has hidden, so a filtered feed stripes in runs of two
+   and three and reads as a rendering fault. Restriping the visible rows from script would be a walk
+   over every row on every frame, on the page most likely to be holding a hundred and sixty thousand
+   of them.
+
+   A hairline under each row does what the stripe was there for, which is keeping the eye on one
+   line across a long location name. It costs nothing, and it is arguably the better affordance at
+   this density anyway. The heading draws its own rules, so it opts out. */
+.journal.filtering .entry:nth-child(even) { background: none; }
+.journal.filtering .entry { border-bottom: 1px solid var(--feed-rule); }
+.journal.filtering .entry.daybreak { border-bottom: 0; }
+
+/* The filter row, above the feed beside the backfill control and for the same reason: it acts on
+   the whole view, and a control that scrolled away with the records it hides would be unreachable
+   exactly when somebody wants it back. */
+.feed-filters {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+.feed-filters label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  /* The label is one control: a box and its words must not break across a line from each other. */
+  white-space: nowrap;
+}
+
 /* --- A LINE ARRIVING, and only one that arrived live --------------------------------------------
    The row opens from nothing to its one line while the text fades in over it, so a record landing
    on a quiet feed is something the eye catches rather than a line that was suddenly always there.

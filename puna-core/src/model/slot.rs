@@ -272,6 +272,41 @@ pub async fn owned_by(
     Ok(rows.into_iter().map(Slot::from).collect())
 }
 
+/// Which slots in THIS room this person holds, by number.
+///
+/// The journal page's personal filter is what wants this: a journal record names a slot by its
+/// number and never by its owner, so filtering a feed down to "traffic touching me" needs the
+/// numbers. [`owns_a_slot`] answers only whether there are any, and [`owned_by`] walks every room.
+///
+/// **Empty is a real answer and the page reads it as one.** A staff member who plays nothing here
+/// holds no slots, so a personal filter would hide the whole feed; the control is not offered at
+/// all rather than offered and useless.
+///
+/// One indexed lookup, on `room_slots_owner_idx`, and it returns numbers rather than [`Slot`]s
+/// because the caller renders them into a page: a `Slot` carries the player name, the game and the
+/// slot's password, none of which belongs in the markup of a feed built to be shared.
+pub async fn owned_slot_numbers(
+    conn: &mut AsyncPgConnection,
+    room_id: RoomId,
+    user_id: i64,
+) -> Result<Vec<i32>, diesel::result::Error> {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = Integer)]
+        slot_number: i32,
+    }
+
+    let rows: Vec<Row> = diesel::sql_query(
+        "SELECT slot_number FROM room_slots WHERE room_id = $1 AND owner_id = $2 \
+         ORDER BY slot_number",
+    )
+    .bind::<SqlUuid, _>(room_id)
+    .bind::<BigInt, _>(user_id)
+    .load(conn)
+    .await?;
+    Ok(rows.into_iter().map(|row| row.slot_number).collect())
+}
+
 /// Does this person hold a slot in this room?
 ///
 /// The **participant** half of the room page's two-tier rule: staff, or somebody playing here. It

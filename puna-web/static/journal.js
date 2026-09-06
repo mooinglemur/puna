@@ -46,6 +46,49 @@
   var earlier = document.getElementById("journal-earlier");
   var progress = document.getElementById("journal-progress");
 
+  // --- THE VIEW FILTERS ---------------------------------------------------------------------------
+  // Three checkboxes over what is already on the page. Nothing here refetches, nothing here is
+  // authorization, and every row a filter hides was sent to this reader and is one click away.
+  //
+  // **The hiding is the stylesheet's.** Each row is painted with marker classes as it is built, and
+  // a box toggles one class on the feed, so a filter costs a class change on one element rather
+  // than a pass over two thousand rows. That is also what makes it correct for rows that have not
+  // arrived yet: a record landing in ten minutes carries its own markers and is hidden or not
+  // without anything having to remember which boxes are ticked.
+  var filters = document.getElementById("journal-filters");
+  var filterNote = document.getElementById("journal-filter-note");
+
+  // **Both come from the server, and neither is retyped here.** `gameplay` is `PUBLIC_KINDS` out of
+  // `routes/journal.rs`, the same list that decides what a public viewer is SENT: a second copy in
+  // this file would drift, and it would drift in the quiet direction, hiding a record type pahoa
+  // added from a page whose whole promise is that it omits no history. `slots` is this viewer's own,
+  // empty for anybody holding none, in which case the control was never rendered.
+  function words(name) {
+    var raw = (filters && filters.dataset[name]) || "";
+    return raw.split(/\s+/).filter(Boolean);
+  }
+
+  var GAMEPLAY_KINDS = words("gameplayKinds");
+  var MY_SLOTS = words("mySlots").map(Number);
+
+  // Records no filter may hide, whatever is ticked.
+  //
+  // `gap` is pahoa's own "records were dropped here" marker and is the only evidence a history is
+  // incomplete: `routes/journal.rs` refuses to filter it at any policy, and a view filter that
+  // hid it would present a partial history as a whole one through the front door instead of the
+  // back. The day headings are the other, by the same argument in miniature: they are not records,
+  // and a feed that silently lost its calendar while filtered would be one where the clock appears
+  // to run backwards.
+  var UNFILTERABLE = ["gap"];
+
+  // The three link conventions, which the personal filter never hides.
+  //
+  // A `deathlink`/`traplink`/`ringlink` record carries the SENDER's slot and a recipient COUNT,
+  // never a recipient list, so "did this one reach me" is not answerable from the record at all.
+  // Shown rather than answered wrongly: the alternative is a filter that quietly drops the deaths
+  // somebody opened the feed to explain.
+  var LINK_KINDS = ["deathlink", "traplink", "ringlink"];
+
   var socket = null;
   // The follow position, in bytes into the room's history file. Advanced by every frame the server
   // sends, and sent back on a RECONNECT so the feed resumes exactly where it stopped rather than
@@ -108,6 +151,51 @@
     if (flags & 1) return "item progression";
     if (flags & 2) return "item useful";
     return "item";
+  }
+
+  // --- WHAT A ROW IS, FOR THE FILTERS -------------------------------------------------------------
+  // Painted once as the row is built, never recomputed. Everything below answers a question about
+  // the RECORD; which of those answers currently hides a row is the stylesheet's business.
+
+  function isMine(slot) {
+    return typeof slot === "number" && MY_SLOTS.indexOf(slot) !== -1;
+  }
+
+  // **Any record naming one of your slots**, not only the item traffic.
+  //
+  // Deliberately generous, and stated as the rule rather than arrived at by listing types: a record
+  // is about you if the room says your slot is in it. The narrower reading would need an allowlist
+  // of types to keep in step with pahoa's sixteen, and its failures are the bad kind: a filter
+  // called "my slots" that hides your own goal, or the release that emptied your world, is one a
+  // reader has to learn the exceptions to before they can trust it.
+  //
+  // `finder` and `receiver` are the check's two ends; `slot` is what everything else names its
+  // subject with.
+  function isPersonal(event) {
+    if (!MY_SLOTS.length) return false;
+    if (LINK_KINDS.indexOf(event.type) !== -1) return true;
+    return isMine(event.finder) || isMine(event.receiver) || isMine(event.slot);
+  }
+
+  // **Archipelago's own classification, not a judgment made here.** `flags` 0 is filler: neither
+  // progression (1), useful (2) nor a trap (4), the same bits `itemClass` colors by.
+  //
+  // Only a record that CARRIES an item can be filler. Everything else is unclassified rather than
+  // filler, and this filter removes what is classified as filler rather than everything that is not
+  // classified as something else, which is the difference between hiding a thousand junk items and
+  // hiding the chat.
+  function isFiller(event) {
+    if (event.type !== "check" && event.type !== "cheat") return false;
+    return !event.flags;
+  }
+
+  function marks(event) {
+    var out = "";
+    if (UNFILTERABLE.indexOf(event.type) !== -1) out += " unfilterable";
+    if (GAMEPLAY_KINDS.indexOf(event.type) !== -1) out += " gameplay";
+    if (isPersonal(event)) out += " personal";
+    if (isFiller(event)) out += " filler";
+    return out;
   }
 
   // **Who the room says it was.** Every record carrying a person carries `player` off the
@@ -259,7 +347,8 @@
   // reader. See the `arriving` rules in puna.css for what animating a replay would look like.
   function line(event, arriving) {
     var row = document.createElement("div");
-    row.className = "entry " + (event.type || "unknown") + (arriving ? " arriving" : "");
+    row.className =
+      "entry " + (event.type || "unknown") + (arriving ? " arriving" : "") + marks(event);
 
     var when = at(event.at);
     var stamp = cell(row, "", "when");
@@ -572,7 +661,11 @@
 
   function daybreak(date) {
     var row = document.createElement("div");
-    row.className = "entry daybreak";
+    // `unfilterable` for the reason the constant gives: a heading is not a record, and a filtered
+    // feed that lost its calendar reads as one where the clock runs backwards. A heading left
+    // standing over rows that are all hidden is the deliberate cost of that, and it is a true
+    // statement: the feed spans that day and nothing on it matched.
+    row.className = "entry daybreak unfilterable";
     cell(row, window.PunaTime ? window.PunaTime.day(date.getTime()) : "", "day");
     return row;
   }
@@ -731,6 +824,11 @@
     if (!keepEverything) {
       while (log.childElementCount > MAX_LINES) log.removeChild(log.firstElementChild);
     }
+    // After the trim, because the note counts what is on the page and the trim is what decides that.
+    // Before the pin, because the note sits above the feed and the feed is the flex item holding
+    // this page's slack: a note that grows or shrinks after the pin moves the bottom the pin just
+    // wrote. See `.feed-page`.
+    refreshFilterNote();
     // Only follow if the reader was already at the bottom. Yanking the view back down while
     // somebody is reading upward is the single most annoying thing a live feed can do.
     if (stuckToBottom) {
@@ -779,6 +877,120 @@
         headings[i].remove();
       }
     }
+    refreshFilterNote();
+  }
+
+  // --- THE THREE VIEW FILTERS ---------------------------------------------------------------------
+  //
+  // Each is a class on the feed and a stylesheet rule, so ticking a box costs one class change on
+  // one element and no pass over the rows at all. The property that buys is not speed but
+  // correctness for records that have not arrived yet: a row landing in ten minutes carries its own
+  // markers and is hidden or shown by the same rule, with nothing having to remember what is ticked.
+  //
+  // **`hides` is the selector `puna.css` uses, spelled here too**, because the count below has to
+  // describe the view actually on screen rather than a second opinion about it. Two spellings of one
+  // rule is a thing this project has been bitten by, so `tests/templates.rs` holds the two files to
+  // these exact strings.
+  //
+  // A missing input is not an error: the gameplay box is rendered only for a viewer the socket is
+  // not already filtering, and the personal one only for somebody holding a slot in this room.
+  var FILTERS = [
+    {
+      cls: "only-gameplay",
+      input: "journal-filter-gameplay",
+      hides: ".entry:not(.unfilterable):not(.gameplay)"
+    },
+    {
+      cls: "only-personal",
+      input: "journal-filter-personal",
+      hides: ".entry:not(.unfilterable):not(.personal)"
+    },
+    {
+      cls: "hide-filler",
+      input: "journal-filter-filler",
+      hides: ".entry:not(.unfilterable).filler"
+    }
+  ];
+
+  // How many records a filter is currently keeping off the screen, said above the feed.
+  //
+  // **Without this a filter and a dead socket look identical.** A personal feed on a room whose
+  // other twenty players are busy is a blank frame, and so is a connection that quietly stopped;
+  // the reader has no way to tell which they are looking at, and the honest answer is cheap.
+  //
+  // "Loaded" is the load-bearing word. The page holds the last MAX_LINES records plus whatever the
+  // whole-feed button has pulled in, and the trim counts rows rather than visible ones, so a
+  // filtered feed on a busy room genuinely is a narrow view of a two-thousand-record window rather
+  // than of the room's history. The `title` in the markup says so at length; this says which
+  // numbers it is talking about.
+  function refreshFilterNote() {
+    if (!filterNote) return;
+    var hides = FILTERS.filter(function (f) {
+      return log.classList.contains(f.cls);
+    }).map(function (f) {
+      return f.hides;
+    });
+    if (!hides.length) {
+      filterNote.textContent = "";
+      return;
+    }
+    // Headings are not records and are never hidden, so neither number counts them.
+    var total = log.querySelectorAll(".entry:not(.daybreak)").length;
+    // One comma-joined query rather than one per filter: a row matching two of them must be counted
+    // once, which `querySelectorAll` does for free and a sum of three lengths does not.
+    var hidden = log.querySelectorAll(hides.join(",")).length;
+    var shown = total - hidden;
+    if (!hidden) {
+      filterNote.textContent = "Showing all " + total + " loaded lines.";
+    } else if (!shown) {
+      filterNote.textContent =
+        "Nothing loaded matches these filters (" + total + " lines hidden).";
+    } else {
+      filterNote.textContent = "Showing " + shown + " of " + total + " loaded lines.";
+    }
+  }
+
+  // Read the boxes and put their classes on the feed.
+  //
+  // `filtering` is a fourth class carrying none of the rules: it is what the stylesheet keys the
+  // alternating ground off, because `:nth-child(even)` counts rows the filter has hidden and a
+  // filtered feed striped that way comes out in runs of two and three, which reads as a rendering
+  // fault rather than as a filter. See the `.journal.filtering` rules.
+  function applyFilters() {
+    if (!filters) return;
+    var any = false;
+    FILTERS.forEach(function (f) {
+      var box = document.getElementById(f.input);
+      var on = !!(box && box.checked);
+      log.classList.toggle(f.cls, on);
+      if (on) any = true;
+    });
+    log.classList.toggle("filtering", any);
+    refreshFilterNote();
+  }
+
+  if (filters) {
+    // Revealed only now: without script these boxes would tick and do nothing, which is worse than
+    // their absence. Same bargain `#journal-earlier` makes.
+    filters.hidden = false;
+    FILTERS.forEach(function (f) {
+      var box = document.getElementById(f.input);
+      if (!box) return;
+      box.addEventListener("change", function () {
+        // **Whether the reader is at the bottom is measured BEFORE the view changes.** Hiding rows
+        // shortens the feed, which moves the bottom out from under them; asking afterwards would
+        // read a reader who was following as one who had scrolled away, and leave them looking at
+        // the middle of the history with no way to tell the feed had stopped moving.
+        var wasFollowing = nearBottom();
+        applyFilters();
+        if (wasFollowing) pinBottom();
+      });
+    });
+    // `toggles.js` has already restored each box from localStorage and dispatches no event of its
+    // own, so this is what applies a remembered filter to the first paint. Without it the boxes
+    // come up ticked over an unfiltered feed, which is the shape of every "my setting did not
+    // persist" report.
+    applyFilters();
   }
 
   function say(text, className) {

@@ -74,10 +74,53 @@ nothing.{% endif %}</p>
 <span id="journal-progress" class="hint"></span>
 </p>
 
+{# --- THE VIEW FILTERS ---------------------------------------------------------------------------
+   Entirely client-side: `journal.js` paints a marker class onto every row it builds and these
+   boxes toggle a class on the feed, so filtering is the stylesheet's job and no record is refetched.
+   Nothing here is authorization. Everything a box can hide has already been sent, which is why the
+   gameplay box is offered only to somebody the SOCKET is not already filtering: for anybody else
+   it would be a control that hides nothing, implying a choice they do not have.
+
+   `hidden`, and revealed by `journal.js`. A checkbox that does nothing without script is worse
+   than an absent one, and this is the same bargain `#journal-earlier` above makes.
+
+   The two data attributes are the page's whole input to the filters, and both are decided by the
+   route: the gameplay set is `PUBLIC_KINDS` rendered rather than retyped, and the slot numbers are
+   this viewer's own. `data-my-slots` is emitted empty rather than conditionally, so the markup does
+   not have to build an attribute inside an `{% raw %}{% if %}{% endraw %}`, which is exactly how a
+   template here once rendered `<trdata-mine>`. #}
+<p class="feed-filters" id="journal-filters" hidden
+   data-gameplay-kinds="{{ gameplay_kinds }}" data-my-slots="{{ my_slots }}">
+{% if sees_everything %}
+<label title="Show only what happened in the games: items, links, goals, and worlds released or
+collected. This is what a viewer at this room's public feed tier is sent.">
+<input type="checkbox" data-toggle="journal.gameplay-only" id="journal-filter-gameplay"> Gameplay
+only</label>
+{% endif %}
+{% if !my_slots.is_empty() %}
+<label title="Show only records naming one of your slots. The three link conventions are always
+shown: a link record carries the sender's slot and a recipient count, never a recipient list, so
+whether one reached you is not answerable from it.">
+<input type="checkbox" data-toggle="journal.personal" id="journal-filter-personal"> My slots</label>
+{% endif %}
+<label title="Hide items Archipelago classifies as filler: neither progression, useful, nor a trap.
+Only a record carrying an item can be filler; everything else is unclassified and stays.">
+<input type="checkbox" data-toggle="journal.hide-filler" id="journal-filter-filler"> Hide
+filler</label>
+<span id="journal-filter-note" class="hint" title="Counted over the records currently loaded, which
+is the last two thousand plus anything the whole-feed button has pulled in, not the room's whole
+history."></span>
+</p>
+
 <div id="journal" class="journal" role="log" aria-live="polite" aria-label="Room feed"></div>
 
 {% endblock %}
 {% block scripts %}
 <script src="/static/localtime.js?v={{ base.static_version }}" defer></script>
+{# **Before `journal.js`, and the order is load-bearing.** `toggles.js` restores each box from
+   `localStorage` and dispatches no synthetic event, so whatever reads `.checked` must run after it
+   or every remembered filter comes up unapplied on the first paint: the boxes would be ticked and
+   the feed unfiltered. Both are `defer`, which executes in document order. #}
+<script src="/static/toggles.js?v={{ base.static_version }}" defer></script>
 <script src="/static/journal.js?v={{ base.static_version }}" defer></script>
 {% endblock %}

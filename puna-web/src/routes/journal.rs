@@ -294,6 +294,24 @@ pub struct JournalTemplate {
     /// Whether to offer the whole-file download at all. Decided here, never in markup: the file
     /// carries chat, and a template cannot prove it did not render a link.
     may_download: bool,
+    /// Whether this viewer is being sent more than the gameplay records.
+    ///
+    /// **Its own field rather than a second reading of `may_download`**, which is the same
+    /// condition today and is not the same question: one decides whether a link to the file is
+    /// offered, the other whether a *view* control has anything to hide. Sharing the field would
+    /// mean the day either rule moves, the other follows it silently.
+    sees_everything: bool,
+    /// [`PUBLIC_KINDS`], space separated, for the page's gameplay-only filter.
+    ///
+    /// **Rendered from the constant rather than retyped in JavaScript.** The filter is a client-side
+    /// approximation of what the `feed` tier is sent, and the failure mode of two lists is
+    /// one-directional and quiet: a kind pahoa adds and this module publishes would be *hidden* by
+    /// a stale copy in the browser, on a page whose entire promise is that it omits no history.
+    gameplay_kinds: String,
+    /// The slot numbers this viewer holds in this room, space separated. Empty for anybody who
+    /// holds none, which is what decides whether the personal filter is offered at all: see
+    /// [`slot::owned_slot_numbers`].
+    my_slots: String,
 }
 
 #[get("/journal/<id>")]
@@ -311,11 +329,25 @@ async fn page(
         .ok()
         .map(|m| m.len());
 
+    // Only for somebody signed in and holding a slot here. An anonymous viewer has no slots to be
+    // personal about, and the query is skipped rather than run to learn that.
+    let my_slots = match session.user_id {
+        Some(user_id) => slot::owned_slot_numbers(&mut conn, room.id, user_id).await?,
+        None => Vec::new(),
+    };
+
     Ok(JournalTemplate {
         base: TplContext::new(&session),
         room,
         size,
         may_download: visibility == Visibility::Everything,
+        sees_everything: visibility == Visibility::Everything,
+        gameplay_kinds: PUBLIC_KINDS.join(" "),
+        my_slots: my_slots
+            .iter()
+            .map(i32::to_string)
+            .collect::<Vec<_>>()
+            .join(" "),
     })
 }
 
@@ -1079,6 +1111,28 @@ mod tests {
         );
     }
 
+    /// Render the feed page for one viewer.
+    ///
+    /// `everything` is the one flag both the download link and the gameplay filter hang off, held
+    /// together here as they are in the handler: they are the same question asked of the same
+    /// `Visibility`, and rendering them from one argument is what stops a test proving a property
+    /// of a combination the route cannot produce.
+    fn page_html(room: &room::Room, everything: bool, my_slots: &str) -> String {
+        use askama::Template;
+
+        JournalTemplate {
+            base: crate::tpl::TplContext::new(&Session::default()),
+            room: room.clone(),
+            size: Some(1024 * 1024),
+            may_download: everything,
+            sees_everything: everything,
+            gameplay_kinds: PUBLIC_KINDS.join(" "),
+            my_slots: my_slots.into(),
+        }
+        .render()
+        .expect("renders")
+    }
+
     /// **The page offers the file exactly where the socket is not filtering.**
     ///
     /// The route refuses regardless, so this is about not offering a link that would 404, but it
@@ -1091,18 +1145,8 @@ mod tests {
     /// something.
     #[test]
     fn the_file_is_offered_only_where_nothing_is_being_withheld() {
-        use askama::Template;
-
-        let render = |may_download| {
-            JournalTemplate {
-                base: crate::tpl::TplContext::new(&Session::default()),
-                room: crate::routes::rooms::tests::a_room(),
-                size: Some(1024 * 1024),
-                may_download,
-            }
-            .render()
-            .expect("renders")
-        };
+        let room = crate::routes::rooms::tests::a_room();
+        let render = |everything| page_html(&room, everything, "");
 
         let staff = render(true);
         assert!(
@@ -1123,6 +1167,61 @@ mod tests {
         assert!(viewer.contains("journal-status"));
     }
 
+    /// **A view filter is offered only where it would do something.**
+    ///
+    /// The three boxes are decided here rather than in markup for the reason every control on
+    /// these pages is, and each has a different condition:
+    ///
+    ///   * **gameplay only** narrows what the *socket* already sends, so for a viewer at the `feed`
+    ///     tier it can hide nothing at all. Offering it there would be a control implying a choice
+    ///     they do not have, over a feed that is already narrowed, and it would read as broken.
+    ///   * **my slots** needs slots. For a spectator, an anonymous viewer, or a staff member who
+    ///     plays nothing in this room, it would hide the entire feed on the first click.
+    ///   * **hide filler** asks nothing of the viewer and is always offered.
+    ///
+    /// Rendering rather than reading, because the gate is a template condition and a template
+    /// condition is what a mistake here would be.
+    #[test]
+    fn a_view_filter_is_offered_only_to_somebody_it_can_do_something_for() {
+        let room = crate::routes::rooms::tests::a_room();
+
+        let staff = page_html(&room, true, "3 11");
+        assert!(
+            staff.contains("journal-filter-gameplay"),
+            "a viewer sent everything is not offered the gameplay filter, which is the only one \
+             they could possibly want"
+        );
+        assert!(staff.contains("journal-filter-personal"));
+
+        let public = page_html(&room, false, "");
+        assert!(
+            !public.contains("journal-filter-gameplay"),
+            "a viewer the socket already filters is offered a box that hides nothing, which reads \
+             as a broken control rather than as a narrowed feed"
+        );
+        assert!(
+            !public.contains("journal-filter-personal"),
+            "somebody holding no slot here is offered a personal filter, which hides every line on \
+             the page the moment it is ticked"
+        );
+
+        // The one that asks nothing of the viewer, and therefore the one every viewer gets.
+        for html in [&staff, &public] {
+            assert!(
+                html.contains("journal-filter-filler"),
+                "the filler filter depends on nothing about the viewer and must always be offered"
+            );
+        }
+
+        // A viewer at the feed tier still gets the kind list: it is what the gameplay filter would
+        // key on, it is a constant rather than anything about them, and withholding it would make
+        // the attribute mean two things depending on who is reading.
+        assert!(
+            public.contains("data-gameplay-kinds="),
+            "the page no longer carries the gameplay set, so the filter has nothing to match on"
+        );
+    }
+
     /// **A feed link hands over the feed and not the room.**
     ///
     /// The page is addressed by `journal_id`, which is derivable from neither the room's id nor its
@@ -1135,21 +1234,14 @@ mod tests {
     /// it is already on the public room page, and it names nothing that can be navigated to.
     #[test]
     fn the_feed_page_never_names_the_room_it_belongs_to() {
-        use askama::Template;
-
         let room = crate::routes::rooms::tests::a_room();
         let (id, tracker) = (room.id.to_string(), room.tracker_id.to_string());
         let journal = room.journal_id.to_string();
 
-        for may_download in [true, false] {
-            let html = JournalTemplate {
-                base: crate::tpl::TplContext::new(&Session::default()),
-                room: room.clone(),
-                size: Some(4096),
-                may_download,
-            }
-            .render()
-            .expect("renders");
+        for everything in [true, false] {
+            // With slots, because that is the shape carrying the most into the markup: a viewer's
+            // own slot numbers, which must still name nothing about the room.
+            let html = page_html(&room, everything, "3 11");
 
             assert!(
                 !html.contains(&id),

@@ -1228,6 +1228,214 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
     );
 }
 
+/// **The three view filters span four files and every half of the contract fails silently.**
+///
+/// A filter is a marker class painted by `journal.js`, a rule in `puna.css` keyed on a class the
+/// same script puts on the feed, an input id in `journal.html`, and a record-type list that comes
+/// out of [`PUBLIC_KINDS`]. Break any one of those and the page keeps working:
+///
+///   * a renamed **input id** makes `getElementById` answer `null` and the box do nothing at all.
+///     It still ticks, it is still remembered across reloads, and the feed never changes;
+///   * a renamed **feed class**, or a selector that differs between the two files, leaves either a
+///     box that hides nothing or a "showing N of M" count describing a view nobody is looking at;
+///   * a **marker** the script stops painting turns a filter into one that hides everything;
+///   * and the **kind list** retyped in the browser rather than rendered from `PUBLIC_KINDS` would
+///     hide, on a page whose whole promise is that it omits no history, precisely the record type
+///     pahoa added last.
+///
+/// Nothing throws in any of them, and the only reader who could tell is one who already knows what
+/// the feed should have said.
+#[test]
+fn the_journal_filters_agree_across_the_markup_script_stylesheet_and_route() {
+    let markup = std::fs::read_to_string(source("templates/rooms/journal.html")).expect("template");
+    let script = std::fs::read_to_string(source("static/journal.js")).expect("journal.js");
+    let code = code_only(&script);
+    let css = code_only_css(&std::fs::read_to_string(source("static/css/puna.css")).expect("css"));
+    let route = std::fs::read_to_string(source("src/routes/journal.rs")).expect("journal.rs");
+
+    // The table is the script's own, so this reads it rather than restating it: a fourth filter
+    // added there is covered by this lint without anybody remembering to come here.
+    let table = code
+        .split_once("var FILTERS = [")
+        .expect("journal.js no longer has a FILTERS table")
+        .1;
+    let table = table
+        .split_once("];")
+        .expect("journal.js's FILTERS table is unterminated")
+        .0;
+    let field = |key: &str| -> Vec<String> {
+        table
+            .match_indices(&format!("{key}: \""))
+            .map(|(at, m)| {
+                let rest = &table[at + m.len()..];
+                rest[..rest.find('"').expect("an unterminated string")].to_string()
+            })
+            .collect()
+    };
+    let classes = field("cls");
+    let inputs = field("input");
+    let selectors = field("hides");
+
+    // A lint that scans for a list states a floor, or it passes by finding nothing.
+    assert_eq!(
+        (classes.len(), inputs.len(), selectors.len()),
+        (3, 3, 3),
+        "read {} classes, {} inputs and {} selectors out of journal.js's FILTERS table; it holds \
+         three filters, each with all three, so this lint is checking the wrong text",
+        classes.len(),
+        inputs.len(),
+        selectors.len()
+    );
+
+    for id in &inputs {
+        assert!(
+            markup.contains(&format!("id=\"{id}\"")),
+            "journal.js looks up `{id}` and the journal template does not render it, so that \
+             filter's box ticks, is remembered, and hides nothing"
+        );
+    }
+
+    for class in &classes {
+        assert!(
+            css.contains(&format!(".journal.{class}")),
+            "journal.js puts `{class}` on the feed and puna.css has no rule keyed on it, so that \
+             filter is a checkbox with no effect"
+        );
+    }
+
+    // **The two spellings of one rule, held together.** The stylesheet decides what is on screen
+    // and the script counts what is off it; a difference between them is a count that contradicts
+    // the feed above it, which is worse than no count at all.
+    for selector in &selectors {
+        assert!(
+            css.contains(selector.as_str()),
+            "journal.js counts hidden rows with `{selector}` and puna.css does not hide that \
+             selector, so the \"showing N of M\" note describes a view nobody is seeing"
+        );
+    }
+
+    // Every marker the rules above depend on, painted where a row is built. Losing one inverts the
+    // filter it belongs to: a filter keyed on a class nothing paints hides the entire feed.
+    for marker in ["unfilterable", "gameplay", "personal", "filler"] {
+        assert!(
+            code.contains(&format!("\" {marker}\"")),
+            "journal.js no longer paints `{marker}` onto the rows it builds, so the filter keyed \
+             on it hides every record instead of some of them"
+        );
+    }
+
+    // **And the CALL, not just the function.** `marks` is entirely its call site: delete the call
+    // and every assertion above still passes, because the markers are all still spelled in a
+    // function nothing runs. The rows then carry no markers at all, so every filter hides
+    // everything and the feed goes blank on the first tick. Same shape as `inspect`'s refusal and
+    // the metrics proxy's registration, both of which needed a lint for exactly this reason.
+    let row = code
+        .split_once("function line(event, arriving)")
+        .expect("journal.js no longer has a line builder")
+        .1;
+    let row = row.split_once("switch (event.type)").expect("a switch").0;
+    assert!(
+        row.contains("marks(event)"),
+        "journal.js builds a row without painting its filter markers, so every filter hides the \
+         whole feed"
+    );
+
+    // The link exemption, which is a decision rather than an omission: a link record carries the
+    // sender's slot and a recipient COUNT, so whether one reached you is not answerable from it.
+    // Dropping this hides the deaths somebody opened a personal feed to explain, and the only
+    // symptom is a feed that is quieter than it should be.
+    let personal = code
+        .split_once("function isPersonal(event)")
+        .expect("journal.js no longer decides what is personal")
+        .1;
+    assert!(
+        personal
+            .split_once("\n  }")
+            .is_some_and(|(body, _)| body.contains("LINK_KINDS")),
+        "the personal filter no longer exempts the link conventions, so it hides deathlinks and \
+         traplinks on the strength of a recipient list the record does not carry"
+    );
+
+    // The stripe replacement, whose absence is purely visual and therefore invisible to everything
+    // except somebody looking at a filtered feed: `:nth-child(even)` counts hidden rows, so without
+    // this the ground alternates in runs of two and three and reads as a rendering fault.
+    assert!(
+        code.contains("\"filtering\"") && css.contains(".journal.filtering"),
+        "the feed no longer swaps its alternating ground while filtered, so a filtered feed stripes \
+         by DOM position rather than by what is visible"
+    );
+
+    // --- THE GAMEPLAY SET IS RENDERED, NOT RETYPED --------------------------------------------------
+    assert!(
+        route.contains("PUBLIC_KINDS.join("),
+        "routes::journal no longer renders PUBLIC_KINDS into the page, so the gameplay filter's \
+         idea of what counts as gameplay is a second list somewhere that can drift from the one \
+         deciding what a public viewer is SENT"
+    );
+    for (attribute, read) in [
+        ("data-gameplay-kinds=", "dataset[name]"),
+        ("data-my-slots=", "words(\"mySlots\")"),
+    ] {
+        assert!(
+            markup.contains(attribute),
+            "the journal template no longer carries `{attribute}`, so the filters have no input \
+             and silently match nothing"
+        );
+        assert!(
+            code.contains(read),
+            "journal.js no longer reads its filter input from the page (`{read}`)"
+        );
+    }
+
+    // --- THE PERSISTENCE, AND ITS ORDERING ----------------------------------------------------------
+    // `toggles.js` restores each box from localStorage and dispatches no event of its own, so
+    // whatever reads `.checked` has to run after it. Both are `defer`, which executes in document
+    // order, so the ORDER OF THESE TWO TAGS is the whole guarantee. Wrong way round, every
+    // remembered filter comes up ticked over an unfiltered feed: the exact shape of a "my setting
+    // did not persist" report, with the setting having persisted perfectly.
+    //
+    // **Anchored on the `src` path, not the bare filename.** The first spelling looked for
+    // `journal.js` and found it in the COMMENT above the toggles tag explaining this very ordering,
+    // so a correct file failed the assertion. Fourth time a lint here has matched its own prose.
+    let toggles = markup
+        .find("/static/toggles.js")
+        .expect("the journal page no longer loads toggles.js, so no filter is remembered");
+    let feed_script = markup
+        .find("/static/journal.js")
+        .expect("the journal page no longer loads journal.js");
+    assert!(
+        toggles < feed_script,
+        "toggles.js is loaded after journal.js, so a remembered filter is restored after the only \
+         thing that reads it and the first paint ignores every one of them"
+    );
+    assert_eq!(
+        markup.matches("data-toggle=\"journal.").count(),
+        3,
+        "not every filter box carries a data-toggle key, so it is forgotten on every reload while \
+         the two beside it are not"
+    );
+    // The box a filtered first paint depends on: without this call the classes are only ever put on
+    // the feed by a `change` event, which a restored box never fires.
+    assert!(
+        code.contains("applyFilters();"),
+        "journal.js no longer applies the filters at load, so a remembered filter has no effect \
+         until the reader toggles something"
+    );
+
+    // Rendered hidden and revealed by the script, the same bargain `#journal-earlier` makes: a box
+    // that ticks and does nothing is worse than an absent one. Both halves are silent on their own,
+    // and losing the reveal is the worse of the two, since the feature simply is not there.
+    assert!(
+        markup.contains("class=\"feed-filters\" id=\"journal-filters\" hidden"),
+        "the filter row is no longer rendered hidden, so a browser with no script shows three boxes \
+         that tick and change nothing"
+    );
+    assert!(
+        code.contains("filters.hidden = false"),
+        "journal.js no longer reveals the filter row, so the filters exist and nobody can reach them"
+    );
+}
+
 /// **The feed lets go of its socket when the server is shutting down.**
 ///
 /// Without this arm an open feed holds its pod for the whole shutdown grace: Rocket keeps doing
