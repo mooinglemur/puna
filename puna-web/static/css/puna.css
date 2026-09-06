@@ -687,6 +687,38 @@ code.stale {
   color: var(--warn-fg);
 }
 
+/* --- the room page's sign-in banner --------------------------------------------------------------
+   A `.notice` turned up, because it is the first thing on a page a reader has usually arrived at
+   from a link somebody sent them, and it is the difference between the rest of the page making
+   sense and looking broken.
+
+   Deliberately NOT `.warning`: nothing is wrong. The room is configured the way its organizer meant
+   it, and the reader is one sign-in away from everything on the page. Warning hues on a state that
+   is nobody's fault is how a palette stops meaning anything.
+
+   Bordered all the way round rather than only on the left, which is what makes it read as a banner
+   rather than as one more paragraph in the column: the left rule is the vocabulary for a status
+   line *within* a page, and this is about the page. */
+.notice.sign-in {
+  border: 2px solid var(--accent);
+  background: var(--surface);
+}
+
+.notice.sign-in ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1.25rem;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+/* A patch that exists and is not this reader's. Muted like the dash beside it, because the column's
+   news is which rows have a file rather than this one being unavailable. */
+.held {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+}
+
 /* --- THE SPINNER, and what it is allowed to mean ------------------------------------------------
    Decoration beside the sentence, never instead of it. A spinner alone cannot tell "coming up" from
    "stuck", which is exactly the distinction somebody watching a cold start needs, so the panel

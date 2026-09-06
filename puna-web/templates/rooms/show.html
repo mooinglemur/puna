@@ -10,6 +10,37 @@
    to breathe reads better than one held to a measure meant for paragraphs. #}
 {% block layout %}wide{% endblock %}
 {% block content %}
+
+{# --- SIGNED OUT, ON A ROOM THAT WITHHOLDS SOMETHING FROM A STRANGER ------------------------------
+   Above the room's own name, because it is about whether the rest of the page is going to work for
+   the reader, and a notice below the roster is one they reach after the confusion rather than
+   before it.
+
+   **Only when something is actually being withheld.** Most rooms need none of this: an anonymous
+   visitor holding the link has the address, the tracker, the feed and their patch, and a page that
+   asked every one of them to sign in would be asking for an account it does not need. The reasons
+   come from `sign_in_needed_for`, keyed on the same rules that decide who gets a password and who
+   gets a patch, so this cannot advertise a restriction the page is not applying.
+
+   The sign-in link is deliberately REDUNDANT with the one in the corner. The corner link is where
+   somebody goes when they have decided to sign in; this one is beside the sentence that just told
+   them why they should, and asking them to go hunting for it is how a banner gets ignored.
+
+   `?redirect=` brings them back to this room rather than to the landing page, which is the whole
+   difference between "sign in and find your way back" and "sign in". Relative, and `auth.rs`
+   refuses anything else: an absolute URL there would make the login endpoint an open redirect. #}
+{% if !sign_in_needed.is_empty() %}
+<div class="notice sign-in">
+<p><strong>Participating in this room?</strong> Please log in first.
+<a href="/auth/login?redirect=/room/{{ room.id }}">Log in with Discord</a></p>
+<ul>
+{% for reason in sign_in_needed %}
+<li>{{ reason }}</li>
+{% endfor %}
+</ul>
+</div>
+{% endif %}
+
 {# The name, and for staff who may change it, a pencil that swaps it for a field.
 
    **`<details>` rather than a scripted toggle**, the same choice the Manage section makes: it opens
@@ -333,6 +364,26 @@ unclaimed
 {% if slot.has_patch %}
 {% if slot.can_download %}
 <a href="/room/{{ room.id }}/slot/{{ slot.slot_number }}/patch">download</a>
+{% else if slot.owner_id.is_some() %}
+{# **Held by somebody, so there is nothing to claim and nothing to do.**
+   This branch used to say "claim this slot to download", which is true of an unclaimed slot and
+   false here: the slot already has a player, and telling a reader to claim it is telling them to
+   take somebody else's world. It also read as though the file were the thing missing.
+
+   The marker's job is only to say a patch EXISTS, which is what separates this cell from the dash
+   below it: a dash means the game is played with a client and there is no file at all. The lock
+   says there is one and it is not yours, which is the honest reading of `claimed` patches.
+
+   `title` and `aria-label` both, per the glyph rule: they are different audiences rather than
+   alternatives, and a lock with neither is a symbol a reader has to guess at. #}
+<span class="held" title="This slot has a patch file. It goes to the player holding the slot."
+      aria-label="Patch held by this slot's player">
+<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+<rect x="3.5" y="7.5" width="9" height="6.5" rx="1.5" fill="none" stroke="currentColor"/>
+<path d="M5.5 7.5V5.2a2.5 2.5 0 0 1 5 0v2.3" fill="none" stroke="currentColor"
+      stroke-linecap="round"/>
+</svg>
+</span>
 {% else %}
 <span class="hint">claim this slot to download</span>
 {% endif %}

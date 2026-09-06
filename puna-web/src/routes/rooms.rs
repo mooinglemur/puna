@@ -13,7 +13,7 @@ use puna_core::model::command::{self, RoomCommand};
 use puna_core::model::event;
 use puna_core::model::generation;
 use puna_core::model::member::{self, MemberError, RoomRole};
-use puna_core::model::room::{self, DesiredState, MyRoom, Room, RoomState, SlotAuth};
+use puna_core::model::room::{self, DesiredState, MyRoom, PatchPolicy, Room, RoomState, SlotAuth};
 use puna_core::model::slot::{self, Slot};
 use puna_core::model::user;
 use rocket::form::Form;
@@ -230,6 +230,16 @@ pub struct RoomTemplate {
     /// `None` for anybody who is not staff, since the control is theirs alone and asking would be
     /// a query for a section that does not render.
     creation_refused: Option<String>,
+    /// Why a signed-out viewer would have to sign in before they could take part here. Empty for
+    /// anybody who is signed in, and for a room that withholds nothing from a stranger.
+    ///
+    /// Decided in the route rather than in markup, like every other gate on this page and for the
+    /// sharper reason: the conditions are *"this page is holding a credential it will not render to
+    /// you"*, so the banner has to be keyed on the same functions that withhold them. A template
+    /// comparing `slot_auth` itself would be a second opinion about who gets a password.
+    ///
+    /// See [`sign_in_needed_for`].
+    sign_in_needed: Vec<&'static str>,
 }
 
 /// One row of the room page's slot table.
@@ -1015,6 +1025,7 @@ async fn show(
         owns_a_slot,
         room_password: room_password_for(&room, role.is_some(), owns_a_slot),
         needs_password: room.slot_auth == SlotAuth::Room,
+        sign_in_needed: sign_in_needed_for(&room, &slots, session.is_logged_in),
         room,
         slots,
         is_staff: role.is_some(),
@@ -1027,6 +1038,63 @@ async fn show(
         message,
         elapsed,
     })
+}
+
+/// What a signed-out viewer of this room cannot get without signing in.
+///
+/// **`GET /room/<id>` is public and mostly works signed out**, which is the design: the link is
+/// what authorizes, the address is right there, the tracker and the feed are linked, and for a room
+/// with no passwords and open patches an anonymous visitor has everything they need to play. So the
+/// page says nothing about logging in, and it should not.
+///
+/// The rooms where that is false fail **quietly**, and each of these is a credential this page holds
+/// and does not render to them:
+///
+///   * a room-wide password goes to the room's staff and its players ([`room_password_for`]), so a
+///     signed-out viewer sees "This room needs a password" and no password;
+///   * a per-slot password goes to the slot's owner and staff ([`SlotView::password`]), same;
+///   * under `PatchPolicy::Claimed` a patch goes to the slot's owner and staff, so the roster reads
+///     as a list of files nobody is being offered.
+///
+/// In every one of those the page is behaving correctly and looks broken, and the thing that would
+/// fix it (signing in, then holding a slot) is nowhere on screen. Hence the banner.
+///
+/// **The patch reason is gated on a patch existing.** Most Archipelago games are played with a
+/// client rather than a patched ROM, so `has_patch` is false for whole rooms, and naming a
+/// restriction on files that are not there would send somebody to sign in for nothing.
+///
+/// Returns the reasons rather than a bool so the banner can say which of them applies: "log in to
+/// take part" with no reason reads as a site nagging for an account, where naming the password or
+/// the patch is a statement about *this room* that a reader can check against what they can see.
+///
+/// **`is_logged_in` is a parameter rather than a check at the call site**, and that is a correction
+/// rather than a preference. It was a `match` in the handler first, which meant the only thing that
+/// could cover it was the handler, which needs a database: a render test could assert the banner is
+/// absent for a signed-in reader and be asserting its own fixture. Mutation-checked, and the
+/// mutation passed. The whole rule lives here now, so there is nothing left to get wrong outside it.
+fn sign_in_needed_for(room: &Room, slots: &[SlotView], is_logged_in: bool) -> Vec<&'static str> {
+    let mut reasons = Vec::new();
+    // Somebody signed in who holds no slot here is a different case with a different answer: they
+    // need a claim link from an organizer, not a login. A banner telling a logged-in reader to log
+    // in is how a banner becomes something people scroll past.
+    if is_logged_in {
+        return reasons;
+    }
+    match room.slot_auth {
+        SlotAuth::None => {}
+        SlotAuth::Room => reasons
+            .push("This room has a password, and it is shown only to the people playing in it."),
+        SlotAuth::PerSlot => reasons.push(
+            "Every slot here has its own password, shown only to the player holding that slot.",
+        ),
+    }
+    if room.patch_policy == PatchPolicy::Claimed && slots.iter().any(|slot| slot.has_patch) {
+        reasons.push(
+            "The patch files are handed out to the player holding each slot, so claiming your \
+             slot is what gets you yours.",
+        );
+    }
+    reasons
 }
 
 /// **The one place that decides who may bring a room up**, used by the page, the explicit start
@@ -3067,6 +3135,9 @@ pub(crate) mod tests {
             unclaimed_after_import: None,
             // An open gate, so the clone control renders. The gate's own test sets this.
             creation_refused: None,
+            // Signed in, per `base` above, so the sign-in banner never applies here. Its own test
+            // renders a signed-out page.
+            sign_in_needed: Vec::new(),
         }
     }
 
@@ -4527,6 +4598,170 @@ pub(crate) mod tests {
         assert!(
             element.contains("kick"),
             "the lock tooltip does not point at kick, which is the half that ejects:\n{element}"
+        );
+    }
+
+    /// **A signed-out reader is told when this page is holding something back, and only then.**
+    ///
+    /// The failure this exists for is silent in the only way that matters: the page renders
+    /// perfectly, the address is right there, and the password or the patch the reader came for is
+    /// simply absent, with nothing saying that signing in is what produces it. Every one of those
+    /// rooms looks like a broken page rather than a gated one.
+    ///
+    /// The other direction is the half that would rot: a banner on every room, including the ones
+    /// where an anonymous visitor already has everything, is a site asking for an account it does
+    /// not need, and it teaches people to scroll past the banner on the rooms that meant it.
+    #[test]
+    fn a_signed_out_reader_is_told_what_signing_in_would_get_them() {
+        let open = || {
+            let mut room = a_room();
+            room.slot_auth = SlotAuth::None;
+            room.patch_policy = PatchPolicy::Open;
+            room
+        };
+        let patched = || vec![a_slot(false)];
+
+        assert!(
+            sign_in_needed_for(&open(), &patched(), false).is_empty(),
+            "a room with no password and open patches withholds nothing from a stranger, so it \
+             must not ask them to sign in"
+        );
+
+        // Each credential this page holds and will not render to a stranger, one reason apiece.
+        let mut with_password = open();
+        with_password.slot_auth = SlotAuth::Room;
+        assert_eq!(
+            sign_in_needed_for(&with_password, &patched(), false).len(),
+            1
+        );
+
+        let mut per_slot = open();
+        per_slot.slot_auth = SlotAuth::PerSlot;
+        assert_eq!(sign_in_needed_for(&per_slot, &patched(), false).len(), 1);
+
+        let mut claimed = open();
+        claimed.patch_policy = PatchPolicy::Claimed;
+        assert_eq!(sign_in_needed_for(&claimed, &patched(), false).len(), 1);
+
+        // **And the one that would send somebody to sign in for nothing.** Most Archipelago games
+        // are played with a client rather than a patched ROM, so a room where no slot has a file is
+        // a room whose patch policy restricts nothing.
+        let mut no_patches = patched();
+        no_patches[0].has_patch = false;
+        assert!(
+            sign_in_needed_for(&claimed, &no_patches, false).is_empty(),
+            "a room with no patch files at all names a patch restriction, which is a reason a \
+             reader cannot check against anything on the page"
+        );
+
+        // Both at once, because a room can withhold both and the reader is owed both reasons.
+        let mut both = claimed;
+        both.slot_auth = SlotAuth::PerSlot;
+        assert_eq!(sign_in_needed_for(&both, &patched(), false).len(), 2);
+
+        // **And the whole thing is off for somebody already signed in**, which is the arm that
+        // lives here rather than at the call site. A render test cannot reach a gate the handler
+        // holds, so with the check in the handler this assertion was against a fixture and a
+        // mutation removing the gate passed. Asserted on the room that withholds the most, so it
+        // cannot pass by there being nothing to say.
+        assert!(
+            sign_in_needed_for(&both, &patched(), true).is_empty(),
+            "a signed-in reader is told to sign in, on a page whose corner already says who they \
+             are"
+        );
+    }
+
+    /// The banner's markup half: rendered for a signed-out reader, absent for a signed-in one, and
+    /// carrying a way in rather than only a diagnosis.
+    #[test]
+    fn the_sign_in_banner_carries_its_own_way_in_and_only_appears_signed_out() {
+        let mut page = page_as(false, false);
+        page.base.is_logged_in = false;
+        page.base.username = String::new();
+        page.sign_in_needed = sign_in_needed_for(
+            &{
+                let mut room = a_room();
+                room.slot_auth = SlotAuth::Room;
+                room
+            },
+            &[a_slot(false)],
+            false,
+        );
+        let html = page.render().expect("renders");
+
+        assert!(
+            html.contains("Participating in this room?"),
+            "a signed-out reader on a passworded room is not told that signing in is what gets \
+             them the password"
+        );
+        // **The redundant link is the point.** The corner has one; this one sits beside the
+        // sentence that just explained why, and it comes back HERE rather than to the landing
+        // page, which is the difference between "sign in" and "sign in and find your way back".
+        assert!(
+            html.contains(&format!("/auth/login?redirect=/room/{}", page.room.id)),
+            "the banner does not offer a way in, so it is a diagnosis with no next step"
+        );
+        assert!(
+            html.contains("This room has a password"),
+            "the banner names no reason, so it reads as a site nagging for an account rather than \
+             as a statement about this room"
+        );
+
+        // Signed in: the route hands an empty list, and nothing renders.
+        let signed_in = page_as(false, false).render().expect("renders");
+        assert!(
+            !signed_in.contains("Participating in this room?"),
+            "a signed-in reader is told to sign in"
+        );
+    }
+
+    /// **A patch somebody else holds is not a patch you can claim.**
+    ///
+    /// The cell said "claim this slot to download" for every slot the reader could not download
+    /// from, which is true of an unclaimed one and false of a held one twice over: the slot has a
+    /// player, so there is nothing to claim, and following the instruction would mean taking
+    /// somebody's world. It also read as though the file were what was missing.
+    ///
+    /// Three states, and the marker exists to separate the middle one from the dash: a dash means
+    /// this game has no patch file at all, which is most of them.
+    #[test]
+    fn a_patch_held_by_its_player_says_so_rather_than_telling_you_to_claim_it() {
+        let cell = |slot: SlotView| {
+            let mut page = page_as(false, false);
+            page.slots = vec![slot];
+            page.render().expect("renders")
+        };
+
+        let mut held = a_slot(false);
+        held.can_download = false;
+        held.owner_id = Some(77);
+        let html = cell(held);
+        assert!(
+            !html.contains("claim this slot to download"),
+            "a slot somebody else is playing tells the reader to claim it"
+        );
+        assert!(
+            html.contains("Patch held by this slot's player"),
+            "a held patch renders nothing to say the file exists, so it reads like a game with no \
+             patch at all"
+        );
+
+        // Unclaimed, where the instruction is the truth: claiming it IS what gets you the file.
+        let mut unclaimed = a_slot(false);
+        unclaimed.can_download = false;
+        unclaimed.owner_id = None;
+        unclaimed.owner_name = None;
+        unclaimed.owner_mention = None;
+        unclaimed.can_release = false;
+        assert!(
+            cell(unclaimed).contains("claim this slot to download"),
+            "an unclaimed slot no longer says what would get the reader its patch"
+        );
+
+        // And the ordinary case is untouched.
+        assert!(
+            cell(a_slot(false)).contains("/slot/1/patch"),
+            "a downloadable patch is no longer offered"
         );
     }
 
