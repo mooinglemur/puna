@@ -106,6 +106,23 @@
 
     if (search) search.addEventListener("input", refilter);
     if (onlyMine) onlyMine.addEventListener("change", refilter);
+
+    // **The controls arrive with state, and an event for it has already been and gone.**
+    //
+    // Both of these come back populated after a reload without anybody touching them: the browser
+    // restores form control values from session history, so a typed search box and a ticked "only
+    // my slots" survive `location.reload()`, which is exactly what `moderation.js` does once a
+    // command lands. It fires no `input` and no `change` doing it, because nothing was input and
+    // nothing changed; the value simply *is* what it was.
+    //
+    // Without this call the page comes back with the box populated, the checkbox ticked, and every
+    // row visible: a control that plainly says it is on, over a table that is not filtered. Two
+    // reports, one cause, and it reads as the filter having broken rather than as never having
+    // been applied.
+    //
+    // Cheap and unconditional. With no controls on the page it walks the rows once and sets
+    // `hidden = false` on each, which is what they already are.
+    refilter();
   }
 
   // Wire every sortable table under `root` that is not wired already.
