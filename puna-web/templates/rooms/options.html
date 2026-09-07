@@ -108,18 +108,15 @@ at download time. This changes only what the page recommends, not what each port
 <label><input type="radio" name="spoiler_policy" value="staff"{% if room.spoiler_policy == puna_core::model::room::SpoilerPolicy::Staff +%} checked{% endif %}> Staff</label>
 <label><input type="radio" name="spoiler_policy" value="players"{% if room.spoiler_policy == puna_core::model::room::SpoilerPolicy::Players +%} checked{% endif %}> Participants</label>
 <label><input type="radio" name="spoiler_policy" value="public"{% if room.spoiler_policy == puna_core::model::room::SpoilerPolicy::Public +%} checked{% endif %}> Anyone</label>
-<p class="hint" data-for="never">Nobody at all, <strong>including you</strong>. The room answers as
-though the seed had no spoiler, so nobody can tell the difference between a room withholding one and
-a room that never had one. The safe setting for a race, and the one to remember you chose if you
-later need the file to settle an argument.</p>
-<p class="hint" data-for="admin_only">This room's staff. The default for a new room, and the
+<p class="hint" data-for="never">Nobody at all, <strong>including you</strong>, until this option is changed again.
+The room answers as though the seed had no spoiler, so nobody can tell the difference between a room withholding one and
+a room that never had one.</p>
+<p class="hint" data-for="staff">This room's staff. The default for a new room, and the
 tightest setting that still leaves somebody able to read it.</p>
 <p class="hint" data-for="players">Staff, and anyone holding a slot in this room. Reasonable once
 everybody has finished, and a decision to make once, since <strong>anyone who reads it cannot
 un-read it</strong>.</p>
-<p class="hint" data-for="public">Everybody, including anyone who was given the room's link.
-<strong>Applies to people already on the page</strong>: the next request they make serves the whole
-spoiler.</p>
+<p class="hint" data-for="public"><strong>Everybody</strong>, including anyone who was given the room's link.</p>
 </div>
 </div>
 
