@@ -6,8 +6,8 @@
 //! |---|---|---|
 //! | [`admin_token`] | `PAHOA_ADMIN_TOKEN`, never rendered | 52 chars, unbroken |
 //! | [`url_token`] | a claim or invite link | 32 chars, unbroken |
-//! | [`slot_password`] | typed into a game client by a player | 15 chars, dash-grouped |
-//! | [`room_password`] | typed into a game client, shared | 15 chars, dash-grouped |
+//! | [`slot_password`] | typed into a game client by a player | 9 chars, unbroken |
+//! | [`room_password`] | typed into a game client, shared | 15 symbols, dash-grouped |
 //!
 //! ## The alphabet
 //!
@@ -17,9 +17,15 @@
 //! typing comfort, which costs nothing: the alphabet has no case-collisions left once those four
 //! are gone.
 //!
-//! That is 28 symbols, so 4.807 bits each. A 15-character slot password is **72 bits**, and a
-//! 32-character URL token is **153 bits**, both far past the point where the limiting factor is
-//! the server rather than the secret.
+//! That leaves **32 symbols, so exactly five bits each**, which is also what lets `random_string`
+//! mask five bits with no rejection sampling at all. A 9-symbol slot password is **45 bits**, a
+//! 15-symbol room password is **75 bits**, and a 32-symbol URL token is **160 bits**.
+//!
+//! (This paragraph read "28 symbols, so 4.807 bits each" and put a slot password at 72 bits until
+//! 2026-09-06. Both numbers described an earlier alphabet; the code has masked five bits out of
+//! thirty-two since it was written, and `the_alphabet_excludes_the_characters_people_mistype`
+//! asserts the count. Corrected while the shape below was changing, since it is the arithmetic that
+//! change rests on.)
 //!
 //! ## Why not a wordlist
 //!
@@ -50,22 +56,34 @@ pub fn url_token() -> String {
     random_string(32)
 }
 
-/// One slot's password, in dash-separated groups of five.
+/// One slot's password: nine symbols, unbroken.
 ///
-/// **Ten symbols, not fifteen**, decided 2026-08-21. The alphabet is 32 characters, so each symbol
-/// is exactly five bits: ten of them is 2^50, a little over a quadrillion combinations, against an
-/// endpoint that rate-limits authentication failures to ten a minute per room. Guessing one at that
-/// rate is not a threat model, and a slot password is not protecting much anyway: it keeps a
-/// stranger out of somebody's slot in a game, it is not a credential for the platform.
+/// **The third shape this has had, and each step was the same argument.** Fifteen symbols in three
+/// groups, then ten in two on 2026-08-21, then nine and no dash at all on 2026-09-06. What is being
+/// spent each time is length in a field a player types by hand, off a web page, often on a phone;
+/// what it buys is entropy against an endpoint that rate-limits authentication failures to **ten a
+/// minute per room**.
 ///
-/// What the five symbols bought was length in a field a player types by hand, having read it off a
-/// web page, often on a phone. That is the cost this removes.
+/// Nine symbols at five bits each is 2^45, about 35 trillion, which at ten guesses a minute is
+/// millions of years. The limiting factor has never been the secret, and a slot password is not a
+/// platform credential: it keeps a stranger out of somebody's slot in a game.
+///
+/// **Dropping the dash is the usability half rather than the entropy half.** A grouped password
+/// asks a question a player should not have to answer at a login prompt: whether the separator is
+/// part of it. `url_token` has been unbroken for the same reason from the start, and its test says
+/// so. At nine characters there is nothing left to group.
+///
+/// **Existing passwords are untouched**, which needs nothing: they live in `room_slots.password`,
+/// nothing re-derives them and nothing anywhere validates their shape, so a room already running
+/// keeps the credential its players hold. Only what this generates next is new: a claim, a
+/// rotation, a room switched into per-slot mode.
 ///
 /// **Nice-to-have, not built:** a deployment-configurable pattern (`PUNA_SLOT_PASSWORD_PATTERN`
 /// or similar, defaulting to what this generates) so an operator running a race can ask for more
-/// without a code change. Recorded in the plan.
+/// without a code change. Recorded in the plan, and this is the third time the constant has moved
+/// without it.
 pub fn slot_password() -> String {
-    grouped(10, 5)
+    random_string(9)
 }
 
 /// A room-wide password. Same shape as a slot's: one person types either.
@@ -85,10 +103,16 @@ fn grouped(len: usize, group: usize) -> String {
 
 /// `len` symbols from a CSPRNG.
 ///
-/// Rejection-sampled rather than reduced modulo 28. The bias from `% 28` over a byte is small
-/// (the first 4 symbols come up 1.14x as often as the rest) but it is free to avoid and it is the
-/// kind of shortcut that looks harmless in a password generator right up until someone quantifies
-/// it.
+/// **Masked, not reduced, and it needs no rejection sampling because the alphabet is a power of
+/// two.** 32 symbols is five bits, so the low five bits of a random byte are already uniform over
+/// it. Reducing modulo a non-power-of-two would bias the first few symbols upward, which is the
+/// kind of shortcut that looks harmless in a password generator right up until somebody quantifies
+/// it; here there is nothing to trade off, and keeping the alphabet at 32 is what buys that. The
+/// inline comment below is the one this repeats.
+///
+/// (This said "rejection-sampled rather than reduced modulo 28" until 2026-09-06, describing an
+/// alphabet the code has never had and an approach it does not take, two lines above the comment
+/// that contradicts it.)
 fn random_string(len: usize) -> String {
     let mut rng = rand::thread_rng();
     let mut out = String::with_capacity(len);
@@ -137,22 +161,43 @@ mod tests {
         assert!(token.is_ascii(), "byte length must equal character count");
     }
 
+    /// **What a person is asked to type, and what it is worth.**
+    ///
+    /// A slot password is nine unbroken symbols: nothing to mistype, and no question about whether
+    /// a separator is part of it. The room-wide one keeps its groups, because fifteen symbols in a
+    /// row is a different reading problem from nine.
     #[test]
-    fn passwords_are_grouped_and_url_tokens_are_not() {
+    fn a_slot_password_is_nine_symbols_with_nothing_to_mistype() {
         let password = slot_password();
         assert_eq!(password, password.to_lowercase());
-        assert_eq!(password.len(), 10 + 1, "10 symbols plus one dash");
-        assert_eq!(password.matches('-').count(), 1);
-
-        // The entropy claim, asserted rather than left in a comment: 32 symbols is five bits each,
-        // so ten symbols is 2^50 and the shape above is what carries it.
-        let symbols = password.replace('-', "").len() as u32;
-        assert_eq!(ALPHABET.len(), 32);
+        assert_eq!(password.len(), 9, "nine symbols: {password}");
         assert!(
-            2f64.powi((symbols * 5) as i32) > 1e15,
-            "a slot password fell below a quadrillion combinations"
+            !password.contains('-'),
+            "a slot password carries a separator a player has to guess at: {password}"
         );
-        for group in password.split('-') {
+        assert!(
+            password.bytes().all(|b| ALPHABET.contains(&b)),
+            "a symbol outside the confusable-free alphabet: {password}"
+        );
+
+        // The entropy claim, asserted rather than left in a comment. 32 symbols is exactly five bits
+        // each, so nine of them is 2^45. The bound is stated against the thing that actually limits
+        // a guesser: ten authentication failures a minute per room, which is millions of years.
+        assert_eq!(ALPHABET.len(), 32);
+        let combinations = 2f64.powi(9 * 5);
+        assert!(
+            combinations / (10.0 * 60.0 * 24.0 * 365.0) > 1e6,
+            "a slot password fell to a size ten guesses a minute could work through"
+        );
+
+        // The room-wide password is a separate decision and did not move.
+        let room = room_password();
+        assert_eq!(
+            room.len(),
+            15 + 2,
+            "15 symbols in three dash-separated groups"
+        );
+        for group in room.split('-') {
             assert_eq!(group.len(), 5);
         }
 
