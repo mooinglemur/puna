@@ -1008,22 +1008,36 @@ fn the_feed_window_control_offers_the_sizes_the_script_knows() {
          announces it: a screen reader is told nothing about which window is in force"
     );
 
-    // **Both batch builders stamp the row they put on the front.** The offset a walk asks from is
-    // read back off the document, so a builder that does not mark its first row leaves the page
-    // permanently unable to say where it begins: every widening then rebuilds the window from the
-    // end instead of extending it, which costs a round trip and the reader's place and looks like
-    // the feed simply reloading itself.
-    for (name, boundary, inserts) in [
-        (
-            "append",
-            "function append(events, live, start) {",
-            "log.appendChild(batch)",
-        ),
-        (
-            "prepend",
-            "function prepend(events, start) {",
-            "log.insertBefore(batch",
-        ),
+    // **Every row carries the offset of the record it draws, and the anchor is read back off the
+    // document.** The walk asks for the records before a byte offset, and a busy room's page trims
+    // rows off the top continuously, so anything remembered instead names a line that is no longer
+    // there: prepending from it stops short of what is on screen, which is a hole in the middle of
+    // a feed whose whole promise is that it omits no history.
+    //
+    // A day heading is not a record and holds no bytes, so it takes the offset of the record it
+    // introduces. Without that, a trim stopping on a heading leaves the page unable to say where it
+    // begins and the walk has nothing to start from.
+    for (name, boundary) in [
+        ("line", "function line(event, arriving, begins) {"),
+        ("daybreak", "function daybreak(date, begins) {"),
+    ] {
+        let body = code
+            .split_once(boundary)
+            .unwrap_or_else(|| panic!("journal.js's {name} builder no longer takes an offset"))
+            .1
+            .split_once("\n  }")
+            .unwrap_or_else(|| panic!("an unterminated {name}"))
+            .0;
+        assert!(
+            body.contains("row.dataset.start = String(begins)"),
+            "`{name}` builds a row without the offset it begins at, so the page loses its anchor \
+             the moment the trim reaches one"
+        );
+    }
+
+    for (name, boundary) in [
+        ("append", "function append(events, live, starts) {"),
+        ("prepend", "function prepend(events, starts, start) {"),
     ] {
         let body = code
             .split_once(boundary)
@@ -1032,26 +1046,26 @@ fn the_feed_window_control_offers_the_sizes_the_script_knows() {
             .split_once("\n  }")
             .unwrap_or_else(|| panic!("an unterminated {name}"))
             .0;
-        let stamps = body.find("stamp(batch, start)").unwrap_or_else(|| {
-            panic!(
-                "`{name}` no longer marks the batch it builds with its start \
-                                       offset, so the page cannot say where it begins"
-            )
-        });
-        let puts = body
-            .find(inserts)
-            .unwrap_or_else(|| panic!("`{name}` no longer puts its batch on the page"));
         assert!(
-            stamps < puts,
-            "`{name}` stamps its batch after handing it to the document, and a fragment is emptied \
-             by that: it has no first child left to mark"
+            body.contains("var begins = starts && starts[i];"),
+            "`{name}` no longer hands each row the offset that belongs to it, so nothing it builds \
+             is anchored and the walk can never start"
         );
     }
 
-    // **The offset an `append` carries is the cursor as it stood BEFORE the frame moved it**, since
-    // that is where those records begin. Read afterwards it is where they END, so a later walk would
-    // ask for the page it is already showing and prepend a duplicate of it: a wrong answer rather
-    // than a missing one, and nothing anywhere reports it.
+    // Read as an array, off the frame. Anything else and every row is built unanchored, the walk
+    // never starts, and the window control silently does nothing but trim.
+    assert!(
+        code.contains("Array.isArray(frame.starts)"),
+        "journal.js no longer reads the frame's per-record offsets"
+    );
+    let routes = std::fs::read_to_string(source("src/routes/journal.rs")).expect("journal.rs");
+    assert!(
+        routes.contains(r#""starts": starts,"#),
+        "the feed's frames no longer carry an offset per record, so the page has nothing to anchor \
+         on and every widening is refused"
+    );
+
     // **A backfill page is trimmed the moment it lands, because the window may have moved under
     // it.** Narrowing cancels the walk and cannot unsend the request already on the wire, so the
     // answer arrives for a window nobody wants: five thousand rows onto a page the reader has just
@@ -1091,18 +1105,6 @@ fn the_feed_window_control_offers_the_sizes_the_script_knows() {
         says.contains("backfilling && short()"),
         "the progress note is written from the in-flight flag alone, so narrowing mid-walk leaves \
          it counting through a cancellation the reader has already made"
-    );
-
-    let reads = code
-        .find("var was = cursor;")
-        .expect("journal.js no longer keeps the cursor a frame arrived at");
-    let advances = code
-        .find("cursor = frame.cursor")
-        .expect("the follow cursor is never advanced, so the feed does not follow");
-    assert!(
-        reads < advances,
-        "the cursor is advanced before it is read, so an `append` batch is marked with the offset \
-         it ends at rather than the one it begins at"
     );
 }
 
@@ -1726,7 +1728,7 @@ fn the_journal_filters_agree_across_the_markup_script_stylesheet_and_route() {
     // everything and the feed goes blank on the first tick. Same shape as `inspect`'s refusal and
     // the metrics proxy's registration, both of which needed a lint for exactly this reason.
     let row = code
-        .split_once("function line(event, arriving)")
+        .split_once("function line(event, arriving, begins)")
         .expect("journal.js no longer has a line builder")
         .1;
     let row = row.split_once("switch (event.type)").expect("a switch").0;
@@ -1836,7 +1838,7 @@ fn the_journal_filters_agree_across_the_markup_script_stylesheet_and_route() {
     // set before a record arrives lets that record through: the feed keeps tailing, which is the
     // point, and the filter silently stops applying to exactly the lines a reader is watching for.
     let built = code
-        .split_once("function line(event, arriving)")
+        .split_once("function line(event, arriving, begins)")
         .expect("journal.js no longer has a line builder")
         .1
         .split_once("\n  }")

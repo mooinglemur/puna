@@ -56,6 +56,34 @@ pub const MAX_REPLAY_LINES: usize = 5_000;
 /// the request shape already carries `at` for the day the page offers a time to scroll back to.
 pub const DEFAULT_REPLAY_LINES: usize = 100;
 
+/// Complete lines out of a buffer, and the offset in the file each one begins at.
+///
+/// **One walk producing both**, which is the whole point: the offsets are what a page anchors on,
+/// and anything that derived them afterwards from the lines' own lengths would be counting the
+/// records that survived rather than the bytes that were there. A blank line is dropped from the
+/// output and its bytes are still counted, which is the case that would otherwise shift every
+/// offset after it.
+///
+/// Split over **bytes** rather than over the decoded string, for the same reason once more: a lossy
+/// UTF-8 replacement is three bytes where the file held one, and `str::lines` also swallows a
+/// carriage return. Either would put the arithmetic a byte or two out per line, which is a boundary
+/// that is not one, which is a record skipped or served twice.
+fn split(buffer: &[u8], from: Cursor) -> (Vec<String>, Vec<Cursor>) {
+    let mut lines = Vec::new();
+    let mut offsets = Vec::new();
+    let mut at = from;
+    for raw in buffer.split_inclusive(|byte| *byte == b'\n') {
+        let text = String::from_utf8_lossy(raw);
+        let text = text.trim_end_matches('\n').trim_end_matches('\r');
+        if !text.trim().is_empty() {
+            lines.push(text.to_string());
+            offsets.push(at);
+        }
+        at += raw.len() as u64;
+    }
+    (lines, offsets)
+}
+
 /// The journal of one room, if the orchestrator has provisioned it.
 pub fn path(data_dir: &Path, room: RoomId) -> PathBuf {
     data_dir
@@ -75,6 +103,18 @@ pub type Cursor = u64;
 #[derive(Debug, Default)]
 pub struct Replay {
     pub lines: Vec<String>,
+    /// Where each line in [`lines`](Replay::lines) begins, one for one.
+    ///
+    /// **This is what lets a page anchor on a record rather than on a frame.** A viewer holds a
+    /// window of a journal and trims the oldest rows off the top as new ones arrive, so the offset
+    /// the frame began at stops describing what is on screen almost immediately; carrying one per
+    /// record means the page can always say where its oldest line starts, however much of the frame
+    /// it has since dropped.
+    ///
+    /// Built by [`split`] alongside the lines themselves and never assembled separately, because
+    /// the two are only useful in step: an offset that names the wrong record is a backfill
+    /// boundary off by one, which reads back as a page that quietly skips a line or repeats one.
+    pub offsets: Vec<Cursor>,
     pub cursor: Cursor,
     /// Where the first line returned begins.
     ///
@@ -85,6 +125,32 @@ pub struct Replay {
     pub start: Cursor,
     /// Total bytes in the file when this was taken, so a caller can report how much it skipped.
     pub size: u64,
+}
+
+#[cfg(test)]
+impl Replay {
+    /// A replay over `lines`, as if they were the whole file. For tests that have records in hand
+    /// rather than bytes.
+    ///
+    /// **The offsets are computed, never handed in**, and through [`split`] rather than beside it.
+    /// A constructor that accepted a pair would be free to accept one that does not line up, and
+    /// the whole value of this pair is that no route exists to make a mismatched one.
+    pub fn of(lines: Vec<String>) -> Self {
+        let mut text = String::new();
+        for line in &lines {
+            text.push_str(line);
+            text.push('\n');
+        }
+        let (lines, offsets) = split(text.as_bytes(), 0);
+        let size = text.len() as u64;
+        Replay {
+            lines,
+            offsets,
+            cursor: size,
+            start: 0,
+            size,
+        }
+    }
 }
 
 /// Read the last `wanted` complete lines.
@@ -124,6 +190,7 @@ fn tail_to(
     if limit == 0 || wanted == 0 {
         return Ok(Replay {
             lines: Vec::new(),
+            offsets: Vec::new(),
             cursor: limit,
             start: 0,
             size,
@@ -160,6 +227,7 @@ fn tail_to(
         // No newline anywhere in what we read: nothing complete to show.
         return Ok(Replay {
             lines: Vec::new(),
+            offsets: Vec::new(),
             cursor: 0,
             start: 0,
             size,
@@ -179,6 +247,7 @@ fn tail_to(
             None => {
                 return Ok(Replay {
                     lines: Vec::new(),
+                    offsets: Vec::new(),
                     cursor: end,
                     start: end,
                     size,
@@ -187,22 +256,23 @@ fn tail_to(
         }
     }
 
-    let text = String::from_utf8_lossy(&buffer);
-    let mut lines: Vec<String> = text
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(str::to_string)
-        .collect();
+    let (mut lines, mut offsets) = split(&buffer, first);
     if lines.len() > wanted {
-        let dropped: usize = lines
-            .drain(..lines.len() - wanted)
-            .map(|l| l.len() + 1)
-            .sum();
-        first += dropped as u64;
+        let extra = lines.len() - wanted;
+        lines.drain(..extra);
+        offsets.drain(..extra);
+    }
+    // **Read back off the records that survived, never counted up separately.** The walk overshoots
+    // by design, so the boundary this reports is the first offset still in hand; the old form added
+    // up the lengths of what it had dropped, which is the same number by a longer road and is wrong
+    // the moment anything is dropped for a reason other than the count.
+    if let Some(&at) = offsets.first() {
+        first = at;
     }
 
     Ok(Replay {
         lines,
+        offsets,
         cursor: end,
         start: first,
         size,
@@ -227,6 +297,7 @@ pub fn read_from(path: &Path, cursor: Cursor) -> std::io::Result<Replay> {
     if size == cursor {
         return Ok(Replay {
             lines: Vec::new(),
+            offsets: Vec::new(),
             cursor,
             start: cursor,
             size,
@@ -241,6 +312,7 @@ pub fn read_from(path: &Path, cursor: Cursor) -> std::io::Result<Replay> {
         // Growth with no complete record yet: a record mid-write. Do not advance.
         return Ok(Replay {
             lines: Vec::new(),
+            offsets: Vec::new(),
             cursor,
             start: cursor,
             size,
@@ -249,13 +321,10 @@ pub fn read_from(path: &Path, cursor: Cursor) -> std::io::Result<Replay> {
     buffer.truncate(last + 1);
     let advanced = cursor + last as u64 + 1;
 
-    let text = String::from_utf8_lossy(&buffer);
+    let (lines, offsets) = split(&buffer, cursor);
     Ok(Replay {
-        lines: text
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(str::to_string)
-            .collect(),
+        lines,
+        offsets,
         cursor: advanced,
         start: cursor,
         size,
@@ -277,6 +346,7 @@ pub fn since(path: &Path, at: f64) -> std::io::Result<Replay> {
     if size == 0 {
         return Ok(Replay {
             lines: Vec::new(),
+            offsets: Vec::new(),
             cursor: 0,
             start: 0,
             size,
@@ -308,7 +378,15 @@ pub fn since(path: &Path, at: f64) -> std::io::Result<Replay> {
 
     let mut replay = read_from(path, answer)?;
     if replay.lines.len() > MAX_REPLAY_LINES {
-        replay.lines.drain(..replay.lines.len() - MAX_REPLAY_LINES);
+        let extra = replay.lines.len() - MAX_REPLAY_LINES;
+        replay.lines.drain(..extra);
+        replay.offsets.drain(..extra);
+        // **And the boundary moves with them**, which it did not before. Dropping the front of a
+        // replay without saying so left `start` naming a record that had just been thrown away, so
+        // a page anchoring on it would ask for a region overlapping what it already held.
+        if let Some(&at) = replay.offsets.first() {
+            replay.start = at;
+        }
     }
     Ok(replay)
 }
@@ -383,6 +461,80 @@ mod tests {
             writeln!(file, "{line}").expect("write");
         }
         (dir, path)
+    }
+
+    /// Every offset a replay reports names the first byte of the line beside it, read back out of
+    /// the file itself.
+    ///
+    /// **Nothing else can check this.** An offset that is one record out still looks like a number,
+    /// still walks backwards, and still returns records; what it produces is a page that skips a
+    /// line or serves one twice, a screenful away from where the mistake was made. So the file is
+    /// the oracle: seek to what was reported and the bytes there must be the line that was reported
+    /// with it.
+    fn offsets_are_real(replay: &Replay, path: &Path) {
+        assert_eq!(
+            replay.lines.len(),
+            replay.offsets.len(),
+            "a replay carried a different number of lines and offsets"
+        );
+        let mut file = std::fs::File::open(path).expect("open");
+        for (line, &at) in replay.lines.iter().zip(&replay.offsets) {
+            let mut bytes = vec![0u8; line.len()];
+            file.seek(SeekFrom::Start(at)).expect("seek");
+            file.read_exact(&mut bytes).expect("read");
+            assert_eq!(
+                String::from_utf8_lossy(&bytes),
+                line.as_str(),
+                "offset {at} does not name the line reported with it"
+            );
+            // And it is a boundary, not a byte in the middle of one that happens to match.
+            if at > 0 {
+                let mut previous = [0u8; 1];
+                file.seek(SeekFrom::Start(at - 1)).expect("seek");
+                file.read_exact(&mut previous).expect("read");
+                assert_eq!(previous[0], b'\n', "offset {at} is not a record boundary");
+            }
+        }
+    }
+
+    #[test]
+    fn every_record_is_reported_with_the_offset_it_begins_at() {
+        let lines: Vec<String> = (0..40).map(|n| check(1000.0 + n as f64, "a")).collect();
+        let borrowed: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let (_dir, path) = journal(&borrowed);
+        let size = std::fs::metadata(&path).expect("metadata").len();
+
+        // The three walks, which produce their offsets by three different routes: backwards from
+        // the end, backwards from a boundary, and forwards from a cursor.
+        let end = tail(&path, 10).expect("tail");
+        offsets_are_real(&end, &path);
+        assert_eq!(end.start, end.offsets[0]);
+
+        offsets_are_real(&before(&path, end.start, 10).expect("before"), &path);
+        offsets_are_real(&read_from(&path, 0).expect("read_from"), &path);
+        offsets_are_real(&since(&path, 1020.0).expect("since"), &path);
+
+        // The last record's offset plus its length and newline is the cursor: the two ends of the
+        // frame agree, which is what makes a follow join onto a replay without a seam.
+        let last = end.offsets.last().expect("an offset");
+        assert_eq!(
+            last + end.lines.last().expect("a line").len() as u64 + 1,
+            size
+        );
+        assert_eq!(end.cursor, size);
+    }
+
+    /// A blank line is dropped from the records and its bytes are still counted.
+    ///
+    /// The case that decided [`split`]'s shape: derived after the fact from the surviving lines'
+    /// own lengths, every offset past the blank would be short by its width, and every backfill
+    /// boundary with it.
+    #[test]
+    fn a_line_that_is_not_a_record_still_takes_up_room() {
+        let (_dir, path) = journal(&[&check(1.0, "a"), "", &check(2.0, "b"), "   "]);
+        let replay = tail(&path, 10).expect("tail");
+        assert_eq!(replay.lines.len(), 2, "a blank line was served as a record");
+        offsets_are_real(&replay, &path);
     }
 
     fn check(at: f64, finder: &str) -> String {

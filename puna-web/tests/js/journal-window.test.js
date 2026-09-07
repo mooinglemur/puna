@@ -23,7 +23,7 @@ const source = path.join(__dirname, "..", "..", "static", "journal.js");
 // everything between them is the record renderer.
 const CUTS = [
   ["  // --- WHERE THE PAGE BEGINS", "  // `live` is true only for an `append` frame"],
-  ["  function prepend(events, start) {", "  // --- THE THREE VIEW FILTERS"],
+  ["  function prepend(events, starts, start) {", "  // --- THE THREE VIEW FILTERS"],
   ["  // How many records to ask for on connect", "  function open() {"],
 ];
 
@@ -53,23 +53,36 @@ const ROW = 20;
 // The trim hands a day heading's offset down to the row below it, and without that link the carry
 // silently does nothing: the stub would report a page that cannot say where it begins, which is a
 // real state and the wrong one.
-function row(siblings, start, daybreak) {
+function row(siblings, start, daybreak, text) {
   const made = {
     dataset: {},
     daybreak: !!daybreak,
+    textContent: text || "",
     classList: { contains: (name) => name === "daybreak" && !!daybreak },
     get nextElementSibling() {
       const at = siblings.indexOf(made);
       return at >= 0 && at + 1 < siblings.length ? siblings[at + 1] : null;
+    },
+    remove() {
+      const at = siblings.indexOf(made);
+      if (at >= 0) siblings.splice(at, 1);
     },
   };
   if (typeof start === "number") made.dataset.start = String(start);
   return made;
 }
 
+// A record's width in the file, so a fixture's offsets are the real thing's shape: consecutive,
+// increasing, and far enough apart that an off-by-one row is an off-by-a-hundred offset.
+const RECORD = 100;
+
 function makeLog(count, start) {
   const rows = [];
-  for (let i = 0; i < count; i++) rows.push(row(rows, i === 0 ? start : undefined));
+  // **Every row carries its own offset**, which is the property the whole design turns on: the trim
+  // drops rows off the top and whatever is left still says where the page begins.
+  for (let i = 0; i < count; i++) {
+    rows.push(row(rows, typeof start === "number" ? start + i * RECORD : undefined));
+  }
   return {
     rows,
     scrollTop: 0,
@@ -82,16 +95,25 @@ function makeLog(count, start) {
     get scrollHeight() {
       return rows.length * ROW;
     },
+    get firstChild() {
+      return rows.length ? rows[0] : null;
+    },
     removeChild(node) {
       rows.splice(rows.indexOf(node), 1);
     },
     replaceChildren() {
       rows.length = 0;
     },
-    // The only selector this block ever passes is the record one; day headings are rows and are
-    // not records.
-    querySelectorAll() {
-      return rows.filter((r) => !r.daybreak);
+    // A fragment is a list of rows, so inserting one is a splice. `before` is always the head here.
+    insertBefore(fragment, before) {
+      const at = before === null ? rows.length : rows.indexOf(before);
+      rows.splice.apply(rows, [at < 0 ? 0 : at, 0].concat(fragment.children));
+    },
+    // Two selectors are passed to this: the record one, and the day headings the dedup collects.
+    querySelectorAll(selector) {
+      return selector === ".daybreak"
+        ? rows.filter((r) => r.daybreak)
+        : rows.filter((r) => !r.daybreak);
     },
   };
 }
@@ -137,8 +159,38 @@ function harness(options) {
   let pins = 0;
   let notes = 0;
 
+  // Enough of a renderer to run `prepend` on real events. A record's `at` stands in for its day,
+  // so a batch's calendar is readable straight off the fixture: what matters here is which rows are
+  // headings and what day the batch ends on, not how either is drawn.
+  const document = {
+    createDocumentFragment() {
+      const children = [];
+      return {
+        children,
+        appendChild(node) {
+          children.push(node);
+        },
+        get firstElementChild() {
+          return children.length ? children[0] : null;
+        },
+      };
+    },
+  };
+  const at = (value) => value;
+  const dayKey = (when) => "day-" + when;
+  // Both take the offset of the record they stand for, and a heading takes the one belonging to the
+  // record it introduces. A stub that dropped it would report a page that cannot say where it
+  // begins, which is a real state and the wrong one.
+  const daybreak = (when, begins) => row(log.rows, begins, true, dayKey(when));
+  const line = (event, arriving, begins) => row(log.rows, begins);
+
   const make = new Function(
     "log",
+    "document",
+    "at",
+    "dayKey",
+    "daybreak",
+    "line",
     "socket",
     "WebSocket",
     "cursor",
@@ -166,6 +218,9 @@ function harness(options) {
       "  setWindow: setWindow," +
       "  setProgress: setProgress," +
       "  cap: function () { return cap; }," +
+      // The day the page ends on, which is what decides whether the next live record draws a
+      // heading. It is a plain variable in the file and has no other way out.
+      "  lastDay: function () { return lastDay; }," +
       // What the frame handler does when a backfill page arrives, and the only reason this is
       // exposed: the walk's continuation is a two-step sequence whose middle step lives in the
       // socket handler, which is not lifted here.
@@ -175,6 +230,11 @@ function harness(options) {
 
   const api = make(
     log,
+    document,
+    at,
+    dayKey,
+    daybreak,
+    line,
     socket,
     { OPEN: 1 },
     settings.cursor === undefined ? 200000 : settings.cursor,
@@ -212,13 +272,12 @@ function harness(options) {
     click: (label) => clicks[label](),
     pins: () => pins,
     notes: () => notes,
-    // Stand a backfill page's worth of rows on the front, as `prepend` would, and re-anchor the
-    // head the way its `start` does.
+    // Stand a backfill page's worth of rows on the front, as `prepend` would, each carrying the
+    // offset it begins at.
     row: (start, daybreak) => row(log.rows, start, daybreak),
     deliver(count, start) {
       const added = [];
-      for (let i = 0; i < count; i++) added.push(row(log.rows, undefined));
-      if (added.length) added[0].dataset.start = String(start);
+      for (let i = 0; i < count; i++) added.push(row(log.rows, start + i * RECORD));
       log.rows.unshift.apply(log.rows, added);
       api.landed();
     },
@@ -342,9 +401,10 @@ exports.run = function (t) {
   }
   {
     // **An empty backfill page is an answer**, and dropping it is a walk that asks for the same
-    // region once per frame, forever.
+    // region once per frame, forever. The head's own offset is exact and is not zero, so nothing
+    // else on the page could say that there is nothing before it.
     const h = harness({ rows: 500, start: 4096 });
-    h.api.prepend([], 0);
+    h.api.prepend([], null, 0);
     h.api.fill();
     t.check(
       "an empty page re-anchors the head rather than leaving it asking forever",
@@ -352,25 +412,71 @@ exports.run = function (t) {
     );
   }
 
-  // --- A PAGE THAT CANNOT SAY WHERE IT BEGINS ---------------------------------------------------
+  // --- THE TRIM MOVES THE ANCHOR, AND THAT IS THE WHOLE POINT -----------------------------------
+  // A page open on a busy room trims records off the top continuously. With one offset per FRAME
+  // that anchor went stale the moment it did, and widening had to throw the window away and fetch
+  // it again from the end: a cleared feed, a lost place, and a duplicate day heading behind it.
+  // One offset per RECORD means whatever is left at the top still says where the page begins.
   {
-    // The ordinary condition of a page that has been open on a busy room: the trim has eaten into
-    // the oldest batch, so the head carries no offset and there is nothing to walk back from.
-    const h = harness({ rows: 500, start: undefined, cursor: 200000 });
-    h.api.setWindow(2500);
-    t.check("a trimmed page rebuilds rather than walking into a hole", h.sent.length === 1);
+    const h = harness({ rows: 1000, start: 4096 });
+    h.api.setWindow(500);
     t.check(
-      "asking for the window that ends at the newest record it has seen",
-      h.sent[0].before === 200000 && h.sent[0].lines === 2500
+      "a trimmed page still knows where it begins, exactly",
+      h.log.rows[0].dataset.start === String(4096 + 500 * RECORD)
     );
-    t.check("and throws the old window away first", h.log.rows.length === 0);
+
+    h.api.setWindow(2500);
+    t.check("so widening extends it rather than rebuilding", h.sent.length === 1);
+    t.check(
+      "walking back from the record now at the top",
+      h.sent[0].before === 4096 + 500 * RECORD && h.sent[0].lines === 2000
+    );
+    t.check("with the window it already had left alone", h.log.rows.length === 500);
   }
   {
-    // Nothing has landed yet. The replay is on its way and will anchor the page itself, so a
-    // rebuild here would throw away a window that is about to arrive.
+    // Nothing has landed yet. The replay is on its way and will anchor the page itself.
     const h = harness({ rows: 0 });
     h.api.setWindow(2500);
     t.check("an empty page asks for nothing", h.sent.length === 0);
+  }
+  {
+    // A day heading is not a record and holds no bytes, so it takes the offset of the record it
+    // introduces. Without that, a trim stopping on a heading would leave the page unable to say
+    // where it begins, which is the state per-record offsets exist to make unreachable.
+    const h = harness({ rows: 0 });
+    h.log.rows.push(h.row(4096, true), h.row(4096), h.row(4196));
+    h.api.setWindow(2);
+    t.check(
+      "a trim that stops on a day heading leaves the page anchored",
+      h.log.rows.length === 2 && h.log.rows[0].dataset.start === "4096"
+    );
+  }
+  {
+    // `lastDay` describes the page's TAIL, and a backfill lands on the FRONT of a page whose bottom
+    // has not moved. Claiming its own last day as the page's would drop the heading at the next real
+    // day change, which is invisible until somebody reads a feed that spans midnight.
+    const h = harness({ rows: 500, start: 8192 });
+    h.api.prepend([{ at: 1 }], [4096], 4096);
+    t.check(
+      "a backfill leaves the day the page ends on alone",
+      h.api.lastDay() === null
+    );
+  }
+  {
+    // **Each row takes ITS OWN offset, not the batch's.** Handing every row the offset the frame
+    // began at is the shape this whole change removes: the page would go on claiming to start where
+    // the batch did, however far the trim had eaten into it, and the walk would then ask for a
+    // region that stops short of what is on screen. The day headings are what make it visible here,
+    // since each takes the offset of the record below it.
+    const h = harness({ rows: 500, start: 8192 });
+    h.api.prepend([{ at: 1 }, { at: 1 }, { at: 2 }], [4096, 4196, 4296], 4096);
+    t.check(
+      "every row a backfill builds carries the offset of its own record",
+      h.log.rows
+        .slice(0, 5)
+        .map((r) => r.dataset.start)
+        .join(",") === "4096,4096,4196,4296,4296"
+    );
   }
 
   // --- NARROWING --------------------------------------------------------------------------------
@@ -393,25 +499,16 @@ exports.run = function (t) {
     t.check("a reader who was following stays at the bottom", h.pins() === 1);
   }
   {
-    // **The common path, and it is one row wide.** Every batch opens with a day heading, so a
-    // window filled exactly to its cap is one row over it and the first thing the trim reaches is
-    // that heading, which is where the batch's offset was written. A heading holds no bytes, so
-    // the offset is equally true of the record below it and moves down: without that, the first
-    // paint of every page throws its own anchor away and every widening after it rebuilds.
-    // A window of 1,000 records, as it lands: a heading carrying the batch's offset, then the
-    // records. One row over the cap, so the trim takes the heading and nothing else.
+    // A window as it lands on a first paint: a heading, then the records, one row over the cap.
+    // The trim takes the heading, and what is left is anchored on its own record.
     const h = harness({ rows: 0, store: { "journal.lines": "2500" } });
     h.log.rows.push(h.row(4096, true));
-    for (let i = 0; i < 1000; i++) h.log.rows.push(h.row());
+    for (let i = 0; i < 1000; i++) h.log.rows.push(h.row(4096 + i * RECORD));
     h.api.setWindow(1000);
     t.check("the trim takes the heading and stops there", h.log.rows.length === 1000);
-    t.check(
-      "handing its offset to the record below it",
-      h.log.rows[0].dataset.start === "4096"
-    );
     h.api.setWindow(2500);
     t.check(
-      "so the first widening after a page loads extends the window rather than rebuilding it",
+      "and the first widening after a page loads extends the window",
       h.sent.length === 1 && h.sent[0].before === 4096
     );
   }

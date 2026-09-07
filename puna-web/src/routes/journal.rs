@@ -639,19 +639,14 @@ async fn feed(
             let mut cursor = match opening {
                 Ok(Ok(replay)) => {
                     let cursor = replay.cursor;
-                    // `start` rides the opening frame as well as every backfill page, because it is
-                    // what the page anchors its walk on, and it has to be re-sent on every replay,
-                    // including after a reconnect, or a viewer that dropped mid-backfill would ask
-                    // for a region its current view no longer joins on to.
                     let mut frame: serde_json::Value = serde_json::from_str(&batch(
                         "replay",
-                        &replay.lines,
+                        &replay,
                         cursor,
                         Some(replay.size),
                         visibility,
                     ))
                     .unwrap_or_default();
-                    frame["start"] = replay.start.into();
                     // **How often the page may expect to hear something, from the side that
                     // decides it.** The client's watchdog is a multiple of this. Hardcoding the
                     // number there instead would be two constants in two files that must agree,
@@ -723,7 +718,7 @@ async fn feed(
                             continue;
                         }
                         cursor = replay.cursor;
-                        let frame = batch("append", &replay.lines, cursor, None, visibility);
+                        let frame = batch("append", &replay, cursor, None, visibility);
                         sent.inc_by(frame.len() as u64);
                         if stream.send(ws::Message::Text(frame)).await.is_err() {
                             return Ok(());
@@ -780,15 +775,11 @@ async fn feed(
                                 journal::before(&path, end, wanted)).await
                             else { continue };
 
-                            // `start` is what the client sends back next time, and zero is how it
-                            // knows to stop. It travels even when the page is empty, or a viewer
-                            // whose backfill found nothing would ask forever.
-                            let mut frame: serde_json::Value = serde_json::from_str(&batch(
-                                "earlier", &page.lines, cursor, None, visibility,
-                            ))
-                            .unwrap_or_default();
-                            frame["start"] = page.start.into();
-                            let frame = frame.to_string();
+                            // `start` rides every frame, and on an empty page it is the whole
+                            // answer: zero is how a client learns it has reached the beginning of
+                            // the file, and without it a backfill that found nothing would be asked
+                            // for again forever.
+                            let frame = batch("earlier", &page, cursor, None, visibility);
                             sent.inc_by(frame.len() as u64);
                             if stream.send(ws::Message::Text(frame)).await.is_err() {
                                 return Ok(());
@@ -826,22 +817,33 @@ async fn feed(
 /// because for them the point is fidelity; for the feed it is one more withheld record.
 fn batch(
     kind: &str,
-    lines: &[String],
+    replay: &journal::Replay,
     cursor: u64,
     size: Option<u64>,
     visibility: Visibility,
 ) -> String {
     let mut withheld = 0usize;
-    let mut events: Vec<serde_json::Value> = Vec::with_capacity(lines.len());
+    let mut events: Vec<serde_json::Value> = Vec::with_capacity(replay.lines.len());
+    let mut starts: Vec<journal::Cursor> = Vec::with_capacity(replay.lines.len());
 
-    for line in lines {
+    for (line, &at) in replay.lines.iter().zip(&replay.offsets) {
         let parsed = serde_json::from_str::<serde_json::Value>(line)
             .unwrap_or_else(|_| serde_json::json!({ "type": "unreadable", "raw": line }));
         let public = is_public(&parsed);
 
+        // Pushed together, in the arm that decides, so the two lists cannot come out of step. A
+        // record and the offset it begins at are one fact split across two arrays, and the array
+        // is what keeps the offset OUT of the record: an event is pahoa's object, and a field of
+        // Puna's own added to it is a name that could collide with theirs at any release.
         match visibility {
-            Visibility::Everything => events.push(as_seen(parsed, visibility)),
-            Visibility::Feed if public => events.push(as_seen(parsed, visibility)),
+            Visibility::Everything => {
+                events.push(as_seen(parsed, visibility));
+                starts.push(at);
+            }
+            Visibility::Feed if public => {
+                events.push(as_seen(parsed, visibility));
+                starts.push(at);
+            }
             Visibility::Feed => withheld += 1,
         }
     }
@@ -849,6 +851,15 @@ fn batch(
     let mut frame = serde_json::json!({
         "kind": kind,
         "cursor": cursor,
+        // **Where the page's oldest line begins, once it has trimmed the rest of this frame away.**
+        // A viewer holds a window and drops the top of it as records arrive, so a single offset per
+        // frame stops describing what is on screen within seconds; one per record is what lets the
+        // page keep walking backwards from wherever it has got to.
+        "starts": starts,
+        // The frame's own boundary, which is `starts[0]` whenever there is one and still means
+        // something when there is not: an empty backfill page reports zero, and that is how a client
+        // learns it has reached the beginning of the file.
+        "start": replay.start,
         "events": events,
     });
     if withheld > 0 {
@@ -906,7 +917,13 @@ mod tests {
         ];
         let lines: Vec<String> = private.iter().map(|k| line(k)).collect();
 
-        let frame = batch("replay", &lines, 1, None, Visibility::Feed);
+        let frame = batch(
+            "replay",
+            &journal::Replay::of(lines),
+            1,
+            None,
+            Visibility::Feed,
+        );
         for kind in private {
             assert!(
                 !frame.contains(kind),
@@ -942,7 +959,13 @@ mod tests {
     #[test]
     fn a_release_reaches_a_public_viewer_without_saying_who_ordered_it() {
         for kind in ["release", "collect"] {
-            let frame = batch("replay", &[bulk(kind)], 1, None, Visibility::Feed);
+            let frame = batch(
+                "replay",
+                &journal::Replay::of(vec![bulk(kind)]),
+                1,
+                None,
+                Visibility::Feed,
+            );
             let parsed: serde_json::Value = serde_json::from_str(&frame).expect("valid JSON");
             let events = parsed["events"].as_array().expect("events");
 
@@ -965,7 +988,7 @@ mod tests {
     fn an_organizer_is_told_what_set_off_a_release() {
         let frame = batch(
             "replay",
-            &[bulk("release")],
+            &journal::Replay::of(vec![bulk("release")]),
             1,
             None,
             Visibility::Everything,
@@ -982,9 +1005,17 @@ mod tests {
     /// useful new field going unseen until somebody adds it, which is a change that gets noticed.
     #[test]
     fn a_field_this_build_does_not_know_never_reaches_a_public_viewer() {
-        let record = r#"{"type":"release","at":1.0,"slot":1,"player":"Troy","items":3,
-                         "reason":"griefing, see #mod-log","ordered_by":"an organizer"}"#;
-        let frame = batch("replay", &[record.to_string()], 1, None, Visibility::Feed);
+        // One line, because a record is one line: `Replay::of` splits on newlines exactly as the
+        // file walk does, so a fixture wrapped for the margin would be two halves of a record and
+        // neither would parse.
+        let record = r#"{"type":"release","at":1.0,"slot":1,"player":"Troy","items":3,"reason":"griefing, see #mod-log","ordered_by":"an organizer"}"#;
+        let frame = batch(
+            "replay",
+            &journal::Replay::of(vec![record.to_string()]),
+            1,
+            None,
+            Visibility::Feed,
+        );
 
         assert!(
             !frame.contains("griefing"),
@@ -1000,7 +1031,7 @@ mod tests {
         // what is fit to exist.
         let frame = batch(
             "replay",
-            &[record.to_string()],
+            &journal::Replay::of(vec![record.to_string()]),
             1,
             None,
             Visibility::Everything,
@@ -1011,7 +1042,13 @@ mod tests {
     /// A goal is public, and it is the line that explains the flood underneath it.
     #[test]
     fn a_goal_reaches_a_public_viewer() {
-        let frame = batch("replay", &[line("goal")], 1, None, Visibility::Feed);
+        let frame = batch(
+            "replay",
+            &journal::Replay::of(vec![line("goal")]),
+            1,
+            None,
+            Visibility::Feed,
+        );
         let parsed: serde_json::Value = serde_json::from_str(&frame).expect("valid JSON");
         assert_eq!(parsed["events"].as_array().expect("events").len(), 1);
         assert!(parsed.get("withheld").is_none());
@@ -1032,6 +1069,52 @@ mod tests {
     /// renderer for it, so it reaches a feed viewer only as a raw object nobody can read. Out of
     /// `PUBLIC_KINDS`, it degrades to exactly what any unrecognized kind does.
     ///
+    /// **Every event goes out with the offset its own record begins at, withheld ones and all.**
+    ///
+    /// The page anchors its backwards walk on the offset of whatever row is at the top, so this is
+    /// the number a `before` request is eventually built from. Two ways to get it wrong and neither
+    /// shows up as an error anywhere:
+    ///
+    /// * An offset that is off by any amount is a `before` that is not a record boundary. The
+    ///   server drops the partial first line it finds there, so the page ends up skipping a record
+    ///   or serving one twice, a screenful away from the frame that carried the bad number.
+    /// * **A withheld record must take its offset with it.** The array travels beside `events`, not
+    ///   beside the file's lines, so a viewer at the feed tier, who is by definition having records
+    ///   filtered out, would otherwise get offsets shifted by however many were withheld. That is
+    ///   the public tier, the one this page exists to be shareable on.
+    #[test]
+    fn every_event_carries_the_offset_of_its_own_record() {
+        let lines = vec![line("check"), line("chat"), line("check")];
+        let replay = journal::Replay::of(lines);
+        let offsets = replay.offsets.clone();
+        assert_eq!(offsets.len(), 3, "the fixture lost a line");
+
+        let everything: serde_json::Value =
+            serde_json::from_str(&batch("replay", &replay, 1, None, Visibility::Everything))
+                .expect("valid JSON");
+        assert_eq!(
+            everything["starts"],
+            serde_json::json!(offsets),
+            "an organizer's frame does not carry each record's own offset"
+        );
+        assert_eq!(
+            everything["start"], 0,
+            "the frame's own boundary is missing"
+        );
+
+        // The feed tier withholds the chat line, so the offsets that travel are the first and the
+        // THIRD: skipping the withheld one, never renumbering around it.
+        let feed: serde_json::Value =
+            serde_json::from_str(&batch("replay", &replay, 1, None, Visibility::Feed))
+                .expect("valid JSON");
+        assert_eq!(feed["events"].as_array().expect("events").len(), 2);
+        assert_eq!(
+            feed["starts"],
+            serde_json::json!([offsets[0], offsets[2]]),
+            "a withheld record shifted the offsets of the records around it"
+        );
+    }
+
     /// `gap` rides with the links because it is the only evidence the history has holes.
     #[test]
     fn the_feed_carries_checks_links_and_the_gap_marker() {
@@ -1041,9 +1124,14 @@ mod tests {
             line("traplink"),
             r#"{"type":"gap","dropped":7}"#.to_string(),
         ];
-        let parsed: serde_json::Value =
-            serde_json::from_str(&batch("append", &lines, 9, None, Visibility::Feed))
-                .expect("valid JSON");
+        let parsed: serde_json::Value = serde_json::from_str(&batch(
+            "append",
+            &journal::Replay::of(lines),
+            9,
+            None,
+            Visibility::Feed,
+        ))
+        .expect("valid JSON");
 
         let events = parsed["events"].as_array().expect("events");
         assert_eq!(events.len(), 4, "the feed dropped a record it should carry");
@@ -1054,7 +1142,7 @@ mod tests {
         // like anything else it does not know.
         let rings: serde_json::Value = serde_json::from_str(&batch(
             "append",
-            &[line("ringlink")],
+            &journal::Replay::of(vec![line("ringlink")]),
             9,
             None,
             Visibility::Feed,
@@ -1077,15 +1165,25 @@ mod tests {
     fn an_unknown_record_is_withheld_from_the_feed_and_kept_for_an_organizer() {
         let lines = vec![line("something_pahoa_added_later")];
 
-        let public: serde_json::Value =
-            serde_json::from_str(&batch("append", &lines, 1, None, Visibility::Feed))
-                .expect("valid JSON");
+        let public: serde_json::Value = serde_json::from_str(&batch(
+            "append",
+            &journal::Replay::of(lines.clone()),
+            1,
+            None,
+            Visibility::Feed,
+        ))
+        .expect("valid JSON");
         assert!(public["events"].as_array().expect("events").is_empty());
         assert_eq!(public["withheld"], 1);
 
-        let staff: serde_json::Value =
-            serde_json::from_str(&batch("append", &lines, 1, None, Visibility::Everything))
-                .expect("valid JSON");
+        let staff: serde_json::Value = serde_json::from_str(&batch(
+            "append",
+            &journal::Replay::of(lines.clone()),
+            1,
+            None,
+            Visibility::Everything,
+        ))
+        .expect("valid JSON");
         assert_eq!(staff["events"][0]["type"], "something_pahoa_added_later");
         assert!(staff.get("withheld").is_none());
     }
@@ -1097,7 +1195,7 @@ mod tests {
         let lines = vec![r#"{"type":"check","at":2.0,"fin"#.to_string()];
         let frame: serde_json::Value = serde_json::from_str(&batch(
             "replay",
-            &lines,
+            &journal::Replay::of(lines.clone()),
             42,
             Some(99),
             Visibility::Everything,
@@ -1114,9 +1212,14 @@ mod tests {
     /// changed under it every second would be noise rather than information.
     #[test]
     fn only_the_opening_frame_reports_the_file_size() {
-        let frame: serde_json::Value =
-            serde_json::from_str(&batch("append", &[], 7, None, Visibility::Feed))
-                .expect("valid JSON");
+        let frame: serde_json::Value = serde_json::from_str(&batch(
+            "append",
+            &journal::Replay::default(),
+            7,
+            None,
+            Visibility::Feed,
+        ))
+        .expect("valid JSON");
         assert_eq!(frame["kind"], "append");
         assert!(frame.get("size").is_none());
     }

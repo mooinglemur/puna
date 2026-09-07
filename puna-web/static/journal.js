@@ -176,10 +176,6 @@
   var stuckToBottom = true;
   // Whether a backfill page is in flight. One at a time, always: see `fill`.
   var backfilling = false;
-  // Whether the page in flight is REBUILDING the window from the end rather than extending it
-  // upward, so the frame handler knows to put the reader at the newest record instead of holding
-  // the place a prepend would have held. See `rebuild`.
-  var rebuilding = false;
   // How many earlier records the walk has pulled in, for the progress note. A whole-feed load on a
   // busy room is dozens of round trips over tens of seconds, and a note that says only "loading"
   // for all of them is indistinguishable from one that has stopped, which is precisely the
@@ -470,10 +466,13 @@
   // `arriving` is the stylesheet's cue to open the row and fade its text in, and it is passed
   // through rather than decided here: only a record that landed on a live feed is new to the
   // reader. See the `arriving` rules in puna.css for what animating a replay would look like.
-  function line(event, arriving) {
+  function line(event, arriving, begins) {
     var row = document.createElement("div");
     row.className =
       "entry " + (event.type || "unknown") + (arriving ? " arriving" : "") + marks(event);
+    // Where this record begins in the room's history file, off the frame's `starts`. It is what
+    // lets the page walk backwards from wherever the trim has left it; see `pageStart`.
+    if (typeof begins === "number") row.dataset.start = String(begins);
 
     var when = at(event.at);
     var stamp = cell(row, "", "when");
@@ -789,8 +788,12 @@
     return date.getFullYear() + "-" + date.getMonth() + "-" + date.getDate();
   }
 
-  function daybreak(date) {
+  function daybreak(date, begins) {
     var row = document.createElement("div");
+    // **The offset of the record it introduces, because a heading holds no bytes of its own.** It
+    // is equally true of the heading, and carrying it is what lets a trim that stops on one leave
+    // the page still able to say where it begins.
+    if (typeof begins === "number") row.dataset.start = String(begins);
     // `unfilterable` for the reason the constant gives: a heading is not a record, and a filtered
     // feed that lost its calendar reads as one where the clock runs backwards. A heading left
     // standing over rows that are all hidden is the deliberate cost of that, and it is a true
@@ -921,38 +924,25 @@
     }).observe(log);
   }
 
-  // --- WHERE THE PAGE BEGINS, AND WHETHER IT CAN SAY --------------------------------------------
+  // --- WHERE THE PAGE BEGINS --------------------------------------------------------------------
   //
   // The backwards walk asks for the records immediately *before* a byte offset, so it needs the
-  // offset the page's oldest line begins at. The server sends one per frame: a `start` on every
-  // replay and every backfill page, and for an `append` it is the follow cursor as it stood before
-  // that frame moved it.
+  // offset the page's oldest line begins at. **Every row carries its own**, off the `starts` array
+  // the server sends beside the events, so the answer is read back off the document rather than
+  // remembered.
   //
-  // **So the offset is a property of a BATCH, and the trim cuts batches in half.** Holding it in a
-  // variable was wrong in a way nothing would have reported: the trim drops rows off the top, the
-  // variable goes on naming the offset of a line that is no longer on the page, and the next walk
-  // then prepends records that stop short of what is on screen. That is a hole in the middle of the
-  // feed with nothing marking it, on a page whose whole promise is that it omits no history.
+  // That is the whole reason the wire carries one per record rather than one per frame. A frame's
+  // own boundary describes the page for about a second: the trim drops rows off the top as new ones
+  // arrive, and a remembered offset then names a line that is no longer there. Walking back from it
+  // prepends records that stop short of what is on screen, which is a hole in the middle of the feed
+  // with nothing marking it, on a page whose whole promise is that it omits no history. An earlier
+  // build of this file answered "I cannot say" in that case and rebuilt the window from the end,
+  // which was honest and cost the reader their place on every widening. One offset per record costs
+  // about seven bytes each and removes the question.
   //
-  // So the marker lives on the row it describes and the answer is read back off the document.
-  // Whatever is at the top either carries a start or it does not, and "it does not" is the honest
-  // answer a variable could not give. `null` therefore covers two states that want the same
-  // handling: an empty page, and a page trimmed into the middle of a batch. Neither can be walked
-  // back from, and `rebuild` is what the second one needs.
-  function stamp(batch, start) {
-    var first = batch.firstElementChild;
-    if (first && typeof start === "number") first.dataset.start = String(start);
-  }
-
-  // Move a marker onto the next row rather than losing it with the row it was on. See the daybreak
-  // dedup in `prepend`, which is the one place a stamped row is removed for a reason of its own.
-  function carryStart(row) {
-    var next = row.nextElementSibling;
-    if (next && row.dataset.start !== undefined && next.dataset.start === undefined) {
-      next.dataset.start = row.dataset.start;
-    }
-  }
-
+  // A day heading is not a record and holds no bytes, so it takes the offset of the record it
+  // introduces: equally true, and it means a trim that stops on a heading has still left the page
+  // able to say where it begins.
   function pageStart() {
     var first = log.firstElementChild;
     if (!first || first.dataset.start === undefined) return null;
@@ -976,27 +966,13 @@
   function trimToCap() {
     if (cap === Infinity || log.childElementCount <= cap) return;
     var before = log.scrollHeight;
-    while (log.childElementCount > cap) {
-      var going = log.firstElementChild;
-      // **A day heading holds a row and no bytes**, so the offset it carries is equally true of the
-      // record below it and moves down rather than dying with it. A RECORD's is not: dropping one
-      // moves where the page begins by that record's own length, which nothing here knows, and the
-      // marker goes with it. That is what `pageStart` answers `null` for.
-      //
-      // This is not an edge case. Every batch opens with a heading, and a window filled exactly to
-      // its cap is one row over it, so without this the FIRST paint of every page would throw its
-      // own anchor away and every widening after it would rebuild the window instead of extending
-      // it: a flash and a lost place, on the common path, for the sake of one row that is not a
-      // record at all.
-      if (going.classList.contains("daybreak")) carryStart(going);
-      log.removeChild(going);
-    }
+    while (log.childElementCount > cap) log.removeChild(log.firstElementChild);
     log.scrollTop -= before - log.scrollHeight;
   }
 
   // `live` is true only for an `append` frame: those are the records that arrived while the reader
   // was watching, and they are the only ones worth animating.
-  function append(events, live, start) {
+  function append(events, live, starts) {
     if (!events.length) return;
     // **Mid-animation counts as being at the bottom.** A batch landing while the last one is still
     // opening measures a distance the page's own rows are creating, so `nearBottom()` on its own
@@ -1006,7 +982,8 @@
     stuckToBottom = nearBottom() || (following && !readerMoved());
 
     var batch = document.createDocumentFragment();
-    events.forEach(function (event) {
+    events.forEach(function (event, i) {
+      var begins = starts && starts[i];
       // A heading whenever the calendar day moves, including before the first line. The feed shows
       // times of day, so without it a reader has no idea which day they are looking at, and a
       // journal that spans a week looks like one where the clock runs backwards.
@@ -1014,13 +991,12 @@
       if (when) {
         var key = dayKey(when);
         if (key !== lastDay) {
-          batch.appendChild(daybreak(when));
+          batch.appendChild(daybreak(when, begins));
           lastDay = key;
         }
       }
-      batch.appendChild(line(event, live));
+      batch.appendChild(line(event, live, begins));
     });
-    stamp(batch, start);
     log.appendChild(batch);
 
     trimToCap();
@@ -1048,7 +1024,7 @@
   // and the reader loses the line they were on, which is the whole reason to backfill in place
   // rather than clear and reload. Measuring the scroll height on both sides and adding the
   // difference back keeps the same record under the same pixel.
-  function prepend(events, start) {
+  function prepend(events, starts, start) {
     if (!events.length) {
       // **An empty page is still an answer, and dropping it is a walk that never ends.** It says
       // there is nothing before what is on screen, so the page's own head is where the file begins.
@@ -1063,19 +1039,19 @@
 
     var batch = document.createDocumentFragment();
     var previousDay = null;
-    events.forEach(function (event) {
+    events.forEach(function (event, i) {
+      var begins = starts && starts[i];
       var when = at(event.at);
       if (when) {
         var key = dayKey(when);
         if (key !== previousDay) {
-          batch.appendChild(daybreak(when));
+          batch.appendChild(daybreak(when, begins));
           previousDay = key;
         }
       }
-      batch.appendChild(line(event));
+      batch.appendChild(line(event, false, begins));
     });
 
-    stamp(batch, start);
     var before = log.scrollHeight;
     log.insertBefore(batch, log.firstChild);
     log.scrollTop += log.scrollHeight - before;
@@ -1084,15 +1060,19 @@
     // ended on some day of its own. If they agree, that heading is now a repeat.
     var headings = log.querySelectorAll(".daybreak");
     for (var i = headings.length - 1; i > 0; i--) {
-      if (headings[i].textContent === headings[i - 1].textContent) {
-        // **The offset marker moves rather than dying with the row.** A heading can be the first
-        // row of the batch below it, which is where that batch's start offset lives, and dropping
-        // it would leave the page unable to say where its oldest line begins the moment the trim
-        // reached that far: a walk refused for no reason a reader could see. See `pageStart`.
-        carryStart(headings[i]);
-        headings[i].remove();
-      }
+      // Removing it loses nothing now: every row carries its own offset, so the heading was not
+      // holding the only copy of anything.
+      if (headings[i].textContent === headings[i - 1].textContent) headings[i].remove();
     }
+
+    // **`lastDay` is deliberately untouched.** It describes the page's TAIL, and a backfill goes on
+    // the FRONT of a page whose bottom has not moved, so the day down there is still whatever it
+    // was. Setting it from this batch would drop the heading at the next genuine day change.
+    //
+    // There is no longer a case where this batch IS the tail: that was the rebuild, which per-record
+    // offsets removed. A widened feed growing a second daybreak the moment the next line arrived was
+    // the bug that came of the two disagreeing, and the way it is gone for good is that the page is
+    // never emptied and refilled at all.
     refreshFilterNote();
   }
 
@@ -1336,7 +1316,7 @@
     if (live) sayLive();
   }
 
-  // How many records to ask for on connect, and on a rebuild.
+  // How many records to ask for on connect.
   //
   // The server clamps to `REPLAY_MAX` whatever it is told, so asking for the cap outright would
   // work; asking for what it will actually serve is what keeps the page's own arithmetic about how
@@ -1367,39 +1347,14 @@
     if (backfilling || !socket || socket.readyState !== WebSocket.OPEN) return;
     if (!short()) return;
     var want = cap === Infinity ? REPLAY_MAX : cap - log.childElementCount;
+    // `null` is a page with nothing on it yet, in which case the replay is on its way and will
+    // anchor the page itself; `0` is a page holding the beginning of the file, and there is nothing
+    // earlier than that. Neither is a state to recover from: a page with rows on it always knows
+    // where it begins, because every row says.
     var start = pageStart();
-    // The whole file is already on the page. There is nothing earlier than the beginning.
-    if (start === 0) return;
-    if (start === null) {
-      // Either nothing has landed yet, in which case the replay is on its way and will anchor the
-      // page itself, or the trim has eaten into the oldest batch and the page can no longer say
-      // where it begins. The second is the ordinary condition of a page that has been open on a
-      // busy room, so it is not an error: it is what `rebuild` is for.
-      if (log.firstElementChild) rebuild();
-      return;
-    }
+    if (start === null || start === 0) return;
     backfilling = true;
     socket.send(JSON.stringify({ before: start, lines: Math.min(want, REPLAY_MAX) }));
-  }
-
-  // Throw the window away and fetch it again, ending at the newest record the page has seen.
-  //
-  // **The one thing the walk cannot do is fill a hole in its own middle.** Once the trim has cut
-  // into the oldest batch on the page there is no offset to walk back from, so widening the window
-  // means asking for the last N records outright. The reader lands at the newest record, which is
-  // where somebody watching a feed that was trimming already was, and where somebody who has just
-  // asked for more history wants to start reading upward from.
-  //
-  // `before: cursor` rather than a redial: the socket is up and already authorized, and a reconnect
-  // would answer with a tail this page would then have to reconcile against what it had kept.
-  function rebuild() {
-    if (cursor === null) return;
-    log.replaceChildren();
-    lastDay = null;
-    backfilled = 0;
-    backfilling = true;
-    rebuilding = true;
-    socket.send(JSON.stringify({ before: cursor, lines: firstPage() }));
   }
 
   // What the walk is doing, in words, beside the control that started it.
@@ -1551,22 +1506,11 @@
         say("This room has no feed history yet. It is written while the room runs.", "notice");
         return;
       }
-      // **Where this frame's records begin, read before the cursor moves.** The server labels a
-      // replay and a backfill page with a `start`; an `append` carries none, because its start is
-      // the follow cursor as it stood a moment ago. See `pageStart` for what the answer is for.
-      //
-      // A cursor that went BACKWARDS is a room whose save directory was reset, so the server
-      // answered a fresh tail rather than a continuation and the old cursor names nothing in the
-      // new file. Unstamped rather than stamped wrongly: the page then declines to walk back from
-      // those rows instead of asking for a region that does not join on to them.
-      var was = cursor;
       if (typeof frame.cursor === "number") cursor = frame.cursor;
-      var start =
-        typeof frame.start === "number"
-          ? frame.start
-          : typeof was === "number" && typeof frame.cursor === "number" && frame.cursor >= was
-            ? was
-            : null;
+      // Where each of this frame's records begins, one per event and in the same order. Every kind
+      // of frame carries them, so nothing here has to infer an offset from a cursor or from what
+      // some previous frame said. See `pageStart`.
+      var starts = Array.isArray(frame.starts) ? frame.starts : null;
       // The cadence comes from the server, on the opening frame. Until it arrives the watchdog is
       // disarmed rather than guessing. A guess shorter than the real interval would tear down a
       // healthy connection on a timer, which is worse than the gap it was meant to close.
@@ -1577,7 +1521,11 @@
 
       // A backfill page goes on the front and never touches the follow cursor.
       if (frame.kind === "earlier") {
-        prepend(frame.events || [], typeof frame.start === "number" ? frame.start : 0);
+        prepend(
+          frame.events || [],
+          starts,
+          typeof frame.start === "number" ? frame.start : 0
+        );
         // **The window may have moved while this page was in flight.** Narrowing cancels the walk,
         // but it cannot unsend the request already on the wire, so the answer arrives for a window
         // nobody wants any more: five thousand rows onto a page the reader has just cut to five
@@ -1596,12 +1544,6 @@
         // note frozen mid-sentence, nothing thrown, 5,000 records of 160,000 on the page. A silent
         // stop is the worst shape this could fail in, because it looks exactly like a short file.
         backfilling = false;
-        if (rebuilding) {
-          rebuilding = false;
-          // The window was thrown away and fetched again, so there is no remembered place to keep:
-          // the reader goes to the newest record, which is what they were looking at.
-          pinBottom();
-        }
         // Keep walking while the window is short of what was asked for, and stop by asking for
         // nothing once it is full. One page in flight at a time, so a slow disk backs the walk up
         // rather than queueing a thousand requests at a server reading a 250 MB file.
@@ -1626,7 +1568,7 @@
       // `append` is the live frame and `replay` is the tail on connect; only the first is new to
       // whoever is watching, so only the first opens a row. A BURST does not either: see ARRIVE_MAX.
       var events = frame.events || [];
-      append(events, frame.kind === "append" && events.length <= ARRIVE_MAX);
+      append(events, frame.kind === "append" && events.length <= ARRIVE_MAX, starts);
       noteFiltering(frame.withheld);
       if (frame.kind === "replay") {
         // The backoff resets on a connection that got as far as a replay, not on one that merely
