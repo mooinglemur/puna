@@ -75,6 +75,23 @@ body {
   font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
+/* **`hidden` means hidden, whatever else this file says.**
+ *
+ * The browser's own stylesheet hides `[hidden]` with `display: none`, and ANY author rule setting
+ * `display` beats it: an author declaration outranks the UA sheet regardless of specificity. So a
+ * control rendered hidden and revealed by script is shown anyway the moment it is given a layout.
+ *
+ * That had already happened. `.feed-filters { display: flex }` put the feed's search box and three
+ * checkboxes in front of every reader with no scripting, doing nothing, which is the one thing
+ * rendering them hidden was there to prevent. Nothing could report it: the attribute was in the
+ * markup, `journal.js` did reveal the row, and the two tests holding that bargain together both
+ * pass. Only a browser with no script can tell, and the failure is a control that ticks and changes
+ * nothing, which is worse than an absent one.
+ *
+ * Stated once and with `!important`, because what it has to outrank is a component's own rule and
+ * the components are the reason it is needed. */
+[hidden] { display: none !important; }
+
 a { color: var(--link); }
 a:hover { text-decoration: none; }
 
@@ -1965,15 +1982,63 @@ h1 .scope {
   white-space: nowrap;
 }
 
-/* The backfill control, above the feed rather than inside it: it acts on the whole view, and a
+/* The window control, above the feed rather than inside it: it acts on the whole view, and a
    control that scrolled away with the records it loads would be unreachable exactly when a reader
    wants it again. */
 .feed-controls {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem;
   flex-wrap: wrap;
   margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+/* Pushed to the far end, so a note that appears, grows and goes away again is not shoving the
+   buttons around while somebody is aiming at one. `margin-left: auto` rather than
+   `justify-content: space-between`, which would spread the buttons too: the same shape, and the
+   same reason, as `#journal-filter-note` in the row below. */
+.feed-controls #journal-progress {
+  margin-left: auto;
+}
+
+/* --- a segmented control ------------------------------------------------------------------------
+   Mutually exclusive readings of ONE setting, drawn as one control rather than as six loose
+   buttons, which would read as six separate actions. Same shape as the theme selector in the
+   topbar, which is the other place this site asks a reader to pick one of a few. */
+.segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.segmented button {
+  padding: 0.2rem 0.5rem;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-radius: calc(var(--radius) - 3px);
+  font-variant-numeric: tabular-nums;
+}
+
+.segmented button:hover { color: var(--text); }
+.segmented button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* **The disabled one is the SELECTED one, and it must not read as unavailable.** The current size
+   is disabled because there is nothing to press: the page is already showing that much. A UA's
+   default for `:disabled` says the opposite, that this is the one option you may not have, so the
+   selected look is stated here rather than left to the browser. `cursor: default` for the same
+   reason: a pointer promising an action there would be lying.
+
+   Deliberately the same treatment the theme selector gives its active button, since it is the same
+   question being answered. */
+.segmented button:disabled {
+  color: var(--text);
+  background: var(--bg);
+  box-shadow: inset 0 0 0 1px var(--border);
+  cursor: default;
 }
 
 /* --- the feed page is sized to the window -------------------------------------------------------

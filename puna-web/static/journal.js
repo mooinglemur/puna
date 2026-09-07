@@ -22,29 +22,55 @@
   var feed = status.dataset.feed;
   if (!feed) return;
 
-  // The last five hundred records, or everything if the room is younger than that.
+  // --- HOW MUCH OF THE FEED THE READER HOLDS ------------------------------------------------------
   //
-  // **Sized against the trim below rather than against the wire.** At 500 a page opens with a
-  // quarter of what it is willing to hold, so there is room for a busy room to run for a while
-  // before anything is dropped off the top, and a reader arriving mid-release has the lines that
-  // explain it rather than the tail of the flood. It also gives the filter box something to filter:
-  // a narrow search over a hundred lines usually finds nothing and reads as broken.
+  // **One number, deciding three things this file used to decide separately**: how many records the
+  // page asks for on connect, how far the backwards walk goes, and how many rows stay in the
+  // document. Those were a constant, a button and a second constant, and every seam between them
+  // showed. The button turned the trim off for good, so the only way back to a bounded page was to
+  // reload it; it kept its label after there was nothing left to load, since nothing about it
+  // expressed a state; and a reader who wanted a deeper window than the one this file had picked
+  // had no way to say so at all.
   //
-  // The cost is one burst on connect, and it was measured before this moved: a 500-line replay is
-  // ~124 KiB raw, and `rocket_ws` sits on a tungstenite with no permessage-deflate, so that is what
-  // crosses the wire. A page load rather than a problem, and the follow after it is a trickle.
-  //
-  // The server clamps this to `journal::MAX_REPLAY_LINES` (5,000) whatever is asked for, so this is
-  // comfortably inside what it will serve rather than up against it.
-  var REPLAY_LINES = 500;
+  // So the reader picks the window and the rest follows from it. `Infinity` is the whole feed,
+  // which is the old button expressed as one of the sizes rather than as a mode.
+  var WINDOW_SIZES = [Infinity, 10000, 5000, 2500, 1000, 500];
 
-  // How many lines stay in the document.
+  // What somebody who has never chosen gets, and the one number here that every viewer pays for on
+  // every load: the window is also the connect burst.
   //
-  // A busy room produces thousands a minute. A mass release is one per location, and a page left
-  // open overnight would otherwise hold a DOM node for every check since it was opened. The trim is
-  // from the top, because this feed reads downward and the oldest line is the one nobody is looking
-  // at.
-  var MAX_LINES = 2000;
+  // A 500-line replay measures ~124 KiB raw, and `rocket_ws` sits on a tungstenite with no
+  // permessage-deflate, so that is what crosses the wire. 1,000 doubles that and is still a page
+  // load rather than an event, while landing near the 2,000 rows this page used to accumulate
+  // before it trimmed. It also gives the filter box something to filter: a narrow search over a
+  // hundred lines usually finds nothing and reads as broken.
+  var DEFAULT_WINDOW = 1000;
+
+  // The most the server will put in one frame, `journal::MAX_REPLAY_LINES`.
+  //
+  // **It clamps regardless, so this is not the enforcement.** It is how the page knows a window
+  // larger than this arrives in pieces, and therefore that it has to keep asking after the first
+  // frame lands rather than believing it has everything it wanted.
+  var REPLAY_MAX = 5000;
+
+  // Where the choice is remembered, in the one store `toggles.js` owns. Namespaced by hand like
+  // every other key there, since they share a store across every page on this site.
+  //
+  // **`Infinity` is never written to it**, which is Troy's rule and a good one: loading a room's
+  // whole history is a deliberate act with a real cost at both ends, and a preference that quietly
+  // did it on every page load would be one nobody remembers setting. Choosing it leaves whatever
+  // numeric window was remembered before untouched, so the next load comes back to that rather than
+  // to the default.
+  var WINDOW_KEY = "journal.lines";
+
+  // How many rows stay in the document, and how much history the page tries to hold.
+  //
+  // A busy room produces thousands of lines a minute. A mass release is one per location, and a
+  // page left open overnight would otherwise hold a DOM node for every check since it was opened.
+  // The trim is from the top, because this feed reads downward and the oldest line is the one
+  // nobody is looking at. **Day headings are rows and count toward it**: this is a statement about
+  // the document, which is what the reader asked to bound, rather than about the history.
+  var cap = DEFAULT_WINDOW;
 
   // Reconnect backoff, in ms. Doubling, jittered, capped.
   //
@@ -55,7 +81,7 @@
   var RETRY_MAX = 30000;
   var retry = RETRY_MIN;
 
-  var earlier = document.getElementById("journal-earlier");
+  var windowRow = document.getElementById("journal-window");
   var progress = document.getElementById("journal-progress");
 
   // --- THE VIEW FILTERS ---------------------------------------------------------------------------
@@ -148,19 +174,17 @@
   var HEARTBEAT_MISSES = 2.5;
   var aliveAfter = 0;
   var stuckToBottom = true;
-  // The offset the oldest line on the page begins at. `null` until the first replay lands, `0` once
-  // the walk has reached the beginning of the file and there is nothing earlier to ask for.
-  var oldest = null;
+  // Whether a backfill page is in flight. One at a time, always: see `fill`.
   var backfilling = false;
+  // Whether the page in flight is REBUILDING the window from the end rather than extending it
+  // upward, so the frame handler knows to put the reader at the newest record instead of holding
+  // the place a prepend would have held. See `rebuild`.
+  var rebuilding = false;
   // How many earlier records the walk has pulled in, for the progress note. A whole-feed load on a
   // busy room is dozens of round trips over tens of seconds, and a note that says only "loading"
   // for all of them is indistinguishable from one that has stopped, which is precisely the
   // confusion the silent-stop bug above produced, and the reason a bare spinner would not do.
   var backfilled = 0;
-  // Set once the reader asks for the whole feed. It turns the DOM trim off: the trim exists so a
-  // page left open overnight does not accumulate a node per check, and it would otherwise eat the
-  // top of exactly what the reader just asked to see.
-  var keepEverything = false;
   // The local calendar day of the last line drawn, so a day break is inserted when it changes.
   // Held out here rather than per batch: a batch boundary is a network artifact and must not
   // produce a heading, and a day can change between two frames as easily as inside one.
@@ -879,11 +903,11 @@
   }
 
   // **Anything above the feed changing height knocks the view off the bottom, and this page does it
-  // to itself.** The backfill control is rendered hidden, since until a replay lands there is
-  // nothing to say about earlier records, and revealing it takes its height out of the feed, which
-  // is the flex item holding the page's slack. Reported on the deployed page and reproducible every
-  // time: the feed opened one line short of the bottom. A window resize and a phone rotating do
-  // exactly the same thing, and so will whatever gets added above the feed next.
+  // to itself.** The controls above the feed are rendered hidden and revealed by this script, and
+  // revealing one takes its height out of the feed, which is the flex item holding the page's
+  // slack. Reported on the deployed page and reproducible every time: the feed opened one line
+  // short of the bottom. The progress note appearing and wrapping does the same thing, and so do a
+  // window resize, a phone rotating, and whatever gets added above the feed next.
   //
   // The ordering fix in the replay branch handles the known case. This handles the class: the feed's
   // own height changing re-pins, unless the reader has taken the view somewhere themselves. Guarded
@@ -897,9 +921,82 @@
     }).observe(log);
   }
 
+  // --- WHERE THE PAGE BEGINS, AND WHETHER IT CAN SAY --------------------------------------------
+  //
+  // The backwards walk asks for the records immediately *before* a byte offset, so it needs the
+  // offset the page's oldest line begins at. The server sends one per frame: a `start` on every
+  // replay and every backfill page, and for an `append` it is the follow cursor as it stood before
+  // that frame moved it.
+  //
+  // **So the offset is a property of a BATCH, and the trim cuts batches in half.** Holding it in a
+  // variable was wrong in a way nothing would have reported: the trim drops rows off the top, the
+  // variable goes on naming the offset of a line that is no longer on the page, and the next walk
+  // then prepends records that stop short of what is on screen. That is a hole in the middle of the
+  // feed with nothing marking it, on a page whose whole promise is that it omits no history.
+  //
+  // So the marker lives on the row it describes and the answer is read back off the document.
+  // Whatever is at the top either carries a start or it does not, and "it does not" is the honest
+  // answer a variable could not give. `null` therefore covers two states that want the same
+  // handling: an empty page, and a page trimmed into the middle of a batch. Neither can be walked
+  // back from, and `rebuild` is what the second one needs.
+  function stamp(batch, start) {
+    var first = batch.firstElementChild;
+    if (first && typeof start === "number") first.dataset.start = String(start);
+  }
+
+  // Move a marker onto the next row rather than losing it with the row it was on. See the daybreak
+  // dedup in `prepend`, which is the one place a stamped row is removed for a reason of its own.
+  function carryStart(row) {
+    var next = row.nextElementSibling;
+    if (next && row.dataset.start !== undefined && next.dataset.start === undefined) {
+      next.dataset.start = row.dataset.start;
+    }
+  }
+
+  function pageStart() {
+    var first = log.firstElementChild;
+    if (!first || first.dataset.start === undefined) return null;
+    return Number(first.dataset.start);
+  }
+
+  // Records on the page, which is what every note counts. Day headings are rows and are not
+  // records: the trim counts them because they hold a DOM node, and nothing a reader is told ever
+  // should.
+  function records() {
+    return log.querySelectorAll(".entry:not(.daybreak)").length;
+  }
+
+  // Drop rows off the top until the document is inside the cap, leaving the reader's line under the
+  // reader's eye.
+  //
+  // Removing content above the view shifts everything up by exactly its height, so a naive trim
+  // teleports a reader who has scrolled back: the same problem `prepend` solves in the other
+  // direction, and the same fix. It is also right for a reader sitting at the bottom with no
+  // special case, since the bottom moves up by the amount the position does.
+  function trimToCap() {
+    if (cap === Infinity || log.childElementCount <= cap) return;
+    var before = log.scrollHeight;
+    while (log.childElementCount > cap) {
+      var going = log.firstElementChild;
+      // **A day heading holds a row and no bytes**, so the offset it carries is equally true of the
+      // record below it and moves down rather than dying with it. A RECORD's is not: dropping one
+      // moves where the page begins by that record's own length, which nothing here knows, and the
+      // marker goes with it. That is what `pageStart` answers `null` for.
+      //
+      // This is not an edge case. Every batch opens with a heading, and a window filled exactly to
+      // its cap is one row over it, so without this the FIRST paint of every page would throw its
+      // own anchor away and every widening after it would rebuild the window instead of extending
+      // it: a flash and a lost place, on the common path, for the sake of one row that is not a
+      // record at all.
+      if (going.classList.contains("daybreak")) carryStart(going);
+      log.removeChild(going);
+    }
+    log.scrollTop -= before - log.scrollHeight;
+  }
+
   // `live` is true only for an `append` frame: those are the records that arrived while the reader
   // was watching, and they are the only ones worth animating.
-  function append(events, live) {
+  function append(events, live, start) {
     if (!events.length) return;
     // **Mid-animation counts as being at the bottom.** A batch landing while the last one is still
     // opening measures a distance the page's own rows are creating, so `nearBottom()` on its own
@@ -923,13 +1020,10 @@
       }
       batch.appendChild(line(event, live));
     });
+    stamp(batch, start);
     log.appendChild(batch);
 
-    // Off once the reader has asked for the whole feed: the trim exists to stop an overnight page
-    // accumulating a node per check, and it would otherwise eat the top of what they just loaded.
-    if (!keepEverything) {
-      while (log.childElementCount > MAX_LINES) log.removeChild(log.firstElementChild);
-    }
+    trimToCap();
     // After the trim, because the note counts what is on the page and the trim is what decides that.
     // Before the pin, because the note sits above the feed and the feed is the flex item holding
     // this page's slack: a note that grows or shrinks after the pin moves the bottom the pin just
@@ -954,8 +1048,18 @@
   // and the reader loses the line they were on, which is the whole reason to backfill in place
   // rather than clear and reload. Measuring the scroll height on both sides and adding the
   // difference back keeps the same record under the same pixel.
-  function prepend(events) {
-    if (!events.length) return;
+  function prepend(events, start) {
+    if (!events.length) {
+      // **An empty page is still an answer, and dropping it is a walk that never ends.** It says
+      // there is nothing before what is on screen, so the page's own head is where the file begins.
+      // Without this the head would go on claiming the offset the server has just reported holds
+      // nothing, and `fill` would ask for the same region forever, once per frame, at a server
+      // reading a 250 MB file.
+      if (log.firstElementChild && typeof start === "number") {
+        log.firstElementChild.dataset.start = String(start);
+      }
+      return;
+    }
 
     var batch = document.createDocumentFragment();
     var previousDay = null;
@@ -971,6 +1075,7 @@
       batch.appendChild(line(event));
     });
 
+    stamp(batch, start);
     var before = log.scrollHeight;
     log.insertBefore(batch, log.firstChild);
     log.scrollTop += log.scrollHeight - before;
@@ -980,6 +1085,11 @@
     var headings = log.querySelectorAll(".daybreak");
     for (var i = headings.length - 1; i > 0; i--) {
       if (headings[i].textContent === headings[i - 1].textContent) {
+        // **The offset marker moves rather than dying with the row.** A heading can be the first
+        // row of the batch below it, which is where that batch's start offset lives, and dropping
+        // it would leave the page unable to say where its oldest line begins the moment the trim
+        // reached that far: a walk refused for no reason a reader could see. See `pageStart`.
+        carryStart(headings[i]);
         headings[i].remove();
       }
     }
@@ -1024,11 +1134,10 @@
   // other twenty players are busy is a blank frame, and so is a connection that quietly stopped;
   // the reader has no way to tell which they are looking at, and the honest answer is cheap.
   //
-  // "Loaded" is the load-bearing word. The page holds the last MAX_LINES records plus whatever the
-  // whole-feed button has pulled in, and the trim counts rows rather than visible ones, so a
-  // filtered feed on a busy room genuinely is a narrow view of a two-thousand-record window rather
-  // than of the room's history. The `title` in the markup says so at length; this says which
-  // numbers it is talking about.
+  // "Loaded" is the load-bearing word. The page holds whatever window the reader has asked for, and
+  // the trim counts rows rather than visible ones, so a filtered feed on a busy room is genuinely a
+  // narrow view of that window rather than of the room's history. The `title` in the markup says so
+  // at length; this says which numbers it is talking about.
   function refreshFilterNote() {
     if (!filterNote) return;
     var hides = FILTERS.filter(function (f) {
@@ -1085,7 +1194,7 @@
 
   if (filters) {
     // Revealed only now: without script these boxes would tick and do nothing, which is worse than
-    // their absence. Same bargain `#journal-earlier` makes.
+    // their absence. Same bargain `#journal-window` makes.
     filters.hidden = false;
     FILTERS.forEach(function (f) {
       var box = document.getElementById(f.input);
@@ -1227,35 +1336,152 @@
     if (live) sayLive();
   }
 
-  // Ask for the page of records immediately before what is on screen.
+  // How many records to ask for on connect, and on a rebuild.
   //
-  // One request in flight at a time. The alternative, firing every page at once, would put a
+  // The server clamps to `REPLAY_MAX` whatever it is told, so asking for the cap outright would
+  // work; asking for what it will actually serve is what keeps the page's own arithmetic about how
+  // much is still missing honest.
+  function firstPage() {
+    return cap === Infinity ? REPLAY_MAX : Math.min(cap, REPLAY_MAX);
+  }
+
+  // Ask for whatever the window is short of, walking backwards from the page's oldest line.
+  //
+  // **One request in flight at a time.** The alternative, firing every page at once, would put a
   // thousand backwards seeks on a 250 MB file at a server that is also following it, to fill a DOM
-  // the reader cannot scroll through anyway.
-  function askForEarlier() {
-    if (backfilling || oldest === null || oldest <= 0) return;
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  // the reader cannot scroll through anyway. The walk continues itself from the frame handler and
+  // stops here, by asking for nothing once the window is full: the cap is what ends it, rather than
+  // a flag somebody has to remember to clear.
+  //
+  // It asks for what it is short of rather than for a full page, because a reader who widened from
+  // 500 to 1,000 needs five hundred records and a full page is five thousand: nine tenths of it on
+  // an uncompressed socket to be trimmed off the top on arrival.
+  function fill() {
+    if (backfilling || !socket || socket.readyState !== WebSocket.OPEN) return;
+    var want = cap === Infinity ? REPLAY_MAX : cap - log.childElementCount;
+    if (want <= 0) return;
+    var start = pageStart();
+    // The whole file is already on the page. There is nothing earlier than the beginning.
+    if (start === 0) return;
+    if (start === null) {
+      // Either nothing has landed yet, in which case the replay is on its way and will anchor the
+      // page itself, or the trim has eaten into the oldest batch and the page can no longer say
+      // where it begins. The second is the ordinary condition of a page that has been open on a
+      // busy room, so it is not an error: it is what `rebuild` is for.
+      if (log.firstElementChild) rebuild();
+      return;
+    }
     backfilling = true;
-    keepEverything = true;
-    setEarlier(
-      false,
-      backfilled
+    socket.send(JSON.stringify({ before: start, lines: Math.min(want, REPLAY_MAX) }));
+  }
+
+  // Throw the window away and fetch it again, ending at the newest record the page has seen.
+  //
+  // **The one thing the walk cannot do is fill a hole in its own middle.** Once the trim has cut
+  // into the oldest batch on the page there is no offset to walk back from, so widening the window
+  // means asking for the last N records outright. The reader lands at the newest record, which is
+  // where somebody watching a feed that was trimming already was, and where somebody who has just
+  // asked for more history wants to start reading upward from.
+  //
+  // `before: cursor` rather than a redial: the socket is up and already authorized, and a reconnect
+  // would answer with a tail this page would then have to reconcile against what it had kept.
+  function rebuild() {
+    if (cursor === null) return;
+    log.replaceChildren();
+    lastDay = null;
+    backfilled = 0;
+    backfilling = true;
+    rebuilding = true;
+    socket.send(JSON.stringify({ before: cursor, lines: firstPage() }));
+  }
+
+  // What the walk is doing, in words, beside the control that started it.
+  //
+  // **A bare spinner would not do, and the reason is on the record.** A whole-feed load on a busy
+  // room is dozens of round trips over tens of seconds, and a note that says only "loading" for all
+  // of them is indistinguishable from one that has stopped: exactly the confusion a silent stop
+  // after one page produced when this walk last went wrong.
+  //
+  // Nothing is said while the window is simply being held. The buttons already say how much that
+  // is, and a line restating it under them would be noise on every page load.
+  function setProgress() {
+    if (!progress) return;
+    if (backfilling) {
+      progress.textContent = backfilled
         ? "Loading earlier records… " + backfilled + " so far."
-        : "Loading earlier records…"
-    );
-    socket.send(JSON.stringify({ before: oldest }));
+        : "Loading earlier records…";
+      return;
+    }
+    progress.textContent =
+      pageStart() === 0 ? "The whole feed is loaded: " + records() + " lines." : "";
   }
 
-  function setEarlier(enabled, note) {
-    if (!earlier) return;
-    earlier.hidden = !enabled && !note;
-    earlier.disabled = !enabled;
-    if (progress) progress.textContent = note || "";
+  // --- THE WINDOW CONTROL -------------------------------------------------------------------------
+
+  // The remembered size, or the default.
+  //
+  // Anything the store holds that is not one of the offered sizes is ignored rather than honored:
+  // it is a string out of a store any script on this origin can write, and these six are the only
+  // values this page has been reasoned about at. `Infinity` is refused along with the rest, which
+  // is what makes "never persisted" a property of the reader rather than only of the writer.
+  function storedWindow() {
+    var saved = window.PunaToggles && window.PunaToggles.recall(WINDOW_KEY);
+    var size = Number(saved);
+    return size !== Infinity && WINDOW_SIZES.indexOf(size) >= 0 ? size : DEFAULT_WINDOW;
   }
 
-  if (earlier) {
-    earlier.addEventListener("click", function () {
-      askForEarlier();
+  function windowValue(button) {
+    return button.dataset.lines === "all" ? Infinity : Number(button.dataset.lines);
+  }
+
+  // **The current size is the disabled button**, which is Troy's call and reads correctly: there is
+  // nothing to press, because the page is already showing that much. The stylesheet draws it as
+  // selected rather than as unavailable, since those are opposite meanings for one attribute.
+  function markWindow() {
+    if (!windowRow) return;
+    windowRow.querySelectorAll("button[data-lines]").forEach(function (button) {
+      var current = windowValue(button) === cap;
+      button.disabled = current;
+      // `disabled` takes a button out of the tab order, so on its own the current size is a control
+      // a screen reader cannot reach and nothing else announces. This is what says which one it is.
+      if (current) button.setAttribute("aria-current", "true");
+      else button.removeAttribute("aria-current");
+    });
+  }
+
+  function setWindow(size) {
+    if (size === cap) return;
+    var narrowing = size < cap;
+    cap = size;
+    markWindow();
+    if (window.PunaToggles && size !== Infinity) {
+      window.PunaToggles.remember(WINDOW_KEY, String(size));
+    }
+    if (narrowing) {
+      // **Measured before the view changes**, for the reason the filter boxes measure it before
+      // theirs: trimming moves the bottom out from under the reader, and asking afterwards reads
+      // somebody who was following as somebody who had scrolled away.
+      var wasFollowing = nearBottom() || (following && !readerMoved());
+      trimToCap();
+      if (wasFollowing) pinBottom();
+      refreshFilterNote();
+    } else {
+      fill();
+    }
+    setProgress();
+  }
+
+  if (windowRow) {
+    cap = storedWindow();
+    markWindow();
+    // Revealed only now, for the reason the filter row is: a control that can do nothing without
+    // script is worse than an absent one. Before any frame has landed rather than after, so the
+    // height it takes out of the feed is already gone by the time the first replay pins the bottom.
+    windowRow.hidden = false;
+    windowRow.querySelectorAll("button[data-lines]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        setWindow(windowValue(button));
+      });
     });
   }
 
@@ -1288,7 +1514,7 @@
       cursorAsked = cursor;
       socket.send(
         JSON.stringify(
-          resumed ? { from: { after: cursor } } : { from: { lines: REPLAY_LINES } }
+          resumed ? { from: { after: cursor } } : { from: { lines: firstPage() } }
         )
       );
     });
@@ -1314,7 +1540,22 @@
         say("This room has no feed history yet. It is written while the room runs.", "notice");
         return;
       }
+      // **Where this frame's records begin, read before the cursor moves.** The server labels a
+      // replay and a backfill page with a `start`; an `append` carries none, because its start is
+      // the follow cursor as it stood a moment ago. See `pageStart` for what the answer is for.
+      //
+      // A cursor that went BACKWARDS is a room whose save directory was reset, so the server
+      // answered a fresh tail rather than a continuation and the old cursor names nothing in the
+      // new file. Unstamped rather than stamped wrongly: the page then declines to walk back from
+      // those rows instead of asking for a region that does not join on to them.
+      var was = cursor;
       if (typeof frame.cursor === "number") cursor = frame.cursor;
+      var start =
+        typeof frame.start === "number"
+          ? frame.start
+          : typeof was === "number" && typeof frame.cursor === "number" && frame.cursor >= was
+            ? was
+            : null;
       // The cadence comes from the server, on the opening frame. Until it arrives the watchdog is
       // disarmed rather than guessing. A guess shorter than the real interval would tear down a
       // healthy connection on a timer, which is worse than the gap it was meant to close.
@@ -1325,24 +1566,27 @@
 
       // A backfill page goes on the front and never touches the follow cursor.
       if (frame.kind === "earlier") {
-        prepend(frame.events || []);
+        prepend(frame.events || [], typeof frame.start === "number" ? frame.start : 0);
         noteFiltering(frame.withheld);
-        oldest = typeof frame.start === "number" ? frame.start : 0;
         backfilled += (frame.events || []).length;
         // **Cleared before the next ask, not in the arm that ends the walk.** This request is
-        // finished. Its page is on the screen, so `askForEarlier`'s in-flight guard is about the
+        // finished. Its page is on the screen, so `fill`'s in-flight guard is about the
         // *next* one. Leaving the flag set until the walk ended made that guard reject every
         // continuation, so the whole-feed button loaded one page and stopped: button disabled,
         // note frozen mid-sentence, nothing thrown, 5,000 records of 160,000 on the page. A silent
         // stop is the worst shape this could fail in, because it looks exactly like a short file.
         backfilling = false;
-        if (oldest > 0) {
-          // Keep walking. One page in flight at a time, so a slow disk backs the walk up rather
-          // than queueing a thousand requests at a server reading a 250 MB file.
-          askForEarlier();
-        } else {
-          setEarlier(false, "Showing the whole feed, " + backfilled + " earlier records.");
+        if (rebuilding) {
+          rebuilding = false;
+          // The window was thrown away and fetched again, so there is no remembered place to keep:
+          // the reader goes to the newest record, which is what they were looking at.
+          pinBottom();
         }
+        // Keep walking while the window is short of what was asked for, and stop by asking for
+        // nothing once it is full. One page in flight at a time, so a slow disk backs the walk up
+        // rather than queueing a thousand requests at a server reading a 250 MB file.
+        fill();
+        setProgress();
         return;
       }
 
@@ -1390,24 +1634,22 @@
           return;
         }
 
-        // **Re-anchored on every replay that REPLACES the page**: a first connect, or a resume the
-        // server could not stitch, both of which start from a tail. The page's oldest line is
-        // whatever that replay began with, and carrying the previous `start` across would ask for a
-        // region the page no longer joins on to, leaving a hole in the middle of the feed.
-        oldest = typeof frame.start === "number" ? frame.start : null;
+        // **The page is re-anchored by the replay itself**, on every replay that REPLACES it: a
+        // first connect, or a resume the server could not stitch, both of which start from a tail.
+        // Its oldest line is whatever that replay began with, and `append` has already stamped it
+        // with the `start` the frame carried, so nothing here has to carry an offset across.
         backfilling = false;
-        if (keepEverything && oldest > 0) {
-          askForEarlier();
-        } else {
-          setEarlier(oldest === null || oldest > 0, "");
-        }
+        // The window is capped at `REPLAY_MAX` on the wire, so anything larger than that arrives in
+        // pieces: this is what asks for the rest, on a first connect exactly as on a cap change.
+        fill();
+        setProgress();
 
-        // **Pinned LAST, after the backfill control has been decided.** That control is rendered
-        // hidden, because until a replay lands there is nothing to say about earlier records, and
-        // revealing it takes its own height out of the feed: the feed is the flex item holding this
-        // page's slack (see `.feed-page`). Pinned before it, the view ended up one line short of
-        // the bottom on every first load, close enough to the 40-pixel tolerance to be a coin toss
-        // about whether the page then considered itself to be following at all.
+        // **Pinned LAST, after the progress note has been written.** The note sits above the feed,
+        // which is the flex item holding this page's slack (see `.feed-page`), so a line appearing
+        // there takes its own height out of the feed and moves the bottom the pin just wrote. That
+        // is the shape of a reported bug: with the reveal ordered the other way the view ended up
+        // one line short of the bottom on every first load, close enough to the 40-pixel tolerance
+        // to be a coin toss about whether the page then considered itself to be following at all.
         //
         // Through `pinBottom` like every other pin, so the position the page believes it wrote is
         // the one it actually wrote. A raw assignment here would leave a stale one behind for the

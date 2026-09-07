@@ -63,14 +63,40 @@ page that is regenerated.{% if may_download +%} The feed history above is the wh
 nothing.{% endif %}</p>
 </noscript>
 
-{# `aria-live="polite"` rather than `assertive`: a busy room appends several lines a second, and a
-   screen reader interrupting itself for each one would make the page unusable for the reader it is
-   meant to help. Polite lets it finish a sentence first. #}
-{# Server-rendered and hidden until the socket has replayed, because until then there is nothing to
-   load earlier THAN: the control needs a boundary from the first frame before it can ask for
-   anything. `journal.js` reveals it and updates its label as the walk goes back. #}
-<p class="feed-controls">
-<button type="button" id="journal-earlier" hidden>Load the whole feed</button>
+{# --- HOW MUCH OF THE FEED TO HOLD ---------------------------------------------------------------
+   One setting, deciding how much history the page asks the room for on connect, how far the
+   backwards walk goes, and how many rows stay in the document. It replaces a lone "Load the whole
+   feed" button, which could only ever go one way: it turned the trim off permanently, so the only
+   route back to a bounded page was to reload it, and it kept its label once there was nothing left
+   to load, because nothing about a button says which state it is in.
+
+   **The current size is the DISABLED one**, which is what says which state this is in: there is
+   nothing to press, because the page is already showing that much. `puna.css` draws it as selected
+   rather than as unavailable, since those are opposite meanings for one attribute, and `journal.js`
+   adds `aria-current` because `disabled` takes a button out of the tab order.
+
+   `data-lines="all"` rather than a number, because the whole feed has no number: it is a room's
+   entire history, which is 160,000 records on a busy one. It is also the one choice `journal.js`
+   never remembers, so loading it stays a deliberate act rather than something a page does on every
+   load for somebody who tried it once.
+
+   `hidden`, and revealed by `journal.js`, the same bargain the filter row below makes: these
+   buttons cannot do anything without script, and a control that does nothing is worse than an
+   absent one. #}
+<p class="feed-controls" id="journal-window" hidden>
+Show
+<span class="segmented" role="group" aria-label="How much of the feed to keep loaded"
+      title="How much history this page holds: what it asks the room for on connect, how far back
+the earlier-records walk goes, and how many lines stay on the page. A smaller window trims the
+oldest lines away as new ones arrive.">
+<button type="button" data-lines="all">All</button>
+<button type="button" data-lines="10000">10000</button>
+<button type="button" data-lines="5000">5000</button>
+<button type="button" data-lines="2500">2500</button>
+<button type="button" data-lines="1000">1000</button>
+<button type="button" data-lines="500">500</button>
+</span>
+lines
 <span id="journal-progress" class="hint"></span>
 </p>
 
@@ -82,7 +108,7 @@ nothing.{% endif %}</p>
    it would be a control that hides nothing, implying a choice they do not have.
 
    `hidden`, and revealed by `journal.js`. A checkbox that does nothing without script is worse
-   than an absent one, and this is the same bargain `#journal-earlier` above makes.
+   than an absent one, and this is the same bargain `#journal-window` above makes.
 
    The two data attributes are the page's whole input to the filters, and both are decided by the
    route: the gameplay set is `PUBLIC_KINDS` rendered rather than retyped, and the slot numbers are
@@ -122,10 +148,12 @@ Only a record carrying an item can be filler; everything else is unclassified an
 <input type="checkbox" data-toggle="journal.hide-filler" id="journal-filter-filler"> Hide
 filler</label>
 <span id="journal-filter-note" class="hint" title="Counted over the records currently loaded, which
-is the last two thousand plus anything the whole-feed button has pulled in, not the room's whole
-history."></span>
+is the window chosen above rather than the room's whole history."></span>
 </p>
 
+{# `aria-live="polite"` rather than `assertive`: a busy room appends several lines a second, and a
+   screen reader interrupting itself for each one would make the page unusable for the reader it is
+   meant to help. Polite lets it finish a sentence first. #}
 <div id="journal" class="journal" role="log" aria-live="polite" aria-label="Room feed"></div>
 
 {% endblock %}

@@ -805,14 +805,14 @@ fn every_publicly_visible_record_has_a_renderer() {
 
 /// **The whole-feed walk clears its in-flight flag before asking for the next page.**
 ///
-/// `askForEarlier` refuses to send while `backfilling` is set: one request in flight at a time,
-/// so a slow disk backs the walk up instead of queueing a thousand backwards seeks. The walk then
-/// continues itself from the frame handler, which means the handler must clear the flag *before*
-/// calling it. It did not: the flag was cleared only in the arm taken when the walk had already
-/// reached the start of the file, so every continuation was rejected by the guard.
+/// `fill` refuses to send while `backfilling` is set: one request in flight at a time, so a slow
+/// disk backs the walk up instead of queueing a thousand backwards seeks. The walk then continues
+/// itself from the frame handler, which means the handler must clear the flag *before* calling it.
+/// It did not: the flag was cleared only in the arm taken when the walk had already reached the
+/// start of the file, so every continuation was rejected by the guard.
 ///
-/// **The result was a silent stop after one page.** On a room with 160,000 records the button
-/// loaded 5,000, disabled itself, and left the note reading "Loading earlier records…" forever.
+/// **The result was a silent stop after one page.** On a room with 160,000 records the control
+/// loaded 5,000, stopped, and left the note reading "Loading earlier records…" forever.
 /// Nothing threw, so there was nothing in a console, and the failure is indistinguishable from a
 /// short file, which is why it was reported as "it seems to load a chunk, but then it stops".
 ///
@@ -833,12 +833,235 @@ fn the_whole_feed_walk_can_take_more_than_one_page() {
         "the backfill branch never clears `backfilling`, so the walk stops after its first page",
     );
     let continues = branch
-        .find("askForEarlier()")
+        .find("fill()")
         .expect("the backfill branch never continues the walk");
     assert!(
         cleared < continues,
         "`backfilling` is cleared after the walk asks for its next page, so `askForEarlier` \
          refuses it and the whole-feed button loads exactly one page, silently"
+    );
+}
+
+/// **The feed's window control offers exactly the sizes its script will honor, and says which one
+/// is in force.**
+///
+/// One setting decides how much history the page asks for, how far its backwards walk goes and how
+/// many rows it keeps, and it is spelled in three files: a button per size in the markup, the list
+/// of sizes in the script, and the selected look in the stylesheet. Each half fails quietly and in
+/// its own way.
+///
+/// * A button naming a size the script does not know still *works* for the life of the page, and
+///   then is not remembered, because `storedWindow` refuses anything that is not on the list. The
+///   symptom is a preference that will not stick, reported against the wrong feature.
+/// * A size on the list with no button is simply unreachable, and reads as never having been built.
+/// * A default that is not one of the sizes leaves **no** button disabled on load, so a control
+///   whose whole job is to say which state the page is in says nothing at all.
+/// * And the selected button is drawn by `:disabled`, which is the browser's spelling of
+///   *unavailable*. Without a rule saying otherwise the current size is the one that looks like the
+///   option you may not have, which is the exact inverse of what it means.
+#[test]
+fn the_feed_window_control_offers_the_sizes_the_script_knows() {
+    let markup = std::fs::read_to_string(source("templates/rooms/journal.html")).expect("template");
+    let script = std::fs::read_to_string(source("static/journal.js")).expect("journal.js");
+    let css = std::fs::read_to_string(source("static/css/puna.css")).expect("puna.css");
+    let code = code_only(&script);
+
+    // The sizes the script will honor, read out of its own array rather than retyped here.
+    let listed: Vec<String> = code
+        .split_once("var WINDOW_SIZES = [")
+        .expect("journal.js no longer lists the window sizes")
+        .1
+        .split_once(']')
+        .expect("an unterminated WINDOW_SIZES")
+        .0
+        .split(',')
+        .map(|size| size.trim().to_string())
+        .filter(|size| !size.is_empty())
+        .collect();
+    assert!(
+        listed.len() > 1,
+        "journal.js offers one window size or none"
+    );
+
+    // What the markup offers, spelled the way a button spells it: a number, or `all` for the one
+    // size that has no number. Compared as a set rather than in order, since which order they are
+    // shown in is a design decision and not a contract.
+    //
+    // **Comments blanked first**, because the block above these buttons explains what
+    // `data-lines="all"` is for and would otherwise be counted as a seventh button. This lint
+    // matched its own prose on its first run, which is a mistake this project has now made five
+    // times and caught by mutation twice.
+    let rendered = blank_comments(&markup);
+    let mut offered: Vec<String> = rendered
+        .match_indices("data-lines=\"")
+        .map(|(at, needle)| {
+            rendered[at + needle.len()..]
+                .split_once('"')
+                .expect("an unterminated data-lines")
+                .0
+                .to_string()
+        })
+        .collect();
+    let mut wanted: Vec<String> = listed
+        .iter()
+        .map(|size| {
+            if size == "Infinity" {
+                "all".to_string()
+            } else {
+                size.clone()
+            }
+        })
+        .collect();
+    offered.sort();
+    wanted.sort();
+    assert_eq!(
+        offered, wanted,
+        "the window buttons and `WINDOW_SIZES` disagree: a button the script does not know is a \
+         choice that silently will not persist, and a size with no button cannot be reached at all"
+    );
+
+    // `Infinity` has no numeric spelling in an attribute, so the markup says `all` and this is the
+    // one line that turns it back into the number the rest of the file compares against.
+    assert!(
+        code.contains(r#"=== "all" ? Infinity"#),
+        "journal.js no longer maps the `all` button onto a window size, so the whole-feed choice \
+         resolves to NaN and matches nothing"
+    );
+
+    // A default off the list disables no button, so nothing on the page says what it is showing.
+    let default = code
+        .split_once("var DEFAULT_WINDOW = ")
+        .expect("journal.js no longer has a default window")
+        .1
+        .split_once(';')
+        .expect("an unterminated DEFAULT_WINDOW")
+        .0
+        .trim()
+        .to_string();
+    assert!(
+        listed.contains(&default),
+        "the default window `{default}` is not one of the offered sizes, so no button is marked as \
+         current on a first load"
+    );
+
+    // **The whole feed is never remembered**, which is Troy's rule: it is a deliberate act with a
+    // real cost at both ends, and a preference that quietly loaded a room's entire history on every
+    // page load is one nobody would remember setting. Both halves are asserted, because a writer
+    // that guards and a reader that does not is a rule one stray store entry defeats.
+    let writes = code
+        .split_once("function setWindow(")
+        .expect("journal.js no longer has a window setter")
+        .1
+        .split_once("\n  }")
+        .expect("an unterminated setWindow")
+        .0;
+    let remembers = writes
+        .split_once("remember(WINDOW_KEY")
+        .expect("setWindow no longer remembers the choice, so it does not outlive the page")
+        .0;
+    assert!(
+        remembers.contains("!== Infinity"),
+        "setWindow stores the whole-feed choice, so every later page load would replay a room's \
+         entire history unasked"
+    );
+    let reads = code
+        .split_once("function storedWindow(")
+        .expect("journal.js no longer reads the remembered window")
+        .1
+        .split_once("\n  }")
+        .expect("an unterminated storedWindow")
+        .0;
+    assert!(
+        reads.contains("!== Infinity"),
+        "storedWindow honors a stored whole-feed choice, so a store entry from anywhere reinstates \
+         the thing the writer refuses to write"
+    );
+
+    // The selected size is `disabled`, so the stylesheet has to say what that means here. Without
+    // this rule the current window is drawn as the one option you may not have.
+    let plain = code_only_css(&css);
+    let selected = plain
+        .split_once(".segmented button:disabled {")
+        .expect(
+            "puna.css has no rule for the selected window size, so the browser draws it as \
+             unavailable: the opposite of what it means",
+        )
+        .1
+        .split_once('}')
+        .expect("an unclosed rule")
+        .0;
+    for property in ["color:", "background:"] {
+        assert!(
+            selected.contains(property),
+            "`.segmented button:disabled` does not set `{property}`, so the current size keeps the \
+             browser's greyed-out default"
+        );
+    }
+    assert!(
+        code.contains("button.disabled = current"),
+        "journal.js no longer disables the current size, so nothing on the page says which window \
+         is in force"
+    );
+    assert!(
+        code.contains(r#"setAttribute("aria-current""#),
+        "the current size is disabled and therefore out of the tab order, and nothing else \
+         announces it: a screen reader is told nothing about which window is in force"
+    );
+
+    // **Both batch builders stamp the row they put on the front.** The offset a walk asks from is
+    // read back off the document, so a builder that does not mark its first row leaves the page
+    // permanently unable to say where it begins: every widening then rebuilds the window from the
+    // end instead of extending it, which costs a round trip and the reader's place and looks like
+    // the feed simply reloading itself.
+    for (name, boundary, inserts) in [
+        (
+            "append",
+            "function append(events, live, start) {",
+            "log.appendChild(batch)",
+        ),
+        (
+            "prepend",
+            "function prepend(events, start) {",
+            "log.insertBefore(batch",
+        ),
+    ] {
+        let body = code
+            .split_once(boundary)
+            .unwrap_or_else(|| panic!("journal.js no longer has a {name}"))
+            .1
+            .split_once("\n  }")
+            .unwrap_or_else(|| panic!("an unterminated {name}"))
+            .0;
+        let stamps = body.find("stamp(batch, start)").unwrap_or_else(|| {
+            panic!(
+                "`{name}` no longer marks the batch it builds with its start \
+                                       offset, so the page cannot say where it begins"
+            )
+        });
+        let puts = body
+            .find(inserts)
+            .unwrap_or_else(|| panic!("`{name}` no longer puts its batch on the page"));
+        assert!(
+            stamps < puts,
+            "`{name}` stamps its batch after handing it to the document, and a fragment is emptied \
+             by that: it has no first child left to mark"
+        );
+    }
+
+    // **The offset an `append` carries is the cursor as it stood BEFORE the frame moved it**, since
+    // that is where those records begin. Read afterwards it is where they END, so a later walk would
+    // ask for the page it is already showing and prepend a duplicate of it: a wrong answer rather
+    // than a missing one, and nothing anywhere reports it.
+    let reads = code
+        .find("var was = cursor;")
+        .expect("journal.js no longer keeps the cursor a frame arrived at");
+    let advances = code
+        .find("cursor = frame.cursor")
+        .expect("the follow cursor is never advanced, so the feed does not follow");
+    assert!(
+        reads < advances,
+        "the cursor is advanced before it is read, so an `append` batch is marked with the offset \
+         it ends at rather than the one it begins at"
     );
 }
 
@@ -862,9 +1085,10 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
 
     // Ids the script gives up on, silently, if the template renames them.
     //
-    // `journal-earlier` and `journal-progress` are the backfill control: `journal.js` guards on
-    // their absence, so a rename does not throw. The button simply never appears and the whole
-    // feed can never be loaded, with nothing anywhere saying why.
+    // `journal-window` and `journal-progress` are the window control: `journal.js` guards on their
+    // absence, so a rename does not throw. The buttons simply never appear, the page is stuck on
+    // whatever window it defaults to, and no more of the feed can ever be loaded, with nothing
+    // anywhere saying why.
     for id in [
         "journal",
         "journal-status",
@@ -873,7 +1097,7 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
         // would be deleted on the first status change, which is to say immediately and forever.
         "journal-message",
         "journal-link",
-        "journal-earlier",
+        "journal-window",
         "journal-progress",
     ] {
         assert!(
@@ -1131,25 +1355,26 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
          of itself"
     );
 
-    // **The first paint pins LAST, and the order is the whole of a reported bug.** The backfill
-    // control is rendered hidden, and revealing it takes its height out of the feed, which is the
-    // flex item holding this page's slack. Pinned before that, the feed opened one line short of the
-    // bottom on every single load, which is inside the 40-pixel tolerance and therefore a coin toss
-    // about whether the page then thought it was following at all. Both calls are correct in
-    // isolation, so only their order says anything.
+    // **The first paint pins LAST, and the order is the whole of a reported bug.** Anything above
+    // the feed that changes height moves the bottom, because the feed is the flex item holding this
+    // page's slack: the progress note appearing is one line, and the reveal of a hidden control used
+    // to be another. Pinned before that, the feed opened one line short of the bottom on every
+    // single load, which is inside the 40-pixel tolerance and therefore a coin toss about whether
+    // the page then thought it was following at all. Both calls are correct in isolation, so only
+    // their order says anything.
     let replay = code
         .split_once(r#"if (frame.kind === "replay") {"#)
         .map(|(_, rest)| rest.split_once("\n      }").map_or(rest, |(body, _)| body))
         .expect("journal.js no longer has a replay branch");
-    let reveals = replay
-        .find("setEarlier(oldest")
-        .expect("the replay branch no longer decides the backfill control");
+    let says = replay
+        .find("setProgress()")
+        .expect("the replay branch no longer writes the progress note");
     let pins = replay
         .rfind("pinBottom()")
         .expect("the replay branch no longer pins the bottom, so the feed opens mid-history");
     assert!(
-        pins > reveals,
-        "the first paint pins the bottom before the backfill control is revealed, so the control's \
+        pins > says,
+        "the first paint pins the bottom before the note above the feed is written, so the note's \
          own height leaves the feed short of the end"
     );
 
@@ -1582,7 +1807,7 @@ fn the_journal_filters_agree_across_the_markup_script_stylesheet_and_route() {
          after the box was typed into is shown regardless of it"
     );
 
-    // Rendered hidden and revealed by the script, the same bargain `#journal-earlier` makes: a box
+    // Rendered hidden and revealed by the script, the same bargain `#journal-window` makes: a box
     // that ticks and does nothing is worse than an absent one. Both halves are silent on their own,
     // and losing the reveal is the worse of the two, since the feature simply is not there.
     assert!(
@@ -1593,6 +1818,19 @@ fn the_journal_filters_agree_across_the_markup_script_stylesheet_and_route() {
     assert!(
         code.contains("filters.hidden = false"),
         "journal.js no longer reveals the filter row, so the filters exist and nobody can reach them"
+    );
+
+    // **And a third half, which had been missing and which defeated both of the others.** The UA
+    // stylesheet hides `[hidden]` with `display: none`, and any author rule setting `display` beats
+    // it whatever its specificity, so `.feed-filters { display: flex }` showed this row to every
+    // scriptless reader regardless of the attribute. Nothing above could catch that: the markup was
+    // right and the reveal was right. Pinned here rather than beside the rule, because this is the
+    // test that claims the bargain holds.
+    let plain = code_only_css(&std::fs::read_to_string(source("static/css/puna.css")).unwrap());
+    assert!(
+        plain.contains("[hidden] { display: none !important; }"),
+        "puna.css no longer forces `[hidden]` to win, so every control rendered hidden and given a \
+         `display` by its own rule is shown to a browser that cannot use it"
     );
 }
 

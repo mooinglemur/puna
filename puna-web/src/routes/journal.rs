@@ -524,11 +524,36 @@ struct FeedRequest {
     from: Option<Anchor>,
     /// Page **backwards**: the records immediately before this byte offset.
     ///
-    /// Sent repeatedly by the page's "load the whole feed" control, each time with the `start` the
-    /// previous answer reported, until that reaches zero. The server holds no per-viewer position
-    /// (the offset the client returns *is* the position), so a viewer that reconnects mid-backfill
-    /// simply carries on, and two tabs backfilling at once cost nothing between them.
+    /// Sent repeatedly by the page's window control, each time with the `start` the previous answer
+    /// reported, until the window is full or that reaches zero. The server holds no per-viewer
+    /// position (the offset the client returns *is* the position), so a viewer that reconnects
+    /// mid-backfill simply carries on, and two tabs backfilling at once cost nothing between them.
     before: Option<u64>,
+    /// How many records that page may carry. Clamped to [`journal::MAX_REPLAY_LINES`], and absent
+    /// means the full page, which is what a client predating this field asks for.
+    ///
+    /// **A backfill is not always a whole page's worth.** A reader widening the page's window from
+    /// 500 lines to 1,000 needs five hundred records; serving five thousand would put nine tenths
+    /// of them across an uncompressed socket to be trimmed off the top of the document on arrival.
+    /// The cap on the far side is what makes the difference visible: whatever does not fit is
+    /// dropped immediately, so the extra is pure cost at both ends.
+    lines: Option<usize>,
+}
+
+/// How many records one backfill page may carry.
+///
+/// **Never zero, whatever was asked for.** A page of no records reports `start: 0`, which is how the
+/// client learns it has reached the beginning of the file and stops walking. Answering that to a
+/// viewer in the middle of a 250 MB history would stop a walk that had not finished, somewhere
+/// arbitrary and with nothing saying why: on the page it is indistinguishable from a room that
+/// simply has no more history.
+///
+/// Its own function so the rule has one definition and a test can reach it, since the loop it is
+/// called from is an open socket. [`journal::before`] honors a zero faithfully, and is right to.
+fn backfill_size(asked: Option<usize>) -> usize {
+    asked
+        .unwrap_or(journal::MAX_REPLAY_LINES)
+        .clamp(1, journal::MAX_REPLAY_LINES)
 }
 
 /// The live feed: replay from a point, then follow.
@@ -748,10 +773,11 @@ async fn feed(
                             let request: FeedRequest =
                                 serde_json::from_str(&text).unwrap_or_default();
                             let Some(end) = request.before else { continue };
+                            let wanted = backfill_size(request.lines);
 
                             let path = path.clone();
                             let Ok(Ok(page)) = tokio::task::spawn_blocking(move ||
-                                journal::before(&path, end, journal::MAX_REPLAY_LINES)).await
+                                journal::before(&path, end, wanted)).await
                             else { continue };
 
                             // `start` is what the client sends back next time, and zero is how it
@@ -1339,6 +1365,44 @@ mod tests {
         // What a reconnect sends. The page has this offset already; the wire has to carry it.
         let after: FeedRequest = serde_json::from_str(r#"{"from":{"after":4096}}"#).expect("after");
         assert_eq!(after.from.unwrap().after, Some(4096));
+
+        // A backfill, with and without a size. **`lines` sits beside `before`, not inside `from`**:
+        // it bounds the page walking backwards, where `from.lines` bounds the opening tail, and the
+        // two are asked for by different requests at different moments.
+        let page: FeedRequest =
+            serde_json::from_str(r#"{"before":8192,"lines":500}"#).expect("a sized backfill");
+        assert_eq!((page.before, page.lines), (Some(8192), Some(500)));
+        let whole: FeedRequest = serde_json::from_str(r#"{"before":8192}"#).expect("a backfill");
+        assert_eq!((whole.before, whole.lines), (Some(8192), None));
+    }
+
+    /// **A backfill page never comes back empty because somebody asked for nothing.**
+    ///
+    /// An empty page reports `start: 0`, which is how the client learns it has reached the
+    /// beginning of the file and stops walking. So a zero-sized request would answer a viewer in
+    /// the middle of a 250 MB history with the one thing that means "there is no more", and the
+    /// walk would stop somewhere arbitrary with nothing saying why: indistinguishable, on the page,
+    /// from a room that simply has no more history.
+    ///
+    /// Through [`backfill_size`], which is the function the socket loop calls: reproducing the
+    /// clamp here would be a test of a rule with its call site unpinned, which is a shape this
+    /// project has shipped before.
+    #[test]
+    fn a_backfill_asking_for_nothing_is_not_answered_with_the_end_of_the_file() {
+        let lines: Vec<String> = (0..8)
+            .map(|n| format!(r#"{{"type":"check","at":{n}.0}}"#))
+            .collect();
+        let (_dir, path) = journal_file(&lines);
+        let end = std::fs::metadata(&path).expect("the journal").len();
+
+        assert_eq!(backfill_size(None), journal::MAX_REPLAY_LINES);
+        assert_eq!(backfill_size(Some(50_000)), journal::MAX_REPLAY_LINES);
+        let page = journal::before(&path, end, backfill_size(Some(0))).expect("a backfill page");
+        assert_eq!(page.lines.len(), 1, "a zero-sized ask served no records");
+        assert!(
+            page.start > 0,
+            "the page reported the start of the file, which stops the client's walk"
+        );
     }
 
     /// Write `lines` to a journal and hand back the directory holding it.
