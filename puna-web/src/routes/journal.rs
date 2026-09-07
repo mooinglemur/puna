@@ -98,12 +98,24 @@ const HEARTBEAT_FRAME: &str = r#"{"kind":"heartbeat"}"#;
 ///   * `gap`: pahoa's own marker that records were dropped. **Never filtered under any policy**:
 ///     it is the only evidence the history is incomplete, and a viewer that dropped it would
 ///     present a partial history as a whole one.
-///   * `deathlink`, `traplink`, `ringlink`: the three link conventions. A link is the same kind of
-///     event as a check: discrete, player-affecting and cross-game, and *"why did I get a trap I
+///   * `deathlink`, `traplink`: two of upstream's three link conventions. A link is the same kind
+///     of event as a check: discrete, player-affecting and cross-game, and *"why did I get a trap I
 ///     never earned"* is exactly what a feed is opened to answer. DeathLink was only ever the
-///     popular one rather than the only one; upstream has three, pahoa records them from one table,
-///     and treating them differently here would be an editorial guess rather than a property of
-///     the protocol.
+///     popular one rather than the only one, so both are carried and both lead their line with the
+///     convention's name.
+///
+///     **`ringlink` is the third and is deliberately absent**, since 2026-09-07. It is not an
+///     editorial judgment about which conventions matter, which is what the earlier wording here
+///     warned against: it fires on a counter changing rather than on a discrete event, so a room
+///     running a game that uses it would bury a history in records nobody opens a feed to read.
+///     pahoa stopped journaling it on those grounds and no production journal had ever carried one,
+///     which is what made removing the renderer with it cheap. Being out of this list is what keeps
+///     the two consistent: a record that turned up anyway is treated as any kind this build does
+///     not know, withheld here and rendered raw for an organizer, which is the fail-closed default.
+///
+///     It is still a real bounce tag on the wire and `model::filter`'s `BOUNCE_TAGS` still offers
+///     it. **What a room may FILTER is a different question from what its history records**, and
+///     collapsing the two would quietly remove an organizer's ability to thin RingLink traffic.
 ///
 ///   * `goal`: a slot finished. pahoa writes it **before** the auto-release and auto-collect it
 ///     triggers, deliberately, so the flood of `check` records those produce sits underneath the
@@ -130,12 +142,11 @@ const HEARTBEAT_FRAME: &str = r#"{"kind":"heartbeat"}"#;
 /// taken, on its own merits above. The other three are not: they are true statements about the
 /// room's *operation* rather than about play, and a room that wants them public has `full` to say
 /// so.
-pub const PUBLIC_KINDS: [&str; 8] = [
+pub const PUBLIC_KINDS: [&str; 7] = [
     "check",
     "gap",
     "deathlink",
     "traplink",
-    "ringlink",
     "goal",
     "release",
     "collect",
@@ -980,22 +991,28 @@ mod tests {
         assert!(parsed.get("withheld").is_none());
     }
 
-    /// The feed itself, the screenshot, is `check`, the three link conventions, and `gap`.
+    /// The feed itself, the screenshot: `check`, the two link conventions it carries, and `gap`.
     ///
     /// **The links belong here for the same reason a check does**: a discrete cross-game effect
     /// landing on somebody. DeathLink was only ever the popular convention rather than the only
-    /// one (pahoa records all three from one table), so admitting one and withholding the others
-    /// would be an editorial guess rather than a property of the protocol, and *"why did I get a
-    /// trap I never earned"* is precisely what a reader opens a feed to answer.
+    /// one, so admitting it and withholding TrapLink would be an editorial guess rather than a
+    /// property of the protocol, and *"why did I get a trap I never earned"* is precisely what a
+    /// reader opens a feed to answer.
     ///
-    /// `gap` rides with them because it is the only evidence the history has holes.
+    /// **RingLink is asserted as WITHHELD in the same test**, deliberately in the same place the
+    /// other two are admitted, because that is the contrast somebody will come here to check. It is
+    /// not an editorial judgment about conventions: it fires on a counter changing rather than on a
+    /// discrete event, pahoa stopped journaling it on frequency grounds, and this build has no
+    /// renderer for it, so it reaches a feed viewer only as a raw object nobody can read. Out of
+    /// `PUBLIC_KINDS`, it degrades to exactly what any unrecognized kind does.
+    ///
+    /// `gap` rides with the links because it is the only evidence the history has holes.
     #[test]
     fn the_feed_carries_checks_links_and_the_gap_marker() {
         let lines = vec![
             line("check"),
             line("deathlink"),
             line("traplink"),
-            line("ringlink"),
             r#"{"type":"gap","dropped":7}"#.to_string(),
         ];
         let parsed: serde_json::Value =
@@ -1003,9 +1020,26 @@ mod tests {
                 .expect("valid JSON");
 
         let events = parsed["events"].as_array().expect("events");
-        assert_eq!(events.len(), 5, "the feed dropped a record it should carry");
-        assert_eq!(events[4]["dropped"], 7);
+        assert_eq!(events.len(), 4, "the feed dropped a record it should carry");
+        assert_eq!(events[3]["dropped"], 7);
         assert!(parsed.get("withheld").is_none());
+
+        // The third convention, which this build renders nothing for. Counted rather than dropped,
+        // like anything else it does not know.
+        let rings: serde_json::Value = serde_json::from_str(&batch(
+            "append",
+            &[line("ringlink")],
+            9,
+            None,
+            Visibility::Feed,
+        ))
+        .expect("valid JSON");
+        assert!(
+            rings["events"].as_array().expect("events").is_empty(),
+            "a ring link reaches a feed viewer, who has no renderer for it and would see a raw \
+             object in a column of sentences"
+        );
+        assert_eq!(rings["withheld"], 1);
     }
 
     /// **An unknown type fails CLOSED on the public feed.**

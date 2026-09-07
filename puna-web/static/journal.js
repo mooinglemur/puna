@@ -107,11 +107,11 @@
 
   // The three link conventions, which the personal filter never hides.
   //
-  // A `deathlink`/`traplink`/`ringlink` record carries the SENDER's slot and a recipient COUNT,
+  // A `deathlink`/`traplink` record carries the SENDER's slot and a recipient COUNT,
   // never a recipient list, so "did this one reach me" is not answerable from the record at all.
   // Shown rather than answered wrongly: the alternative is a filter that quietly drops the deaths
   // somebody opened the feed to explain.
-  var LINK_KINDS = ["deathlink", "traplink", "ringlink"];
+  var LINK_KINDS = ["deathlink", "traplink"];
 
   var socket = null;
   // The follow position, in bytes into the room's history file. Advanced by every frame the server
@@ -317,6 +317,23 @@
     span.title = "Reported by the sending client, not verified by the room";
   }
 
+  // The convention's name, first on the line after the timestamp.
+  //
+  // **A DeathLink and a TrapLink are not things the reader did or was told; they are things that
+  // happened TO them**, arriving from a game they may not be playing, and the question a feed gets
+  // opened to answer is "why did I get a trap I never earned". Leading with the convention answers
+  // it before the sentence starts, and it is what makes the two scannable in a column where every
+  // other line begins with somebody's name.
+  //
+  // The trailing space rides INSIDE the cell rather than between cells, the same reason the
+  // timestamp's does: `white-space: pre` keeps it, and markup whitespace is what askama strips.
+  //
+  // A helper for two call sites, because the format is the thing that would drift: brackets, a
+  // space, and the convention spelled the way Archipelago spells it.
+  function convention(row, name) {
+    cell(row, "[" + name + "] ", "convention");
+  }
+
   // How many other slots a link reached. Suppressed at zero rather than rendered as "0 slots",
   // which reads as a failure where it usually means a solo room or a convention nobody else runs.
   function recipients(row, event) {
@@ -482,15 +499,28 @@
         cell(row, event.text || "", "chat-text");
         break;
 
-      // The three link conventions, and the one rule that matters is whose name is shown.
+      // The two link conventions this build renders, and the one rule that matters is whose name
+      // is shown.
+      //
+      // **RingLink was the third and its renderer is gone**, removed 2026-09-07 once pahoa stopped
+      // journaling it: it fires on a counter changing, so a room running a game that uses it would
+      // fill a history with records nobody opens a feed to read. No prod journal had ever carried
+      // one, which is what made deleting the renderer cheaper than keeping it. It is out of
+      // `PUBLIC_KINDS` with it, so a record that turned up anyway is treated as any kind this build
+      // does not know: withheld from a feed viewer and counted, raw for an organizer. That is the
+      // fail-closed default rather than a special case.
+      //
+      // It remains a real bounce tag on the wire, and `model::filter`'s `BOUNCE_TAGS` still offers
+      // it: what a room may FILTER is a different question from what its history records.
       //
       // **`player` is the room's answer; `source` is the sending client's claim.** They are
       // recorded separately precisely because they can disagree. Nothing in the protocol stops a
       // client putting somebody else's name in the payload, so a page rendering `source` as "who
       // killed you" would be rendering an assertion an attacker picks. Every one of these reads
       // `player`, which comes off the authenticated connection the packet arrived on. `source` is
-      // never displayed at all; `RingLink` does not even carry a usable one.
+      // never displayed at all.
       case "deathlink":
+        convention(row, "DeathLink");
         who(row, event);
         claimed(row, event);
         cell(row, " died", "verb");
@@ -502,6 +532,7 @@
         break;
 
       case "traplink":
+        convention(row, "TrapLink");
         who(row, event);
         claimed(row, event);
         cell(row, " sent ", "verb");
@@ -509,26 +540,6 @@
         recipients(row, event);
         break;
 
-      // `amount` is a number and keeps its own type, so it is legitimately negative. A ring link
-      // relays a loss as readily as a gain. **The sign is the whole event**, so it is rendered as
-      // the word rather than as a signed number: "sent -25 rings" describes half of these
-      // backwards, and a bare `-25` beside a name is exactly the sort of thing a reader rounds off
-      // to "sent".
-      case "ringlink":
-        who(row, event);
-        // RingLink has no usable `source`. That convention puts a client instance id where the
-        // others put a name, so pahoa records null rather than something wrong. `claimed` is
-        // called anyway: the guard belongs in one place, and a convention that starts sending a
-        // real name should surface without a change here.
-        claimed(row, event);
-        if (typeof event.amount !== "number") {
-          cell(row, " changed rings", "verb");
-        } else {
-          cell(row, event.amount < 0 ? " lost " : " gained ", "verb");
-          cell(row, Math.abs(event.amount) + " rings", "item useful");
-        }
-        recipients(row, event);
-        break;
 
       // **The incarnation markers.** A file spans every run of a room, so without these a jump in
       // the timestamps could be a quiet night or a crash and there is no way to tell. A `started`

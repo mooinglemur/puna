@@ -1715,6 +1715,12 @@ h1 .scope {
   --feed-progression: light-dark(#a800c8, #c58af9);
   --feed-useful: light-dark(#0048e0, #7cb0f0);
   --feed-trap: light-dark(#cc0000, #f08a7c);
+  /* The `[DeathLink]` / `[TrapLink]` tag that leads those lines. Deep red, and the light value is
+     the one that was asked for: #880000 is 10.3:1 on white, which is as emphatic as this palette
+     gets. It is 1.7:1 on the dark feed and simply unreadable there, so that end is a lighter red
+     rather than the same one dimmed: 5.9:1, still unmistakably red rather than pink or orange.
+     Same asymmetry the item classes already record and for the same reason. */
+  --feed-convention: light-dark(#880000, #ff5c57);
   --feed-kind: light-dark(#985c00, #d7a65a);
   --feed-gap: light-dark(#985c00, #f0c86a);
   background: var(--feed-bg);
@@ -1898,6 +1904,13 @@ h1 .scope {
 .journal .item.progression { color: var(--feed-progression); }
 .journal .item.useful { color: var(--feed-useful); }
 .journal .item.trap { color: var(--feed-trap); }
+
+/* The convention's own tag. **Two reds land on one TrapLink line**, this and the trap item's name,
+   which is legible because one is a bracketed label at the start and the other is a name mid
+   sentence, and because a DeathLink line carries only this one. If they ever read as muddy the fix
+   is a weight or a letter-spacing here rather than a third red: this feed is monospaced, so neither
+   reflows anything. */
+.journal .convention { color: var(--feed-convention); }
 
 .journal .chat-text { color: var(--feed-who); }
 .journal .kind { color: var(--feed-kind); }

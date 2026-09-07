@@ -740,9 +740,9 @@ fn a_links_claimed_sender_is_shown_but_never_as_the_identity() {
         "`claimed()` renders an unverified name with nothing saying it is unverified"
     );
 
-    // Every link type offers it. Missing one is silent: the field simply never appears for that
+    // Both link types offer it. Missing one is silent: the field simply never appears for that
     // convention, on the records where it is most likely to differ.
-    for kind in ["deathlink", "traplink", "ringlink"] {
+    for kind in ["deathlink", "traplink"] {
         let arm = code
             .split_once(&format!("case \"{kind}\":"))
             .unwrap_or_else(|| panic!("a `{kind}` arm"))
@@ -925,6 +925,9 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
         // The viewer's own name. Losing the rule makes it identical to every other name on the
         // page, which is the whole of what it does: there is no second signal to fall back on.
         "mine",
+        // The `[DeathLink]` / `[TrapLink]` tag. Without its rule it is the feed's ordinary text
+        // colour and reads as part of the sentence rather than as a label on it.
+        "convention",
     ] {
         assert!(
             code.contains(class),
@@ -976,6 +979,89 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
             call.rsplit(',').next().unwrap_or(call).trim()
         );
     }
+
+    // --- THE LINK CONVENTIONS ANNOUNCE THEMSELVES, AND DO IT FIRST --------------------------------
+    // A DeathLink and a TrapLink arrive from a game the reader may not be playing, so the line leads
+    // with which convention it was. **Ordering is the half a `contains` cannot see**: the tag has to
+    // precede the name, or it lands mid-sentence after somebody's handle and reads as part of it
+    // rather than as a label on the line.
+    //
+    // RingLink is absent from both, and from `PUBLIC_KINDS`. pahoa stopped journaling it on
+    // frequency grounds and no production journal had ever carried one, so the renderer went with
+    // the tag on 2026-09-07. **The two had to move together**: a kind left public with no case
+    // falls through to the raw-JSON default, which is what
+    // `every_publicly_visible_record_has_a_renderer` refuses. Out of both, it degrades to whatever
+    // any unrecognized kind does.
+    for (kind, tag) in [("deathlink", "DeathLink"), ("traplink", "TrapLink")] {
+        let arm = code
+            .split_once(&format!("case \"{kind}\":"))
+            .unwrap_or_else(|| panic!("journal.js no longer renders `{kind}`"))
+            .1
+            .split_once("break;")
+            .unwrap_or_else(|| panic!("an unterminated `{kind}` arm"))
+            .0;
+        let tagged = arm
+            .find(&format!("convention(row, \"{tag}\")"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "a {kind} line no longer announces itself as [{tag}], so a trap arriving from a \
+                     game the reader is not playing looks like an ordinary item"
+                )
+            });
+        let named = arm
+            .find("who(row, event)")
+            .unwrap_or_else(|| panic!("a {kind} line no longer names anybody"));
+        assert!(
+            tagged < named,
+            "[{tag}] is rendered after the player's name, so it reads as part of the sentence \
+             instead of as the label the line leads with"
+        );
+    }
+    // **`LINK_KINDS` and the tagged arms are one set.** That list is the personal filter's exemption,
+    // and its whole justification is that a link record carries a recipient COUNT rather than a
+    // list, so "did this reach me" is unanswerable. That is a statement about records this build
+    // renders as links. A kind left in it after its arm went is an exemption for something that
+    // never arrives, and it is invisible: nothing errors, and the state it affects is unreachable.
+    // That is exactly how a stale entry outlives the reason for it.
+    let listed = code
+        .split_once("var LINK_KINDS = [")
+        .expect("journal.js no longer lists the link conventions")
+        .1
+        .split_once(']')
+        .expect("an unterminated LINK_KINDS")
+        .0;
+    let listed: Vec<&str> = listed.split('"').skip(1).step_by(2).collect();
+    assert_eq!(
+        listed.len(),
+        2,
+        "read {listed:?} out of LINK_KINDS; this build renders two link conventions"
+    );
+    for kind in listed {
+        let arm = code
+            .split_once(&format!("case \"{kind}\":"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "`{kind}` is exempt from the personal filter and has no renderer, so the \
+                     exemption is for a record that never reaches anybody"
+                )
+            })
+            .1
+            .split_once("break;")
+            .expect("an unterminated arm")
+            .0;
+        assert!(
+            arm.contains("convention(row,"),
+            "`{kind}` is exempt from the personal filter as a link convention and does not announce \
+             itself as one"
+        );
+    }
+
+    assert!(
+        !code.contains("convention(row, \"RingLink\")"),
+        "a ring link is tagged like the other two, but nothing journals one and this build renders \
+         nothing for it: the tag would be for a kind that never arrives, and if one did it is \
+         withheld from a feed viewer rather than rendered."
+    );
 
     // --- A LINE ARRIVING, whose three halves each fail without a symptom -------------------------
     // The row opens and its text fades in over 100ms, and every piece of that is silent when it
