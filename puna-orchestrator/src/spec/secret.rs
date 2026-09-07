@@ -171,6 +171,7 @@ mod tests {
             journal_policy: JournalPolicy::Full,
             patch_policy: PatchPolicy::Claimed,
             primary_port: PrimaryPort::Full,
+            password_complexity: puna_core::secret::PasswordComplexity::Medium,
             wants_filtered: true,
             state: "idle".into(),
             state_changed_at: chrono::Utc::now(),

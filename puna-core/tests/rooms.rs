@@ -23,6 +23,7 @@ use puna_core::model::room::{
     TrackerPolicy,
 };
 use puna_core::model::{slot, user};
+use puna_core::secret::PasswordComplexity;
 
 const OWNER: i64 = 1;
 const HELPER: i64 = 2;
@@ -1660,6 +1661,131 @@ async fn the_enhanced_tracker_is_off_by_default_and_carries_to_a_clone() {
                 .expect("the room")
                 .enhanced_tracker,
             "the clone lost the setting its source had"
+        );
+    })
+    .await;
+}
+
+/// **Changing a room's password policy re-rolls nothing, and the next password issued obeys it.**
+///
+/// Both halves fail silently and in opposite directions. If a policy change regenerated, an
+/// organizer tightening a race room would invalidate every credential their players are holding
+/// mid-game, with the page cheerfully reporting success; if the next password ignored the policy,
+/// the option would be a control that appears to work and does nothing, which is only discoverable
+/// by counting characters.
+///
+/// Postgres-backed rather than a unit test on the generator, because the property is about a
+/// *column* being read at generation time: `room::complexity_for` is what threads it, and a
+/// version of this that passed the tier in from the caller would pass a unit test while letting any
+/// route weaken a room's policy.
+#[tokio::test]
+async fn a_password_policy_change_leaves_issued_passwords_alone() {
+    with_db(|pool| async move {
+        let mut conn = pool.get().await.expect("connection");
+        users(&mut conn).await;
+        let generation = seed_generation(&mut conn, false).await;
+
+        // A per-slot room at the shortest tier, so what it issues is unmistakable.
+        let mut new = NewRoom::direct(Environment::Dev, "policy", generation, OWNER);
+        new.slot_auth = SlotAuth::PerSlot;
+        new.password_complexity = Some(PasswordComplexity::Low);
+        let id = room::create(&mut conn, &new).await.expect("create");
+
+        // **The column, not just what it generated.** `create` mints the slot passwords from the
+        // draft, so a version that never persisted the choice would issue the right passwords once
+        // and then quietly revert to the default for every later rotation, with nothing wrong until
+        // somebody opened the options page. Mutation-checked: it passed without this line.
+        assert_eq!(
+            room::get(&mut conn, id)
+                .await
+                .expect("read")
+                .expect("the room")
+                .password_complexity,
+            PasswordComplexity::Low,
+            "the room was created with a policy it did not store"
+        );
+
+        let issued: Vec<String> = slot::list(&mut conn, id)
+            .await
+            .expect("slots")
+            .into_iter()
+            .map(|s| {
+                s.password
+                    .expect("a per-slot room gives every slot a password")
+            })
+            .collect();
+        assert!(!issued.is_empty(), "the fixture generation has no slots");
+        for password in &issued {
+            assert_eq!(
+                password.len(),
+                5,
+                "the room's own tier was not applied: {password}"
+            );
+        }
+
+        // Tighten it, through the same path the options form uses.
+        let room = room::get(&mut conn, id)
+            .await
+            .expect("read")
+            .expect("the room");
+        room::set_live_options(
+            &mut conn,
+            id,
+            room::LiveOptions {
+                tracker_policy: room.tracker_policy,
+                journal_policy: room.journal_policy,
+                patch_policy: room.patch_policy,
+                primary_port: room.primary_port,
+                spoiler_policy: room.spoiler_policy,
+                enhanced_tracker: room.enhanced_tracker,
+                password_complexity: PasswordComplexity::High,
+            },
+        )
+        .await
+        .expect("save");
+
+        // --- NOTHING ALREADY ISSUED MOVED --------------------------------------------------------
+        let after: Vec<String> = slot::list(&mut conn, id)
+            .await
+            .expect("slots")
+            .into_iter()
+            .map(|s| s.password.expect("a password vanished"))
+            .collect();
+        assert_eq!(
+            issued, after,
+            "changing the policy re-rolled passwords players are already holding"
+        );
+
+        // --- AND THE NEXT ONE OBEYS IT -----------------------------------------------------------
+        let first = slot::list(&mut conn, id).await.expect("slots")[0].slot_number;
+        let rolled = slot::rotate_password(&mut conn, id, first)
+            .await
+            .expect("rotate");
+        assert_eq!(
+            rolled.len(),
+            15 + 2,
+            "a rotation ignored the room's policy and used something else: {rolled}"
+        );
+        assert!(
+            !issued.contains(&rolled),
+            "the rotation returned a password the room was already holding"
+        );
+
+        // The room-wide path reads the same column. `rotate_password` is scoped to `room` mode, so
+        // this switches the room into it, which is itself a generation site.
+        room::set_slot_auth(&mut conn, id, SlotAuth::Room)
+            .await
+            .expect("mode");
+        let shared = room::get(&mut conn, id)
+            .await
+            .expect("read")
+            .expect("the room")
+            .password
+            .expect("room mode has a room-wide password");
+        assert_eq!(
+            shared.len(),
+            15 + 2,
+            "switching into room mode ignored the room's policy: {shared}"
         );
     })
     .await;

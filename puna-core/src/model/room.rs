@@ -482,6 +482,11 @@ pub struct NewRoom {
     pub patch_policy: Option<PatchPolicy>,
     /// `None` derives it from the generation's slot count via [`PrimaryPort::for_slots`].
     pub primary_port: Option<PrimaryPort>,
+    /// How long a password this room generates. `None` keeps the column default, `medium`.
+    ///
+    /// It governs the room-wide password below, every slot password, and the remote-admin one.
+    /// **Never `admin_token`**, which pahoa requires to be at least 32 bytes.
+    pub password_complexity: Option<crate::secret::PasswordComplexity>,
     /// A remote-admin password for pahoa's `!admin login`. `None` sets none, which is the
     /// ordinary case: Puna's console drives a room over the bearer-token admin API instead.
     pub server_password: Option<String>,
@@ -517,6 +522,7 @@ impl NewRoom {
             generation_id,
             source: RoomSource::Direct,
             created_by,
+            password_complexity: None,
             slot_auth: SlotAuth::None,
             spoiler_policy: None,
             tracker_policy: None,
@@ -569,6 +575,13 @@ pub struct Room {
     pub patch_policy: PatchPolicy,
     /// Which port the room page leads with.
     pub primary_port: PrimaryPort,
+    /// How long a password this room generates, for the three a person types.
+    ///
+    /// **Read at generation time, never applied retroactively**: changing it leaves every password
+    /// already issued alone and decides only the next one. Deliberately absent from the spec hash,
+    /// since pahoa never sees the policy, only the values, and password values are kept out of that
+    /// hash so a rotation does not bounce a room.
+    pub password_complexity: crate::secret::PasswordComplexity,
     pub wants_filtered: bool,
 
     pub state: String,
@@ -685,6 +698,8 @@ struct RoomRow {
     patch_policy: String,
     #[diesel(sql_type = Text)]
     primary_port: String,
+    #[diesel(sql_type = Text)]
+    password_complexity: String,
     #[diesel(sql_type = Bool)]
     wants_filtered: bool,
     #[diesel(sql_type = Text)]
@@ -747,6 +762,10 @@ impl From<RoomRow> for Room {
             patch_policy: PatchPolicy::parse(&row.patch_policy).unwrap_or(PatchPolicy::Open),
             // Unknown reads as `Full`, the address that fails loudly rather than silently.
             primary_port: PrimaryPort::parse(&row.primary_port).unwrap_or(PrimaryPort::Full),
+            // Unknown reads as the default rather than as the shortest: an unreadable policy must
+            // not be the one that issues the weakest password.
+            password_complexity: crate::secret::PasswordComplexity::parse(&row.password_complexity)
+                .unwrap_or_default(),
             wants_filtered: row.wants_filtered,
             state: row.state,
             state_changed_at: row.state_changed_at,
@@ -810,7 +829,8 @@ const ROOM_COLUMNS: &str = "id, name, environment::text AS environment, generati
                             tracker_policy::text AS tracker_policy, \
                             journal_policy::text AS journal_policy, \
                             patch_policy::text AS patch_policy, \
-                            primary_port::text AS primary_port, wants_filtered, \
+                            primary_port::text AS primary_port, \
+                            password_complexity::text AS password_complexity, wants_filtered, \
                             state::text AS state, state_changed_at, desired_at, advertised_host, \
                             advertised_port, advertised_filtered_port, last_error, \
                             gameplay_options, probed_at, enhanced_tracker";
@@ -874,6 +894,7 @@ pub async fn create(
             let primary_port = new
                 .primary_port
                 .unwrap_or_else(|| PrimaryPort::for_slots(seed.slots));
+            let complexity = new.password_complexity.unwrap_or_default();
 
             // **A new room is created RUNNING, and the `desired_state` column's `stopped` default
             // is deliberately not what creation uses.**
@@ -899,7 +920,7 @@ pub async fn create(
             // CHECK enforces exactly that, so getting this wrong is a failed insert, not a
             // room whose mode and credential disagree.
             let password = match new.slot_auth {
-                SlotAuth::Room => Some(crate::secret::room_password()),
+                SlotAuth::Room => Some(crate::secret::room_password(complexity)),
                 SlotAuth::None | SlotAuth::PerSlot => None,
             };
 
@@ -909,11 +930,12 @@ pub async fn create(
                      idempotency_key, cloned_from, created_by, spoiler_policy, tracker_id,
                      tracker_policy, journal_policy, patch_policy, slot_auth, password,
                      server_password, wants_filtered, use_embedded_options, save_interval_secs,
-                     admin_token, primary_port, enhanced_tracker, desired_state)
+                     admin_token, primary_port, enhanced_tracker, password_complexity,
+                     desired_state)
                  VALUES ($1, $2::puna_environment, $3, $4, $5::room_source, $6, $7, $8, $9, $10,
                          $11::spoiler_policy, $12, $13::tracker_policy, $14::journal_policy,
                          $15::patch_policy, $16::slot_auth_mode, $17, $18, $19, $20, $21, $22,
-                         $23::primary_port, $24, 'running')",
+                         $23::primary_port, $24, $25::password_complexity, 'running')",
             )
             .bind::<SqlUuid, _>(id)
             .bind::<Text, _>(new.environment.as_str())
@@ -939,6 +961,7 @@ pub async fn create(
             .bind::<Text, _>(crate::secret::admin_token())
             .bind::<Text, _>(primary_port.as_sql())
             .bind::<Bool, _>(new.enhanced_tracker)
+            .bind::<Text, _>(complexity.as_sql())
             .execute(conn)
             .await?;
 
@@ -953,7 +976,7 @@ pub async fn create(
                     _ => diesel::result::Error::RollbackTransaction,
                 })?;
 
-            copy_slots(conn, id, new.generation_id, new.slot_auth).await?;
+            copy_slots(conn, id, new.generation_id, new.slot_auth, complexity).await?;
 
             Ok(id)
         }
@@ -971,6 +994,7 @@ async fn copy_slots(
     room: RoomId,
     generation: GenerationId,
     slot_auth: SlotAuth,
+    complexity: crate::secret::PasswordComplexity,
 ) -> Result<(), diesel::result::Error> {
     let slots = crate::model::generation::slots(conn, generation).await?;
 
@@ -979,7 +1003,7 @@ async fn copy_slots(
         // per-slot patch download and what puts a room on a player's landing page, so it matters
         // whether or not there is a password to protect.
         let password = match slot_auth {
-            SlotAuth::PerSlot => Some(crate::secret::slot_password()),
+            SlotAuth::PerSlot => Some(crate::secret::slot_password(complexity)),
             SlotAuth::None | SlotAuth::Room => None,
         };
 
@@ -1042,6 +1066,41 @@ pub async fn has_server_password(
             .load(conn)
             .await?;
     Ok(rows.into_iter().next().is_some_and(|row| row.present))
+}
+
+/// How long a password this room should generate next.
+///
+/// **Read here rather than passed in**, which is the rule [`rotate_password`] already states about
+/// the password itself: a complexity supplied by a caller is a route that can weaken a room's
+/// policy, and the whole point of the column is that the room decides. The three functions that
+/// mint a credential without holding the room row call this; the one that does (`create`) takes it
+/// from the draft it is inserting.
+///
+/// **A room that has gone missing answers the default rather than erroring.** The callers are all
+/// mid-transaction on a row they have already scoped their `UPDATE` to, so a `None` here means the
+/// update is about to affect nothing anyway; returning the default keeps that path from turning a
+/// vanished room into an error about passwords.
+pub(crate) async fn complexity_for(
+    conn: &mut AsyncPgConnection,
+    id: RoomId,
+) -> Result<crate::secret::PasswordComplexity, diesel::result::Error> {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = Text)]
+        password_complexity: String,
+    }
+
+    let rows: Vec<Row> = diesel::sql_query(
+        "SELECT password_complexity::text AS password_complexity FROM rooms WHERE id = $1",
+    )
+    .bind::<SqlUuid, _>(id)
+    .load(conn)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .next()
+        .and_then(|row| crate::secret::PasswordComplexity::parse(&row.password_complexity))
+        .unwrap_or_default())
 }
 
 /// Read a room's credentials. Orchestrator-facing; nothing in a page needs these.
@@ -1244,7 +1303,7 @@ pub async fn rotate_password(
     conn: &mut AsyncPgConnection,
     id: RoomId,
 ) -> Result<Option<String>, diesel::result::Error> {
-    let password = crate::secret::room_password();
+    let password = crate::secret::room_password(complexity_for(conn, id).await?);
 
     // Scoped to the mode in the WHERE rather than checked first, so a mode change landing between a
     // read and this write cannot leave a password on a room that does not want one: the
@@ -1361,8 +1420,9 @@ pub async fn set_slot_auth(
 ) -> Result<(), diesel::result::Error> {
     conn.transaction::<(), diesel::result::Error, _>(|conn| {
         async move {
+            let complexity = complexity_for(conn, id).await?;
             let password = match mode {
-                SlotAuth::Room => Some(crate::secret::room_password()),
+                SlotAuth::Room => Some(crate::secret::room_password(complexity)),
                 SlotAuth::None | SlotAuth::PerSlot => None,
             };
 
@@ -1421,6 +1481,14 @@ pub struct LiveOptions {
     /// annotations being shown without deleting them, which is the right shape for a toggle
     /// somebody may flip back.
     pub enhanced_tracker: bool,
+    /// How long a password this room generates next.
+    ///
+    /// **Live in the strongest sense of the word: it changes nothing that exists.** Every other
+    /// option here alters what the next request renders or admits; this one alters what the next
+    /// *password* looks like, and every credential already issued keeps working. So it belongs to
+    /// this form rather than the restart one for two independent reasons: pahoa never reads the
+    /// policy, and saving it does not even change what Puna would render.
+    pub password_complexity: crate::secret::PasswordComplexity,
 }
 
 /// Apply every live option at once.
@@ -1441,7 +1509,8 @@ pub async fn set_live_options(
                 patch_policy   = $4::patch_policy,
                 primary_port   = $5::primary_port,
                 spoiler_policy = $6::spoiler_policy,
-                enhanced_tracker = $7
+                enhanced_tracker = $7,
+                password_complexity = $8::password_complexity
           WHERE id = $1",
     )
     .bind::<SqlUuid, _>(id)
@@ -1451,6 +1520,7 @@ pub async fn set_live_options(
     .bind::<Text, _>(options.primary_port.as_sql())
     .bind::<Text, _>(options.spoiler_policy.as_sql())
     .bind::<Bool, _>(options.enhanced_tracker)
+    .bind::<Text, _>(options.password_complexity.as_sql())
     .execute(conn)
     .await?;
     Ok(())
@@ -1533,6 +1603,10 @@ pub async fn clone_room(
         journal_policy: Some(existing.journal_policy),
         patch_policy: Some(existing.patch_policy),
         primary_port: Some(existing.primary_port),
+        // Carried over for the reason `enhanced_tracker` is: a clone is the same group playing the
+        // same seed again, and a room that chose short passwords to get a client working needs them
+        // just as short the second time.
+        password_complexity: Some(existing.password_complexity),
         server_password: None,
         wants_filtered: existing.wants_filtered,
         use_embedded_options: true,

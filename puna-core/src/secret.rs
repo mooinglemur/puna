@@ -6,8 +6,12 @@
 //! |---|---|---|
 //! | [`admin_token`] | `PAHOA_ADMIN_TOKEN`, never rendered | 52 chars, unbroken |
 //! | [`url_token`] | a claim or invite link | 32 chars, unbroken |
-//! | [`slot_password`] | typed into a game client by a player | 9 chars, unbroken |
-//! | [`room_password`] | typed into a game client, shared | 15 symbols, dash-grouped |
+//! | [`slot_password`] | typed into a game client by a player | per the room's [`PasswordComplexity`] |
+//! | [`room_password`] | typed into a game client, shared, and the remote-admin one | ditto |
+//!
+//! **The bottom two are a room's choice and the top two are not**, which is the line the type
+//! draws: [`admin_token`] and [`url_token`] are bearer credentials nobody reads aloud, and the
+//! first of them has a floor pahoa enforces by refusing to start. Neither takes a complexity.
 //!
 //! ## The alphabet
 //!
@@ -18,8 +22,8 @@
 //! are gone.
 //!
 //! That leaves **32 symbols, so exactly five bits each**, which is also what lets `random_string`
-//! mask five bits with no rejection sampling at all. A 9-symbol slot password is **45 bits**, a
-//! 15-symbol room password is **75 bits**, and a 32-symbol URL token is **160 bits**.
+//! mask five bits with no rejection sampling at all. So the three password tiers are **25, 50 and
+//! 75 bits**, a 32-symbol URL token is **160 bits**, and a 52-symbol admin token is **260 bits**.
 //!
 //! (This paragraph read "28 symbols, so 4.807 bits each" and put a slot password at 72 bits until
 //! 2026-09-06. Both numbers described an earlier alphabet; the code has masked five bits out of
@@ -39,6 +43,94 @@ use rand::RngCore;
 /// Crockford base32's alphabet: no `I`, `L`, `O` or `U`.
 const ALPHABET: &[u8] = b"0123456789abcdefghjkmnpqrstvwxyz";
 
+/// How long a password a room generates, for the three a person types.
+///
+/// Per room, on `rooms.password_complexity`, and it governs the room-wide password, every slot
+/// password and the remote-admin password. **Never [`admin_token`]**: that is a bearer token for a
+/// mutating internet-reachable API which nothing renders, and pahoa refuses to start on one under
+/// 32 bytes, so even [`Self::High`] would be a room that never comes up. The type makes that
+/// structural rather than remembered, since `admin_token` takes no complexity at all.
+///
+/// **Changing it regenerates nothing.** It decides what the *next* password looks like, so an
+/// organizer can tighten a race room without invalidating credentials their players hold, and
+/// loosen one to debug a client without re-issuing a roster.
+///
+/// The alphabet is 32 symbols, so each is exactly five bits and the three tiers are 25, 50 and 75
+/// bits. pahoa rate-limits authentication failures to **ten a minute per room**, so the floor is
+/// still years of guessing for one slot in one game; what the tiers actually trade is how much a
+/// player has to type off a web page on a phone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasswordComplexity {
+    /// `a1b2c`. Five symbols and no separator: the shortest thing worth calling a password, for a
+    /// room whose players are fighting their client rather than each other.
+    Low,
+    /// `a1b2c-3d4e5`. The default.
+    Medium,
+    /// `a1b2c-3d4e5-f6g7h`. What every room-wide password looked like before this was a choice.
+    High,
+}
+
+impl PasswordComplexity {
+    /// Every value, for rendering the control from the enum rather than from a list in markup.
+    pub const ALL: [Self; 3] = [Self::Low, Self::Medium, Self::High];
+
+    /// How many symbols, before grouping. Always a multiple of [`Self::GROUP`], so `low` comes out
+    /// with no separator at all rather than with a trailing one.
+    fn symbols(self) -> usize {
+        match self {
+            Self::Low => 5,
+            Self::Medium => 10,
+            Self::High => 15,
+        }
+    }
+
+    /// Symbols between separators. One constant rather than one per tier: the grouping exists to
+    /// make a long string readable, and groups that changed size between tiers would make the three
+    /// look like three different kinds of credential.
+    const GROUP: usize = 5;
+
+    pub fn as_sql(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "low" => Some(Self::Low),
+            "medium" => Some(Self::Medium),
+            "high" => Some(Self::High),
+            _ => None,
+        }
+    }
+
+    /// What the control says, and an example of what it produces.
+    ///
+    /// **The example is generated, not written**, so a label cannot describe a shape the generator
+    /// stopped producing. That is not hypothetical here: this file's own module doc carried an
+    /// entropy figure for an alphabet the code never had.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Low => "Short",
+            Self::Medium => "Standard",
+            Self::High => "Long",
+        }
+    }
+}
+
+impl Default for PasswordComplexity {
+    /// **Medium, and it is the one value that could not preserve every current shape.** Unifying
+    /// three credentials under one policy means a room-wide password rotated after this gets ten
+    /// symbols where it got fifteen, and a slot password gets ten grouped where the 2026-09-06
+    /// hotfix gave nine unbroken. Both are the point; `High` restores the older room-wide shape for
+    /// a room that wants it.
+    fn default() -> Self {
+        Self::Medium
+    }
+}
+
 /// A room's `PAHOA_ADMIN_TOKEN`.
 ///
 /// Pahoa refuses to start on a token under **32 bytes** and compares in constant time, so this is
@@ -56,46 +148,46 @@ pub fn url_token() -> String {
     random_string(32)
 }
 
-/// One slot's password: nine symbols, unbroken.
+/// One slot's password, at the room's chosen complexity.
 ///
-/// **The third shape this has had, and each step was the same argument.** Fifteen symbols in three
-/// groups, then ten in two on 2026-08-21, then nine and no dash at all on 2026-09-06. What is being
-/// spent each time is length in a field a player types by hand, off a web page, often on a phone;
-/// what it buys is entropy against an endpoint that rate-limits authentication failures to **ten a
-/// minute per room**.
+/// **The shape stopped being a constant on 2026-09-07 and became a room option**, which is the end
+/// of an argument this file had three times: fifteen symbols, then ten on 2026-08-21, then nine and
+/// unbroken on 2026-09-06 as a hotfix while a client was suspected of mangling what it was given.
+/// The client turned out to have a different and fixable problem, so the shortening was not needed
+/// and is not the default; what it showed is that the right length is a property of the room rather
+/// than of the software.
 ///
-/// Nine symbols at five bits each is 2^45, about 35 trillion, which at ten guesses a minute is
-/// millions of years. The limiting factor has never been the secret, and a slot password is not a
-/// platform credential: it keeps a stranger out of somebody's slot in a game.
-///
-/// **Dropping the dash is the usability half rather than the entropy half.** A grouped password
-/// asks a question a player should not have to answer at a login prompt: whether the separator is
-/// part of it. `url_token` has been unbroken for the same reason from the start, and its test says
-/// so. At nine characters there is nothing left to group.
-///
-/// **Existing passwords are untouched**, which needs nothing: they live in `room_slots.password`,
-/// nothing re-derives them and nothing anywhere validates their shape, so a room already running
-/// keeps the credential its players hold. Only what this generates next is new: a claim, a
-/// rotation, a room switched into per-slot mode.
-///
-/// **Nice-to-have, not built:** a deployment-configurable pattern (`PUNA_SLOT_PASSWORD_PATTERN`
-/// or similar, defaulting to what this generates) so an operator running a race can ask for more
-/// without a code change. Recorded in the plan, and this is the third time the constant has moved
-/// without it.
-pub fn slot_password() -> String {
-    random_string(9)
+/// **Existing passwords are untouched by a policy change**, which needs no mechanism: they live in
+/// `room_slots.password`, nothing re-derives them and nothing anywhere validates their shape.
+pub fn slot_password(complexity: PasswordComplexity) -> String {
+    grouped(complexity)
 }
 
-/// A room-wide password. Same shape as a slot's: one person types either.
-pub fn room_password() -> String {
-    grouped(15, 5)
+/// A room-wide password, at the room's chosen complexity.
+///
+/// **Also the remote-admin password** (`rooms.server_password`, pahoa's `!admin login` gate), which
+/// is generated by calling this. One person types either, so one shape covers both. It is
+/// emphatically not [`admin_token`], which no one types and which pahoa requires to be at least 32
+/// bytes.
+pub fn room_password(complexity: PasswordComplexity) -> String {
+    grouped(complexity)
 }
 
-/// `len` random symbols, split into groups of `group`.
-fn grouped(len: usize, group: usize) -> String {
-    let raw = random_string(len);
+/// `complexity.symbols()` random symbols, in dash-separated groups of five.
+///
+/// One group produces no separator at all, which is what makes [`PasswordComplexity::Low`] read as
+/// `a1b2c` rather than as `a1b2c-`: `join` puts a separator *between* chunks, so a single chunk
+/// needs no special case. Asserted, because a length that stopped being a multiple of the group
+/// size would silently produce a ragged last group.
+fn grouped(complexity: PasswordComplexity) -> String {
+    let raw = random_string(complexity.symbols());
+    debug_assert_eq!(
+        complexity.symbols() % PasswordComplexity::GROUP,
+        0,
+        "a tier whose length is not a whole number of groups renders a ragged tail"
+    );
     raw.as_bytes()
-        .chunks(group)
+        .chunks(PasswordComplexity::GROUP)
         .map(|chunk| std::str::from_utf8(chunk).expect("ascii"))
         .collect::<Vec<_>>()
         .join("-")
@@ -161,50 +253,95 @@ mod tests {
         assert!(token.is_ascii(), "byte length must equal character count");
     }
 
-    /// **What a person is asked to type, and what it is worth.**
+    /// **The three tiers are exactly the shapes the option promises.**
     ///
-    /// A slot password is nine unbroken symbols: nothing to mistype, and no question about whether
-    /// a separator is part of it. The room-wide one keeps its groups, because fifteen symbols in a
-    /// row is a different reading problem from nine.
+    /// The control names them by example, so the examples are what has to hold: `a1b2c`,
+    /// `a1b2c-3d4e5`, `a1b2c-3d4e5-f6g7h`. Asserted by rendering each rather than by reading a
+    /// constant, which is what catches the ragged-tail case a length that stopped being a whole
+    /// number of groups would produce.
     #[test]
-    fn a_slot_password_is_nine_symbols_with_nothing_to_mistype() {
-        let password = slot_password();
-        assert_eq!(password, password.to_lowercase());
-        assert_eq!(password.len(), 9, "nine symbols: {password}");
-        assert!(
-            !password.contains('-'),
-            "a slot password carries a separator a player has to guess at: {password}"
-        );
-        assert!(
-            password.bytes().all(|b| ALPHABET.contains(&b)),
-            "a symbol outside the confusable-free alphabet: {password}"
-        );
-
-        // The entropy claim, asserted rather than left in a comment. 32 symbols is exactly five bits
-        // each, so nine of them is 2^45. The bound is stated against the thing that actually limits
-        // a guesser: ten authentication failures a minute per room, which is millions of years.
-        assert_eq!(ALPHABET.len(), 32);
-        let combinations = 2f64.powi(9 * 5);
-        assert!(
-            combinations / (10.0 * 60.0 * 24.0 * 365.0) > 1e6,
-            "a slot password fell to a size ten guesses a minute could work through"
-        );
-
-        // The room-wide password is a separate decision and did not move.
-        let room = room_password();
-        assert_eq!(
-            room.len(),
-            15 + 2,
-            "15 symbols in three dash-separated groups"
-        );
-        for group in room.split('-') {
-            assert_eq!(group.len(), 5);
+    fn each_tier_is_the_shape_its_example_promises() {
+        for (tier, groups) in [
+            (PasswordComplexity::Low, 1),
+            (PasswordComplexity::Medium, 2),
+            (PasswordComplexity::High, 3),
+        ] {
+            for made in [slot_password(tier), room_password(tier)] {
+                assert_eq!(made, made.to_lowercase(), "{made}");
+                assert_eq!(
+                    made.matches('-').count(),
+                    groups - 1,
+                    "{tier:?} should render {groups} group(s): {made}"
+                );
+                // **The floor with no separator, which is what `low` is for.** `join` puts a
+                // separator between chunks, so one chunk needs no special case, and a trailing dash
+                // would be a character a player has to decide about.
+                assert!(
+                    !made.starts_with('-') && !made.ends_with('-'),
+                    "a separator with nothing on one side of it: {made}"
+                );
+                for group in made.split('-') {
+                    assert_eq!(group.len(), 5, "ragged group in {made}");
+                }
+                assert!(
+                    made.bytes().all(|b| b == b'-' || ALPHABET.contains(&b)),
+                    "a symbol outside the confusable-free alphabet: {made}"
+                );
+            }
         }
 
-        // A token in a URL should not carry separators to be mangled by a copy-paste.
+        // The entropy claim, asserted rather than left in a comment, and stated against the thing
+        // that actually limits a guesser: pahoa allows ten authentication failures a minute per
+        // room. Even the FLOOR has to be years, or the tier is not a password.
+        assert_eq!(ALPHABET.len(), 32, "five bits per symbol");
+        let low = 2f64.powi(5 * 5);
+        assert!(
+            low / (10.0 * 60.0 * 24.0 * 365.0) > 5.0,
+            "the shortest tier fell to a size ten guesses a minute could work through in under five \
+             years"
+        );
+
+        // A token in a URL should not carry separators to be mangled by a copy-paste, and takes no
+        // complexity at all: it is not a thing anybody types.
         let token = url_token();
         assert_eq!(token.len(), 32);
         assert!(!token.contains('-'));
+    }
+
+    /// **The wire spellings round-trip, and every tier is offered.**
+    ///
+    /// `as_sql` is a Postgres enum label and `parse` reads it back, so a mismatch is a room whose
+    /// stored policy cannot be loaded. `ALL` is what the options form renders from, so a tier
+    /// missing from it is one nobody can select while rooms can still hold it.
+    #[test]
+    fn every_tier_round_trips_through_its_wire_spelling() {
+        for tier in PasswordComplexity::ALL {
+            assert_eq!(PasswordComplexity::parse(tier.as_sql()), Some(tier));
+            assert!(!tier.label().is_empty());
+        }
+        assert_eq!(PasswordComplexity::ALL.len(), 3);
+        assert_eq!(PasswordComplexity::parse("nonsense"), None);
+        // The default is a real tier rather than a fourth state, and it is the one the migration's
+        // column default agrees with.
+        assert_eq!(PasswordComplexity::default(), PasswordComplexity::Medium);
+    }
+
+    /// **The admin token is outside the policy, structurally.**
+    ///
+    /// It takes no complexity, so there is no call site that could pass one. This asserts the
+    /// consequence that matters: even the longest tier is far below pahoa's 32-byte floor, so a
+    /// version of this that *did* thread the policy through would be every room in the environment
+    /// failing to start behind a healthy-looking banner.
+    #[test]
+    fn no_tier_could_ever_stand_in_for_an_admin_token() {
+        for tier in PasswordComplexity::ALL {
+            assert!(
+                room_password(tier).len() < 32,
+                "a tier reached pahoa's admin-token floor, which is the coincidence that would make \
+                 putting the token under this policy look survivable"
+            );
+        }
+        assert!(admin_token().len() >= 32);
     }
 
     /// Not a randomness test: it cannot be, from inside. It catches the failure that actually
@@ -214,13 +351,20 @@ mod tests {
         let tokens: HashSet<String> = (0..1000).map(|_| url_token()).collect();
         assert_eq!(tokens.len(), 1000);
 
-        let passwords: HashSet<String> = (0..1000).map(|_| slot_password()).collect();
+        let passwords: HashSet<String> = (0..1000)
+            .map(|_| slot_password(PasswordComplexity::High))
+            .collect();
         assert_eq!(passwords.len(), 1000);
     }
 
     #[test]
     fn every_character_comes_from_the_alphabet() {
-        let sample = format!("{}{}{}", admin_token(), url_token(), slot_password());
+        let sample = format!(
+            "{}{}{}",
+            admin_token(),
+            url_token(),
+            slot_password(PasswordComplexity::High).replace('-', "")
+        );
         for c in sample.chars() {
             assert!(
                 c == '-' || ALPHABET.contains(&(c as u8)),

@@ -14,6 +14,13 @@
 //!     would stay open while the UI said locked.
 //!   * **Per-slot password *values* are not covered.** They can be rotated on a live room over the
 //!     admin API, and hashing them would bounce a room every time one player rotated a password.
+//!   * **Nor is `password_complexity`**, the room option deciding how long the next generated
+//!     password is. pahoa never sees the policy, only the values it produces, and those are already
+//!     out by the rule above. Folding it in would cost a full recreate for a change that alters no
+//!     byte the room receives and no credential anybody is holding: the policy governs the *next*
+//!     password issued and regenerates nothing. A room-wide password rotated afterwards moves the
+//!     hash on its own, because that value is covered, which is the right place for the restart to
+//!     come from.
 //!
 //! Both fall out of one rule: **the hash covers everything pahoa reads once at startup, and nothing
 //! it can be told later.** The room-wide password is covered (pahoa reads `PAHOA_PASSWORD` at
@@ -706,6 +713,49 @@ mod tests {
              slot_auth=none\n\
              outbound_budget_mib=64\n\
              env=PAHOA_ADMIN_TOKEN=token\n"
+        );
+    }
+
+    /// **A room's password-length policy must never reach this hash.**
+    ///
+    /// `rooms.password_complexity` decides how long the *next* generated password is. pahoa never
+    /// sees it: it sees the values, and password values are already out by this module's own rule,
+    /// which is what keeps a rotation from bouncing a room.
+    ///
+    /// Covering it would be worse than pointless. Every room on the fleet would read as drifted the
+    /// moment an organizer changed a setting that alters no byte the room receives and invalidates
+    /// no credential anybody holds, and the recreate would cost roughly a minute of downtime to
+    /// deliver nothing.
+    ///
+    /// It is out **structurally** rather than by omission: [`Draft`] has no such field, so there is
+    /// nothing to leave out. This asserts the consequence anyway, because the natural way to get it
+    /// wrong is to add the field to `Draft` and update the pinned string beside it in the same
+    /// commit, which is exactly the shape a pinned literal cannot object to.
+    #[test]
+    fn the_spec_hash_ignores_a_password_policy_pahoa_cannot_see() {
+        let canonical = draft().canonical(SlotAuth::None, &token_only());
+        for spelling in ["complexity", "low", "medium", "high"] {
+            assert!(
+                !canonical.contains(spelling),
+                "the canonical form names `{spelling}`, so a room's password-length policy is in \
+                 its spec hash: changing it would recreate the pod for a change pahoa cannot \
+                 observe.\n{canonical}"
+            );
+        }
+        // And the room-wide password's VALUE is still covered, which is where a restart should come
+        // from: rotating it is a credential the room reads at startup actually changing.
+        assert_ne!(
+            hash(
+                &draft(),
+                SlotAuth::Room,
+                &env(&[("PAHOA_PASSWORD", "a1b2c")])
+            ),
+            hash(
+                &draft(),
+                SlotAuth::Room,
+                &env(&[("PAHOA_PASSWORD", "z9y8x")])
+            ),
+            "a rotated room password no longer reaches the pod"
         );
     }
 

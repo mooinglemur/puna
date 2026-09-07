@@ -14,6 +14,10 @@ pub mod sql_types {
     pub struct JournalPolicy;
 
     #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
+    #[diesel(postgres_type(name = "password_complexity"))]
+    pub struct PasswordComplexity;
+
+    #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "patch_policy"))]
     pub struct PatchPolicy;
 
@@ -301,6 +305,7 @@ diesel::table! {
     use super::sql_types::JournalPolicy;
     use super::sql_types::PatchPolicy;
     use super::sql_types::PrimaryPort;
+    use super::sql_types::PasswordComplexity;
 
     rooms (id) {
         id -> Uuid,
@@ -364,6 +369,7 @@ diesel::table! {
         last_static_tracker_at -> Nullable<Timestamptz>,
         gameplay_options -> Nullable<Jsonb>,
         enhanced_tracker -> Bool,
+        password_complexity -> PasswordComplexity,
     }
 }
 

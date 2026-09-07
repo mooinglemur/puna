@@ -645,6 +645,8 @@ struct CreateRoomForm {
     generation_id: String,
     name: String,
     slot_auth: String,
+    /// How long a password this room generates, for the three a person types.
+    password_complexity: String,
     patch_policy: String,
     /// Which of the room's two ports its page leads with.
     primary_port: String,
@@ -702,6 +704,19 @@ async fn create(
     // page nobody re-reads after creating it.
     let patch_policy = room::PatchPolicy::parse(&form.patch_policy)
         .ok_or_else(|| Error::new(Status::BadRequest, anyhow::anyhow!("unknown patch policy")))?;
+    // Parsed here as well as on the options page, because a room in `room` mode gets its password at
+    // creation: leaving this to the options page would mean the one credential a new room already
+    // holds is the one that ignored the choice, and the fix would be a rotation on a room nobody had
+    // used yet.
+    let password_complexity = puna_core::secret::PasswordComplexity::parse(
+        &form.password_complexity,
+    )
+    .ok_or_else(|| {
+        Error::new(
+            Status::BadRequest,
+            anyhow::anyhow!("unknown password complexity"),
+        )
+    })?;
     let journal_policy = room::JournalPolicy::parse(&form.journal_policy)
         .ok_or_else(|| Error::new(Status::BadRequest, anyhow::anyhow!("unknown feed policy")))?;
     let tracker_policy = room::TrackerPolicy::parse(&form.tracker_policy).ok_or_else(|| {
@@ -728,11 +743,13 @@ async fn create(
     new.enhanced_tracker = form.enhanced_tracker;
     // **Generated here, never typed.** The checkbox says whether the room has one at all; a field
     // asking somebody to invent a remote-admin password would collect a weak one, and the value is
-    // rendered back to the organizer on the room page either way.
+    // rendered back to the organizer on the room page either way. It takes the shape this room
+    // asked for, like the other two a person types.
+    new.password_complexity = Some(password_complexity);
     new.server_password = form
         .server_password
         .is_some()
-        .then(puna_core::secret::room_password);
+        .then(|| puna_core::secret::room_password(password_complexity));
     let id = room::create(&mut conn, &new).await?;
 
     tracing::info!(
@@ -1952,6 +1969,9 @@ struct LiveOptionsForm {
     patch_policy: String,
     primary_port: String,
     spoiler_policy: String,
+    /// How long a password this room generates next. Live, and in the strongest sense: it changes
+    /// no credential that exists, only the next one issued.
+    password_complexity: String,
     /// A checkbox, so **absent is off**, unlike every field beside it, which is a radio group
     /// whose value is always posted. `#[field(default = false)]` is what makes unticking it mean
     /// something rather than leaving the previous value in place.
@@ -2100,6 +2120,10 @@ async fn set_live_options(
         spoiler_policy: room::SpoilerPolicy::parse(&form.spoiler_policy)
             .ok_or_else(|| bad("unknown spoiler policy"))?,
         enhanced_tracker: form.enhanced_tracker,
+        password_complexity: puna_core::secret::PasswordComplexity::parse(
+            &form.password_complexity,
+        )
+        .ok_or_else(|| bad("unknown password complexity"))?,
     };
 
     let mut conn = pool.get().await?;
@@ -2150,7 +2174,8 @@ async fn set_restart_options(
     let wants = form.server_password.is_some();
     let password_changed = had != wants;
     if password_changed {
-        let value = wants.then(puna_core::secret::room_password);
+        let value =
+            wants.then(|| puna_core::secret::room_password(access.room.password_complexity));
         room::set_server_password(&mut conn, id.0, value.as_deref()).await?;
     }
 
@@ -2926,6 +2951,7 @@ pub(crate) mod tests {
             journal_policy: puna_core::model::room::JournalPolicy::Full,
             patch_policy: puna_core::model::room::PatchPolicy::Claimed,
             primary_port: puna_core::model::room::PrimaryPort::Full,
+            password_complexity: puna_core::secret::PasswordComplexity::Medium,
             wants_filtered: true,
             state: "running".into(),
             // A room that has been up for a while, which is the situation the elapsed-time bug
@@ -3566,6 +3592,78 @@ pub(crate) mod tests {
     /// a fragment to the top of the viewport, so pointing at the form would put the values just
     /// above the fold, and the values are what somebody following this link came to see, with the
     /// control underneath them.
+    /// **Both password-length forms offer every tier and pre-check exactly one.**
+    ///
+    /// The option is presented twice, and it has to be: the options page is where a room property
+    /// belongs, and the creation form is where it is load-bearing, because a room in room-wide mode
+    /// is handed its password the moment it is made. Leaving it to the options page alone would mean
+    /// the one credential a brand-new room already holds is the one that ignored the choice, and the
+    /// only fix would be rotating a password on a room nobody had used yet.
+    ///
+    /// Two failures, both quiet. **Nothing checked** posts no value at all for a radio group, so
+    /// `FromForm` refuses the whole submission and a form that looks completely normal answers 400
+    /// on save. **The wrong one checked** shows a room's setting as something it is not, which is
+    /// indistinguishable from the setting having failed to persist, and is the report that follows.
+    ///
+    /// Rendered rather than read off the template, because it is a loop over the enum and what
+    /// matters is which single line comes out carrying `checked`.
+    #[test]
+    fn the_options_page_offers_every_password_tier_and_preselects_the_rooms_own() {
+        use askama::Template;
+        use puna_core::secret::PasswordComplexity;
+
+        for tier in PasswordComplexity::ALL {
+            let mut room = a_room();
+            room.password_complexity = tier;
+            let html = OptionsTemplate {
+                notice: None,
+                base: crate::tpl::TplContext::new(&Session::default()),
+                gameplay_options: room::gameplay_option_rows(room.gameplay_options.as_ref()),
+                gameplay_options_at: crate::routes::console::probe_stamp(&room),
+                room: room.clone(),
+                has_server_password: false,
+                has_lobby: true,
+                restart_would_land: true,
+            }
+            .render()
+            .expect("renders");
+
+            for offered in PasswordComplexity::ALL {
+                assert!(
+                    html.contains(&format!("value=\"{}\"", offered.as_sql())),
+                    "the options page does not offer {offered:?}, so a room holding it cannot be \
+                     seen or changed"
+                );
+            }
+
+            // **Per `<input>`, not per line.** `whitespace = "suppress"` collapses the whole
+            // `{% for %}` onto one line, so a line-oriented reading finds the first `value=` on it
+            // whatever carries `checked`. That reported the Low tier for every room and looked
+            // exactly like the page being broken. The tag is the unit here; the line is an artifact
+            // of the renderer.
+            let checked: Vec<&str> = html
+                .match_indices("<input ")
+                .filter_map(|(at, _)| {
+                    let tag = &html[at..at + html[at..].find('>')?];
+                    (tag.contains("name=\"password_complexity\"") && tag.contains(" checked"))
+                        .then(|| {
+                            tag.split_once("value=\"")?
+                                .1
+                                .split_once('"')
+                                .map(|(v, _)| v)
+                        })?
+                })
+                .collect();
+            assert_eq!(
+                checked,
+                vec![tier.as_sql()],
+                "a {tier:?} room pre-checks {checked:?}: either nothing is selected, which posts no \
+                 value and answers 400 on save, or the page is showing a setting the room does not \
+                 have"
+            );
+        }
+    }
+
     #[test]
     fn the_options_page_shows_the_rooms_own_rules_and_links_to_where_they_change() {
         use askama::Template;

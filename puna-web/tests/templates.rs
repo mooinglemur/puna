@@ -2043,8 +2043,22 @@ fn no_template_renders_a_credential_off_the_room() {
         let source = std::fs::read_to_string(&path).expect("a template");
         let code = blank_comments(&source);
         for forbidden in ["room.password", "room.admin_token"] {
+            // **The FIELD, not any name beginning with it.** `room.password_complexity` is a room
+            // option deciding how long the next generated password is, and it carries no secret at
+            // all: a bare `contains` read it as the credential and refused a correct options page.
+            //
+            // Fixed by requiring a boundary after the match, the same shape `styles` uses, rather
+            // than by dropping the check or listing exceptions. A prefix rule here fails in the
+            // direction that gets a lint deleted: it rejects correct code, so the pressure is on
+            // whoever is right.
+            let hit = code.match_indices(forbidden).any(|(at, _)| {
+                code[at + forbidden.len()..]
+                    .chars()
+                    .next()
+                    .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+            });
             assert!(
-                !code.contains(forbidden),
+                !hit,
                 "{}: renders `{forbidden}` directly. Credentials reach a template through a field \
                  the route gated (see `room_password_for`) because a condition in markup cannot \
                  prove what it did not render.",

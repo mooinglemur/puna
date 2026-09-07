@@ -64,6 +64,30 @@ answer as somebody holding a made-up one.</p>
 </div>
 </div>
 
+{# **In the LIVE form, and it belongs here twice over.** Every other option under this button is a
+   gate the next request reads; this one is not even that. It changes no credential that exists, only
+   the shape of the next one issued, so nothing on the page renders differently after saving it and
+   nobody is disconnected.
+
+   It is also the reason this is not in the restart form below: pahoa never sees the policy, only the
+   passwords it produces, and password VALUES are deliberately kept out of the room's spec hash so a
+   rotation does not bounce a room. A policy that moved the hash would cost a restart for a change
+   the room cannot observe. `the_spec_hash_ignores_a_password_policy_pahoa_cannot_see` holds that. #}
+<div class="field" data-hints="password_complexity">
+<span class="label">Password length</span>
+<div class="choices">
+{% for tier in puna_core::secret::PasswordComplexity::ALL %}
+<label><input type="radio" name="password_complexity" value="{{ tier.as_sql() }}"{% if room.password_complexity == tier +%} checked{% endif %}> {{+ tier.label() }}</label>
+{% endfor %}
+<p class="hint">The room password, each slot password, and the remote-admin password: everything a
+person types into a client. <strong>Not</strong> the admin API token, which nobody types and which
+the room server requires to be long.</p>
+<p class="hint"><strong>Nothing already issued changes.</strong> Every password a player is holding
+keeps working; this decides the next one made, which is a claim, a rotation, a switch into per-slot
+mode, or a cloned room. To put existing slots on the new length, rotate them.</p>
+</div>
+</div>
+
 <div class="field" data-hints="patch_policy">
 <span class="label">Patch downloads</span>
 <div class="choices">

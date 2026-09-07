@@ -102,6 +102,26 @@ connect with their own.</p>
 </div>
 </div>
 
+{# Offered at creation as well as on the options page, because a room in room-wide mode gets its
+   password the moment it is made: leaving this to the options page would mean the one credential a
+   brand-new room already holds is the one that ignored the choice.
+
+   Rendered from `PasswordComplexity::ALL` rather than written out, so a tier the enum gains cannot
+   be one the form omits, and the example beside each is GENERATED rather than typed: a label
+   describing a shape the generator no longer produces is the exact failure this file has already
+   had once, in `secret.rs`'s own module doc. #}
+<div class="field" data-hints="password_complexity">
+<span class="label">Password length</span>
+<div class="choices">
+{% for tier in puna_core::secret::PasswordComplexity::ALL %}
+<label><input type="radio" name="password_complexity" value="{{ tier.as_sql() }}"{% if tier == puna_core::secret::PasswordComplexity::default() +%} checked{% endif %}> {{+ tier.label() }}</label>
+{% endfor %}
+<p class="hint">Applies to the room password, each slot password, and the remote-admin password:
+everything a person types into a client. It never changes the admin API token, which is not typed by
+anyone. Changing it later leaves passwords already issued alone and applies to the next one made.</p>
+</div>
+</div>
+
 <div class="field" data-hints="patch_policy">
 <span class="label">Patch downloads</span>
 <div class="choices">

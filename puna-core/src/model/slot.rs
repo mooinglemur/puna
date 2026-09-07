@@ -503,7 +503,9 @@ pub async fn rotate_password(
     room: RoomId,
     slot_number: i32,
 ) -> Result<String, diesel::result::Error> {
-    let password = crate::secret::slot_password();
+    // The room's policy, read here rather than handed in: see `room::complexity`.
+    let password =
+        crate::secret::slot_password(crate::model::room::complexity_for(conn, room).await?);
     diesel::sql_query(
         "UPDATE room_slots SET password = $3 WHERE room_id = $1 AND slot_number = $2",
     )
