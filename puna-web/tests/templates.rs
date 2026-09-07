@@ -1052,6 +1052,47 @@ fn the_feed_window_control_offers_the_sizes_the_script_knows() {
     // that is where those records begin. Read afterwards it is where they END, so a later walk would
     // ask for the page it is already showing and prepend a duplicate of it: a wrong answer rather
     // than a missing one, and nothing anywhere reports it.
+    // **A backfill page is trimmed the moment it lands, because the window may have moved under
+    // it.** Narrowing cancels the walk and cannot unsend the request already on the wire, so the
+    // answer arrives for a window nobody wants: five thousand rows onto a page the reader has just
+    // cut to five hundred. Left to the next live record, that is never on a quiet room, and the
+    // control sits there claiming 500 over a page holding thousands.
+    let landing = code
+        .split_once(r#"if (frame.kind === "earlier") {"#)
+        .expect("journal.js no longer has a backfill branch")
+        .1
+        .split_once("\n      }")
+        .expect("an unterminated backfill branch")
+        .0;
+    let puts = landing
+        .find("prepend(")
+        .expect("the backfill branch no longer puts its page on the front");
+    let trims = landing.find("trimToCap()").expect(
+        "a backfill page is never trimmed, so a window narrowed while it was in flight is \
+             overshot until some later record happens to trim it",
+    );
+    assert!(
+        trims > puts,
+        "the backfill page is trimmed before it is on the page, which trims the window the reader \
+         already had rather than the one that just arrived"
+    );
+
+    // The note reports what is still being fetched FOR THIS READER, not whether a request happens
+    // to be outstanding: a page already asked for cannot be unsent, and a walk that goes on
+    // counting through a cancellation is describing the wire rather than the page.
+    let says = code
+        .split_once("function setProgress() {")
+        .expect("journal.js no longer has a progress note")
+        .1
+        .split_once("\n  }")
+        .expect("an unterminated setProgress")
+        .0;
+    assert!(
+        says.contains("backfilling && short()"),
+        "the progress note is written from the in-flight flag alone, so narrowing mid-walk leaves \
+         it counting through a cancellation the reader has already made"
+    );
+
     let reads = code
         .find("var was = cursor;")
         .expect("journal.js no longer keeps the cursor a frame arrived at");

@@ -1356,10 +1356,17 @@
   // It asks for what it is short of rather than for a full page, because a reader who widened from
   // 500 to 1,000 needs five hundred records and a full page is five thousand: nine tenths of it on
   // an uncompressed socket to be trimmed off the top on arrival.
+  // Whether the page is holding less than the reader asked for. The walk's condition, and the note's:
+  // it is what makes narrowing mid-walk a cancellation rather than a request that has to be tracked
+  // and revoked.
+  function short() {
+    return cap === Infinity || log.childElementCount < cap;
+  }
+
   function fill() {
     if (backfilling || !socket || socket.readyState !== WebSocket.OPEN) return;
+    if (!short()) return;
     var want = cap === Infinity ? REPLAY_MAX : cap - log.childElementCount;
-    if (want <= 0) return;
     var start = pageStart();
     // The whole file is already on the page. There is nothing earlier than the beginning.
     if (start === 0) return;
@@ -1406,7 +1413,11 @@
   // is, and a line restating it under them would be noise on every page load.
   function setProgress() {
     if (!progress) return;
-    if (backfilling) {
+    // **`short()` and not `backfilling`, so a cancelled walk stops saying it is loading at once.**
+    // A page already asked for is on its way and cannot be unsent, but nothing more is being
+    // fetched for this reader, and a note going on counting through a narrowing they just asked for
+    // is the page describing a request rather than what it is doing.
+    if (backfilling && short()) {
       progress.textContent = backfilled
         ? "Loading earlier records… " + backfilled + " so far."
         : "Loading earlier records…";
@@ -1567,6 +1578,15 @@
       // A backfill page goes on the front and never touches the follow cursor.
       if (frame.kind === "earlier") {
         prepend(frame.events || [], typeof frame.start === "number" ? frame.start : 0);
+        // **The window may have moved while this page was in flight.** Narrowing cancels the walk,
+        // but it cannot unsend the request already on the wire, so the answer arrives for a window
+        // nobody wants any more: five thousand rows onto a page the reader has just cut to five
+        // hundred. Trimmed here rather than left for the next live record, which on a quiet room is
+        // never, and which would leave the control saying 500 over a page holding thousands.
+        //
+        // It also settles the ordinary overshoot: a page is asked for in records and lands with a
+        // day heading or two besides, which are rows like any other.
+        trimToCap();
         noteFiltering(frame.withheld);
         backfilled += (frame.events || []).length;
         // **Cleared before the next ask, not in the arm that ends the walk.** This request is

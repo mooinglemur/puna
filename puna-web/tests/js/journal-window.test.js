@@ -300,6 +300,30 @@ exports.run = function (t) {
     t.check("and stops of its own accord once the window is full", h.sent.length === 2);
   }
   {
+    // --- CANCELLING A WALK BY NARROWING ---------------------------------------------------------
+    // Every button but the current one stays live while a walk is running, which is the point: a
+    // whole-feed load on a busy room is dozens of round trips over tens of seconds, and a reader who
+    // changes their mind has to be able to say so.
+    const h = harness({ rows: 500, start: 4096 });
+    h.api.setWindow(Infinity);
+    h.api.setProgress();
+    t.check(
+      "a walk says it is loading",
+      h.progress.textContent === "Loading earlier records…"
+    );
+
+    h.api.setWindow(500);
+    t.check(
+      "narrowing stops the note at once, rather than counting through a cancellation",
+      h.progress.textContent === ""
+    );
+
+    // The page already on the wire cannot be unsent, and it lands into a window nobody wants.
+    h.api.landed();
+    h.api.fill();
+    t.check("and no further page is asked for", h.sent.length === 1);
+  }
+  {
     // The whole feed walks in full pages, since there is no number to be short of.
     const h = harness({ rows: 500, start: 4096 });
     h.api.setWindow(Infinity);
