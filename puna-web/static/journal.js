@@ -263,12 +263,31 @@
     return out;
   }
 
+  // A person's name, marked when the slot behind it is one of the viewer's.
+  //
+  // **The reason this is one function rather than a class added at each call site**: a slot's name
+  // appears as a subject in nine record types and as a *recipient* in one, and the recipient is the
+  // half a player is scanning for. Marking it wherever a name is rendered means a record type added
+  // later gets it by using this, and a name rendered some other way is visibly the odd one out.
+  //
+  // **Nothing at all for an anonymous or non-participant viewer**, which needs no branch here:
+  // `MY_SLOTS` is empty for them, so `isMine` is false for every slot and every cell comes out with
+  // the class the feed has always had. The attribute the list comes from is rendered only for
+  // somebody holding a slot in this room.
+  //
+  // Marked on the CELL rather than the row, deliberately. The row already carries `personal` for the
+  // filter, which is a question about the whole record; this is about one name inside it, and on a
+  // check between two other players the answer differs between the two names on the same line.
+  function name(row, text, slot) {
+    return cell(row, text, isMine(slot) ? "who mine" : "who");
+  }
+
   // **Who the room says it was.** Every record carrying a person carries `player` off the
   // authenticated connection, and the slot number as a fallback for a record written before a name
   // was known. This is the only thing that ever fills the identity cell, never `source`, which is
   // the sending client's own claim.
   function who(row, event) {
-    cell(row, event.player || "slot " + event.slot, "who");
+    name(row, event.player || "slot " + event.slot, event.slot);
   }
 
   // **What the sending client said its name was, when that is not the slot's.**
@@ -441,7 +460,7 @@
       // Compared on the slot NUMBERS rather than the names: the numbers are what the room means by
       // identity, and they are present on records whose names are not.
       case "check":
-        cell(row, event.finder_name || "slot " + event.finder, "who");
+        name(row, event.finder_name || "slot " + event.finder, event.finder);
         if (event.finder === event.receiver) {
           cell(row, " found their ", "verb");
           cell(row, event.item_name || "item " + event.item, itemClass(event.flags));
@@ -449,7 +468,7 @@
           cell(row, " sent ", "verb");
           cell(row, event.item_name || "item " + event.item, itemClass(event.flags));
           cell(row, " to ", "verb");
-          cell(row, event.receiver_name || "slot " + event.receiver, "who");
+          name(row, event.receiver_name || "slot " + event.receiver, event.receiver);
         }
         cell(row, " (", "verb");
         cell(row, event.location_name || "location " + event.location, "where");

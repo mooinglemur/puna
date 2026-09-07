@@ -1700,6 +1700,16 @@ h1 .scope {
   --feed-dim: light-dark(#5f6875, #6d7480);
   --feed-verb: light-dark(#5b6472, #9aa2af);
   --feed-who: light-dark(#111318, #e6e7ea);
+  /* The viewer's OWN name, wherever it appears as a subject or a recipient. Magenta because nothing
+     else in this palette is anywhere near it: the item classes run purple, blue, cyan and red, the
+     names are near-black or near-white, and a feed's whole problem is that a player is scanning a
+     fast-moving column for one word.
+
+     Both ends measured against the grounds they actually sit on rather than chosen by eye:
+     #ff6ad5 is 7.0:1 on the dark feed (6.6:1 on its stripe) and #b5008a is 6.3:1 on the light one
+     (5.8:1 on its stripe), so both clear AA comfortably. The light value is darker rather than a
+     dimmed version of the dark one, which is the finding the palette above already records. */
+  --feed-mine: light-dark(#b5008a, #ff6ad5);
   --feed-where: light-dark(#007a29, #6ac48a);
   --feed-item: light-dark(#007e91, #56c8d8);
   --feed-progression: light-dark(#a800c8, #c58af9);
@@ -1872,6 +1882,13 @@ h1 .scope {
 .journal .when { color: var(--feed-dim); }
 .journal .verb { color: var(--feed-verb); }
 .journal .who { color: var(--feed-who); }
+/* **Hue alone, and that is a smaller cost here than the note on the item classes describes.** A
+   reader who cannot pick this out loses a convenience: their own name is still rendered, still says
+   what it says, and the personal filter above the feed answers the same question exhaustively. That
+   is unlike progression-versus-trap, where the hue carries a fact nothing else on the line does.
+   If it turns out not to be enough, a weight bump is one declaration and reflows nothing, since this
+   feed is monospaced. */
+.journal .mine { color: var(--feed-mine); }
 .journal .where { color: var(--feed-where); }
 
 /* The item classes, from `flags`. Chosen to stay apart from each other for the common forms of

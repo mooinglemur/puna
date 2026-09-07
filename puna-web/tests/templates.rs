@@ -922,6 +922,9 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
         // A name the sending client supplied. Losing its rule makes it identical to the verified
         // name beside it, which is the one thing that must never be true of it.
         "claimed",
+        // The viewer's own name. Losing the rule makes it identical to every other name on the
+        // page, which is the whole of what it does: there is no second signal to fall back on.
+        "mine",
     ] {
         assert!(
             code.contains(class),
@@ -930,6 +933,47 @@ fn the_journal_feed_agrees_across_markup_script_and_stylesheet() {
         assert!(
             styles(&css, class),
             "puna.css has no rule for `.{class}`, so the feed renders it as plain text"
+        );
+    }
+
+    // --- THE VIEWER'S OWN NAME, AND THE TWO ENDS OF A CHECK ---------------------------------------
+    // `name` decides the class and `journal-mine.test.js` covers what it decides, but the wiring is
+    // here: a check renders TWO names on one line and each has to be marked from its own slot.
+    // Mutation-checked, and both of these passed the behavioral test, which exercises the helper and
+    // not its call sites: binding the receiver's cell to `event.finder` marks the wrong name, and
+    // dropping back to a plain `cell` marks neither, and both look exactly like the feature working
+    // for the reader who tries it on a line where they are the finder.
+    let check_arm = code
+        .split_once("case \"check\":")
+        .expect("journal.js no longer renders a check")
+        .1
+        .split_once("break;")
+        .expect("an unterminated check arm")
+        .0;
+    for (field, slot) in [
+        ("finder_name", "event.finder"),
+        ("receiver_name", "event.receiver"),
+    ] {
+        // **The call taken whole, not the token.** A first version asserted the arm merely
+        // *contained* `event.receiver)`, which the `if (event.finder === event.receiver)` beside it
+        // already satisfies, so binding the receiver's cell to the finder passed the lint. Read to
+        // the end of the call and compare its last argument.
+        let call = check_arm
+            .split_once(&format!("name(row, event.{field}"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "a check's `{field}` is no longer rendered through `name`, so the viewer's own \
+                     name is not marked on that end of the line"
+                )
+            })
+            .1;
+        let call = call.split_once(");").expect("an unterminated call").0;
+        assert!(
+            call.trim_end().ends_with(slot),
+            "a check's `{field}` cell is marked from `{}` rather than from `{slot}`, so it takes \
+             its class from the other end of the line: the wrong name is highlighted, and only on \
+             the lines that carry two people",
+            call.rsplit(',').next().unwrap_or(call).trim()
         );
     }
 
