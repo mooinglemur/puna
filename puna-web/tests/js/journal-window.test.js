@@ -22,7 +22,7 @@ const source = path.join(__dirname, "..", "..", "static", "journal.js");
 // is what stops the walk asking forever), and the window control itself. Sliced separately because
 // everything between them is the record renderer.
 const CUTS = [
-  ["  // --- WHERE THE PAGE BEGINS", "  // `live` is true only for an `append` frame"],
+  ["  // --- WHERE THE PAGE BEGINS", "  // Older records, on the front."],
   ["  function prepend(events, starts, start) {", "  // --- THE THREE VIEW FILTERS"],
   ["  // How many records to ask for on connect", "  function open() {"],
 ];
@@ -103,6 +103,9 @@ function makeLog(count, start) {
     },
     replaceChildren() {
       rows.length = 0;
+    },
+    appendChild(fragment) {
+      rows.push.apply(rows, fragment.children);
     },
     // A fragment is a list of rows, so inserting one is a splice. `before` is always the head here.
     insertBefore(fragment, before) {
@@ -196,8 +199,8 @@ function harness(options) {
     "cursor",
     "cap",
     "backfilling",
-    "rebuilding",
-    "backfilled",
+    "loaded",
+    "stuckToBottom",
     "lastDay",
     "progress",
     "windowRow",
@@ -210,14 +213,19 @@ function harness(options) {
     "readerMoved",
     "following",
     "pinBottom",
+    "followBottom",
     "refreshFilterNote",
     lift() +
       "\nreturn {" +
       "  fill: fill," +
+      "  append: append," +
       "  prepend: prepend," +
       "  setWindow: setWindow," +
       "  setProgress: setProgress," +
       "  cap: function () { return cap; }," +
+      // The reader's number: records on the page, maintained rather than queried. Exposed so the
+      // tests can hold it against the document, which is the whole reason maintaining it is safe.
+      "  loaded: function () { return loaded; }," +
       // The day the page ends on, which is what decides whether the next live record draws a
       // heading. It is a plain variable in the file and has no other way out.
       "  lastDay: function () { return lastDay; }," +
@@ -239,9 +247,11 @@ function harness(options) {
     { OPEN: 1 },
     settings.cursor === undefined ? 200000 : settings.cursor,
     1000,
+    // backfilling, loaded, stuckToBottom, lastDay. `loaded` starts as whatever the fixture put on
+    // the page, since that is what the running file's own counter would have reached.
     false,
-    false,
-    0,
+    log.rows.filter((r) => !r.daybreak).length,
+    true,
     null,
     progress,
     windowRow,
@@ -256,6 +266,7 @@ function harness(options) {
     () => {
       pins++;
     },
+    () => {},
     () => {
       notes++;
     }
@@ -272,13 +283,22 @@ function harness(options) {
     click: (label) => clicks[label](),
     pins: () => pins,
     notes: () => notes,
-    // Stand a backfill page's worth of rows on the front, as `prepend` would, each carrying the
-    // offset it begins at.
     row: (start, daybreak) => row(log.rows, start, daybreak),
+    // A backfill page arriving, **through the real `prepend`** rather than by pushing rows onto the
+    // list: it is what maintains the record count, and a helper that bypassed it would leave the
+    // count and the document disagreeing for a reason the file is not responsible for.
+    //
+    // The records carry no timestamp, so no day headings are drawn and a page of N records is N
+    // rows. That keeps the arithmetic in the walk tests about the window rather than about the
+    // calendar.
     deliver(count, start) {
-      const added = [];
-      for (let i = 0; i < count; i++) added.push(row(log.rows, start + i * RECORD));
-      log.rows.unshift.apply(log.rows, added);
+      const events = [];
+      const starts = [];
+      for (let i = 0; i < count; i++) {
+        events.push({});
+        starts.push(start + i * RECORD);
+      }
+      api.prepend(events, starts, start);
       api.landed();
     },
     current: () => harnessCurrent(buttons),
@@ -367,14 +387,14 @@ exports.run = function (t) {
     h.api.setWindow(Infinity);
     h.api.setProgress();
     t.check(
-      "a walk says it is loading",
-      h.progress.textContent === "Loading earlier records…"
+      "a walk says it is loading, and how much it holds so far",
+      h.progress.textContent === "Loading earlier records… 500 lines so far."
     );
 
     h.api.setWindow(500);
     t.check(
-      "narrowing stops the note at once, rather than counting through a cancellation",
-      h.progress.textContent === ""
+      "narrowing stops the loading message at once, rather than counting through a cancellation",
+      h.progress.textContent === "Showing the last 500 lines."
     );
 
     // The page already on the wire cannot be unsent, and it lands into a window nobody wants.
@@ -477,6 +497,95 @@ exports.run = function (t) {
         .map((r) => r.dataset.start)
         .join(",") === "4096,4096,4196,4296,4296"
     );
+  }
+
+  // --- THE NUMBER BESIDE THE BUTTONS ------------------------------------------------------------
+  // It says how much of the feed is on the page and whether more is coming, in every mode, and it
+  // is live: a whole-feed window that has finished loading still has records arriving at the bottom
+  // of it, and the count is the only thing on the page that shows the feed is still moving.
+  {
+    const h = harness({ rows: 500, start: 4096 });
+    h.api.setProgress();
+    t.check(
+      "a window being held says what it is holding",
+      h.progress.textContent === "Showing the last 500 lines."
+    );
+
+    h.api.append([{ at: 1 }, { at: 1 }], false, [9000, 9100]);
+    t.check(
+      "and a record arriving moves the number without anything being pressed",
+      h.progress.textContent === "Showing the last 502 lines."
+    );
+  }
+  {
+    const h = harness({ rows: 500, start: 0 });
+    h.api.setProgress();
+    t.check(
+      "a page holding the oldest record in the room says the whole feed is loaded",
+      h.progress.textContent === "The whole feed is loaded: 500 lines."
+    );
+    h.api.append([{ at: 1 }], false, [9000]);
+    t.check(
+      "and that number moves too, which is what says a loaded feed is still live",
+      h.progress.textContent === "The whole feed is loaded: 501 lines."
+    );
+  }
+  {
+    const h = harness({ rows: 1, start: 0 });
+    h.api.setProgress();
+    t.check(
+      "one record is one line",
+      h.progress.textContent === "The whole feed is loaded: 1 line."
+    );
+  }
+
+  // --- THE REPORTED BUG: A COUNTER THAT REMEMBERED THE LAST WALK --------------------------------
+  // The note used to count the records a walk had pulled in, and nothing reset it when a new walk
+  // began. Toggling between the whole feed and a fixed window added the old total to the new one, so
+  // the number read wildly high and went on climbing from there. The count is the page's own record
+  // count now, which has no such state to forget.
+  {
+    const h = harness({ rows: 500, start: 4096 });
+    h.api.setWindow(Infinity);
+    // A page lands and the walk continues, which is what the frame handler does with it.
+    h.deliver(1000, 2048);
+    h.api.fill();
+    h.api.setProgress();
+    t.check(
+      "a walk counts what is on the page",
+      h.progress.textContent === "Loading earlier records… 1500 lines so far."
+    );
+
+    // Back to a fixed window and out to the whole feed again: the same page, so the same number.
+    h.api.setWindow(500);
+    h.api.setWindow(Infinity);
+    h.api.setProgress();
+    t.check(
+      "and going back out to the whole feed starts from what is there, not from the last walk",
+      h.progress.textContent === "Loading earlier records… 500 lines so far."
+    );
+  }
+
+  // --- THE COUNT AGREES WITH THE DOCUMENT -------------------------------------------------------
+  // It is maintained rather than queried, because the note is written on every arriving frame and a
+  // whole-feed window is 160,000 rows. That is the trade, and this is what makes it safe: the four
+  // places that can change it, driven together, against a count taken off the document.
+  {
+    const h = harness({ rows: 0, store: { "journal.lines": "10000" } });
+    const real = () => h.log.rows.filter((r) => !r.daybreak).length;
+
+    h.api.append([{ at: 1 }, { at: 1 }, { at: 2 }], false, [100, 200, 300]);
+    t.check("after an append", h.api.loaded() === real() && real() === 3);
+
+    h.api.prepend([{ at: 0 }, { at: 0 }], [0, 50], 0);
+    t.check("after a backfill", h.api.loaded() === real() && real() === 5);
+
+    // Narrowing past what is on the page: the trim takes rows off the top, headings among them, and
+    // only the records may count against the reader's number.
+    h.api.setWindow(500);
+    h.api.setWindow(4);
+    t.check("after a trim that takes a day heading", h.api.loaded() === real());
+    t.check("and the trim counted rows, not records", h.log.rows.length === 4);
   }
 
   // --- NARROWING --------------------------------------------------------------------------------

@@ -176,11 +176,21 @@
   var stuckToBottom = true;
   // Whether a backfill page is in flight. One at a time, always: see `fill`.
   var backfilling = false;
-  // How many earlier records the walk has pulled in, for the progress note. A whole-feed load on a
-  // busy room is dozens of round trips over tens of seconds, and a note that says only "loading"
-  // for all of them is indistinguishable from one that has stopped, which is precisely the
-  // confusion the silent-stop bug above produced, and the reason a bare spinner would not do.
-  var backfilled = 0;
+  // Records on the page. Day headings are rows and are not records, so they are not counted here:
+  // the trim bounds the DOM and this is what a reader is told, and the two are different questions.
+  //
+  // **Counted rather than queried, and this is the one number in this file with two possible
+  // implementations.** `querySelectorAll(".entry:not(.daybreak)").length` is always right and costs
+  // a walk of the whole feed every time it is asked; the note is now written on every arriving
+  // frame, and under the whole-feed window that feed is 160,000 rows. So it is maintained instead,
+  // by the four places that can change it, and `journal-window.test.js` cross-checks it against the
+  // document rather than trusting it.
+  //
+  // **It replaced a counter of "records this walk has pulled in", which was the bug it fixed.**
+  // That one was never reset when a new walk began, so toggling between the whole feed and a fixed
+  // window added the old total to the new one and the note read wildly high. A number derived from
+  // what is on the page has no such state to forget.
+  var loaded = 0;
   // The local calendar day of the last line drawn, so a day break is inserted when it changes.
   // Held out here rather than per batch: a batch boundary is a network artifact and must not
   // produce a heading, and a day can change between two frames as easily as inside one.
@@ -949,13 +959,6 @@
     return Number(first.dataset.start);
   }
 
-  // Records on the page, which is what every note counts. Day headings are rows and are not
-  // records: the trim counts them because they hold a DOM node, and nothing a reader is told ever
-  // should.
-  function records() {
-    return log.querySelectorAll(".entry:not(.daybreak)").length;
-  }
-
   // Drop rows off the top until the document is inside the cap, leaving the reader's line under the
   // reader's eye.
   //
@@ -966,7 +969,12 @@
   function trimToCap() {
     if (cap === Infinity || log.childElementCount <= cap) return;
     var before = log.scrollHeight;
-    while (log.childElementCount > cap) log.removeChild(log.firstElementChild);
+    while (log.childElementCount > cap) {
+      var going = log.firstElementChild;
+      // A heading is a row and not a record: the cap counts it, the reader's number does not.
+      if (!going.classList.contains("daybreak")) loaded--;
+      log.removeChild(going);
+    }
     log.scrollTop -= before - log.scrollHeight;
   }
 
@@ -998,13 +1006,19 @@
       batch.appendChild(line(event, live, begins));
     });
     log.appendChild(batch);
+    loaded += events.length;
 
     trimToCap();
-    // After the trim, because the note counts what is on the page and the trim is what decides that.
-    // Before the pin, because the note sits above the feed and the feed is the flex item holding
+    // After the trim, because both notes count what is on the page and the trim is what decides
+    // that. Before the pin, because they sit above the feed and the feed is the flex item holding
     // this page's slack: a note that grows or shrinks after the pin moves the bottom the pin just
     // wrote. See `.feed-page`.
+    //
+    // **The count is written on every arriving frame**, which is what makes it a live number rather
+    // than one that was true when the reader last pressed something. On a whole-feed window that is
+    // the only thing on the page that says the feed is still moving.
     refreshFilterNote();
+    setProgress();
     // Only follow if the reader was already at the bottom. Yanking the view back down while
     // somebody is reading upward is the single most annoying thing a live feed can do.
     if (stuckToBottom) {
@@ -1051,6 +1065,7 @@
       }
       batch.appendChild(line(event, false, begins));
     });
+    loaded += events.length;
 
     var before = log.scrollHeight;
     log.insertBefore(batch, log.firstChild);
@@ -1357,29 +1372,36 @@
     socket.send(JSON.stringify({ before: start, lines: Math.min(want, REPLAY_MAX) }));
   }
 
-  // What the walk is doing, in words, beside the control that started it.
+  // How much of the feed is on the page, and whether more is coming, beside the control that asked
+  // for it.
   //
-  // **A bare spinner would not do, and the reason is on the record.** A whole-feed load on a busy
-  // room is dozens of round trips over tens of seconds, and a note that says only "loading" for all
-  // of them is indistinguishable from one that has stopped: exactly the confusion a silent stop
-  // after one page produced when this walk last went wrong.
+  // **One line saying both, always, rather than a note that appears while something is happening.**
+  // A count that only shows up during a walk answers "is it still going" and leaves "how much have
+  // I got" to be guessed at from a button that describes a ceiling rather than a state; and a room
+  // shorter than its window, a walk that reached the beginning of the file, and a window being held
+  // at its cap are three different situations that a blank line renders identically.
   //
-  // Nothing is said while the window is simply being held. The buttons already say how much that
-  // is, and a line restating it under them would be noise on every page load.
+  // **A bare spinner would not do either, and the reason is on the record.** A whole-feed load on a
+  // busy room is dozens of round trips over tens of seconds, and a note that says only "loading"
+  // for all of them is indistinguishable from one that has stopped: exactly the confusion a silent
+  // stop after one page produced when this walk last went wrong. The number moving is the evidence.
   function setProgress() {
     if (!progress) return;
-    // **`short()` and not `backfilling`, so a cancelled walk stops saying it is loading at once.**
-    // A page already asked for is on its way and cannot be unsent, but nothing more is being
-    // fetched for this reader, and a note going on counting through a narrowing they just asked for
-    // is the page describing a request rather than what it is doing.
+    var lines = loaded + (loaded === 1 ? " line" : " lines");
+    // **`short()` and not `backfilling` alone, so a cancelled walk stops saying it is loading at
+    // once.** A page already asked for is on its way and cannot be unsent, but nothing more is
+    // being fetched for this reader, and a note going on counting through a narrowing they just
+    // asked for is the page describing a request rather than what it is doing.
     if (backfilling && short()) {
-      progress.textContent = backfilled
-        ? "Loading earlier records… " + backfilled + " so far."
-        : "Loading earlier records…";
-      return;
+      progress.textContent = "Loading earlier records… " + lines + " so far.";
+    } else if (pageStart() === 0) {
+      // The oldest record in the room is on the page, so there is nothing earlier to ask for. True
+      // of a room shorter than the window as well as of a whole-feed load that has finished, which
+      // is why it is decided by where the page begins rather than by which button is pressed.
+      progress.textContent = "The whole feed is loaded: " + lines + ".";
+    } else {
+      progress.textContent = "Showing the last " + lines + ".";
     }
-    progress.textContent =
-      pageStart() === 0 ? "The whole feed is loaded: " + records() + " lines." : "";
   }
 
   // --- THE WINDOW CONTROL -------------------------------------------------------------------------
@@ -1536,7 +1558,6 @@
         // day heading or two besides, which are rows like any other.
         trimToCap();
         noteFiltering(frame.withheld);
-        backfilled += (frame.events || []).length;
         // **Cleared before the next ask, not in the arm that ends the walk.** This request is
         // finished. Its page is on the screen, so `fill`'s in-flight guard is about the
         // *next* one. Leaving the flag set until the walk ended made that guard reject every
@@ -1560,7 +1581,9 @@
       if (frame.kind === "replay" && resumed && frame.start !== cursorAsked) {
         log.replaceChildren();
         lastDay = null;
-        backfilled = 0;
+        // The page is empty again, so the count is zero again. It is maintained rather than
+        // queried, so the one place that empties the feed wholesale has to say so.
+        loaded = 0;
         restarted = true;
         resumed = false;
       }
