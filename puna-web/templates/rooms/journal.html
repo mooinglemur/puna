@@ -80,11 +80,19 @@ nothing.{% endif %}</p>
    never remembers, so loading it stays a deliberate act rather than something a page does on every
    load for somebody who tried it once.
 
+   **"Keep", not "Show" and not "Load".** It said Show first, and that word is already spoken for
+   one row down: the filter note says "Showing 63 of 2500 loaded lines", so a control above it
+   offering to *show* 2500 was the same word making two claims about one page, and with a filter set
+   the one up here was false. "Load" is wrong in the other direction, because pressing a smaller
+   number on a page that already holds more does not fetch anything, it TRIMS: keeping is the only
+   verb true of both directions, and it is what makes the small options read as the rolling window
+   they are. So this row owns "keep" and "loaded", and the filter row owns "showing".
+
    `hidden`, and revealed by `journal.js`, the same bargain the filter row below makes: these
    buttons cannot do anything without script, and a control that does nothing is worse than an
    absent one. #}
 <p class="feed-controls" id="journal-window" hidden>
-Show
+Keep
 <span class="segmented" role="group" aria-label="How much of the feed to keep loaded"
       title="How much history this page holds: what it asks the room for on connect, how far back
 the earlier-records walk goes, and how many lines stay on the page. A smaller window trims the

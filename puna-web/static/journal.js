@@ -1385,9 +1385,15 @@
   // busy room is dozens of round trips over tens of seconds, and a note that says only "loading"
   // for all of them is indistinguishable from one that has stopped: exactly the confusion a silent
   // stop after one page produced when this walk last went wrong. The number moving is the evidence.
+  //
+  // **"Loaded" and "keeping", never "showing", and the filter row is why.** That row says "Showing
+  // 63 of 2500 loaded lines", so with a filter set a line up here claiming to show 2500 would be one
+  // word making two different claims about one page, and the claim up here would be the false one.
+  // Each row owns its verbs: this one reports the corpus, the one below reports what survives the
+  // filters of it. Troy's wording.
   function setProgress() {
     if (!progress) return;
-    var lines = loaded + (loaded === 1 ? " line" : " lines");
+    var lines = loaded === 1 ? "1 line" : loaded + " lines";
     // **`short()` and not `backfilling` alone, so a cancelled walk stops saying it is loading at
     // once.** A page already asked for is on its way and cannot be unsent, but nothing more is
     // being fetched for this reader, and a note going on counting through a narrowing they just
@@ -1398,9 +1404,13 @@
       // The oldest record in the room is on the page, so there is nothing earlier to ask for. True
       // of a room shorter than the window as well as of a whole-feed load that has finished, which
       // is why it is decided by where the page begins rather than by which button is pressed.
-      progress.textContent = "The whole feed is loaded: " + lines + ".";
+      progress.textContent = "The entire history is loaded: " + lines + ".";
     } else {
-      progress.textContent = "Showing the last " + lines + ".";
+      // "The last", because which end matters: this is a rolling window on a feed that reads
+      // downward, so what is held is the newest and there is more above it that is not. And
+      // "keeping", the same word the buttons use, because that is the thing being set: a page at
+      // its cap is dropping a line off the top for every one that arrives.
+      progress.textContent = "Keeping the last " + lines + " of history loaded.";
     }
   }
 

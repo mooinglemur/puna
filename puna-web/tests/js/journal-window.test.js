@@ -394,7 +394,7 @@ exports.run = function (t) {
     h.api.setWindow(500);
     t.check(
       "narrowing stops the loading message at once, rather than counting through a cancellation",
-      h.progress.textContent === "Showing the last 500 lines."
+      h.progress.textContent === "Keeping the last 500 lines of history loaded."
     );
 
     // The page already on the wire cannot be unsent, and it lands into a window nobody wants.
@@ -416,7 +416,7 @@ exports.run = function (t) {
     h.api.setProgress();
     t.check(
       "and says so",
-      h.progress.textContent === "The whole feed is loaded: 500 lines."
+      h.progress.textContent === "The entire history is loaded: 500 lines."
     );
   }
   {
@@ -508,13 +508,13 @@ exports.run = function (t) {
     h.api.setProgress();
     t.check(
       "a window being held says what it is holding",
-      h.progress.textContent === "Showing the last 500 lines."
+      h.progress.textContent === "Keeping the last 500 lines of history loaded."
     );
 
     h.api.append([{ at: 1 }, { at: 1 }], false, [9000, 9100]);
     t.check(
       "and a record arriving moves the number without anything being pressed",
-      h.progress.textContent === "Showing the last 502 lines."
+      h.progress.textContent === "Keeping the last 502 lines of history loaded."
     );
   }
   {
@@ -522,12 +522,12 @@ exports.run = function (t) {
     h.api.setProgress();
     t.check(
       "a page holding the oldest record in the room says the whole feed is loaded",
-      h.progress.textContent === "The whole feed is loaded: 500 lines."
+      h.progress.textContent === "The entire history is loaded: 500 lines."
     );
     h.api.append([{ at: 1 }], false, [9000]);
     t.check(
       "and that number moves too, which is what says a loaded feed is still live",
-      h.progress.textContent === "The whole feed is loaded: 501 lines."
+      h.progress.textContent === "The entire history is loaded: 501 lines."
     );
   }
   {
@@ -535,7 +535,7 @@ exports.run = function (t) {
     h.api.setProgress();
     t.check(
       "one record is one line",
-      h.progress.textContent === "The whole feed is loaded: 1 line."
+      h.progress.textContent === "The entire history is loaded: 1 line."
     );
   }
 
