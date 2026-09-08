@@ -218,6 +218,7 @@ function harness(options) {
     lift() +
       "\nreturn {" +
       "  fill: fill," +
+      "  rememberStart: rememberStart," +
       "  append: append," +
       "  prepend: prepend," +
       "  setWindow: setWindow," +
@@ -536,6 +537,52 @@ exports.run = function (t) {
     t.check(
       "one record is one line",
       h.progress.textContent === "The entire history is loaded: 1 line."
+    );
+  }
+
+  // --- A VIEWER WHO IS SENT RECORDS AND RENDERS NONE ---------------------------------------------
+  // At the gameplay tier the server withholds chat, hints, connects and admin actions, so a room
+  // that has not had a check in it yet delivers frames that come out as no rows at all. The page has
+  // nothing to read an offset off, and until the frame's own boundary was kept beside the document
+  // it could neither walk back for more nor tell the two situations below apart. It sat on
+  // "Keeping the last 0 lines of history loaded" over a room with plenty of history in it.
+  {
+    // The whole file was in that replay and every record in it was somebody else's.
+    const h = harness({ rows: 0 });
+    h.api.rememberStart(0);
+    h.api.setProgress();
+    t.check(
+      "a page that rendered nothing of the entire history says so",
+      h.progress.textContent === "The entire history is loaded: 0 lines."
+    );
+    h.api.fill();
+    t.check("and asks for nothing further", h.sent.length === 0);
+  }
+  {
+    // There IS more, further back, and it may hold something this viewer can see.
+    const h = harness({ rows: 0 });
+    h.api.rememberStart(8192);
+    h.api.fill();
+    t.check(
+      "a page that rendered nothing can still walk back for more",
+      h.sent.length === 1 && h.sent[0].before === 8192 && h.sent[0].lines === 1000
+    );
+    h.api.setProgress();
+    t.check(
+      "and says it is looking rather than claiming to hold anything",
+      h.progress.textContent === "Loading earlier records… 0 lines so far."
+    );
+  }
+  {
+    // **The document wins wherever it can answer.** The remembered boundary is the older, coarser
+    // one, and reading it in preference to a row would undo the whole per-record design: the trim
+    // moves where the page begins and only the rows know it has.
+    const h = harness({ rows: 500, start: 4096 });
+    h.api.rememberStart(0);
+    h.api.setWindow(2500);
+    t.check(
+      "a page with rows on it anchors on them, not on the frame it remembers",
+      h.sent.length === 1 && h.sent[0].before === 4096
     );
   }
 

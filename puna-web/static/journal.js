@@ -953,10 +953,29 @@
   // A day heading is not a record and holds no bytes, so it takes the offset of the record it
   // introduces: equally true, and it means a trim that stops on a heading has still left the page
   // able to say where it begins.
+  // Where the oldest frame the socket has delivered begins, for when the page itself cannot say.
+  //
+  // **A viewer can be sent records and render none of them.** At the gameplay tier the server
+  // withholds every chat line, hint, connect and admin action, so a room that has not had a check in
+  // it yet delivers frame after frame that come out as no rows at all. The page then has nothing to
+  // read an offset off, and without this it could neither walk back for more nor tell "nothing has
+  // arrived yet" from "that was the entire history and none of it was mine". Reported as a feed
+  // sitting on `Keeping the last 0 lines of history loaded` over a room that had plenty of history,
+  // all of it withheld.
+  //
+  // **Consulted only when there is no row at all**, so it can never override the document or drift
+  // against it. The trim stops at the cap and the cap is never zero, so a page with rows on it
+  // always answers for itself, and this is reached only in the state it was written for.
+  var frameStart = null;
+
+  function rememberStart(start) {
+    frameStart = typeof start === "number" ? start : null;
+  }
+
   function pageStart() {
     var first = log.firstElementChild;
-    if (!first || first.dataset.start === undefined) return null;
-    return Number(first.dataset.start);
+    if (!first) return frameStart;
+    return first.dataset.start === undefined ? null : Number(first.dataset.start);
   }
 
   // Drop rows off the top until the document is inside the cap, leaving the reader's line under the
@@ -1568,6 +1587,9 @@
         // day heading or two besides, which are rows like any other.
         trimToCap();
         noteFiltering(frame.withheld);
+        // Where this page began, for a viewer who rendered none of it. Every record in it may have
+        // been withheld, and then the rows say nothing about how far back the walk has got.
+        rememberStart(frame.start);
         // **Cleared before the next ask, not in the arm that ends the walk.** This request is
         // finished. Its page is on the screen, so `fill`'s in-flight guard is about the
         // *next* one. Leaving the flag set until the walk ended made that guard reject every
@@ -1633,6 +1655,11 @@
         // first connect, or a resume the server could not stitch, both of which start from a tail.
         // Its oldest line is whatever that replay began with, and `append` has already stamped it
         // with the `start` the frame carried, so nothing here has to carry an offset across.
+        //
+        // The frame's own boundary is kept beside that, and **replaces** rather than joins whatever
+        // was remembered: a replay that reaches this line has replaced the window, so an older
+        // boundary from before it describes a page that no longer exists.
+        rememberStart(frame.start);
         backfilling = false;
         // The window is capped at `REPLAY_MAX` on the wire, so anything larger than that arrives in
         // pieces: this is what asks for the rest, on a first connect exactly as on a cap change.

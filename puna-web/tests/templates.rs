@@ -1053,6 +1053,30 @@ fn the_feed_window_control_offers_the_sizes_the_script_knows() {
         );
     }
 
+    // **Every frame that carries a boundary hands it to `rememberStart`, and this is a lint because
+    // the failure is a request loop.** A viewer at the gameplay tier can be sent a page whose every
+    // record is withheld, so it renders no rows and the document cannot say how far back the walk
+    // has got. The remembered boundary is the only thing that advances then; a branch that forgets
+    // to move it leaves `fill` asking for the same region once per answer, forever, at a server
+    // reading a 250 MB file. Nothing throws, the page looks idle, and the room bears the cost.
+    for (kind, branch) in [
+        ("earlier", r#"if (frame.kind === "earlier") {"#),
+        ("replay", r#"if (frame.kind === "replay") {"#),
+    ] {
+        let body = code
+            .split_once(branch)
+            .unwrap_or_else(|| panic!("journal.js no longer has a {kind} branch"))
+            .1
+            .split_once("\n      }")
+            .unwrap_or_else(|| panic!("an unterminated {kind} branch"))
+            .0;
+        assert!(
+            body.contains("rememberStart(frame.start)"),
+            "the {kind} branch does not keep the boundary its frame reported, so a viewer who \
+             renders none of what it is sent asks for the same region forever"
+        );
+    }
+
     // Read as an array, off the frame. Anything else and every row is built unanchored, the walk
     // never starts, and the window control silently does nothing but trim.
     assert!(
