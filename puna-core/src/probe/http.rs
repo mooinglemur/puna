@@ -285,7 +285,7 @@ pub fn parse(document: &serde_json::Value) -> RoomStatus {
             .map(|save| SaveStatus {
                 last_save_at: timestamp(save, "last_save_at"),
                 last_save_bytes: number(save, "last_save_bytes"),
-                last_save_micros: number(save, "last_save_micros"),
+                last_save_seconds: decimal(save, "last_save_seconds"),
                 save_interval_seconds: number(save, "save_interval_seconds"),
                 dirty: save.get("dirty").and_then(serde_json::Value::as_bool),
             }),
@@ -359,6 +359,20 @@ fn number(value: &serde_json::Value, key: &str) -> Option<i64> {
     value.get(key)?.as_i64()
 }
 
+/// A duration, which this surface spells in seconds and therefore as a decimal.
+///
+/// **Its own reader rather than a widened `number`**, and the difference is not stylistic:
+/// `as_i64` answers `None` for `0.041233`, so reading a float through it is indistinguishable from
+/// the field being absent. Everything else on this document is a count or a byte total and is
+/// rightly an integer, so widening the one helper both use would silence a real mismatch on all of
+/// them to accommodate this one.
+///
+/// `as_f64` accepts an integer too, which matters here: a save that took no measurable time can
+/// arrive as `0` rather than `0.0`.
+fn decimal(value: &serde_json::Value, key: &str) -> Option<f64> {
+    value.get(key)?.as_f64()
+}
+
 /// RFC 3339, which is what this surface uses, unlike the tracker documents, which use RFC 1123
 /// because the reference does. Two surfaces, two formats, and mixing them up yields `None` rather
 /// than a wrong instant.
@@ -412,7 +426,7 @@ mod tests {
             "save": {
                 "last_save_at": "2026-08-19T18:30:00Z",
                 "last_save_bytes": 4096,
-                "last_save_micros": 1234,
+                "last_save_seconds": 0.041233,
                 "save_interval_seconds": 30,
                 "dirty": false
             },
@@ -472,6 +486,42 @@ mod tests {
             status.options.as_ref().unwrap()["release_mode"],
             "auto-enabled"
         );
+    }
+
+    /// **A save duration is a decimal, and reading it as an integer is indistinguishable from the
+    /// field being absent.**
+    ///
+    /// pahoa renamed `last_save_micros` to `last_save_seconds` and changed its type in one release,
+    /// and either half alone would have gone unnoticed here: `as_i64` refuses `0.041233`, and a
+    /// missing key answers `None` too, so the probe would have gone on succeeding and recording
+    /// nothing at all. That is the failure this pins, in the one direction a reader is likely to
+    /// drift back toward: `number` is right for every other field on this document and wrong for
+    /// this one.
+    #[test]
+    fn a_save_duration_survives_having_a_fraction_in_it() {
+        let status = parse(&document());
+        let save = status.save.as_ref().expect("a saving room");
+        assert_eq!(
+            save.last_save_seconds,
+            Some(0.041233),
+            "a fractional duration read as an integer is silently no duration at all"
+        );
+
+        // A save too quick to measure arrives as an integer zero, and is a reading rather than an
+        // absence. `as_f64` takes both spellings; nothing else needs to know which arrived.
+        let mut quick = document();
+        quick["save"]["last_save_seconds"] = serde_json::json!(0);
+        assert_eq!(
+            parse(&quick).save.and_then(|s| s.last_save_seconds),
+            Some(0.0)
+        );
+
+        // And the old spelling is gone rather than tolerated: carrying both would leave a room on
+        // an older image reporting a number three orders of magnitude out, under a field named for
+        // seconds, with nothing to say which unit it had arrived in.
+        let mut old = document();
+        old["save"] = serde_json::json!({"last_save_micros": 1234});
+        assert_eq!(parse(&old).save.and_then(|s| s.last_save_seconds), None);
     }
 
     /// **The two `null`s that are not zero.** A room with no `--save-dir` reports `save: null`, and a

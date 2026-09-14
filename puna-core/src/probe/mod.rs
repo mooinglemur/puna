@@ -113,11 +113,26 @@ impl ProbeCapabilities {
 }
 
 /// The room's persistence, or `None` for a room that keeps nothing.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// `PartialEq` without `Eq`, because a duration in seconds is a float. That is the whole cost of
+/// the unit below and it is the right side of the trade: nothing here is a map key.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SaveStatus {
     pub last_save_at: Option<DateTime<Utc>>,
     pub last_save_bytes: Option<i64>,
-    pub last_save_micros: Option<i64>,
+    /// How long the last save took, in **seconds**, as a decimal.
+    ///
+    /// **This was `last_save_micros: Option<i64>`, and the change would have been silent at both
+    /// ends.** pahoa renamed the key and changed the type in one release, and each half on its own
+    /// answers `None` here: a missing key reads as absent, and `as_i64` refuses `0.041233` even
+    /// under the right name. A probe that was not updated would have gone on succeeding and
+    /// recorded nothing, forever, with nothing to see in a log.
+    ///
+    /// Seconds because Prometheus's convention is base units and its sample type is `float64`
+    /// regardless, so the integer microseconds bought nothing and cost every reader a conversion.
+    /// **Anything that comes to render or threshold on this must be written against seconds**: the
+    /// same number under the old name is three orders of magnitude out.
+    pub last_save_seconds: Option<f64>,
     pub save_interval_seconds: Option<i64>,
     /// State has changed since the last save was *started*.
     pub dirty: Option<bool>,
@@ -192,7 +207,8 @@ impl SlotStatus {
 }
 
 /// One room's answer to "how are you".
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// `PartialEq` without `Eq`, which follows [`SaveStatus`] rather than being a choice of its own.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct RoomStatus {
     pub seed_name: Option<String>,
     pub pahoa_version: Option<String>,
