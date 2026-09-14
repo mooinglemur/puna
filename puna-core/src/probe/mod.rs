@@ -6,6 +6,29 @@
 //! line describes how a room *started*, not how it *is*, and an organizer may have moved an option
 //! with `!admin /option` since. So anything rendering a gameplay option must read it from here.
 //!
+//! ## This document is hand-shaped, and that is a position rather than an accident
+//!
+//! **Prometheus's naming conventions govern pahoa's exposition, not this JSON.** The two surfaces
+//! carry overlapping numbers and answer to different rules: `/admin/v1/metrics` is a Prometheus
+//! document and takes `process_`-prefixed names and base units because every client library expects
+//! them, while `/admin/v1/status` is a document two programs agreed on and is stable on its own
+//! terms. Puna's re-export `puna_room_resident_bytes` is the worked example: it comes off this
+//! document's `net.resident_bytes` and did not follow `pahoa_resident_bytes` when that was replaced
+//! by `process_resident_memory_bytes`, because the convention that moved the metric has no claim on
+//! the field.
+//!
+//! So a rename here is a change to a contract rather than a tidy-up, and **the next one gets raised
+//! before it is made rather than reported after**. Settled with pahoa on 2026-09-14, after
+//! `last_save_micros` became `last_save_seconds` and Puna learned of it from a handoff.
+//!
+//! That rename stands, and it is worth being precise about why, because the argument that was
+//! offered for it is not the one that carries: it led with Prometheus's base-unit convention, which
+//! is exactly what this section says does not reach the JSON. What justifies it is the document's
+//! **own** vocabulary, which was already seconds everywhere else that names a duration
+//! (`save_interval_seconds`, `activity.idle_seconds`, `activity.check_idle_seconds`) while the save
+//! duration alone was microseconds. Internal coherence on the document's own terms is a reason a
+//! hand-shaped document accepts; a convention borrowed from the surface next door is not.
+//!
 //! ## `None` means "cannot tell", never zero
 //!
 //! Every field is optional and the distinction is load-bearing in both directions. `save` is `null`
