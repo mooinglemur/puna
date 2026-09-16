@@ -3026,6 +3026,11 @@ fn a_checkbox_posts_something_its_rust_type_can_parse() {
 /// The other direction matters too. A rule for a tone nothing emits is dead style that reads as
 /// evidence the feature has a state it does not have.
 ///
+/// **Two consumers, and both are checked**: the chip, and the Last seen cell, which takes the same
+/// tint when the time it is showing is an annotation rather than a check. They are separate
+/// selectors because one wants a border and the other does not, so a tone added to the chips alone
+/// would leave that cell untinted on exactly the rows where the column has something extra to say.
+///
 /// `unknown` is deliberately absent from the stylesheet: it renders no chip at all, so a rule for it
 /// could never apply.
 #[test]
@@ -3063,24 +3068,36 @@ fn every_progression_has_a_tint_and_every_tint_a_progression() {
             "`prog-{tone}` has no rule, so that chip renders in the default grey and looks \
              deliberate"
         );
+        assert!(
+            css.contains(&format!("td.prog-{tone} {{")),
+            "`prog-{tone}` tints no table cell, so a Last seen column showing that slot's \
+             annotation renders in the ordinary text color and reads as a check time"
+        );
     }
 
-    // And nothing else claims to be one.
-    let styled: Vec<String> = css
-        .match_indices(".tag.prog-")
-        .map(|(at, m)| {
-            css[at + m.len()..]
-                .split_whitespace()
-                .next()
-                .unwrap_or_default()
-                .to_string()
-        })
-        .collect();
-    for tone in &styled {
-        assert!(
-            tones.contains(&tone.as_str()),
-            "`prog-{tone}` is styled and no progression emits it"
+    // And nothing else claims to be one, in either selector.
+    for prefix in [".tag.prog-", "td.prog-"] {
+        let styled: Vec<String> = css
+            .match_indices(prefix)
+            .map(|(at, m)| {
+                css[at + m.len()..]
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(
+            styled.len(),
+            tones.len(),
+            "expected one `{prefix}` rule per progression, found {styled:?}"
         );
+        for tone in &styled {
+            assert!(
+                tones.contains(&tone.as_str()),
+                "`{prefix}{tone}` is styled and no progression emits it"
+            );
+        }
     }
 }
 
@@ -3256,6 +3273,52 @@ fn every_sort_override_names_a_column_that_exists() {
              it was written for is back on the default and this entry does nothing"
         );
     }
+}
+
+/// **Last seen shows and sorts by the same thing**, and both halves of that are call sites.
+///
+/// The column has two inputs on an enhanced tracker, the room's activity timer and when the slot
+/// was last annotated, and `freshest` is the one rule about which of them wins. That rule is unit
+/// tested; what cannot be reached from a unit test is whether the view config still *calls* it,
+/// which is the shape this project has been bitten by repeatedly.
+///
+/// Both reversions are silent and neither is visibly broken:
+///
+/// * `cells` going back to `age(r.last_activity_ms_ago)` renders a perfectly plausible timestamp.
+///   It is simply the older of the two, so a slot whose player said something an hour ago reads as
+///   untouched since their last check, which is indistinguishable from a quiet room.
+/// * the `sortValues` entry going away sorts the column by the raw field while the cells display
+///   the other, so a row reading "just now" sits below one reading "3d ago". **A sort that is
+///   subtly wrong is worse than none**, because it looks like it worked.
+///
+/// Nothing in the Rust build parses this file and both mutations run.
+#[test]
+fn the_last_seen_column_shows_and_sorts_by_whichever_is_fresher() {
+    let script =
+        code_only(&std::fs::read_to_string(source("static/tracker.js")).expect("tracker.js"));
+
+    assert!(
+        script.contains("lastSeen(r),"),
+        "the Last seen cell is no longer built by `lastSeen`, so it speaks for the room's activity \
+         timer alone and an annotation newer than the last check is invisible"
+    );
+    assert!(
+        !script.contains("age(r.last_activity_ms_ago)"),
+        "the Last seen cell is back on the raw activity timer"
+    );
+
+    let overrides = script
+        .split_once("sortValues: {")
+        .expect("tracker.js no longer configures any sort override")
+        .1
+        .split_once('}')
+        .expect("unterminated sortValues")
+        .0;
+    assert!(
+        overrides.contains("last_activity_ms_ago: freshest"),
+        "Last seen has no sort override, so the column sorts by the activity timer while showing \
+         whichever of the two is fresher"
+    );
 }
 
 /// **The Owner cell is built from the server's flag, never from whether the row has an owner.**

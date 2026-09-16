@@ -139,6 +139,16 @@ need to.</p>
           <th data-key="checks_done" data-type="number">Checks</th>
           <th data-key="status">Status</th>
           <th data-key="hints" data-type="number">Hints</th>
+          {# **The key names one of the column's two inputs, and that is deliberate.** On a room
+             running the enhanced tracker this cell shows the more recent of the slot's last check
+             and its last annotation, tinted with the progression when it is the annotation, and the
+             tooltip carries both labeled. So `tracker.js` builds it with `lastSeen` and overrides
+             its sort with `freshest`, and neither reads this key as a field.
+
+             It stays `last_activity_ms_ago` because the key is the column's IDENTITY: a remembered
+             sort and a shared "sorted by last seen" link already carry it, so renaming it would
+             leave those silently on a column that no longer exists rather than failing visibly.
+             The same reasoning `checks_done` records two headings up. #}
           <th data-key="last_activity_ms_ago" data-type="number">Last seen</th>
         </tr></thead>
         <tbody></tbody>

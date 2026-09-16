@@ -75,6 +75,20 @@ pub struct SlotRow {
     /// `None` is **never**, and never is not 1970. Rendering an epoch date is the classic way to
     /// make an untouched slot look like an abandoned one.
     pub last_activity_ms_ago: Option<i64>,
+    /// When this slot's progression or note last moved, and **absent for a viewer who may not see
+    /// annotations at all**, so an anonymous reader's Last seen column is the one it always was.
+    ///
+    /// It sits beside the activity timer rather than with `progression` and `note` because that is
+    /// the column it feeds: the two are answers to one question, and the client shows whichever is
+    /// more recent. A room reports when a slot last checked something and structurally cannot
+    /// report that its player came back to say "I am BK", which is news about the same slot from
+    /// the same person and is often the fresher half.
+    ///
+    /// **Present even when both annotations are empty**, which neither of the other two fields can
+    /// express: clearing a note is itself an edit, so the timestamp moves while the row goes back
+    /// to carrying no chip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotated_ms_ago: Option<i64>,
     pub hints: usize,
     /// Whether anybody has taken this slot, and **`None` for a viewer not entitled to know**.
     ///
@@ -415,6 +429,16 @@ pub fn slot_rows(
                 last_activity_ms_ago: entry(live, "activity_timers", n)
                     .and_then(|e| e.get("time")?.as_str())
                     .and_then(|time| age_ms(time, now)),
+                // Gated with `people`, like the two annotation fields below rather than like the
+                // activity timer above: it says when somebody wrote a note, on a page where the
+                // note itself is withheld from this viewer.
+                //
+                // Deliberately **not** conditioned on there being a progression or a note left to
+                // show. A cleared annotation is still an edit, and the column wants its recency.
+                annotated_ms_ago: viewer
+                    .people
+                    .and(slot.annotated_at)
+                    .map(|at| since_ms(at, now)),
                 hints: entry(live, "hints", n)
                     .and_then(|e| e.get("hints")?.as_array())
                     .map_or(0, Vec::len),
@@ -831,11 +855,17 @@ fn classify(flags: i64) -> &'static str {
 /// renders as a time in the future and reads as a bug in Puna.
 fn age_ms(time: &str, now: DateTime<Utc>) -> Option<i64> {
     let at = DateTime::parse_from_rfc2822(time).ok()?;
-    Some(
-        now.signed_duration_since(at.with_timezone(&Utc))
-            .num_milliseconds()
-            .max(0),
-    )
+    Some(since_ms(at.with_timezone(&Utc), now))
+}
+
+/// How long ago an instant was, in milliseconds, floored at zero.
+///
+/// **The floor is the point, and it is why this is shared rather than written twice.** Every age in
+/// this module is computed here so a client cannot be handed a negative one, which it would render
+/// as an event in the future; the two callers reach that from different directions, one parsing a
+/// timestamp out of the room's document and one reading a column Puna wrote itself.
+fn since_ms(at: DateTime<Utc>, now: DateTime<Utc>) -> i64 {
+    now.signed_duration_since(at).num_milliseconds().max(0)
 }
 
 #[cfg(test)]
@@ -1050,11 +1080,16 @@ mod tests {
         }
     }
 
+    /// Slot 1 is annotated and slot 2 has been **cleared**, which is the pair worth having: the
+    /// second carries a timestamp and nothing else, so a field derived from the progression or the
+    /// note rather than from the edit would read as never annotated.
     fn annotated_roster() -> Vec<Slot> {
         let mut roster = roster();
         roster[0].progression = ProgressionStatus::Bk;
         roster[0].note = Some("ping me before 9pm".into());
+        roster[0].annotated_at = Some(now() - chrono::Duration::minutes(10));
         roster[1].owner_id = Some(8);
+        roster[1].annotated_at = Some(now() - chrono::Duration::hours(2));
         roster
     }
 
@@ -1091,6 +1126,12 @@ mod tests {
                 );
                 assert_eq!(row.progression, None, "{who} got a progression chip");
                 assert_eq!(row.note, None, "{who} got somebody's note");
+                assert_eq!(
+                    row.annotated_ms_ago, None,
+                    "{who} was told when slot {} was last annotated, which says the feature is on \
+                     and that somebody is using it",
+                    row.slot
+                );
             }
         }
 
@@ -1128,6 +1169,54 @@ mod tests {
 
         // An unclaimed slot has nobody to name.
         assert_eq!(rows[2].owner, None);
+    }
+
+    /// **When a slot was last annotated is its own answer, independent of what the annotation says
+    /// now.**
+    ///
+    /// The Last seen column shows whichever is more recent, this or the room's activity timer, so
+    /// this field decides what a reader is looking at rather than merely decorating it. Two
+    /// properties, and the second is the one a shortcut would break:
+    ///
+    /// * it is an **age the server computed**, like every other instant in this module, so a skewed
+    ///   client clock cannot render a time in the future;
+    /// * it is present for a **cleared** annotation. Wiping a note is an edit and the column wants
+    ///   its recency; deriving this from `progression` or `note` being present would put that row
+    ///   back on a check from days earlier, silently, on the one row somebody has just touched.
+    #[test]
+    fn the_annotation_timestamp_survives_the_annotation_being_cleared() {
+        let people = people(PingPreference::Yes);
+        let rows = slot_rows(
+            &annotated_roster(),
+            &live(),
+            &statics(),
+            None,
+            now(),
+            &Viewer {
+                id: None,
+                participant: true,
+                staff: false,
+                people: Some(&people),
+            },
+        );
+
+        assert_eq!(rows[0].annotated_ms_ago, Some(600_000), "ten minutes");
+
+        // Slot 2 carries a timestamp with no progression and no note, which is what clearing looks
+        // like on the wire and is the whole reason this is not derived from either.
+        assert_eq!(rows[1].progression, None);
+        assert_eq!(rows[1].note, None);
+        assert_eq!(
+            rows[1].annotated_ms_ago,
+            Some(7_200_000),
+            "a cleared annotation reads as never annotated, so its row falls back to a check that \
+             may be days older"
+        );
+
+        // Nobody has touched the spectator, which stays absent rather than becoming a zero. Zero is
+        // "just now" to the column, and it would make every unannotated row the freshest thing in
+        // the multiworld.
+        assert_eq!(rows[2].annotated_ms_ago, None);
     }
 
     /// **Who gets the edit control: the slot's own holder, and the room's staff.**
@@ -1596,6 +1685,7 @@ mod tests {
             checks_total: total,
             status,
             last_activity_ms_ago: None,
+            annotated_ms_ago: None,
             hints: 0,
             claimed: Some(false),
             editable: false,

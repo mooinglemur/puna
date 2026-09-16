@@ -1485,26 +1485,47 @@ h1 .scope {
    follow with their left borders.
 
    Border and text only, no fill: these sit inside table cells beside other chips, and four filled
-   badges per row would read as a status board rather than as a note in the margin. */
+   badges per row would read as a status board rather than as a note in the margin.
+
+   **Tokens because there are two consumers**, and they want different properties of one decision:
+   the chip takes the hue as text and border, and the Last seen cell takes it as text alone when the
+   time it is showing is an annotation rather than a check. Written out twice they would be free to
+   drift, and the drift would be a row whose chip and whose timestamp disagreed about how far along
+   somebody is, which is precisely the pairing a reader is scanning for. */
+:root {
+  --prog-unblocked: light-dark(#1a7f37, #4cc264);
+  --prog-bk: light-dark(#8f1616, #f2696e);
+  --prog-soft_bk: light-dark(#c2410c, #f0a882);
+  --prog-go_mode: light-dark(#7a4c00, #f0c86a);
+}
+
 .tag.prog-unblocked {
-  color: light-dark(#1a7f37, #4cc264);
-  border-color: light-dark(#1a7f37, #4cc264);
+  color: var(--prog-unblocked);
+  border-color: var(--prog-unblocked);
 }
 
 .tag.prog-bk {
-  color: light-dark(#8f1616, #f2696e);
-  border-color: light-dark(#8f1616, #f2696e);
+  color: var(--prog-bk);
+  border-color: var(--prog-bk);
 }
 
 .tag.prog-soft_bk {
-  color: light-dark(#c2410c, #f0a882);
-  border-color: light-dark(#c2410c, #f0a882);
+  color: var(--prog-soft_bk);
+  border-color: var(--prog-soft_bk);
 }
 
 .tag.prog-go_mode {
-  color: light-dark(#7a4c00, #f0c86a);
-  border-color: light-dark(#7a4c00, #f0c86a);
+  color: var(--prog-go_mode);
+  border-color: var(--prog-go_mode);
 }
+
+/* The Last seen cell, when what it is showing is an annotation. Text only: a border here would draw
+   a box around a timestamp in a column of bare ones, and the tint is a second signal beside the
+   chip on the same row rather than the only one carrying the meaning. */
+td.prog-unblocked { color: var(--prog-unblocked); }
+td.prog-bk { color: var(--prog-bk); }
+td.prog-soft_bk { color: var(--prog-soft_bk); }
+td.prog-go_mode { color: var(--prog-go_mode); }
 
 /* The pencil that opens the annotation dialog. Rendered only on rows the viewer may edit, so it is
    allowed to be quiet: on a 200-slot room a player sees one of these and staff see all of them, and

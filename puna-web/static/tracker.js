@@ -130,7 +130,7 @@
           : `${r.checks_done} / ${r.checks_total}${percent(r)}`,
         r.spectator ? dash : r.status,
         r.spectator ? dash : String(r.hints),
-        age(r.last_activity_ms_ago),
+        lastSeen(r),
       ],
       // **Checks sort by COMPLETION, not by count**, which is what the column means: 400/2000 is
       // behind 12/12 however the raw numbers compare, and sorting on the count puts the biggest
@@ -148,6 +148,11 @@
       sortValues: {
         checks_done: (r) => (r.checks_total ? r.checks_done / r.checks_total : null),
         held_by: ownerSortValue,
+        // **Last seen sorts by what it SHOWS**, which on an enhanced tracker is not always the
+        // field the column is keyed on. Sorting the raw activity timer would put a row reading
+        // "just now" below one reading "3d ago" whenever the fresher of the two was an annotation,
+        // and a sort that is subtly wrong is worse than none because it looks like it worked.
+        last_activity_ms_ago: freshest,
       },
       // The footer, computed from the rows CURRENTLY DISPLAYED rather than from the server's
       // `totals`. With no filter the two agree exactly; with one, this describes the table it sits
@@ -245,13 +250,50 @@
   // forever, which is the same 1970 mistake in the other direction. All-null answers `null`, which
   // `age` renders as "never".
   //
+  // It reduces over `freshest` rather than over the raw activity timer, so the footer carries the
+  // newest thing anybody can SEE in the column above it. The footer is computed from the displayed
+  // rows precisely so it cannot contradict them, and reading a different field than the cells do
+  // would reintroduce that contradiction one layer down: a total reading older than a row above it.
+  //
   // `reduce` rather than `Math.min(...ages)`: a 2000-slot room would spread 2000 arguments onto the
   // stack for no reason.
   function mostRecent(rows) {
-    const ages = rows
-      .map((row) => row.last_activity_ms_ago)
-      .filter((ms) => ms !== null && ms !== undefined);
+    const ages = rows.map(freshest).filter((ms) => !nullish(ms));
     return ages.length ? ages.reduce((a, b) => (b < a ? b : a)) : null;
+  }
+
+  function nullish(value) {
+    return value === null || value === undefined;
+  }
+
+  // The more recent of a row's two ages, where **smaller is fresher** and `null` is never.
+  //
+  // **A real value beats never, in both directions**, which is the case a plain comparison against
+  // a null gets backwards. A slot nobody has played but somebody has annotated does have a last
+  // seen time; a slot with neither has none, and sorts last like any other unanswered cell.
+  //
+  // `annotated_ms_ago` is absent for a viewer who may not see annotations, so for them this is the
+  // activity timer and nothing else.
+  //
+  // Spread here where `mostRecent` above avoids it: this is two values by construction, where that
+  // one is a row per slot.
+  function freshest(row) {
+    const ages = [row.last_activity_ms_ago, row.annotated_ms_ago].filter((ms) => !nullish(ms));
+    return ages.length ? Math.min(...ages) : null;
+  }
+
+  // The absolute instant behind an age, or null when there is nothing to spell.
+  //
+  // `lastResponseAt` is when this document arrived and `msAgo` is how old the event was THEN, so
+  // their difference is the instant itself, and it does not drift as the page sits open unlike the
+  // shorthand above it.
+  //
+  // **`localtime.js` decides how an instant is spelled, never this file.** A `toLocaleString` here
+  // would reorder the fields by the reader's locale and carry no zone at all, on the page most
+  // likely to be read somewhere other than where it was written. There is a lint.
+  function instant(msAgo) {
+    if (nullish(msAgo) || !window.PunaTime) return null;
+    return window.PunaTime.absolute(lastResponseAt - msAgo);
   }
 
   // `|| 0` rather than assuming the field is there: a spectator carries no meaningful check or hint
@@ -265,7 +307,7 @@
   // client clock cannot produce a negative one; this adds the time since that response arrived, so
   // the column keeps ticking between polls without a fetch.
   function age(msAgo) {
-    if (msAgo === null || msAgo === undefined) return { text: "never", class: "hint" };
+    if (nullish(msAgo)) return { text: "never", class: "hint" };
     const minutes = Math.floor((msAgo + (Date.now() - lastResponseAt)) / 60000);
     const text =
       minutes < 1
@@ -276,16 +318,68 @@
             ? `${Math.floor(minutes / 60)}h ago`
             : `${Math.floor(minutes / 1440)}d ago`;
 
-    // **The exact moment, behind the shorthand.** `lastResponseAt` is when this document arrived
-    // and `msAgo` is how old the event was THEN, so their difference is the instant itself, and
-    // it does not drift as the page sits open, unlike the age above it.
+    // **The exact moment, behind the shorthand.**
     //
     // Computed here rather than swept afterwards because these cells are rebuilt on every render;
     // a sweep would have to re-walk the table each time and would race the next one.
-    const title = window.PunaTime
-      ? window.PunaTime.absolute(lastResponseAt - msAgo)
-      : undefined;
+    const title = instant(msAgo);
     return title ? { text, title } : text;
+  }
+
+  // The **Last seen** cell, which on an enhanced tracker answers a wider question than the room's
+  // own activity timer does.
+  //
+  // A room reports when a slot last checked something. It cannot report that the slot's player came
+  // back and said "I am BK", which is news about the same slot from the same person and is often
+  // the fresher half. So the cell shows whichever is more recent and the tooltip carries both,
+  // labeled, because a reader comparing progress across a roster needs to know which one they are
+  // looking at and a bare timestamp cannot say.
+  //
+  // Three things fall out of the shape rather than needing a case each:
+  //
+  //   * **A viewer who may not see annotations gets the column they always had.** The server omits
+  //     `annotated_ms_ago` for them, so this collapses to `age(last_activity_ms_ago)`.
+  //   * **Somebody who cleared their status keeps the fresher time and loses the color**, reading
+  //     exactly like a row that never set one. The tint is keyed on `progression`, which the server
+  //     omits for `unknown`, so clearing is the absence of a chip rather than a fourth case here.
+  //   * **A slot nobody has ever played says so.** `never` is a legitimate first line.
+  //
+  // **Staff edits move a player's row, deliberately.** An organizer correcting somebody's note
+  // makes that row read "just now" under a column headed Last seen; the tooltip's second label is
+  // what keeps that honest, and the room's own check time stays on the line above it, so nothing is
+  // hidden by the substitution.
+  function lastSeen(row) {
+    const checked = row.last_activity_ms_ago;
+    const annotated = row.annotated_ms_ago;
+    if (nullish(annotated)) return age(checked);
+
+    // `age` answers with a bare string when nothing supplied a title, so normalize before adding
+    // one: a cell object is what carries a class and a tooltip.
+    const shown = age(freshest(row));
+    const cell = typeof shown === "string" ? { text: shown } : shown;
+
+    const annotatedAt = instant(annotated);
+    if (annotatedAt) {
+      // Inside this branch `localtime.js` is loaded, since that is the only way `annotatedAt`
+      // resolved. So a null here means there is no check to spell rather than no speller, which is
+      // the edge case worth naming in as many words instead of leaving a reader to infer it from a
+      // line that is simply missing.
+      cell.title =
+        "Last check: " +
+        (instant(checked) || "never") +
+        "\nNotes/progression updated: " +
+        annotatedAt;
+    }
+
+    // Tinted only when the annotation is the thing on display. Coloring a check time with a
+    // progression would attach the chip's meaning to a number that does not describe it.
+    //
+    // The class is the tone the SERVER chose, never a color: which red BK is drawn in belongs to
+    // the stylesheet and has to answer to the theme, the same rule the chip itself follows.
+    if (row.progression && freshest(row) === annotated) {
+      cell.class = `prog-${row.progression.tone}`;
+    }
+    return cell;
   }
 
   function idFromApi() {
