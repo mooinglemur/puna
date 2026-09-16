@@ -3643,6 +3643,50 @@ fn the_bulk_panel_offers_exactly_the_actions_its_route_implements() {
     );
 }
 
+/// **The "still current" chip is a button only where the route would accept it.**
+///
+/// Three call sites in one file, each silent in its own way:
+///
+/// * the chip's `reaffirm` payload is gated on `editable`, which is the server's answer to "may
+///   this viewer change this slot". Ungated, every reader of a public tracker gets a control that
+///   the route refuses, which is a refusal somebody has to be told about rather than a leak;
+/// * `appendCell` builds a `<button>` for a chip that carries one and a `<span>` for a chip that
+///   does not. Left as a span the control simply does not exist, with nothing failing anywhere, and
+///   a clickable span would be unreachable from a keyboard on an affordance whose whole appeal is
+///   that it takes one click;
+/// * a poll re-renders the table and destroys the chip the floating form was positioned against, so
+///   a form left open sits over whatever row is there now while carrying the slot it was opened on.
+///   The write stays right and the thing under the pointer does not, which is the worse half.
+#[test]
+fn the_reaffirm_control_is_a_button_only_for_a_viewer_who_may_edit() {
+    let script =
+        code_only(&std::fs::read_to_string(source("static/tracker.js")).expect("tracker.js"));
+
+    assert!(
+        script.contains("reaffirm: r.editable ?"),
+        "the chip's reaffirm payload is no longer gated on `editable`, so every viewer of a public \
+         tracker is offered a control the route refuses"
+    );
+    assert!(
+        script.contains(r#"document.createElement(chip.reaffirm ? "button" : "span")"#),
+        "a chip that can be acted on is no longer a button: the control either does not exist or \
+         is unreachable from a keyboard"
+    );
+
+    // The dismissal has to sit in the poll, which is what re-renders. Read as "between arriving and
+    // doing anything with the result", so moving it after the render would fail here too.
+    let poll = script
+        .split_once("async function refreshAll()")
+        .expect("tracker.js no longer polls")
+        .1;
+    assert!(
+        poll.split_once("showFreshness")
+            .is_some_and(|(before, _)| before.contains("hideReaffirm()")),
+        "a poll re-renders the rows and leaves the floating control pointing at a chip that is \
+         gone, over whatever row took its place"
+    );
+}
+
 /// **Every hook `tracker.js` reaches for in the annotation dialog has to exist in the markup.**
 ///
 /// The same contract and the same failure as the moderation dialog's lint below: the script

@@ -1612,6 +1612,124 @@ async fn clearing_a_note_removes_it_rather_than_storing_nothing() {
     .await;
 }
 
+/// **Saying a progression is still true moves its clock and touches nothing else.**
+///
+/// The tracker's Last seen column reports how stale an annotation is, so "still BK" has to be
+/// sayable without retyping a note to say it. Two properties, and both are the reason this is its
+/// own statement rather than `set_slot_annotation` called with the values already on screen:
+///
+/// * it **cannot clobber**. Resubmitting a rendered progression and note would let a page drawn a
+///   minute ago overwrite an edit made since, which for staff reaffirming somebody else's note
+///   destroys one with nobody able to tell that it happened. Carrying no values makes that
+///   unspellable rather than unlikely.
+/// * it **refuses a slot with nothing annotated**, in the `WHERE` so the guard cannot race the read
+///   that justified it. `annotated_at` means "when the annotation last moved", and setting it on a
+///   slot carrying neither a progression nor a note asserts an edit that never happened: the column
+///   would read fresh for an annotation nobody can see.
+#[tokio::test]
+async fn reaffirming_an_annotation_moves_only_its_timestamp() {
+    use puna_core::model::annotation::{self, ProgressionStatus};
+
+    with_db(|pool| async move {
+        let mut conn = pool.get().await.expect("connection");
+        users(&mut conn).await;
+        let generation = seed_generation(&mut conn, false).await;
+        let id = room::create(
+            &mut conn,
+            &NewRoom::direct(Environment::Dev, "reaffirm", generation, OWNER),
+        )
+        .await
+        .expect("create");
+
+        let slots = slot::list(&mut conn, id).await.expect("slots");
+        let annotated = slots[0].slot_number;
+        let untouched = slots[1].slot_number;
+
+        macro_rules! row {
+            ($n:expr) => {
+                slot::list(&mut conn, id)
+                    .await
+                    .expect("slots")
+                    .into_iter()
+                    .find(|s| s.slot_number == $n)
+                    .expect("the slot")
+            };
+        }
+
+        // A slot nobody has annotated has nothing to reaffirm, and says so rather than inventing a
+        // timestamp for an annotation that does not exist.
+        assert!(
+            !annotation::reaffirm_slot_annotation(&mut conn, id, untouched, OWNER)
+                .await
+                .expect("reaffirm"),
+            "a slot with no progression and no note was given an annotation timestamp"
+        );
+        assert_eq!(row!(untouched).annotated_at, None);
+
+        annotation::set_slot_annotation(
+            &mut conn,
+            id,
+            annotated,
+            ProgressionStatus::Bk,
+            Some("waiting on a sword"),
+            OWNER,
+        )
+        .await
+        .expect("annotate");
+        let before = row!(annotated).annotated_at.expect("annotated");
+
+        assert!(
+            annotation::reaffirm_slot_annotation(&mut conn, id, annotated, HELPER)
+                .await
+                .expect("reaffirm"),
+            "an annotated slot could not be reaffirmed"
+        );
+
+        let after = row!(annotated);
+        assert!(
+            after.annotated_at.expect("still annotated") > before,
+            "the timestamp did not move, so the whole point of the control is missing"
+        );
+        assert_eq!(
+            after.progression,
+            ProgressionStatus::Bk,
+            "reaffirming changed what the annotation says"
+        );
+        assert_eq!(
+            after.note.as_deref(),
+            Some("waiting on a sword"),
+            "reaffirming rewrote the note it was supposed to leave alone"
+        );
+        assert_eq!(
+            after.annotated_by,
+            Some(HELPER),
+            "whoever said it is still current is who last touched it"
+        );
+
+        // **A cleared annotation still has a timestamp and still cannot be reaffirmed.** Clearing
+        // is an edit, so the clock moved; what is gone is anything to say is still true, and the
+        // chip that would offer this is gone with it.
+        annotation::set_slot_annotation(
+            &mut conn,
+            id,
+            annotated,
+            ProgressionStatus::Unknown,
+            None,
+            OWNER,
+        )
+        .await
+        .expect("clear");
+        assert!(row!(annotated).annotated_at.is_some());
+        assert!(
+            !annotation::reaffirm_slot_annotation(&mut conn, id, annotated, OWNER)
+                .await
+                .expect("reaffirm"),
+            "a cleared annotation was reaffirmed, which says nothing is still something"
+        );
+    })
+    .await;
+}
+
 /// **The toggle is off unless somebody asks for it, and it survives a clone.**
 ///
 /// Off is how every room behaved before this existed, so the default is what makes the feature

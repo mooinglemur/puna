@@ -852,6 +852,46 @@ p.error {
   vertical-align: baseline;
 }
 
+/* **A chip that is a button still has to look like a chip.** The base `button` rule sets its own
+   font, padding, border and background, all of which would win here on specificity grounds if this
+   did not put them back: `button` and `.tag` are both one selector, and `button` comes first in
+   this file, so the chip's own rule above already beats it on order. What it does NOT override is
+   the two properties `.tag` never sets, which is why they are named here rather than left alone.
+
+   The cursor is the only thing that says this one does something, and that is deliberate: the chips
+   are read in a column, and a control that announced itself on every editable row would make an
+   organizer's tracker a table of buttons. The tooltip and the label carry the rest. */
+button.tag {
+  font: inherit;
+  font-size: 0.78rem;
+  background: none;
+  cursor: pointer;
+}
+
+button.tag:hover,
+button.tag:focus-visible {
+  /* The chip keeps its own hue and gains a ground, so hovering says "this is a control" without
+     restating the progression in a second color. */
+  background: var(--bg);
+}
+
+/* --- "still <progression>" ----------------------------------------------------------------------
+   One floating form, positioned off the chip that opened it. Same surface as the note panel next
+   door, and the same `position: fixed` for the same reasons: the tables are `overflow-x: auto`, so
+   an absolutely positioned descendant is clipped by its own scroll container.
+
+   `margin: 0` because `form` carries a bottom margin for the ones that sit in a page. */
+.reaffirm-pop {
+  position: fixed;
+  z-index: 40;
+  margin: 0;
+  padding: 0.3rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--float-shadow);
+}
+
 /* A slot staff have barred from connecting. Warning colors rather than error, and the same
    reasoning `.tag.drift` gives: it is a state somebody chose, not a fault, but unlike drift it is
    a state a player is currently experiencing, so it gets the stronger of the two quiet hues.

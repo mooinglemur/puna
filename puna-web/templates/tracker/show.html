@@ -197,6 +197,27 @@ need to.</p>
    somebody is part-way through typing into. A stray click light-dismissing a half-written note is
    exactly the wrong behavior. #}
 {% if annotations %}
+{# --- "still BK" ------------------------------------------------------------------------------
+   Clicking a progression chip you may edit offers exactly one thing: saying it is still true. That
+   moves the annotation's timestamp and changes nothing it says, which is what the tracker's Last
+   seen column made worth having: a self-reported status goes stale, and making somebody retype a
+   note to refresh it is how a roster fills up with statuses nobody trusts.
+
+   **One floating form reused by every chip**, the same choice the note panel makes: a 200-slot room
+   would otherwise carry 200 hidden forms for the one that gets opened. `tracker.js` sets its action
+   and its label per click and positions it; it builds none of it, which is the same split the
+   dialog above follows.
+
+   It posts and redirects like every other write here rather than fetching: the answer is the page's
+   own next render, and there is nothing worth a hand-written result pane in a button whose entire
+   meaning is "no change". #}
+{# The words are here rather than only in the script, and **not an `aria-label`**: the script
+   replaces this text with the chip's own progression, so a label set here would go stale the first
+   time it opened and a screen reader would then read the wrong status while the page showed the
+   right one. The accessible name is the visible text, which is the one thing that cannot drift. #}
+<form method="post" class="reaffirm-pop" data-reaffirm-form hidden>
+<button type="submit" data-reaffirm-button>Still current</button>
+</form>
 <dialog id="annotate" class="sheet annotate" aria-labelledby="annotate-title">
 <h2 id="annotate-title">Annotate</h2>
 <p class="target" data-annotate-target></p>

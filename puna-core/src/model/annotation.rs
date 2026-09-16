@@ -254,6 +254,46 @@ pub async fn set_slot_annotation(
     Ok(())
 }
 
+/// Say a slot's annotation is still current, without changing what it says.
+///
+/// **The only write here that asserts nothing new**, and it exists because the tracker's Last seen
+/// column now reports how stale an annotation is. A progression is self-reported, so "I am still
+/// BK" is a thing somebody has to be able to say, and making them retype a note to say it is how a
+/// roster fills up with statuses nobody trusts.
+///
+/// **Not [`set_slot_annotation`] called with the values it already holds**, which is the obvious
+/// spelling and loses edits: those values come off the reader's screen, so re-sending them lets a
+/// row rendered a minute ago overwrite a change made since. For staff reaffirming somebody else's
+/// note that is a real way to destroy one, and the person who did it would have no idea.
+///
+/// **A slot with nothing annotated is refused in the `WHERE`**, not by a check above it, so the
+/// guard cannot race the read that justified it. `annotated_at` means "when the annotation last
+/// moved"; setting it on a slot carrying neither a progression nor a note would assert an edit that
+/// never happened, and leave the column reading fresh for an annotation nobody can see.
+///
+/// Answers whether anything was touched.
+pub async fn reaffirm_slot_annotation(
+    conn: &mut AsyncPgConnection,
+    room: RoomId,
+    slot_number: i32,
+    actor: i64,
+) -> Result<bool, diesel::result::Error> {
+    let touched = diesel::sql_query(
+        "UPDATE room_slots
+            SET annotated_at = now(),
+                annotated_by = $3
+          WHERE room_id = $1 AND slot_number = $2
+            AND (progression <> 'unknown'::progression_status OR note IS NOT NULL)",
+    )
+    .bind::<SqlUuid, _>(room)
+    .bind::<diesel::sql_types::Integer, _>(slot_number)
+    .bind::<BigInt, _>(actor)
+    .execute(conn)
+    .await?;
+
+    Ok(touched > 0)
+}
+
 /// One person's ping preference for one room.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Preference {

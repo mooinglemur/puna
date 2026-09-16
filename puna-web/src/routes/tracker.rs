@@ -1340,11 +1340,47 @@ struct AnnotationForm {
     note: String,
 }
 
-/// Set a slot's progression and note.
+/// The slot a viewer is allowed to annotate, and who they are, or the refusal that says why not.
+///
+/// **One definition for every route that writes an annotation**, because each of them makes the
+/// identical four-part decision and a second copy is how they come to disagree. The order matters
+/// and is the reason this is a function rather than a comment:
+///
+/// 1. the room has to have opted in, or the feature is reachable by POST on a room that never
+///    turned it on: a control nobody can see is still a route anybody can construct;
+/// 2. somebody has to be signed in, since the write records who;
+/// 3. the slot has to exist;
+/// 4. and it has to be theirs, or they have to be staff.
 ///
 /// **The slot's holder, or the room's staff**, which is the rule the feature was asked for with:
 /// organizers and helpers may change anything a player can, because a note is the sort of thing an
 /// organizer occasionally has to correct or remove.
+async fn annotatable_slot(
+    conn: &mut diesel_async::AsyncPgConnection,
+    access: &Access,
+    number: i32,
+) -> Result<(slot::Slot, i64)> {
+    if !access.sees_annotations() {
+        return Err(not_found("this room does not use the enhanced tracker"));
+    }
+    let Some(actor) = access.viewer else {
+        return Err(unauthorized("sign in to annotate a slot"));
+    };
+
+    let slot = slot::list(conn, access.room.id)
+        .await?
+        .into_iter()
+        .find(|s| s.slot_number == number)
+        .ok_or_else(|| not_found("no such slot"))?;
+
+    if !(access.is_staff || slot.owner_id == Some(actor)) {
+        return Err(forbidden("that is not your slot"));
+    }
+
+    Ok((slot, actor))
+}
+
+/// Set a slot's progression and note.
 #[rocket::post("/tracker/<id>/slot/<number>/annotation", data = "<form>")]
 async fn set_annotation(
     id: TrackerParam,
@@ -1359,22 +1395,7 @@ async fn set_annotation(
 
     // The room has to have opted in. Without this the feature would be reachable by POST on a room
     // that never turned it on: a control nobody can see is still a route anybody can construct.
-    if !access.sees_annotations() {
-        return Err(not_found("this room does not use the enhanced tracker"));
-    }
-    let Some(actor) = access.viewer else {
-        return Err(unauthorized("sign in to annotate a slot"));
-    };
-
-    let slot = slot::list(&mut conn, access.room.id)
-        .await?
-        .into_iter()
-        .find(|s| s.slot_number == number)
-        .ok_or_else(|| not_found("no such slot"))?;
-
-    if !(access.is_staff || slot.owner_id == Some(actor)) {
-        return Err(forbidden("that is not your slot"));
-    }
+    let (slot, actor) = annotatable_slot(&mut conn, &access, number).await?;
 
     let progression = annotation::ProgressionStatus::parse(&form.progression)
         .ok_or_else(|| Error::new(Status::BadRequest, anyhow::anyhow!("unknown progression")))?;
@@ -1419,6 +1440,55 @@ async fn set_annotation(
     Ok(rocket::response::Flash::success(
         rocket::response::Redirect::to(format!("/tracker/{}", id.0)),
         "Saved.",
+    ))
+}
+
+/// Say a slot's annotation is still current, changing nothing about what it says.
+///
+/// **Its own route rather than the one above with the values it already has**, and the reason is in
+/// [`annotation::reaffirm_slot_annotation`]: resubmitting a rendered progression and note lets a
+/// stale page overwrite an edit made since it was drawn. This carries no values at all, so there is
+/// nothing it could get wrong.
+///
+/// Same four-part guard as setting one, through the same function. A slot with nothing annotated is
+/// refused: the control is only offered beside a progression chip, which renders only where there
+/// is something to reaffirm, so reaching this any other way is a constructed request.
+#[rocket::post("/tracker/<id>/slot/<number>/reaffirm")]
+async fn reaffirm_annotation(
+    id: TrackerParam,
+    number: i32,
+    session: Session,
+    pool: &State<Pool>,
+    tag: &crate::http_metrics::RoomTag,
+) -> Result<rocket::response::Flash<rocket::response::Redirect>> {
+    let mut conn = pool.get().await?;
+    let access = access(&mut conn, &session, id.0, tag).await?;
+    let (slot, actor) = annotatable_slot(&mut conn, &access, number).await?;
+
+    if !annotation::reaffirm_slot_annotation(&mut conn, access.room.id, number, actor).await? {
+        return Err(Error::new(
+            Status::BadRequest,
+            anyhow::anyhow!("that slot has no progression or note to reaffirm"),
+        ));
+    }
+
+    // The same rule the edit path follows, and it matters more here rather than less: this write
+    // leaves no trace in what the annotation says, so the event row is the only record that staff
+    // touched somebody else's at all.
+    if slot.owner_id != Some(actor) {
+        event::record(
+            &mut conn,
+            access.room.id,
+            event::Actor::User(actor),
+            "annotated_slot",
+            serde_json::json!({ "slot": number, "owner": slot.owner_id, "reaffirmed": true }),
+        )
+        .await?;
+    }
+
+    Ok(rocket::response::Flash::success(
+        rocket::response::Redirect::to(format!("/tracker/{}", id.0)),
+        "Marked as still current.",
     ))
 }
 
@@ -1481,6 +1551,7 @@ pub fn routes() -> Vec<rocket::Route> {
         view_locations,
         view_items,
         set_annotation,
+        reaffirm_annotation,
         set_ping_preference
     ]
 }
@@ -2374,6 +2445,11 @@ mod tests {
     /// A source lint because there is no unit test that reaches a Rocket route's body, and the
     /// alternative (a full router harness per guard) is what M21 built once and is far more than
     /// this needs.
+    ///
+    /// **The three slot guards moved into `annotatable_slot` when a second route needed them**, so
+    /// this checks them where they live and checks that each route goes through it. That is the
+    /// stronger shape rather than the weaker one: the old version would have passed a new write
+    /// route that checked nothing at all, because it only ever read the one function it named.
     #[test]
     fn both_writes_check_the_room_the_caller_and_the_slot() {
         let source = include_str!("tracker.rs");
@@ -2385,15 +2461,26 @@ mod tests {
             rest[..rest.find("\n}\n").expect("unterminated")].to_string()
         };
 
-        let annotation = body_of("async fn set_annotation(");
-        for guard in [
+        let guard = body_of("async fn annotatable_slot(");
+        for check in [
             "access.sees_annotations()",
             "access.viewer",
             "access.is_staff || slot.owner_id == Some(actor)",
         ] {
             assert!(
-                annotation.contains(guard),
-                "the annotation route no longer checks `{guard}`"
+                guard.contains(check),
+                "the shared slot guard no longer checks `{check}`"
+            );
+        }
+
+        // Every route that writes an annotation goes through it. Named individually rather than
+        // scanned for, so adding one is a deliberate line here rather than something a pattern
+        // silently covers or silently misses.
+        for route in ["async fn set_annotation(", "async fn reaffirm_annotation("] {
+            assert!(
+                body_of(route).contains("annotatable_slot(&mut conn, &access,"),
+                "{route} does not go through the shared slot guard, so it decides for itself who \
+                 may write an annotation"
             );
         }
 

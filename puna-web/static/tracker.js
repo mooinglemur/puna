@@ -122,7 +122,16 @@
           // label, because a reworded label must not silently drop a color.
           tag: [
             r.spectator ? "spectator" : null,
-            r.progression && { text: r.progression.label, class: `prog-${r.progression.tone}` },
+            r.progression && {
+              text: r.progression.label,
+              class: `prog-${r.progression.tone}`,
+              // **A chip somebody may act on is a button, and one they may only read is a span.**
+              // Decided by `editable`, which is the server's answer to "may this viewer change this
+              // slot", so the control cannot be offered to somebody the route would refuse. A
+              // clickable span would also be unreachable from a keyboard, on the one affordance
+              // here whose whole appeal is that it takes one click.
+              reaffirm: r.editable ? { slot: r.slot, label: r.progression.label } : null,
+            },
           ],
         },
         r.spectator
@@ -695,7 +704,16 @@
     // has to answer to the theme.
     for (const entry of [].concat(value.tag || []).filter(Boolean)) {
       const chip = typeof entry === "string" ? { text: entry } : entry;
-      const tag = document.createElement("span");
+      // A `<button>` only where there is something to do, so the tab order carries the chips a
+      // reader can act on and not one per row of a 200-slot table. `type="button"`: it sits in no
+      // form here, and a default-type button inside one would submit it.
+      const tag = document.createElement(chip.reaffirm ? "button" : "span");
+      if (chip.reaffirm) {
+        tag.type = "button";
+        tag.dataset.reaffirm = JSON.stringify(chip.reaffirm);
+        tag.title = "Say this is still current";
+        tag.setAttribute("aria-label", `${chip.text}: say this is still current`);
+      }
       tag.className = chip.class ? `tag ${chip.class}` : "tag";
       tag.textContent = chip.text;
       td.append(" ", tag);
@@ -786,6 +804,77 @@
     annotateDialog.addEventListener("click", (event) => {
       if (event.target.closest("[data-annotate-cancel]")) annotateDialog.close();
     });
+  }
+
+  // --- "still <progression>" --------------------------------------------------------------------
+  //
+  // Clicking a progression chip you may edit offers one button, which moves the annotation's
+  // timestamp and changes nothing it says. Clicking anywhere else puts it away.
+  //
+  // **It carries no values**, only the slot in its action. Posting the progression and note back
+  // would let a row rendered a minute ago overwrite an edit made since it was drawn, which for
+  // staff reaffirming somebody else's note is a real way to lose one. See the model function.
+  //
+  // `position: fixed` off the chip's rect, the same choice the note panel below makes and for the
+  // same two reasons: these tables are `overflow-x: auto`, so an absolutely positioned descendant
+  // would be clipped by its own scroll container, and a fixed element sidesteps every question
+  // about which ancestor is a containing block.
+  const reaffirmForm = document.querySelector("[data-reaffirm-form]");
+  const reaffirmButton = reaffirmForm && reaffirmForm.querySelector("[data-reaffirm-button]");
+
+  function hideReaffirm() {
+    if (reaffirmForm) reaffirmForm.hidden = true;
+  }
+
+  function showReaffirm(chip) {
+    if (!reaffirmForm || !reaffirmButton) return;
+    const what = JSON.parse(chip.dataset.reaffirm);
+
+    reaffirmForm.action = `${root.dataset.write}/slot/${encodeURIComponent(what.slot)}/reaffirm`;
+    // `textContent`: the label is the server's own word for the progression, and this is the file
+    // that must not be the one to start building markup out of data.
+    reaffirmButton.textContent = `Still ${what.label}`;
+    reaffirmForm.hidden = false;
+
+    const rect = chip.getBoundingClientRect();
+    reaffirmForm.style.left = `${Math.max(
+      8,
+      Math.min(rect.left, window.innerWidth - reaffirmForm.offsetWidth - 8)
+    )}px`;
+    // Below the chip, flipping above where there is no room: a control rendered off-screen is the
+    // same as no control.
+    const below = rect.bottom + 6;
+    reaffirmForm.style.top =
+      below + reaffirmForm.offsetHeight > window.innerHeight && rect.top > reaffirmForm.offsetHeight
+        ? `${rect.top - reaffirmForm.offsetHeight - 6}px`
+        : `${below}px`;
+    // So the whole thing is reachable from the keyboard: the chip is a button, and this is what it
+    // opened.
+    reaffirmButton.focus();
+  }
+
+  if (reaffirmForm) {
+    document.addEventListener("click", (event) => {
+      const chip = event.target.closest?.("[data-reaffirm]");
+      if (chip) {
+        // Toggle, so a second click on the same chip puts it away rather than leaving somebody
+        // hunting for where to click to close it.
+        if (!reaffirmForm.hidden && reaffirmForm.dataset.on === String(chip.dataset.reaffirm)) {
+          hideReaffirm();
+        } else {
+          reaffirmForm.dataset.on = chip.dataset.reaffirm;
+          showReaffirm(chip);
+        }
+        return;
+      }
+      // Anywhere else dismisses, except the button itself, whose click is the whole point.
+      if (!event.target.closest?.("[data-reaffirm-form]")) hideReaffirm();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") hideReaffirm();
+    });
+    // Positioned once rather than tracked, so a scroll would leave it pointing at nothing.
+    window.addEventListener("scroll", hideReaffirm, { passive: true });
   }
 
   // --- the note panel ---------------------------------------------------------------------------
@@ -969,6 +1058,12 @@
     lastPollAt = Date.now();
     const results = await Promise.all(tables.map((t) => t.refresh().catch(() => null)));
     lastResponseAt = Date.now();
+    // **A render destroys the chip this was positioned against**, and the rows may come back in a
+    // different order, so a "Still BK" left floating would be sitting over somebody else's row
+    // while carrying the slot it was opened on. The write would still be right and the thing under
+    // the pointer would not, which is the worse half of that pair. Dismissed rather than
+    // repositioned: the chip it belongs to may not even be in the table any more.
+    hideReaffirm();
 
     const document_ = results.find((r) => r);
     if (document_) {
