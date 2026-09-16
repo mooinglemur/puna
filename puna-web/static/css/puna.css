@@ -492,25 +492,37 @@ footer {
 
 /* The footer is two things now, the components and the license, so they sit apart rather than
    running together as one sentence. Wrapping rather than scrolling: on a phone the license drops to
-   its own line, which is the one place a footer is allowed to take two. */
+   its own line, which is the one place a footer is allowed to take two.
+
+   `margin-left: auto` on the license as well as `space-between`, which is not redundant: the two
+   agree while there are exactly two items on one line, and the margin is what keeps the license
+   right once the component list wraps. */
 footer {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem 1rem;
+  gap: 0.25rem 1rem;
   justify-content: space-between;
 }
 
 .version { color: var(--muted); font-size: 0.85rem; }
+.license { margin-left: auto; }
 
-/* Muted like the text around them: these are provenance, not navigation, and a footer of blue links
-   under every page would pull the eye to the least urgent thing on it. The underline is what says
-   they are links at all, so it stays. */
+/* **The underline is drawn in the border color, not the text color**, which is the whole difference
+   between this reading as an aside and reading as a row of links. Inheriting it puts a full-weight
+   rule under every name in the footer, and the eye goes to the least urgent thing on the page.
+   Quiet until hover, where the link color and a matching underline say it is live. Kalapana's
+   footer is where this is copied from. */
 .version a {
   color: inherit;
   text-decoration: underline;
+  text-decoration-color: var(--border);
 }
 
-.version a:hover { color: var(--link); }
+.version a:hover,
+.version a:focus-visible {
+  color: var(--link);
+  text-decoration-color: currentColor;
+}
 
 h1 { font-size: 1.6rem; line-height: 1.25; margin: 0 0 1rem; }
 h2 { font-size: 1.2rem; margin: 2rem 0 0.6rem; }

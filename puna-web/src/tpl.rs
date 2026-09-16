@@ -45,12 +45,31 @@ pub const PAHOA_IMAGE_REFRESH: std::time::Duration = std::time::Duration::from_s
 /// Takes `Option` rather than `&str` so a failed read leaves the previous answer standing: the
 /// database being briefly unreachable is not evidence that the fleet has no pahoa image, and
 /// blanking the footer on it would make a transient fault look like a configuration one.
+///
+/// **Reduced to the tag on the way in**, since the footer is the only reader and what it wants is
+/// the revision. The stored value is a whole reference, and
+/// `registry.git.mooinglemur.com/mooinglemur/pahoa:sha-65a80331` spends forty characters saying
+/// where our registry lives before it gets to the eight that identify the build. `/admin/rooms`
+/// still shows the reference in full, which is the page where the registry is part of the answer.
 pub fn set_pahoa_image(image: Option<String>) {
     if let Some(image) = image
         && let Ok(mut held) = PAHOA_IMAGE.write()
     {
-        *held = Some(image);
+        *held = Some(image_tag(&image).to_string());
     }
+}
+
+/// The tag half of an image reference: everything after the last colon.
+///
+/// **The LAST colon, not the first**, which is the whole reason this is a function with a test
+/// rather than a `split_once` at the call site: a registry may carry a port, so `split_once` on
+/// `registry:5000/pahoa:sha-abc` answers `5000/pahoa:sha-abc` and looks right on every reference
+/// that has no port, which is every one this deployment has.
+///
+/// A reference with no colon is returned whole: it names a repository with no tag, and the
+/// alternative is a footer that says nothing where it could say something true.
+fn image_tag(image: &str) -> &str {
+    image.rsplit_once(':').map_or(image, |(_, tag)| tag)
 }
 
 fn pahoa_image() -> Option<String> {
@@ -120,4 +139,28 @@ impl TplContext {
 /// it as a `&str` rather than cloning a `String` per render.
 pub fn site_name() -> &'static str {
     SITE_NAME.as_str()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::image_tag;
+
+    /// **The tag is what follows the LAST colon.** Splitting on the first is the obvious spelling
+    /// and is correct for every reference this deployment currently has, which is what makes it
+    /// worth pinning: it breaks only once somebody puts a port on a registry, and then the footer
+    /// reports most of a URL under a heading that says it is a revision.
+    #[test]
+    fn a_reference_reduces_to_its_tag() {
+        assert_eq!(
+            image_tag("registry.git.mooinglemur.com/mooinglemur/pahoa:sha-65a80331"),
+            "sha-65a80331"
+        );
+        assert_eq!(
+            image_tag("registry:5000/mooinglemur/pahoa:sha-abc"),
+            "sha-abc"
+        );
+
+        // No tag at all: the repository names itself, and that is better than nothing.
+        assert_eq!(image_tag("pahoa"), "pahoa");
+    }
 }
