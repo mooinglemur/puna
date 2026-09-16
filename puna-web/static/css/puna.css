@@ -490,7 +490,27 @@ footer {
   padding: 0 1rem 2rem;
 }
 
+/* The footer is two things now, the components and the license, so they sit apart rather than
+   running together as one sentence. Wrapping rather than scrolling: on a phone the license drops to
+   its own line, which is the one place a footer is allowed to take two. */
+footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  justify-content: space-between;
+}
+
 .version { color: var(--muted); font-size: 0.85rem; }
+
+/* Muted like the text around them: these are provenance, not navigation, and a footer of blue links
+   under every page would pull the eye to the least urgent thing on it. The underline is what says
+   they are links at all, so it stays. */
+.version a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.version a:hover { color: var(--link); }
 
 h1 { font-size: 1.6rem; line-height: 1.25; margin: 0 0 1rem; }
 h2 { font-size: 1.2rem; margin: 2rem 0 0.6rem; }

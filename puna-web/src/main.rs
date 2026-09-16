@@ -328,6 +328,33 @@ async fn main() -> anyhow::Result<()> {
     // at readiness instead, so two web replicas can never race each other applying them.
     let pool = puna_core::db::get_database_pool(&database_url, None).await?;
 
+    // What the footer names beside pahoa, refreshed rather than read per render: `TplContext::new`
+    // is sync and runs on every page of both tiers, so a query there would be a round trip per
+    // render of the most-viewed surface Puna has, for a string that moves when somebody repins.
+    //
+    // **Both roles**, because the tracker renders the same shell. A failed read leaves the previous
+    // answer standing, so a blip in the database does not blank the footer.
+    {
+        let pool = pool.clone();
+        tokio::spawn(async move {
+            loop {
+                match pool.get().await {
+                    Ok(mut conn) => {
+                        let image = puna_core::model::fleet::pahoa_image(&mut conn, environment)
+                            .await
+                            .unwrap_or_else(|e| {
+                                tracing::debug!(error = %e, "could not read the fleet's pahoa image");
+                                None
+                            });
+                        tpl::set_pahoa_image(image);
+                    }
+                    Err(e) => tracing::debug!(error = %e, "no connection to refresh the footer"),
+                }
+                tokio::time::sleep(tpl::PAHOA_IMAGE_REFRESH).await;
+            }
+        });
+    }
+
     tracing::info!(
         role = role.as_str(),
         environment = environment.as_str(),

@@ -3643,6 +3643,51 @@ fn the_bulk_panel_offers_exactly_the_actions_its_route_implements() {
     );
 }
 
+/// **The footer names each component, its revision and the license, and spaces them.**
+///
+/// Every failure here is a rendering one, which is the category this project has the least natural
+/// coverage of: the page compiles, serves and looks fine to whoever wrote it.
+///
+/// Askama's `whitespace = "suppress"` is the reason it needs asserting rather than reading. A space
+/// next to a tag is removed unless a `+` keeps it, so the difference between `0.1.0+a0237e2b ·
+/// pahoa` and `0.1.0+a0237e2b·pahoa` is one character in the source and invisible in review. The
+/// two whitespace lints catch a `+` that preserves nothing and a space that is silently dropped;
+/// neither can say the result reads correctly, which is what this does.
+#[test]
+fn the_footer_names_its_components_and_keeps_them_apart() {
+    let markup = std::fs::read_to_string(source_template("base.html")).expect("base.html");
+
+    // Both repositories, and the license, all on GitHub: the mirrors are what a reader can open.
+    for link in [
+        "https://github.com/mooinglemur/puna\"",
+        "https://github.com/mooinglemur/pahoa\"",
+        "https://github.com/mooinglemur/puna/blob/main/LICENSE",
+    ] {
+        assert!(markup.contains(link), "the footer no longer links {link}");
+    }
+    assert!(
+        markup.contains("MIT license"),
+        "the license link lost its words"
+    );
+
+    // **pahoa is named whether or not its revision is known.** Inside the `if` it would vanish
+    // entirely on a fresh environment, or for the ten minutes before the first refresh answers,
+    // which is exactly when somebody is most likely to be looking at this page.
+    let conditional = markup
+        .split_once("if let Some(image) = base.pahoa_image")
+        .expect("the footer no longer renders the fleet's pahoa image")
+        .1;
+    assert!(
+        !conditional
+            .split_once("endif")
+            .expect("unterminated")
+            .0
+            .contains("github.com/mooinglemur/pahoa"),
+        "pahoa is named only when its revision is known, so a fresh environment's footer does not \
+         mention the room server at all"
+    );
+}
+
 /// **The note icon carries the note in its accessible name and NOT in a `title`.**
 ///
 /// It is the one glyph control in this project without a tooltip, so the obvious later change is to

@@ -112,7 +112,41 @@ can change anything.
 <main>
 {% block content %}{% endblock %}
 </main>
-<footer><span class="version">puna {{+ base.version }}</span></footer>
+{# **The software, not the site.** `base.site_name` names the deployment in the corner above; this
+   names what is running it, which is a different question and the one somebody asks when they want
+   the source or need to say which build they saw something on.
+
+   Each component links to its own repository and carries its own revision, in kalapana's shape:
+   `name version · name version`, ending in the license.
+
+   **`base.build_rev` is the string the image tag is made of**, so `0.1.0+a0237e2b` is directly
+   comparable with `puna-web:sha-a0237e2b` in the registry. It is this tier's own build. There are
+   two Puna images and the orchestrator's is not named separately because they are built from one
+   commit by one pipeline: naming both would imply they can disagree, and the case where they do is
+   a half-finished rollout rather than a fact about the software.
+
+   **pahoa is named because it is the room server**, which is the component somebody debugging a
+   room actually cares about and the one this project does not contain. Its revision is what the
+   orchestrator published as configured, so it answers "what will my next room start on" rather than
+   "what is any particular room running", which is `/admin/rooms`'s question and can differ per room
+   until each restarts. Absent until the first refresh answers, and absent rather than guessed. #}
+<footer>
+<span class="version">
+<a href="https://github.com/mooinglemur/puna" target="_blank" rel="noopener">puna</a>
+{{+ base.version }}+{{ base.build_rev +}} ·
+<a href="https://github.com/mooinglemur/pahoa" target="_blank" rel="noopener">pahoa</a>
+{# **A rendered space, because `{{+ }}` cannot reach this one.** The `+` preserves whitespace that
+   is adjacent to ITS tag, and here the whitespace is between `%}` and `{{`, so the `if` has already
+   suppressed it and there is nothing left to keep: the footer rendered `pahoasha-b7127069` with
+   both whitespace lints passing, since their question is whether a `+` is present or pointless
+   rather than whether the line reads. A string literal renders an actual space, which the footer's
+   render test then asserts. `&nbsp;` is the other way round here (admin/generations.html uses it)
+   and is wrong for this one: it would also stop the footer wrapping where it should. #}
+{% if let Some(image) = base.pahoa_image %}{{ " " }}{{ image }}{% endif %}
+</span>
+<a class="version license" href="https://github.com/mooinglemur/puna/blob/main/LICENSE"
+   target="_blank" rel="noopener">MIT license</a>
+</footer>
 {# Pages that need script say so; every other page ships none. #}
 {% block scripts %}{% endblock %}
 </body>

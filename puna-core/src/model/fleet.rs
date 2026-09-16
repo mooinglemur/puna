@@ -57,6 +57,37 @@ impl Drift {
     }
 }
 
+/// The pahoa image this environment's orchestrator is configured with, as it published it.
+///
+/// **The one value the web tier cannot know for itself.** `PUNA_PAHOA_IMAGE` is the orchestrator's
+/// environment variable, and setting it on the web tier as well was considered and rejected at M17:
+/// two copies in git that can drift, with the drift landing exactly on the thing the value exists to
+/// report. So the orchestrator writes what it is actually running with, and everybody else reads.
+///
+/// `None` before the orchestrator has started once against this database, which is a real state on
+/// a fresh environment rather than an error.
+///
+/// Its own function because it has two callers with nothing else in common: the admin table, which
+/// wants it beside every room's running image, and the page footer, which wants it alone and often.
+pub async fn pahoa_image(
+    conn: &mut AsyncPgConnection,
+    environment: Environment,
+) -> Result<Option<String>, diesel::result::Error> {
+    #[derive(diesel::QueryableByName)]
+    struct Configured {
+        #[diesel(sql_type = Text)]
+        pahoa_image: String,
+    }
+
+    let rows: Vec<Configured> =
+        diesel::sql_query("SELECT pahoa_image FROM fleet WHERE environment = $1::puna_environment")
+            .bind::<Text, _>(environment.as_str())
+            .load(conn)
+            .await?;
+
+    Ok(rows.into_iter().next().map(|row| row.pahoa_image))
+}
+
 /// Which half of the fleet a query is asking about.
 ///
 /// **The split is on `desired_state`, not on `state`**, and that is the whole reason it is stable
@@ -238,22 +269,12 @@ pub async fn overview(
     scope: Scope,
 ) -> Result<Overview, diesel::result::Error> {
     #[derive(diesel::QueryableByName)]
-    struct Configured {
-        #[diesel(sql_type = Text)]
-        pahoa_image: String,
-    }
-
-    #[derive(diesel::QueryableByName)]
     struct Count {
         #[diesel(sql_type = BigInt)]
         n: i64,
     }
 
-    let configured: Vec<Configured> =
-        diesel::sql_query("SELECT pahoa_image FROM fleet WHERE environment = $1::puna_environment")
-            .bind::<Text, _>(environment.as_str())
-            .load(conn)
-            .await?;
+    let configured = pahoa_image(conn, environment).await?;
 
     // `LEFT JOIN`, never an inner one: `created_by` is nullable and the FK is not cascading, so an
     // inner join would silently drop every room whose creator is unknown, which on an admin page
@@ -291,7 +312,7 @@ pub async fn overview(
     .await?;
 
     Ok(Overview {
-        pahoa_image: configured.into_iter().next().map(|c| c.pahoa_image),
+        pahoa_image: configured,
         rooms,
         // `into_iter().next()`, not `.first()`: diesel's `FirstDsl` is in scope and shadows the
         // slice method, and the resulting error is about `Table` rather than about this line.

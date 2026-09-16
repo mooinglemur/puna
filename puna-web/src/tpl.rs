@@ -5,12 +5,57 @@
 //! because a page that forgot to populate `is_admin` would silently hide the admin nav from an
 //! administrator: a bug that looks like a permissions problem.
 
-use std::sync::LazyLock;
+use std::sync::{LazyLock, RwLock};
 
 use crate::auth::Session;
 
 /// Set by `build.rs` from a hash of `static/`, for cache-busting asset URLs.
 pub const STATIC_VERSION: &str = env!("STATIC_VERSION");
+
+/// The commit this binary was built from, set by `build.rs`.
+///
+/// **The same string the image tag is made of**, because both come from `CI_COMMIT_SHORT_SHA`. So
+/// the footer names something somebody can look up in the registry rather than a number that merely
+/// resembles one. `dev` for a build with neither CI nor git.
+pub const BUILD_REV: &str = env!("PUNA_BUILD_REV");
+
+/// The pahoa image the orchestrator is configured to run, as the footer names it.
+///
+/// **Refreshed in the background rather than read per render**, which is the whole reason this is a
+/// global. `TplContext::new` is sync, takes only a session, and is called from every page on both
+/// tiers; a query there would put one round trip on every render of the highest-volume public
+/// surface Puna has, for a string that changes when somebody repins an image.
+///
+/// **Read from `fleet` rather than from this tier's own environment.** `PUNA_PAHOA_IMAGE` is the
+/// orchestrator's variable, and M17 settled that setting it here too is worse: two copies in git
+/// that can drift, with the drift landing precisely on the thing the value exists to report. The
+/// orchestrator publishes what it is actually configured with, and this reads that.
+///
+/// `None` until the first refresh answers, and `None` is rendered as nothing at all rather than as
+/// a guess: a footer that names no pahoa is honest about a value it does not have yet.
+static PAHOA_IMAGE: RwLock<Option<String>> = RwLock::new(None);
+
+/// How long a repin takes to reach the footer. A repin is rare and the footer is provenance rather
+/// than a control, so this is deliberately slack: the cost of a shorter interval is a query per
+/// replica per interval, forever, and the cost of a longer one is a footer that lags a rollout.
+pub const PAHOA_IMAGE_REFRESH: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Publish what the orchestrator says it is configured with.
+///
+/// Takes `Option` rather than `&str` so a failed read leaves the previous answer standing: the
+/// database being briefly unreachable is not evidence that the fleet has no pahoa image, and
+/// blanking the footer on it would make a transient fault look like a configuration one.
+pub fn set_pahoa_image(image: Option<String>) {
+    if let Some(image) = image
+        && let Ok(mut held) = PAHOA_IMAGE.write()
+    {
+        *held = Some(image);
+    }
+}
+
+fn pahoa_image() -> Option<String> {
+    PAHOA_IMAGE.read().ok().and_then(|held| held.clone())
+}
 
 /// What this deployment calls itself, from `PUNA_SITE_NAME`.
 ///
@@ -39,6 +84,11 @@ pub struct TplContext {
     /// footer: that one identifies the build and stays `puna`.
     pub site_name: &'static str,
     pub version: &'static str,
+    /// The commit this build came from, appended to the version in the footer.
+    pub build_rev: &'static str,
+    /// The pahoa image the fleet is configured with, or `None` before the first refresh answers.
+    /// Owned rather than borrowed because it comes from a lock this render does not hold.
+    pub pahoa_image: Option<String>,
     pub static_version: &'static str,
     /// Whose eyes this page is being seen through, when an administrator is viewing as somebody
     /// else. `None` in every ordinary request.
@@ -58,6 +108,8 @@ impl TplContext {
             username: session.username.clone().unwrap_or_default(),
             site_name: site_name(),
             version: puna_core::VERSION,
+            build_rev: BUILD_REV,
+            pahoa_image: pahoa_image(),
             static_version: STATIC_VERSION,
             view_as: session.view_as.as_ref().map(|v| v.admin_username.clone()),
         }

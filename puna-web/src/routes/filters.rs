@@ -1001,6 +1001,8 @@ mod tests {
                 username: "troy".into(),
                 site_name: "puna",
                 version: "test",
+                build_rev: "abcd1234",
+                pahoa_image: None,
                 static_version: "test",
                 view_as: None,
             },

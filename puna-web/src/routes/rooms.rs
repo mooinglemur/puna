@@ -3008,6 +3008,67 @@ pub(crate) mod tests {
         }
     }
 
+    /// **The footer reads correctly once rendered**, which is the half a source lint cannot see.
+    ///
+    /// Askama's `whitespace = "suppress"` removes a space adjacent to a tag unless a `+` keeps it,
+    /// so `puna test+abcd1234 · pahoa` and `punatest+abcd1234·pahoa` differ by three characters in
+    /// the template and not at all in review. Both whitespace lints passed on a version of this
+    /// footer that ran two of its words together, because their question is whether a `+` is
+    /// present or pointless, not whether the sentence reads.
+    ///
+    /// Rendered through a real page, since the footer lives in `base.html` and only a page that
+    /// extends it produces one.
+    #[test]
+    fn the_footer_renders_as_a_sentence_rather_than_a_run_on() {
+        let footer_of = |image: Option<&str>| {
+            let mut page = page_as(false, false);
+            page.base.pahoa_image = image.map(str::to_string);
+            footer_text(&page.render().expect("renders"))
+        };
+
+        // Before the first refresh answers: pahoa is still named, with no revision beside it.
+        assert_eq!(
+            footer_of(None),
+            "puna test+abcd1234 · pahoa MIT license",
+            "the footer does not read as it should without a pahoa revision"
+        );
+
+        // And with one, which is the spacing the rendered string literal exists for: run together it reads
+        // `pahoasha-b7127069`.
+        assert_eq!(
+            footer_of(Some("sha-b7127069")),
+            "puna test+abcd1234 · pahoa sha-b7127069 MIT license",
+            "the fleet's pahoa image does not sit apart from the name it belongs to"
+        );
+    }
+
+    /// The footer as a reader sees it: tags removed, runs of whitespace collapsed.
+    fn footer_text(html: &str) -> String {
+        let footer = html
+            .split_once("<footer>")
+            .expect("the page has no footer")
+            .1
+            .split_once("</footer>")
+            .expect("unterminated footer")
+            .0;
+        let mut text = String::new();
+        let mut inside = false;
+        for c in footer.chars() {
+            match c {
+                '<' => inside = true,
+                '>' => inside = false,
+                _ if inside => {}
+                c if c.is_whitespace() => {
+                    if !text.ends_with(' ') {
+                        text.push(' ');
+                    }
+                }
+                c => text.push(c),
+            }
+        }
+        text.trim().to_string()
+    }
+
     /// **The open-claim control appears exactly where both halves of its condition hold.**
     ///
     /// Four renders, because each wrong one fails differently and none of them fails loudly:
@@ -3218,6 +3279,8 @@ pub(crate) mod tests {
                 username: "troy".into(),
                 site_name: "puna",
                 version: "test",
+                build_rev: "abcd1234",
+                pahoa_image: None,
                 static_version: "test",
                 view_as: None,
             },
@@ -3277,6 +3340,8 @@ pub(crate) mod tests {
                 username: "troy".into(),
                 site_name: "puna",
                 version: "test",
+                build_rev: "abcd1234",
+                pahoa_image: None,
                 static_version: "test",
                 view_as: None,
             },
