@@ -197,7 +197,7 @@ need to.</p>
    somebody is part-way through typing into. A stray click light-dismissing a half-written note is
    exactly the wrong behavior. #}
 {% if annotations %}
-<dialog id="annotate" class="sheet" aria-labelledby="annotate-title">
+<dialog id="annotate" class="sheet annotate" aria-labelledby="annotate-title">
 <h2 id="annotate-title">Annotate</h2>
 <p class="target" data-annotate-target></p>
 <form method="post" data-annotate-form>
@@ -210,10 +210,34 @@ need to.</p>
 <p>
 <label for="annotate-note">Note</label>
 {# **Emptying it deletes it**, which the placeholder says because a blank box and a deleted note are
-   otherwise the same gesture with no confirmation between them. Bounded to match both the column's
-   CHECK and the route's, so the browser refuses before a round trip does. #}
-<textarea id="annotate-note" name="note" rows="4" maxlength="{{ note_limit }}"
+   otherwise the same gesture with no confirmation between them.
+
+   **No `maxlength`, deliberately, and it used to have one.** Two reasons, and the second is the one
+   that makes this a correction rather than a preference:
+
+   * The attribute counts UTF-16 code units where the route counts `chars()` and the column counts
+     `char_length`, which are both code points. An emoji is two of the first and one of the second,
+     so a note of emoji was cut off at about 500 characters while the server would have taken 1000.
+     Silently, mid-word, at a boundary nothing on the page names.
+   * It makes going over unreachable, so a counter could never turn red and the Save button could
+     never disable. The browser would simply stop accepting keystrokes, which is the same
+     information delivered by a control going dead.
+
+   The counter below is the affordance instead, and the route stays the thing that actually refuses:
+   with no script, an over-long note is a sentence naming the limit rather than a truncation nobody
+   was told about. `data-limit` is where the script reads the number, so `MAX_NOTE_CHARS` remains
+   spelled once, in Rust. #}
+<textarea id="annotate-note" name="note" rows="6" data-limit="{{ note_limit }}"
+          aria-describedby="annotate-count"
           placeholder="Visible to this room's players and staff. Leave empty to remove it."></textarea>
+{# Filled and revealed by `tracker.js`, so a page with no script carries no counter rather than one
+   frozen at "0 / 1000" while somebody types into the box above it. Same rule the filter boxes
+   follow, and there is a lint over that one.
+
+   A `<span>` made block by the stylesheet, not a `<p>`: this sits inside one, and a `<p>` inside a
+   `<p>` is closed by the parser at the inner one's start tag, which would silently put the counter
+   outside the field it belongs to and leave a stray `</p>` behind. #}
+<span class="note-count" id="annotate-count" data-annotate-count hidden></span>
 </p>
 <p class="buttons">
 <button type="submit">Save</button>

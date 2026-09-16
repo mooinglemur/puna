@@ -223,8 +223,17 @@ td .actions form {
    container: the same trap the copy confirmation hit, solved by the platform this time rather
    than by hand. Escape and click-away close it, and opening one closes any other, all without a
    line of script. */
-[popover].sheet {
-  width: min(30rem, calc(100vw - 2rem));
+/* **Both spellings, because `.sheet` alone was never the selector.** A `<dialog class="sheet">` gets
+   none of this: the rule is `[popover].sheet`, so a dialog wearing the class inherited the UA's
+   surface instead, which is `width: fit-content` and a 1px inset border owing nothing to the theme.
+   The moderation dialog hit that and answered it by copying the block; the tracker's annotation
+   dialog wore the class and got neither, which is why it opened barely wider than its own radio
+   buttons. Shared here so the next `<dialog class="sheet">` cannot repeat it.
+
+   The WIDTH stays per dialog below: what a sheet is made of is one decision and how wide it wants
+   to be is another, and these two want different answers. */
+[popover].sheet,
+dialog.sheet {
   /* **`white-space: normal`, because the top layer does not escape INHERITANCE.** The overlay is
      painted above the page and is positioned by the viewport, so it is easy to read it as detached
      from the table, but it is still a DOM descendant of the `<td>` it is declared in, and
@@ -240,9 +249,25 @@ td .actions form {
   box-shadow: 0 8px 30px var(--float-shadow);
 }
 
-[popover].sheet::backdrop {
-  /* Dimmed rather than clear, so it reads as "answer this first", which it is: the form behind it
-     is a list of other people's accounts. */
+/* The sanction overlays: a short reason field, so a reading measure is the right width. */
+[popover].sheet { width: min(30rem, calc(100vw - 2rem)); }
+
+/* The tracker's annotation dialog, which is **half the viewport** because the thing in it is a
+   textarea and the old width made a thousand-character box look like a search field. `width` is a
+   content box here (nothing sets `border-box` globally), so this IS the textarea's width and the
+   padding sits outside it.
+
+   **`min(max(...))` rather than `clamp()`**, which is the spelling that looks natural and is wrong
+   in the one case that matters: `clamp` applies its floor last, so a 20rem minimum beats the
+   viewport cap and the dialog overflows the screen on a narrow phone. Here the cap is applied last
+   and always wins. */
+dialog.annotate { width: min(max(50vw, 20rem), calc(100vw - 4.5rem)); }
+
+[popover].sheet::backdrop,
+dialog.sheet::backdrop {
+  /* Dimmed rather than clear, so it reads as "answer this first", which it is: with a modal dialog
+     the page behind it is literally inert, and the sanction overlay's own form is a list of other
+     people's accounts. */
   background: rgb(0 0 0 / 0.45);
 }
 
@@ -250,6 +275,33 @@ td .actions form {
 .sheet .hint { margin: 0 0 0.9rem; }
 .sheet label { display: block; margin-bottom: 0.3rem; }
 .sheet input[type="text"] { width: 100%; box-sizing: border-box; }
+
+/* `border-box` so the padding and border come out of the width rather than pushing the field past
+   the dialog's content box, which is what the width above was chosen to be. */
+.sheet textarea {
+  width: 100%;
+  box-sizing: border-box;
+  /* Vertical only: a textarea the reader can drag wider than the dialog containing it is a
+     scrollbar waiting to happen, and the height is the axis somebody actually wants more of. */
+  resize: vertical;
+}
+
+/* **How much of the note is used, right against the end of the box it describes.** A `<span>` made
+   block rather than a `<p>`, because it lives inside one. Muted until it matters, then the error
+   color: the Save button disables at the same moment, and a control going dead with nothing saying
+   why is the failure this exists to prevent. */
+.note-count {
+  display: block;
+  margin-top: 0.25rem;
+  text-align: right;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.note-count.over {
+  color: var(--err-fg);
+  font-weight: 600;
+}
 .sheet .buttons {
   display: flex;
   gap: 0.5rem;
@@ -320,25 +372,11 @@ td .actions form {
    this work?" answer must not do: a granted hint and a refused one look identical once the box is
    gone.
 
-   It borrows `.sheet` for its surface and adds only what a dialog needs: the UA stylesheet centers
-   it and gives it a border and a margin of its own, which the shared rules do not expect. */
-dialog.moderate {
-  width: min(32rem, calc(100vw - 2rem));
-  /* `border` rather than the UA's default, and `padding` because `.sheet`'s does not apply here:
-     that rule is `[popover].sheet`, and this element has no `popover` attribute. */
-  padding: 1rem 1.15rem 1.15rem;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: 0 8px 30px var(--float-shadow);
-}
-
-dialog.moderate::backdrop {
-  /* Dimmed rather than clear, for the same reason the sanction overlays are: it says "answer this
-     first", which with an inert page behind it is literally true. */
-  background: rgb(0 0 0 / 0.45);
-}
+   It borrows `.sheet` for its surface and adds only its width. It used to carry its own copy of
+   that surface, with a comment saying `.sheet`'s did not reach a dialog; the selector up there
+   covers both spellings now, so this is the same six declarations arriving from one place instead
+   of two. Its own `::backdrop` went with them. */
+dialog.moderate { width: min(32rem, calc(100vw - 2rem)); }
 
 .moderate h2 { margin: 0 0 0.4rem; font-size: 1.1rem; }
 

@@ -3643,6 +3643,107 @@ fn the_bulk_panel_offers_exactly_the_actions_its_route_implements() {
     );
 }
 
+/// **Every hook `tracker.js` reaches for in the annotation dialog has to exist in the markup.**
+///
+/// The same contract and the same failure as the moderation dialog's lint below: the script
+/// addresses the dialog through `[data-annotate-…]`, some of those reads are unguarded, and a
+/// renamed attribute throws inside the click handler rather than degrading one field, taking every
+/// pencil on the page dead with it and leaving the evidence in a console nobody has open.
+///
+/// Written the strict way round, the script being the authority: an unused attribute in the markup
+/// is harmless and a missing one is not.
+#[test]
+fn the_annotation_dialog_renders_every_hook_its_script_reaches_for() {
+    let script = std::fs::read_to_string(source("static/tracker.js")).expect("tracker.js");
+    let template =
+        std::fs::read_to_string(source_template("tracker/show.html")).expect("show.html");
+
+    let mut wanted: Vec<&str> = Vec::new();
+    let mut rest = script.as_str();
+    while let Some(at) = rest.find("[data-annotate-") {
+        let after = &rest[at + 1..];
+        let name = after.split(']').next().unwrap_or_default();
+        if !name.is_empty() && !wanted.contains(&name) {
+            wanted.push(name);
+        }
+        rest = after;
+    }
+
+    assert!(
+        wanted.len() >= 4,
+        "only {} hooks found in tracker.js: this lint is no longer looking at anything, {wanted:?}",
+        wanted.len()
+    );
+
+    let missing: Vec<&&str> = wanted
+        .iter()
+        .filter(|name| !template.contains(**name))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "tracker.js addresses these and tracker/show.html renders none of them, so the first \
+         annotate pencil clicked throws and every one on the page goes dead: {missing:?}"
+    );
+}
+
+/// **The note counter is told when the field is filled, and the field has no `maxlength`.**
+///
+/// Two call sites, and both revert to something that looks entirely reasonable.
+///
+/// `countNote` is unit tested; what a unit test cannot reach is that opening the dialog calls it.
+/// **Setting `value` fires no `input` event**, so without that call the counter carries whatever the
+/// previously opened slot left in it, and on the first open of a page it stays hidden until the
+/// first keystroke: a counter that only starts counting once you type. The same class of bug as a
+/// browser-restored form control, which `table-filter.test.js` exists for.
+///
+/// The `maxlength` half is the one that would be re-added as a tightening. It caps in UTF-16 code
+/// units where the route counts `chars()` and the column counts `char_length`, so it truncates a
+/// note of emoji at about half the real limit, silently. It also makes the over-limit state
+/// unreachable, so the counter could never turn red and Save could never disable: the feature would
+/// still be there, fully tested, and nobody could ever see it.
+#[test]
+fn the_note_counter_is_told_when_the_field_is_filled() {
+    let script =
+        code_only(&std::fs::read_to_string(source("static/tracker.js")).expect("tracker.js"));
+    let markup = blank_comments(
+        &std::fs::read_to_string(source_template("tracker/show.html")).expect("show.html"),
+    );
+
+    let after_fill = script
+        .split_once("noteField.value = edit.note")
+        .expect("the dialog no longer fills the note field")
+        .1;
+    let before_open = after_fill
+        .split_once("showModal()")
+        .expect("the dialog is no longer opened after its fields are filled")
+        .0;
+    assert!(
+        before_open.contains("countNote()"),
+        "the note field is filled and the counter is not told, so it shows the last slot's count \
+         until somebody types, and is missing entirely on the first open"
+    );
+
+    // Comments stripped first: the template explains at length why the attribute is absent, and a
+    // lint that matches its own prose fails on a correct file. Fifth instance in this repository.
+    let textarea = markup
+        .split_once("<textarea id=\"annotate-note\"")
+        .expect("the annotation dialog no longer has its note field")
+        .1
+        .split_once('>')
+        .expect("unterminated textarea")
+        .0;
+    assert!(
+        !textarea.contains("maxlength"),
+        "the note field caps itself again, in UTF-16 code units rather than the characters the \
+         route and the column count, and nobody can reach the counter's over-limit state"
+    );
+    assert!(
+        textarea.contains("data-limit="),
+        "the script reads the limit off the field; without it the counter renders NaN and disables \
+         nothing"
+    );
+}
+
 /// **Every hook `moderation.js` reaches for has to exist in the markup.**
 ///
 /// The script addresses the dialog entirely through `[data-mod-…]` attributes, and most of those

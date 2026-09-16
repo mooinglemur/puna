@@ -717,6 +717,39 @@
   if (annotateDialog && typeof annotateDialog.showModal === "function") {
     const form = annotateDialog.querySelector("[data-annotate-form]");
     const target = annotateDialog.querySelector("[data-annotate-target]");
+    const noteField = form.querySelector('[name="note"]');
+    const counter = annotateDialog.querySelector("[data-annotate-count]");
+    const save = form.querySelector('button[type="submit"]');
+    // Server-rendered from `MAX_NOTE_CHARS`, so the number is spelled once and in Rust. A missing
+    // attribute would make this `NaN`, and every comparison against `NaN` is false, so the counter
+    // would render "NaN" and never disable anything: guarded rather than trusted.
+    const limit = Number(noteField && noteField.dataset.limit);
+
+    // **How much of the note is used, counted the way the things that REFUSE it count.**
+    //
+    // `value.length` is UTF-16 code units; the route counts `chars()` and the column's CHECK counts
+    // `char_length`, both of which are code points. An emoji is two of the first and one of the
+    // second, so a note of 600 emoji would report 1200 and disable Save over a limit the server
+    // would not have applied. `Array.from` iterates by code point, which is the same unit.
+    //
+    // This is also why the field carries no `maxlength`: that attribute counts in the wrong unit
+    // too, and while it was there nobody could reach the state this renders.
+    function countNote() {
+      if (!counter || !noteField || !limit) return;
+      const used = Array.from(noteField.value).length;
+      const over = used > limit;
+      counter.textContent = `${used} / ${limit} characters`;
+      counter.classList.toggle("over", over);
+      // Revealed by the script that maintains it, so a page with no script shows no counter rather
+      // than one frozen at zero.
+      counter.hidden = false;
+      noteField.setAttribute("aria-invalid", over ? "true" : "false");
+      // The refusal is the route's; this only saves the round trip. Trimming re-enables it on the
+      // next keystroke, so there is no state to get stuck in.
+      if (save) save.disabled = over;
+    }
+
+    if (noteField) noteField.addEventListener("input", countNote);
 
     document.addEventListener("click", (event) => {
       const button = event.target.closest?.(".annotate-icon");
@@ -739,10 +772,15 @@
       for (const radio of form.querySelectorAll('input[name="progression"]')) {
         radio.checked = radio.value === chosen;
       }
-      form.querySelector('[name="note"]').value = edit.note || "";
+      noteField.value = edit.note || "";
+      // **Setting `value` fires no `input` event**, so the counter has to be told. Without this it
+      // would carry whatever the last slot opened left behind, and on the first open of the page it
+      // would stay hidden until the first keystroke: a box that only starts counting once you type
+      // into it. The same class of bug as a restored form control, which `table.js` records.
+      countNote();
 
       annotateDialog.showModal();
-      form.querySelector('[name="note"]').focus();
+      noteField.focus();
     });
 
     annotateDialog.addEventListener("click", (event) => {
