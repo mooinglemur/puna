@@ -544,6 +544,20 @@
       if (!response.ok) return null;
 
       const document_ = await response.json();
+      // **Stamped when the response lands, before anything renders off it.**
+      //
+      // `age()` adds `Date.now() - lastResponseAt` to each row's server-computed age, so the column
+      // keeps ticking between polls without a fetch. That term is only correct if the stamp belongs
+      // to the document being rendered. It used to be set in `refreshAll` **after** awaiting every
+      // table, so a render ran against the PREVIOUS response's stamp and every age came out too old
+      // by the whole gap since the last poll.
+      //
+      // At the 60 s cadence that is one minute of error, which reads as plausible. On a tab
+      // returning from the background it is the entire time you were away: the fetch is fresh, the
+      // check counts are new, and the ages claim nothing has happened since you left. Measured on a
+      // live room: four slots whose counts had not moved each read exactly three minutes older than
+      // a browser reload showed a moment later.
+      lastResponseAt = Date.now();
       this.rows = this.config.rows(document_) || [];
       this.render();
       return document_;
@@ -1070,8 +1084,10 @@
 
   async function refreshAll() {
     lastPollAt = Date.now();
+    // **`lastResponseAt` is NOT set here**, and that is the fix rather than an omission: each table
+    // stamps it as its own response lands, because that is the value its render needs. Setting it
+    // after this await is what made every age too old by the gap since the previous poll.
     const results = await Promise.all(tables.map((t) => t.refresh().catch(() => null)));
-    lastResponseAt = Date.now();
     // **A render destroys the chip this was positioned against**, and the rows may come back in a
     // different order, so a "Still BK" left floating would be sitting over somebody else's row
     // while carrying the slot it was opened on. The write would still be right and the thing under

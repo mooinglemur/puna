@@ -189,6 +189,34 @@ exports.run = function (t) {
     t.check("all never answers never", h.mostRecent([row(null, undefined)]) === null);
   }
 
+  // --- the drift term, which is why the stamp has to be fresh -----------------------------------
+  //
+  // `age` reports the server's number plus however long ago that response landed, so the column
+  // ticks between polls. That makes it correct only when `lastResponseAt` belongs to the document
+  // being rendered.
+  //
+  // The shipped bug set it after awaiting every table, so each render measured against the previous
+  // poll. This is what that looked like, and it is the reason a returning tab appeared not to
+  // refresh: the data was new and every age was inflated by the time the tab spent hidden.
+  {
+    const stale = harness();
+    // Pretend the last stamp is three minutes old, which is what a backgrounded tab leaves behind.
+    const drifted = new Function(
+      "lastResponseAt",
+      "window",
+      lift() + "\nreturn age;"
+    )(Date.now() - 3 * 60 * 1000, { PunaTime: { absolute: () => "@" } });
+
+    t.check(
+      "a fresh stamp reports the server's own age",
+      stale.age(OLD).text === "3d ago"
+    );
+    t.check(
+      "a stale stamp inflates it by the gap, which is the bug this pins",
+      drifted(RECENT).text === "4m ago" && stale.age(RECENT).text === "1m ago"
+    );
+  }
+
   // --- without localtime.js ---------------------------------------------------------------------
   //
   // The tooltip degrades to absent, exactly as the single-line one already did, rather than to a

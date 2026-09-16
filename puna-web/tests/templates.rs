@@ -3727,6 +3727,62 @@ fn the_footer_names_its_components_and_keeps_them_apart() {
     );
 }
 
+/// **A response is stamped before anything renders off it.**
+///
+/// `age()` adds `Date.now() - lastResponseAt` to each row's server-computed age so the Last seen
+/// column keeps ticking between polls. The term is only right if the stamp belongs to the document
+/// being rendered, and `render()` is called from inside `refresh()` while the stamp used to be set
+/// in `refreshAll` after awaiting every table. So each render measured against the PREVIOUS
+/// response and every age came out too old by the whole gap since the last poll.
+///
+/// **It hid because the error is the poll interval**, which at 60 s reads as a plausible reading
+/// rather than a wrong one. It only becomes obvious on a tab returning from the background, where
+/// the error is however long you were away: a fetch lands with new data and the page insists
+/// nothing has happened since you left, which reads as the poll not firing.
+///
+/// Not reachable from a unit test: `age()` is correct in isolation and always was, and the two
+/// halves of the mistake are in different functions.
+#[test]
+fn a_tracker_response_is_stamped_before_it_is_rendered() {
+    let script =
+        code_only(&std::fs::read_to_string(source("static/tracker.js")).expect("tracker.js"));
+
+    let refresh = script
+        .split_once("async refresh()")
+        .expect("tracker.js no longer refreshes a table")
+        .1
+        .split_once("\n    }")
+        .expect("unterminated refresh")
+        .0;
+
+    let stamp = refresh
+        .find("lastResponseAt = Date.now()")
+        .expect("a table no longer stamps the response it is about to render");
+    let render = refresh
+        .find("this.render()")
+        .expect("refresh no longer renders");
+    assert!(
+        stamp < render,
+        "the response is stamped after it is rendered, so every age is measured against the \
+         previous poll and comes out that much too old"
+    );
+
+    // And the old spelling is gone: setting it again after awaiting every table would overwrite
+    // each table's own stamp with a later one, which is the same error in miniature.
+    let all = script
+        .split_once("async function refreshAll()")
+        .expect("tracker.js no longer polls")
+        .1
+        .split_once("\n  }")
+        .expect("unterminated refreshAll")
+        .0;
+    assert!(
+        !all.contains("lastResponseAt = Date.now()"),
+        "`refreshAll` stamps the response again after every table has rendered, which re-introduces \
+         the gap it was moved out of"
+    );
+}
+
 /// **The note icon carries the note in its accessible name and NOT in a `title`.**
 ///
 /// It is the one glyph control in this project without a tooltip, so the obvious later change is to
