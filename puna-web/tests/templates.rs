@@ -3643,6 +3643,45 @@ fn the_bulk_panel_offers_exactly_the_actions_its_route_implements() {
     );
 }
 
+/// **No template comment closes itself early**, which is invisible in an editor and renders prose
+/// into the page.
+///
+/// A comment is `{#` to the first `#}`, so writing that pair inside one ends it there and everything
+/// after it is live markup. It happened in `base.html`, in a comment explaining a whitespace
+/// problem, which is exactly the subject that makes somebody quote a delimiter.
+///
+/// **Nothing else could catch it.** The page still compiles, because the leaked text is valid
+/// markup; the whitespace lints reported a `{{+` in the leaked half as though it were real, which
+/// is how it was found, but they were reporting the symptom two lines from the cause. The render
+/// tests only read the fragment each is about, so prose landing above the footer passed them all.
+#[test]
+fn no_template_comment_ends_before_it_looks_like_it_does() {
+    for path in templates() {
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("could not read {path:?}: {e}"));
+
+        let mut rest = raw.as_str();
+        let mut line = 1;
+        while let Some(at) = rest.find("{#") {
+            line += rest[..at].matches('\n').count();
+            let body = &rest[at + 2..];
+            let end = body
+                .find("#}")
+                .unwrap_or_else(|| panic!("{path:?}:{line}: a comment is never closed"));
+            // A second opener inside the body means the first `#}` belongs to a nested-looking
+            // comment: the outer one ended at it, and everything past that is being rendered.
+            assert!(
+                !body[..end].contains("{#"),
+                "{}:{line}: this comment contains `{{#` before it closes, so it ends at the first \
+                 `#}}` and the rest of its text is rendered into the page",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            );
+            line += body[..end].matches('\n').count();
+            rest = &body[end + 2..];
+        }
+    }
+}
+
 /// **The footer names each component, its revision and the license, and spaces them.**
 ///
 /// Every failure here is a rendering one, which is the category this project has the least natural

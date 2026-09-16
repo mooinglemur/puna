@@ -119,6 +119,15 @@ can change anything.
    Each component links to its own repository and carries its own revision, in kalapana's shape:
    `name version · name version`, ending in the license.
 
+   **A `+` joins the version and the revision, which is semver's separator for build metadata, and
+   a commit sha is exactly that.** A hyphen is the prerelease separator and would assert something
+   different and untrue: that every build of `0.1.0` is a prerelease of it.
+
+   **No comment may sit between the link above and the tag after it.** A whitespace-trimming comment
+   went there once and the footer rendered `punatest+abcd1234`: the comment's own tag suppressed the
+   newline the version tag relies on for its space. Both whitespace lints passed, because their
+   question is whether a `+` is present or pointless rather than whether the line reads.
+
    **`base.build_rev` is the string the image tag is made of**, so `0.1.0+a0237e2b` is directly
    comparable with `puna-web:sha-a0237e2b` in the registry. It is this tier's own build. There are
    two Puna images and the orchestrator's is not named separately because they are built from one
