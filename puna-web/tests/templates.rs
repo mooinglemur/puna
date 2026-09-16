@@ -3643,6 +3643,90 @@ fn the_bulk_panel_offers_exactly_the_actions_its_route_implements() {
     );
 }
 
+/// **The room creation form, its struct and the room it builds all name the same fields.**
+///
+/// Three files, and every way they can disagree is silent, because an HTML form sends nothing for a
+/// control it does not have and Rocket fills a missing checkbox with its default:
+///
+/// * an input whose `name` is not a field on `CreateRoomForm` posts into nothing. The room is
+///   created, the organizer's choice is dropped, and the option reads as off on a form that showed
+///   it ticked;
+/// * a field on the struct that the route never reads is an option that exists everywhere except in
+///   the room. This is the one a new checkbox lands in: the markup is the visible half, so it gets
+///   written first and looks finished.
+///
+/// Neither fails anything today, which is what this is for: the whole path renders, submits,
+/// redirects and creates a room, and the only evidence is an option that will not stay on.
+#[test]
+fn every_control_on_the_creation_form_reaches_the_room() {
+    let routes = std::fs::read_to_string(source("src/routes/rooms.rs")).expect("rooms.rs");
+    let markup = blank_comments(
+        &std::fs::read_to_string(source_template("generations/show.html")).expect("show.html"),
+    );
+
+    let declared = routes
+        .split_once("struct CreateRoomForm {")
+        .expect("the creation form's struct is gone, so this lint checks nothing")
+        .1
+        .split_once("\n}")
+        .expect("unterminated struct")
+        .0;
+    let fields: Vec<&str> = declared
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with("//") && !line.starts_with('#'))
+        .filter_map(|line| line.split_once(':').map(|(name, _)| name.trim()))
+        .filter(|name| !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_'))
+        .collect();
+
+    assert!(
+        fields.len() >= 10,
+        "read {} fields off CreateRoomForm: this lint is no longer looking at anything, {fields:?}",
+        fields.len()
+    );
+
+    // The route body, which is where a field becomes part of the room.
+    let route = routes
+        .split_once("\nasync fn create(")
+        .expect("the creation route is gone")
+        .1;
+    let route = route.split_once("\n}\n").expect("unterminated route").0;
+    // Comments first so a sentence naming a field cannot stand in for reading it, then whitespace,
+    // because rustfmt wraps a long access as `form\n    .generation_id` and a contiguous search for
+    // `form.generation_id` would report the one field the route cannot do without as unread.
+    let route: String = code_only(route)
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+
+    for field in &fields {
+        assert!(
+            route.contains(&format!("form.{field}")),
+            "`CreateRoomForm.{field}` is never read by the creation route, so whatever the \
+             organizer chose for it is dropped and the room gets the default"
+        );
+    }
+
+    // And nothing on the form posts into a field that does not exist.
+    let mut names = 0;
+    let mut rest = markup.as_str();
+    while let Some(at) = rest.find("name=\"") {
+        let after = &rest[at + 6..];
+        let name = after.split('"').next().unwrap_or_default();
+        assert!(
+            fields.contains(&name),
+            "the creation form posts `{name}` and CreateRoomForm has no such field, so that \
+             control is dropped and its option silently takes the default"
+        );
+        names += 1;
+        rest = after;
+    }
+    assert!(
+        names >= 10,
+        "found {names} named controls on the creation form: this lint is looking at the wrong file"
+    );
+}
+
 /// **The "still current" chip is a button only where the route would accept it.**
 ///
 /// Three call sites in one file, each silent in its own way:

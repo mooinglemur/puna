@@ -474,6 +474,47 @@ pub async fn claim(
         .ok_or(ClaimError::NoSuchToken)
 }
 
+/// Take an unclaimed slot without holding its claim link, for a room with `open_claims` on.
+///
+/// **The caller decides whether the room allows it; this decides whether the slot is free.** That
+/// split is deliberate: the room's setting is a policy question the route answers from the row it
+/// already loaded, and "is anybody holding this" is a question only the write itself can answer
+/// without a race.
+///
+/// Three things the statement does that a check above it could not:
+///
+/// * **`owner_id IS NULL` is the guard**, so two people pressing the button at the same moment
+///   cannot both get the slot. One update matches and the other does not, and the loser is told the
+///   slot was taken rather than silently replacing its owner.
+/// * **The claim token goes with it**, exactly as redeeming one does. Leaving it would be the real
+///   defect here: a link staff minted earlier still names this slot, and `claim` matches on the
+///   token alone, so whoever held that link could take the slot back off the person who just
+///   claimed it, at any point, with nothing refusing them.
+/// * It touches nothing else, so a slot's password, progression and note are whatever the room had
+///   already given it.
+///
+/// Answers the claimed slot, or `None` when somebody else already holds it.
+pub async fn claim_open(
+    conn: &mut AsyncPgConnection,
+    room: RoomId,
+    slot_number: i32,
+    user_id: i64,
+) -> Result<Option<Slot>, diesel::result::Error> {
+    let rows: Vec<SlotRow> = diesel::sql_query(format!(
+        "UPDATE room_slots
+            SET owner_id = $3, claim_token = NULL, claimed_at = now()
+          WHERE room_id = $1 AND slot_number = $2 AND owner_id IS NULL
+      RETURNING {SLOT_COLUMNS}"
+    ))
+    .bind::<SqlUuid, _>(room)
+    .bind::<Integer, _>(slot_number)
+    .bind::<BigInt, _>(user_id)
+    .load(conn)
+    .await?;
+
+    Ok(rows.into_iter().next().map(Slot::from))
+}
+
 /// Hand a slot back: clear its owner and issue a fresh claim link.
 ///
 /// The token is regenerated rather than restored, because the old link may have been shared with

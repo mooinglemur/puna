@@ -370,6 +370,7 @@ diesel::table! {
         gameplay_options -> Nullable<Jsonb>,
         enhanced_tracker -> Bool,
         password_complexity -> PasswordComplexity,
+        open_claims -> Bool,
     }
 }
 

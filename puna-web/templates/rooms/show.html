@@ -271,6 +271,24 @@ claimed
 <path d="M10.5 14.5h-8a1 1 0 0 1-1-1v-9" fill="none" stroke="currentColor" stroke-linecap="round"/>
 </svg>
 </button>
+{% else if room.open_claims && base.is_logged_in %}
+{# **The open-claims path, and it is a form rather than an anchor.** The branch above it is a claim
+   LINK, which has to be an anchor because it is a thing somebody is sent and a chat client unfurls;
+   this means nothing off the page it is on, so a form is both simpler and the shape that needs no
+   script at all. Unscripted and scripted alike: post, redirect, the roster shows you holding it.
+
+   Gated in markup rather than in the route's view model, unlike the password column next door,
+   because nothing here is withheld: the action is `/room/<id>/slot/<n>/claim`, which anybody can
+   derive from the URL they are already looking at. The route re-checks both halves of this
+   condition, so a control offered wrongly is refused rather than honored. #}
+<form method="post" action="/room/{{ room.id }}/slot/{{ slot.slot_number }}/claim" class="claim-open">
+<button type="submit" title="Take this slot">claim</button>
+</form>
+{% else if room.open_claims %}
+{# Signed out, on a room anybody may join. "unclaimed" alone would be true and useless: the reason
+   this room has the option on is that its organizer is expecting strangers, and the one thing
+   standing between this reader and a slot is a login they have not been told they need. #}
+<a href="/auth/login?redirect=/room/{{ room.id }}">sign in to claim</a>
 {% else %}
 unclaimed
 {% endif %}

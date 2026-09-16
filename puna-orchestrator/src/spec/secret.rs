@@ -184,6 +184,7 @@ mod tests {
             // STARTED with, and the room's reported rules are what it is running with. A fixture
             // that supplied them would invite a future reader to reach for them.
             enhanced_tracker: false,
+            open_claims: false,
             gameplay_options: None,
             probed_at: None,
         }

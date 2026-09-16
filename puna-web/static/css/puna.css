@@ -852,6 +852,30 @@ p.error {
   vertical-align: baseline;
 }
 
+/* The open-claim control. A form so it works with no script, drawn as a link because its neighbor
+   in that column is one: the roster's claim cell is a link on a room that hands out claim links and
+   this on a room that does not, and a chunky button in one of them would make the two rooms look
+   like different pages rather than one page with a setting.
+
+   `display: inline` and no margin, because `form` carries a bottom margin for the ones that own a
+   block of a page, and this one lives in a table cell. */
+.claim-open {
+  display: inline;
+  margin: 0;
+}
+
+.claim-open button {
+  padding: 0;
+  font: inherit;
+  color: var(--link);
+  background: none;
+  border: none;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.claim-open button:hover { text-decoration: none; }
+
 /* **A chip that is a button still has to look like a chip.** The base `button` rule sets its own
    font, padding, border and background, all of which would win here on specificity grounds if this
    did not put them back: `button` and `.tag` are both one selector, and `button` comes first in

@@ -1612,6 +1612,134 @@ async fn clearing_a_note_removes_it_rather_than_storing_nothing() {
     .await;
 }
 
+/// **Open claims let anybody signed in take a FREE slot, and spend the link on the way.**
+///
+/// Four properties, and the second is the one that would have been a real defect:
+///
+/// * the option is **off for a new room**, which is how every room behaved before the column
+///   existed. A widening that arrives by migration is one nobody chose.
+/// * claiming this way **clears the claim token**, exactly as redeeming one does. Leaving it would
+///   mean a link staff minted earlier still names the slot, and `claim` matches on the token alone,
+///   so its holder could take the slot back off whoever just claimed it, at any time, with nothing
+///   refusing them.
+/// * a slot somebody already holds is **not available**, answered by the write rather than by a
+///   check above it, so two people pressing at the same moment cannot both get it.
+/// * it **carries to a clone**, like every other room option: a clone is the same group on the same
+///   seed, and closing a room that was open is the more surprising of the two directions.
+#[tokio::test]
+async fn an_open_room_lets_anybody_take_a_free_slot_and_spends_its_link() {
+    with_db(|pool| async move {
+        let mut conn = pool.get().await.expect("connection");
+        users(&mut conn).await;
+        let generation = seed_generation(&mut conn, false).await;
+
+        let id = room::create(
+            &mut conn,
+            &NewRoom::direct(Environment::Dev, "open", generation, OWNER),
+        )
+        .await
+        .expect("create");
+
+        assert!(
+            !room::get(&mut conn, id)
+                .await
+                .expect("read")
+                .expect("the room")
+                .open_claims,
+            "a room nobody asked about was opened to anybody who can reach it"
+        );
+
+        let free = slot::list(&mut conn, id).await.expect("slots")[0].clone();
+        let number = free.slot_number;
+        let token = free.claim_token.expect("an unclaimed slot has a link");
+
+        // The model function answers whether the SLOT is free; the room's setting is the route's
+        // question, which is why this can be exercised without turning the option on.
+        let claimed = slot::claim_open(&mut conn, id, number, PLAYER)
+            .await
+            .expect("claim")
+            .expect("the slot was free");
+        assert_eq!(claimed.owner_id, Some(PLAYER));
+        assert!(claimed.claimed_at.is_some());
+
+        // **The link is spent.** Without this the token still names a slot somebody now holds, and
+        // redeeming it would hand the slot to whoever kept the link.
+        assert_eq!(claimed.claim_token, None);
+        assert!(
+            matches!(
+                slot::claim(&mut conn, &token, STRANGER).await,
+                Err(slot::ClaimError::NoSuchToken)
+            ),
+            "an old claim link took a slot back off the person who had claimed it"
+        );
+
+        // Nobody else can have it, and the answer is `None` rather than a silent reassignment.
+        assert!(
+            slot::claim_open(&mut conn, id, number, STRANGER)
+                .await
+                .expect("claim")
+                .is_none(),
+            "a slot that was already held was handed to somebody else"
+        );
+        assert_eq!(
+            slot::list(&mut conn, id)
+                .await
+                .expect("slots")
+                .into_iter()
+                .find(|s| s.slot_number == number)
+                .expect("the slot")
+                .owner_id,
+            Some(PLAYER),
+            "the owner changed under them"
+        );
+
+        // A slot number this room does not have answers the same way rather than erroring.
+        assert!(
+            slot::claim_open(&mut conn, id, 9999, STRANGER)
+                .await
+                .expect("claim")
+                .is_none()
+        );
+
+        // --- and the setting carries to a clone --------------------------------------------------
+        // Every other option carried off the row rather than named here, so this turns one thing on
+        // and asserts about one thing.
+        let before = room::get(&mut conn, id)
+            .await
+            .expect("read")
+            .expect("the room");
+        room::set_live_options(
+            &mut conn,
+            id,
+            room::LiveOptions {
+                tracker_policy: before.tracker_policy,
+                journal_policy: before.journal_policy,
+                patch_policy: before.patch_policy,
+                primary_port: before.primary_port,
+                spoiler_policy: before.spoiler_policy,
+                enhanced_tracker: before.enhanced_tracker,
+                open_claims: true,
+                password_complexity: before.password_complexity,
+            },
+        )
+        .await
+        .expect("save");
+
+        let clone = room::clone_room(&mut conn, id, "open clone".into(), OWNER, true)
+            .await
+            .expect("clone");
+        assert!(
+            room::get(&mut conn, clone)
+                .await
+                .expect("read")
+                .expect("the clone")
+                .open_claims,
+            "a clone of an open room closed itself, so the group has to ask for it again"
+        );
+    })
+    .await;
+}
+
 /// **Saying a progression is still true moves its clock and touches nothing else.**
 ///
 /// The tracker's Last seen column reports how stale an annotation is, so "still BK" has to be
@@ -1856,6 +1984,7 @@ async fn a_password_policy_change_leaves_issued_passwords_alone() {
                 primary_port: room.primary_port,
                 spoiler_policy: room.spoiler_policy,
                 enhanced_tracker: room.enhanced_tracker,
+                open_claims: room.open_claims,
                 password_complexity: PasswordComplexity::High,
             },
         )

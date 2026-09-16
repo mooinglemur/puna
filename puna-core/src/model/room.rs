@@ -476,6 +476,10 @@ pub struct NewRoom {
     /// for**: off is how every room behaved before the feature existed, so a room whose organizer
     /// did not think about it behaves the way rooms always have.
     pub enhanced_tracker: bool,
+    /// Whether anybody signed in may take an unclaimed slot without holding its claim link. **Off
+    /// unless asked for**, for the reason above and one more: turning it on is a widening, and the
+    /// rooms that would inherit it silently include races.
+    pub open_claims: bool,
     /// `None` defaults from `race_mode` too: `members` for a race, `link` otherwise.
     pub tracker_policy: Option<TrackerPolicy>,
     /// `None` keeps the column default, `open`. The creation form sends `claimed`.
@@ -538,6 +542,7 @@ impl NewRoom {
             idempotency_key: None,
             cloned_from: None,
             enhanced_tracker: false,
+            open_claims: false,
         }
     }
 }
@@ -625,6 +630,20 @@ pub struct Room {
     /// participant-only on top of this, so a `link`-policy tracker with the toggle on still shows an
     /// anonymous viewer the same page it always did.
     pub enhanced_tracker: bool,
+    /// Whether anybody signed in may take an unclaimed slot here without holding its claim link.
+    ///
+    /// **Unclaimed only.** A slot somebody holds is not available to anybody, and handing one back
+    /// stays staff-only through [`slot::release`](crate::model::slot::release), which mints a fresh
+    /// link so the person being replaced cannot walk back in on the old one.
+    ///
+    /// Says nothing about who may see the room: anybody holding `/room/<id>` can view it either
+    /// way, and the unguessable id is what stands between it and the internet. This decides only
+    /// whether reading the roster is enough to join it.
+    ///
+    /// **Not "public", which is how this was first written everywhere it is explained.** The word
+    /// reads as *discoverable*, which is false here and is the opposite of what an organizer
+    /// expects, so a reader takes it as licence for a widening they would not otherwise accept.
+    pub open_claims: bool,
     pub gameplay_options: Option<serde_json::Value>,
     /// When the probe pass last got an answer out of this room, and therefore how old
     /// [`gameplay_options`](Self::gameplay_options) is. Written in the same statement, so the two
@@ -718,6 +737,8 @@ struct RoomRow {
     last_error: Option<String>,
     #[diesel(sql_type = diesel::sql_types::Bool)]
     enhanced_tracker: bool,
+    #[diesel(sql_type = diesel::sql_types::Bool)]
+    open_claims: bool,
     #[diesel(sql_type = Nullable<diesel::sql_types::Jsonb>)]
     gameplay_options: Option<serde_json::Value>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
@@ -775,6 +796,7 @@ impl From<RoomRow> for Room {
             advertised_filtered_port: row.advertised_filtered_port,
             last_error: row.last_error,
             enhanced_tracker: row.enhanced_tracker,
+            open_claims: row.open_claims,
             gameplay_options: row.gameplay_options,
             probed_at: row.probed_at,
         }
@@ -833,7 +855,7 @@ const ROOM_COLUMNS: &str = "id, name, environment::text AS environment, generati
                             password_complexity::text AS password_complexity, wants_filtered, \
                             state::text AS state, state_changed_at, desired_at, advertised_host, \
                             advertised_port, advertised_filtered_port, last_error, \
-                            gameplay_options, probed_at, enhanced_tracker";
+                            gameplay_options, probed_at, enhanced_tracker, open_claims";
 
 /// Open a room from an already-indexed generation.
 ///
@@ -931,11 +953,11 @@ pub async fn create(
                      tracker_policy, journal_policy, patch_policy, slot_auth, password,
                      server_password, wants_filtered, use_embedded_options, save_interval_secs,
                      admin_token, primary_port, enhanced_tracker, password_complexity,
-                     desired_state)
+                     open_claims, desired_state)
                  VALUES ($1, $2::puna_environment, $3, $4, $5::room_source, $6, $7, $8, $9, $10,
                          $11::spoiler_policy, $12, $13::tracker_policy, $14::journal_policy,
                          $15::patch_policy, $16::slot_auth_mode, $17, $18, $19, $20, $21, $22,
-                         $23::primary_port, $24, $25::password_complexity, 'running')",
+                         $23::primary_port, $24, $25::password_complexity, $26, 'running')",
             )
             .bind::<SqlUuid, _>(id)
             .bind::<Text, _>(new.environment.as_str())
@@ -962,6 +984,7 @@ pub async fn create(
             .bind::<Text, _>(primary_port.as_sql())
             .bind::<Bool, _>(new.enhanced_tracker)
             .bind::<Text, _>(complexity.as_sql())
+            .bind::<Bool, _>(new.open_claims)
             .execute(conn)
             .await?;
 
@@ -1481,6 +1504,12 @@ pub struct LiveOptions {
     /// annotations being shown without deleting them, which is the right shape for a toggle
     /// somebody may flip back.
     pub enhanced_tracker: bool,
+    /// Whether anybody signed in may take an unclaimed slot without holding its claim link.
+    ///
+    /// Live, and it genuinely is: nothing about it reaches pahoa, so it changes what one route
+    /// admits and what the roster offers, from the next request. Turning it **off** strands nobody,
+    /// because it governs only the act of claiming: everybody who already took a slot keeps it.
+    pub open_claims: bool,
     /// How long a password this room generates next.
     ///
     /// **Live in the strongest sense of the word: it changes nothing that exists.** Every other
@@ -1510,7 +1539,8 @@ pub async fn set_live_options(
                 primary_port   = $5::primary_port,
                 spoiler_policy = $6::spoiler_policy,
                 enhanced_tracker = $7,
-                password_complexity = $8::password_complexity
+                password_complexity = $8::password_complexity,
+                open_claims = $9
           WHERE id = $1",
     )
     .bind::<SqlUuid, _>(id)
@@ -1521,6 +1551,7 @@ pub async fn set_live_options(
     .bind::<Text, _>(options.spoiler_policy.as_sql())
     .bind::<Bool, _>(options.enhanced_tracker)
     .bind::<Text, _>(options.password_complexity.as_sql())
+    .bind::<Bool, _>(options.open_claims)
     .execute(conn)
     .await?;
     Ok(())
@@ -1597,6 +1628,12 @@ pub async fn clone_room(
         // group playing the same seed again, and asking them to turn it back on is asking them to
         // re-answer a question this room already answered.
         enhanced_tracker: existing.enhanced_tracker,
+        // Carried for the same reason, and it is worth being explicit that this is a WIDENING being
+        // inherited: a clone starts with the source's slot owners already in place, so an open
+        // clone is one whose *remaining* slots anybody may take, which is what a group re-running a
+        // seed with a couple of replacements actually wants. Not inheriting it would quietly close
+        // a room that was open, which is the more surprising of the two.
+        open_claims: existing.open_claims,
         slot_auth: existing.slot_auth,
         spoiler_policy: Some(existing.spoiler_policy),
         tracker_policy: Some(existing.tracker_policy),

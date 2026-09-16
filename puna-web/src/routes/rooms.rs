@@ -668,6 +668,13 @@ struct CreateRoomForm {
     /// write next to `server_password`'s would fail the whole submission with a 422.
     #[field(default = false)]
     enhanced_tracker: bool,
+    /// Whether anybody signed in may take a free slot without being sent its claim link.
+    ///
+    /// A checkbox like the one above it and off for the same reason, and it is on this form rather
+    /// than only on the options page because "a room people sign up to" is decided when the room is
+    /// posted. The alternative is create, navigate, tick, save, and only then share the link.
+    #[field(default = false)]
+    open_claims: bool,
     /// The lobby room this seed was rolled in. Optional, and blank when the organizer skipped it.
     ///
     /// A URL or a bare id: both are things somebody has in hand, and only the id is used. See
@@ -741,6 +748,7 @@ async fn create(
     new.journal_policy = Some(journal_policy);
     new.tracker_policy = Some(tracker_policy);
     new.enhanced_tracker = form.enhanced_tracker;
+    new.open_claims = form.open_claims;
     // **Generated here, never typed.** The checkbox says whether the room has one at all; a field
     // asking somebody to invent a remote-admin password would collect a weak one, and the value is
     // rendered back to the organizer on the room page either way. It takes the shape this room
@@ -1824,6 +1832,69 @@ pub enum ClaimAnswer {
     Redirect(Box<Redirect>),
 }
 
+/// Take an unclaimed slot in a room that allows it, without holding its claim link.
+///
+/// **An ordinary form post rather than the in-place path [`claim_slot`] takes**, and the difference
+/// is that this control has no link behind it. A claim token is a thing somebody is sent, so its
+/// anchor has to be a real page for the chat client that unfurls it and for the reader with no
+/// script; this one means nothing off the page it is on, so a form is both the simplest shape and
+/// the one that needs no JavaScript at all.
+///
+/// Two refusals, both of which the page also avoids offering:
+///
+/// * the room has to have the option on. Without this the feature is reachable by POST on a room
+///   that never turned it on, which is the same rule every other opt-in here follows: a control
+///   nobody can see is still a route anybody can construct.
+/// * the slot has to be free, which [`slot::claim_open`] answers in the write rather than in a
+///   check, so two people pressing at once cannot both get it.
+///
+/// **No membership requirement, deliberately**: being signed in is the whole of it, and that is the
+/// feature. `LoggedInSession` is also where a banned account is refused, so this inherits that
+/// without restating it.
+#[post("/room/<id>/slot/<number>/claim")]
+async fn claim_open_slot(
+    id: RoomParam,
+    number: i32,
+    session: LoggedInSession,
+    pool: &State<Pool>,
+) -> Result<Flash<Redirect>> {
+    let mut conn = pool.get().await?;
+    let back = || Redirect::to(format!("/room/{}", id.0));
+
+    let room = room::get(&mut conn, id.0)
+        .await?
+        .ok_or_else(|| Error::new(Status::NotFound, anyhow::anyhow!("no such room")))?;
+
+    if !room.open_claims {
+        return Err(Error::new(
+            Status::Forbidden,
+            anyhow::anyhow!("this room's slots are claimed by link"),
+        ));
+    }
+
+    let Some(claimed) = slot::claim_open(&mut conn, id.0, number, session.user_id()).await? else {
+        // Either somebody got there first or the slot number is not one of this room's. Both answer
+        // the same way on purpose: the roster is right there, so a sentence pointing at it beats
+        // two that distinguish cases a reader can see for themselves.
+        return Ok(Flash::error(
+            back(),
+            "That slot is already taken. The roster below shows what is left.",
+        ));
+    };
+
+    tracing::info!(
+        room = %id.0,
+        slot = claimed.slot_number,
+        user_id = session.user_id(),
+        "slot claimed without a link"
+    );
+
+    Ok(Flash::success(
+        back(),
+        format!("You are playing {}.", claimed.player_name),
+    ))
+}
+
 /// A slot's password, for whoever `SlotAccess` admitted.
 ///
 /// JSON rather than a page, because it is one string that wants copying. `404` outside `per_slot`
@@ -1977,6 +2048,11 @@ struct LiveOptionsForm {
     /// something rather than leaving the previous value in place.
     #[field(default = false)]
     enhanced_tracker: bool,
+    /// A checkbox too, and absent is off for the same reason. Getting that wrong here is the worse
+    /// of the two: leaving the previous value in place would make unticking it appear to work and
+    /// leave the room open.
+    #[field(default = false)]
+    open_claims: bool,
 }
 
 #[derive(FromForm)]
@@ -2120,6 +2196,7 @@ async fn set_live_options(
         spoiler_policy: room::SpoilerPolicy::parse(&form.spoiler_policy)
             .ok_or_else(|| bad("unknown spoiler policy"))?,
         enhanced_tracker: form.enhanced_tracker,
+        open_claims: form.open_claims,
         password_complexity: puna_core::secret::PasswordComplexity::parse(
             &form.password_complexity,
         )
@@ -2364,6 +2441,7 @@ pub fn routes() -> Vec<rocket::Route> {
         redeem_invite,
         claim_page,
         claim_slot,
+        claim_open_slot,
         release_slot,
         rotate_slot_password,
         slot_password,
@@ -2930,6 +3008,74 @@ pub(crate) mod tests {
         }
     }
 
+    /// **The open-claim control appears exactly where both halves of its condition hold.**
+    ///
+    /// Four renders, because each wrong one fails differently and none of them fails loudly:
+    ///
+    /// * a closed room offering it is a control that 403s, which teaches somebody the site is
+    ///   broken;
+    /// * an open room hiding it is the whole feature missing with the option reading as on;
+    /// * an anonymous viewer being shown a claim button gets a login redirect from a POST, which
+    ///   loses the click;
+    /// * and a slot somebody already holds must never offer it on any of them, which is the one
+    ///   that would take a slot off its owner if the route did not re-check.
+    ///
+    /// The route re-checks both halves regardless: this is about what is offered, and a control
+    /// offered wrongly is a refusal somebody has to be told about.
+    #[test]
+    fn an_open_room_offers_a_free_slot_to_anybody_signed_in() {
+        let unclaimed = || SlotView {
+            owner_id: None,
+            owner_name: None,
+            owner_mention: None,
+            is_mine: false,
+            claim_token: None,
+            ..a_slot(false)
+        };
+        let render = |open: bool, logged_in: bool, slot: SlotView| {
+            let mut page = page_as(false, false);
+            page.room.open_claims = open;
+            page.base.is_logged_in = logged_in;
+            page.slots = vec![slot];
+            page.render().expect("renders")
+        };
+
+        let action = format!("/slot/{}/claim", 1);
+
+        let offered = render(true, true, unclaimed());
+        assert!(
+            offered.contains(&action),
+            "an open room does not offer a free slot to somebody signed in"
+        );
+
+        let closed = render(false, true, unclaimed());
+        assert!(
+            !closed.contains(&action),
+            "a room that hands out claim links offers a control its own route refuses"
+        );
+        assert!(
+            closed.contains("unclaimed"),
+            "the slot stopped saying it is free"
+        );
+
+        // Signed out: pointed at the login rather than at a button whose POST would lose the click.
+        let anonymous = render(true, false, unclaimed());
+        assert!(
+            !anonymous.contains(&action),
+            "a signed-out reader is offered a claim button"
+        );
+        assert!(
+            anonymous.contains("sign in to claim"),
+            "a signed-out reader on an open room is told only that the slot is unclaimed"
+        );
+
+        // And a slot with a holder is never on offer, on the most permissive render there is.
+        assert!(
+            !render(true, true, a_slot(false)).contains(&action),
+            "a slot somebody holds was offered to somebody else"
+        );
+    }
+
     pub(crate) fn a_room() -> Room {
         Room {
             id: puna_core::ids::RoomId::new(),
@@ -2968,6 +3114,7 @@ pub(crate) mod tests {
             // word, because the flattener treats the two differently and a fixture of one kind
             // would only prove half of it.
             enhanced_tracker: false,
+            open_claims: false,
             gameplay_options: Some(serde_json::json!({
                 "release_mode": "auto",
                 "hint_cost": 10,
@@ -4250,6 +4397,38 @@ pub(crate) mod tests {
         // And a settled room still reports the age of its state, which is what that branch means.
         let settled = a_room();
         assert!(since_ms(transition_began(&settled)) >= long_running.num_milliseconds() - 1_000);
+    }
+
+    /// **The open-claim route checks the room's own setting, and nothing else can check it for it.**
+    ///
+    /// The render test next door proves the control is offered only on a room that opted in, and
+    /// the DB test proves the write refuses a slot somebody holds. Neither reaches this: an opt-in
+    /// enforced only by the page that offers it is enforced nowhere, because the action is
+    /// `/room/<id>/slot/<n>/claim` and anybody can derive it from a URL they are looking at.
+    ///
+    /// **Deleting the check fails no test at all**, which is why this exists rather than a comment:
+    /// every room in the environment would start accepting claims from anybody signed in, including
+    /// the races, and the page would still say "unclaimed" while it happened.
+    ///
+    /// A source lint because nothing reaches a Rocket route's body, and a router harness for one
+    /// boolean is far more than this needs.
+    #[test]
+    fn the_open_claim_route_checks_that_the_room_is_open() {
+        let source = include_str!("rooms.rs");
+        let at = source
+            .find("async fn claim_open_slot(")
+            .expect("the open-claim route is gone, so this lint checks nothing");
+        let body = &source[at..][..source[at..].find("\n}\n").expect("unterminated route body")];
+
+        assert!(
+            body.contains("room.open_claims"),
+            "the open-claim route no longer reads the room's setting, so a room that never turned \
+             the option on accepts claims from anybody signed in"
+        );
+        assert!(
+            body.contains("slot::claim_open("),
+            "the open-claim route no longer goes through the write that refuses a held slot"
+        );
     }
 
     /// Every event kind a route records has a sentence.

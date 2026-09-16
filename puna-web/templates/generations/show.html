@@ -185,6 +185,26 @@ tracker's own policy says.</p>
 </div>
 </div>
 
+{# **On this form and not only on the options page, unlike `spoiler_policy`.** That one is kept off
+   here because widening it discloses a file nobody can un-read, so it is worth being a deliberate
+   second visit. This is the opposite case: a room people sign up to is decided when the room is
+   posted, so leaving it out would mean create, navigate, tick, save, and only then share the link.
+
+   Off by default here for the same reason it is off in the column: the roster changing hands only
+   when staff hand out a link is how every room has always worked, and a room whose organizer did
+   not think about this behaves the way rooms always have. #}
+<div class="field">
+<span class="label">Open claims</span>
+<div class="choices">
+<label><input type="checkbox" name="open_claims" value="true"> Let anyone signed in claim a free
+slot</label>
+<p class="hint">Anybody who can reach this room and sign in may take a slot nobody holds, without
+being sent its claim link. Leave it off to hand out claim links yourself, which is one link per
+slot and names the person you send it to. Anyone with the room's link can already view its page, so
+what this decides is whether reading the roster is enough to join it.</p>
+</div>
+</div>
+
 <div class="field">
 <span class="label">Remote admin</span>
 <div class="choices">

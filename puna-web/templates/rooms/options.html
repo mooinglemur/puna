@@ -163,6 +163,34 @@ have written without deleting it.</p>
 </div>
 </div>
 
+{# **A widening, and the hint says which one.** Off is how every room has always worked: a slot
+   changes hands only when staff hand out its link, and the link names one slot and is spent once.
+   On, the roster becomes a sign-up sheet for anybody who can reach the room and sign in.
+
+   The sentence about the room's own link is the one that matters, and it is easy to leave unsaid:
+   anyone holding `/room/<id>` can view it on both settings, so what this changes is not who can
+   LOOK but whether looking is enough to join. Somebody turning this on for a race wants to know
+   that before they do rather than after.
+
+   **"Public" is the wrong word for that and the hint deliberately avoids it.** It reads as
+   discoverable, which is false and is the opposite of what an organizer expects: the unguessable id
+   is the whole protection, and a reader who thinks the room is already findable will draw exactly
+   the wrong conclusion about what this costs them.
+
+   Nothing it does is retroactive in either direction: turning it on hands out nothing, and turning
+   it off takes nothing back. #}
+<div class="field">
+<span class="label">Open claims</span>
+<div class="choices">
+<label><input type="checkbox" name="open_claims" value="true"{% if room.open_claims +%} checked{% endif %}> Let anyone signed in claim a free slot</label>
+<p class="hint">Anybody who can reach this room and sign in may take a slot nobody holds, without
+being sent its claim link. Useful for a room you are posting for people to sign up to. Anyone with
+this room's link can already view this page, so what this decides is whether reading the roster is
+enough to join it. Slots that are already held are unaffected, and only staff can hand one back.
+Turning it off later leaves everybody who has claimed a slot holding it.</p>
+</div>
+</div>
+
 <div class="actions">
 <button type="submit">Save</button>
 <button type="reset" class="secondary">Undo changes</button>
