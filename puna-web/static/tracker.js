@@ -666,8 +666,22 @@
       button.type = "button";
       button.className = "note-icon";
       button.dataset.note = value.annotation;
-      button.title = value.annotation;
-      button.setAttribute("aria-label", "Show this slot's note");
+      // **The one glyph control here with no `title`, and the exception is principled rather than
+      // an omission.** Everywhere else the pairing is "different audiences, not alternatives":
+      // `aria-label` is assistive-tech only and browsers render nothing for it, so without a
+      // `title` a sighted reader hovering a glyph learns nothing.
+      //
+      // Hovering THIS one already shows the note, in a panel that wraps, follows the theme and can
+      // be selected once pinned. A `title` carrying the same text draws the native tooltip on top
+      // of that panel a moment later: the same words twice, the second copy worse and covering the
+      // first.
+      //
+      // **The note goes in the accessible name instead of the tooltip**, which is what keeps this
+      // from being a loss. The panel is a bare `div` appended to `<body>` with no live region and
+      // no association with this button, so activating it announces nothing at all; without the
+      // note here, a screen reader would have no route to it. In the name, it arrives on focus and
+      // needs no activation.
+      button.setAttribute("aria-label", `Note: ${value.annotation}`);
       button.textContent = "🗒";
       td.append(" ", button);
     }

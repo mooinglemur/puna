@@ -3643,6 +3643,47 @@ fn the_bulk_panel_offers_exactly_the_actions_its_route_implements() {
     );
 }
 
+/// **The note icon carries the note in its accessible name and NOT in a `title`.**
+///
+/// It is the one glyph control in this project without a tooltip, so the obvious later change is to
+/// add one back for consistency with [`a_glyph_only_control_names_itself_twice`]. That rule is
+/// about a glyph whose hover says nothing; this glyph's hover shows the note, so a `title` renders
+/// the same words a second time, over the panel, a moment later.
+///
+/// Both directions are pinned because both are silent and they fail oppositely:
+///
+/// * a `title` returns the doubled tooltip, which no test would notice and which reads as a
+///   rendering bug rather than as a decision;
+/// * a generic `aria-label` looks tidier and makes the note **unreachable** to a screen reader.
+///   The panel is a bare `div` appended to `<body>` with no live region and no association with the
+///   button, so activating it announces nothing: the name is the only route to the text.
+///
+/// Scoped to this one control, since every other glyph here genuinely wants both.
+#[test]
+fn the_note_icon_puts_the_note_in_its_name_rather_than_a_tooltip() {
+    let script =
+        code_only(&std::fs::read_to_string(source("static/tracker.js")).expect("tracker.js"));
+
+    let block = script
+        .split_once("if (value.annotation) {")
+        .expect("the note icon is gone, so this lint checks nothing")
+        .1
+        .split_once("if (value.edit)")
+        .expect("the note icon is no longer followed by the edit pencil")
+        .0;
+
+    assert!(
+        !block.contains(".title ="),
+        "the note icon sets a `title` again, so hovering it draws the native tooltip over the note \
+         panel that is already showing the same words"
+    );
+    assert!(
+        block.contains("aria-label") && block.contains("${value.annotation}"),
+        "the note icon's accessible name no longer carries the note, and nothing else does: the \
+         panel is not announced, so a screen reader has no route to the text at all"
+    );
+}
+
 /// **The room creation form, its struct and the room it builds all name the same fields.**
 ///
 /// Three files, and every way they can disagree is silent, because an HTML form sends nothing for a
