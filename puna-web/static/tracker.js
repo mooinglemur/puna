@@ -185,16 +185,29 @@
           seen: age(mostRecent(rows)),
         };
       },
-      // "Only my slots", the room page's roster toggle on the page most people actually watch.
-      //
-      // **`mine`, never `editable`.** The row next door carries both and they differ on exactly the
-      // reader most likely to want this: a room's staff may edit every row, so keying on `editable`
-      // would give an organizer who also plays a filter that hides nothing.
-      //
-      // `mine` is absent rather than false for a viewer holding no slots, so `!r.mine` is true for
-      // every row: the correct answer for a control that is not rendered for them anyway, rather
-      // than one that depends on the server having sent a field.
-      exclude: (r) => !r.mine,
+      // The boxes above this table, each keyed by the `data-filter` its input names. A box whose
+      // name is absent here ticks, is remembered across reloads, and changes nothing; a name here
+      // with no box is a predicate nothing calls. Both halves are pinned by a lint.
+      toggles: {
+        // "Only my slots", the room page's roster toggle on the page most people actually watch.
+        //
+        // **`mine`, never `editable`.** The row next door carries both and they differ on exactly
+        // the reader most likely to want this: a room's staff may edit every row, so keying on
+        // `editable` would give an organizer who also plays a filter that hides nothing.
+        //
+        // `mine` is absent rather than false for a viewer holding no slots, so `!r.mine` is true
+        // for every row: the correct answer for a control that is not rendered for them anyway,
+        // rather than one that depends on the server having sent a field.
+        mine: { exclude: (r) => !r.mine },
+        // "Exclude goal/100%", which answers "who is still playing" on a multiworld most of whose
+        // rows are eventually finished.
+        //
+        // **Offered only once there is something to exclude.** Nobody has goaled at the start of a
+        // multiworld, so a box that was always there would be a control that does nothing for the
+        // whole first half of a room's life. `offer` is the same predicate asked of the whole set,
+        // which is what keeps the two from ever disagreeing about what "finished" means.
+        finished: { exclude: isFinished, offer: (rows) => rows.some(isFinished) },
+      },
       // Only on the multiworld page, and built from the id already in this URL rather than from
       // anything the server sent: a slot's own tracker id is deliberately never in the JSON.
       href: (r) => (slotQuery ? null : `/tracker/${idFromApi()}/0/${r.slot}`),
@@ -204,7 +217,7 @@
       rows: (d) => d.locations,
       // Hide what is done, leaving what is left. A predicate on the view rather than a branch in
       // `Table`, for the same reason `collapse` is one: what "done" means belongs to the view.
-      exclude: (r) => r.checked,
+      toggles: { hidechecked: { exclude: (r) => r.checked } },
       cells: (r) => [r.name, r.checked ? "✔" : ""],
       rowClass: (r) => (r.checked ? "done" : null),
     },
@@ -215,7 +228,7 @@
       // `Table` because it is a property of what this view holds: an item list is the only one
       // where the same thing legitimately appears many times, and where "how many" is a fact the
       // reader wants rather than noise.
-      collapse: { key: "item", recency: "order" },
+      toggles: { latest: { collapse: { key: "item", recency: "order" } } },
       cells: (r) => [
         String(r.order),
         {
@@ -232,7 +245,7 @@
 
     hints: {
       rows: (d) => d.hints,
-      exclude: (r) => r.found,
+      toggles: { hidefound: { exclude: (r) => r.found } },
       cells: (r) => [
         r.receiving_name,
         { text: r.item, tag: r.classification === "filler" ? null : r.classification },
@@ -245,6 +258,27 @@
       rowClass: (r) => (r.found ? "done" : null),
     },
   };
+
+  // A slot with nothing left to do: it has goaled, or it has checked everything in its world.
+  //
+  // **`checks_total > 0` is load-bearing**, and dropping it is the one mistake here that reads as
+  // the filter working. A total of zero is not a finished world; it is a world whose size is not
+  // known, and it arrives two ways. A spectator owns no locations, so it sits at `0 / 0` for the
+  // life of the room. And a slot missing from the static document reads the same, which is a
+  // PLAYER who has done nothing. A bare `done >= total` calls both complete on the first render,
+  // hides them behind a box that says "goal/100%", and offers that box on a multiworld where
+  // nobody has finished anything.
+  //
+  // The same guard, spelled `known`, is what `digest::summary` branches on server-side, and
+  // `sortValues.checks_done` answers `null` on the same rows for the same reason: having nothing
+  // to check is not an answer to how far along somebody is.
+  //
+  // `>=` rather than `===` because the two counts come from different halves of the document: the
+  // total is the seed's, the count is the room's, and a room that has recorded a check against a
+  // location the seed does not list should read as finished rather than as permanently one short.
+  function isFinished(r) {
+    return r.status === "goal" || (r.checks_total > 0 && r.checks_done >= r.checks_total);
+  }
 
   function percent(r) {
     if (!r.checks_total) return "";
@@ -425,10 +459,25 @@
       this.tfoot = section.querySelector("tfoot");
       this.empty = section.querySelector(".empty");
       this.search = section.querySelector(".table-search");
-      this.toggle = section.querySelector("[data-toggle]");
-      // Read AFTER `toggles.js` has restored it: both files are `defer`, so they run in document
-      // order and the box is already in its remembered state by the time this asks.
-      this.toggled = !!(this.toggle && this.toggle.checked);
+      // **Every box in this section, each bound to the predicate its `data-filter` names.** A list
+      // rather than the single toggle this started as, because the multiworld's slot table carries
+      // two: "only my slots" and "exclude goal/100%", which are independent questions and compose.
+      //
+      // `[data-toggle]` is what `toggles.js` remembers and `[data-filter]` is what this file acts
+      // on, so a box is picked up here only when it has both: the selector is the pairing.
+      this.toggles = Array.from(
+        section.querySelectorAll("[data-toggle][data-filter]")
+      ).map((input) => ({
+        input,
+        // The label is what gets hidden when a filter has nothing to offer, since hiding the box
+        // alone would leave its words sitting there with no control. `closest` rather than a class,
+        // so the markup stays free to wrap it however it likes.
+        label: input.closest("label") || input,
+        spec: (this.config.toggles || {})[input.dataset.filter] || {},
+        // Read AFTER `toggles.js` has restored it: both files are `defer`, so they run in document
+        // order and the box is already in its remembered state by the time this asks.
+        on: input.checked,
+      }));
       // Namespaced by page type, so the hints table's sort on a slot page is not the multiworld's.
       this.sortKey = `tracker.${pageType}.${this.view}.sort`;
       this.headers = Array.from(section.querySelectorAll("th[data-key]"));
@@ -453,11 +502,11 @@
     }
 
     bind() {
-      if (this.toggle) {
+      for (const toggle of this.toggles) {
         // `toggles.js` owns persisting it; this only reacts. Two listeners on one input rather than
         // a callback threaded through, so neither file has to know the other's shape.
-        this.toggle.addEventListener("change", () => {
-          this.toggled = this.toggle.checked;
+        toggle.input.addEventListener("change", () => {
+          toggle.on = toggle.input.checked;
           this.render();
         });
       }
@@ -565,16 +614,39 @@
 
     render() {
       const needle = this.query.trim().toLowerCase();
-      // **Before filtering, deliberately.** Collapse then filter answers "the most recent of each
-      // item, among those matching"; filter then collapse would answer "the most recent MATCHING
-      // instance", which for a search that excludes the newest one shows an older row as though it
-      // were current. Same rows, different meaning, and the wrong one is not visibly wrong.
       let rows = this.rows;
-      if (this.toggled) {
-        // A view declares one or the other, never both today, but applying collapse first would
-        // be the right order if one ever did: fold duplicates, then drop what is finished.
-        if (this.config.collapse) rows = collapse(rows, this.config.collapse);
-        if (this.config.exclude) rows = rows.filter((row) => !this.config.exclude(row));
+
+      // **What a box can offer depends on what is in the document**, so it is decided here rather
+      // than in the template: nobody has goaled at the start of a multiworld, and the server
+      // renders this page before a single row has been fetched.
+      //
+      // Asked of `this.rows`, which is every row before any filter, and deliberately so. Against
+      // the filtered set the box would hide itself the moment it was ticked, leaving the reader
+      // unable to untick a control that is no longer on screen; and it would come and go as
+      // somebody typed in the search box beside it.
+      //
+      // Hiding it cannot strand a filter, in either direction: `offer` is false exactly when no row
+      // satisfies `exclude`, so a tick remembered from a livelier room filters nothing here.
+      for (const toggle of this.toggles) {
+        if (toggle.spec.offer) toggle.label.hidden = !toggle.spec.offer(this.rows);
+      }
+
+      // **Both of these run before the search box, deliberately.** Collapse then filter answers
+      // "the most recent of each item, among those matching"; filter then collapse would answer
+      // "the most recent MATCHING instance", which for a search that excludes the newest one shows
+      // an older row as though it were current. Same rows, different meaning, and the wrong one is
+      // not visibly wrong.
+      //
+      // Collapses before excludes, for the same kind of reason. No box carries both today, and
+      // this is the order that would be right if one ever did: fold duplicates, then drop what is
+      // finished.
+      for (const toggle of this.toggles) {
+        if (toggle.on && toggle.spec.collapse) rows = collapse(rows, toggle.spec.collapse);
+      }
+      for (const toggle of this.toggles) {
+        if (toggle.on && toggle.spec.exclude) {
+          rows = rows.filter((row) => !toggle.spec.exclude(row));
+        }
       }
 
       if (needle) {

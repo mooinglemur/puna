@@ -3476,13 +3476,14 @@ fn the_tracker_summary_fills_every_cell_it_declares() {
 
 /// **The tracker's "only my slots" box and the predicate behind it, which fail apart silently.**
 ///
-/// Three files hold one control. `tracker.js` filters a view when its section carries a
-/// `[data-toggle]` *and* the view declares an `exclude`, and either half alone is a checkbox that
-/// ticks, is remembered across reloads, and changes nothing:
+/// Three files hold one control. `tracker.js` filters a view when its section carries a box with
+/// both `[data-toggle]` and `[data-filter]` *and* the view's `toggles` map holds an entry under
+/// that name, and either half alone is a checkbox that ticks, is remembered across reloads, and
+/// changes nothing:
 ///
-///   * a box with no `exclude` sets `toggled`, finds neither a `collapse` nor an `exclude`, and
-///     renders the identical table;
-///   * an `exclude` with no box is a predicate nothing calls.
+///   * a box whose `data-filter` names nothing gets an empty `spec`, finds neither a `collapse`
+///     nor an `exclude`, and renders the identical table;
+///   * an entry with no box is a predicate nothing calls.
 ///
 /// And the predicate has a near-miss one field away. `mine` and `editable` sit next to each other on
 /// the row and differ on exactly the reader most likely to use this: a room's staff may edit every
@@ -3509,13 +3510,15 @@ fn the_tracker_slot_filter_has_a_box_a_predicate_and_the_right_field() {
         .expect("unterminated slots section")
         .0;
     assert!(
-        slots.contains(r#"data-toggle="tracker.room.slots.mine""#),
-        "the slot table has no \"only my slots\" box, or its key was renamed, which forgets the \
-         choice on every reload while the two toggles beside it keep theirs"
+        slots.contains(r#"data-toggle="tracker.room.slots.mine" data-filter="mine""#),
+        "the slot table has no \"only my slots\" box, or its key or filter name was renamed: the \
+         first forgets the choice on every reload while the toggles beside it keep theirs, and the \
+         second leaves a box that ticks and filters nothing"
     );
     assert!(
-        code.contains("exclude: (r) => !r.mine"),
-        "the slots view declares no `exclude` for it, so the box ticks and the table is identical"
+        code.contains("mine: { exclude: (r) => !r.mine }"),
+        "the slots view declares no `mine` filter for it, so the box ticks and the table is \
+         identical"
     );
     // The substitution that compiles, renders, and is wrong only for staff.
     assert!(
@@ -3530,6 +3533,137 @@ fn the_tracker_slot_filter_has_a_box_a_predicate_and_the_right_field() {
         slots.contains("{% if owns_a_slot %}"),
         "the box is no longer gated on the viewer holding a slot, so a spectator or a stranger is \
          offered a filter that empties the table"
+    );
+}
+
+/// **Every remembered box on the tracker names a predicate, and every name exists.**
+///
+/// Two files, two attributes, and the failure is the same shape in both directions: a checkbox that
+/// ticks, is remembered across reloads, and changes nothing. `toggles.js` restores anything carrying
+/// `[data-toggle]` and `tracker.js` acts on anything carrying `[data-filter]`, so a box with only
+/// the first is persisted and inert, and a `data-filter` naming a key no view declares gets an empty
+/// spec and filters nothing.
+///
+/// Written when the slot table grew a second box. With one toggle per table a missing pairing was
+/// hard to reach; with two, the obvious way to add a third is to copy a `<label>` and change its
+/// words, which carries the old filter name or none at all.
+#[test]
+fn every_tracker_filter_box_drives_a_predicate_that_exists() {
+    let template =
+        std::fs::read_to_string(source("templates/tracker/show.html")).expect("the tracker page");
+    let script = std::fs::read_to_string(source("static/tracker.js")).expect("tracker.js");
+    let code: String = script
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let mut boxes = 0;
+    for tag in template.split("<input").skip(1) {
+        let tag = tag.split('>').next().expect("an unterminated <input> tag");
+        if !tag.contains("data-toggle=") {
+            continue;
+        }
+        boxes += 1;
+        let name = tag
+            .split_once(r#"data-filter=""#)
+            .unwrap_or_else(|| {
+                panic!(
+                    "a remembered box on the tracker carries no `data-filter`, so `tracker.js` \
+                     never picks it up: it ticks, is remembered across reloads, and filters \
+                     nothing:{tag}"
+                )
+            })
+            .1
+            .split_once('"')
+            .expect("unterminated data-filter")
+            .0;
+        assert!(
+            code.contains(&format!("{name}: {{")),
+            "a tracker box names the filter `{name}`, which no view's `toggles` map declares, so \
+             the box ticks and the table is identical"
+        );
+    }
+
+    // **A lint that finds nothing passes**, and this one is a scan for an attribute. Five boxes
+    // exist today; the floor is what says it is still reading the markup it thinks it is.
+    assert!(
+        boxes >= 5,
+        "only {boxes} remembered boxes were found on the tracker; this lint has stopped looking at \
+         the markup it was written for"
+    );
+}
+
+/// **The "exclude goal/100%" box appears exactly when it would hide something, and never strands a
+/// filter behind itself.**
+///
+/// Nobody has goaled at the start of a multiworld, so this control is offered rather than always
+/// rendered, and the server cannot decide it either, because the page goes out before a single row
+/// has been fetched. That makes three things true only by construction, each of which fails quietly:
+///
+///   * **`offer` is asked of `this.rows`, before any filter.** Against the filtered set the box
+///     hides itself the instant it is ticked, and the reader cannot untick a control that is no
+///     longer on screen. It would also come and go as somebody typed in the search box beside it.
+///   * **The label ships `hidden`.** Otherwise it flashes into view on first paint and back out
+///     when the first document lands, on every load of every fresh room.
+///   * **It is not inside the `owns_a_slot` gate.** This box is about the state of the multiworld
+///     rather than the reader's relationship to it, and hiding it from a spectator would withhold
+///     the one control that makes a mostly-finished room readable.
+///
+/// The predicate's own semantics are held by `tests/js/tracker-finished.test.js`; this is about the
+/// wiring, which that file cannot see.
+#[test]
+fn the_finished_filter_is_offered_only_when_it_would_hide_something() {
+    let template =
+        std::fs::read_to_string(source("templates/tracker/show.html")).expect("the tracker page");
+    let script = std::fs::read_to_string(source("static/tracker.js")).expect("tracker.js");
+    let code: String = script
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let slots = template
+        .split_once("data-view=\"slots\"")
+        .expect("the slots table is gone")
+        .1
+        .split_once("</section>")
+        .expect("unterminated slots section")
+        .0;
+
+    assert!(
+        slots.contains(
+            r#"<label class="only-mine" hidden>
+        <input type="checkbox" data-toggle="tracker.room.slots.hidefinished" data-filter="finished">"#
+        ),
+        "the \"exclude goal/100%\" box is gone, renamed, or no longer ships hidden: a box that \
+         renders visible flashes in and out on every load of a room where nobody has finished"
+    );
+    assert!(
+        code.contains("finished: { exclude: isFinished, offer: (rows) => rows.some(isFinished) }"),
+        "the slots view no longer declares `finished` with BOTH halves; `offer` and `exclude` \
+         built from one predicate is what stops the box appearing when it can do nothing"
+    );
+    assert!(
+        code.contains("toggle.spec.offer(this.rows)"),
+        "`offer` is no longer asked of every row: against the filtered set the box hides itself \
+         the moment it is ticked, leaving nothing on screen to untick"
+    );
+
+    // Offered to everybody, unlike the box above it. Asserted by looking inside the gate rather
+    // than around it, since "is after the `{% endif %}`" would pass on a box moved out of the
+    // section entirely.
+    let gated = slots
+        .split_once("{% if owns_a_slot %}")
+        .expect("the \"only my slots\" gate is gone")
+        .1
+        .split_once("{% endif %}")
+        .expect("unterminated owns_a_slot block")
+        .0;
+    assert!(
+        !gated.contains("hidefinished"),
+        "the \"exclude goal/100%\" box moved inside the `owns_a_slot` gate, so a spectator or a \
+         stranger cannot filter out a multiworld that is mostly finished"
     );
 }
 

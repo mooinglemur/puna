@@ -2353,8 +2353,10 @@ mod tests {
         );
 
         assert!(
-            html.contains(r#"data-toggle="tracker.slot.items.latest""#),
-            "the collapse toggle is missing from the items table"
+            html.contains(r#"data-toggle="tracker.slot.items.latest" data-filter="latest""#),
+            "the collapse toggle is missing from the items table, or has lost one of its two \
+             attributes: `data-toggle` is what `toggles.js` remembers and `data-filter` is what \
+             `tracker.js` acts on, so either alone is a box that ticks and does nothing"
         );
 
         // The store that restores it, and the file that reacts to it. Checked against the CALLS
@@ -2372,12 +2374,61 @@ mod tests {
 
         let tracker = std::fs::read_to_string("static/tracker.js").expect("tracker.js");
         assert!(
-            tracker.contains(r#"querySelector("[data-toggle]")"#),
-            "tracker.js no longer reads the toggle, so ticking it changes nothing"
+            tracker.contains(r#"querySelectorAll("[data-toggle][data-filter]")"#),
+            "tracker.js no longer reads the toggle, so ticking it changes nothing. The selector is \
+             the pairing: a box is acted on only where the attribute `toggles.js` remembers and \
+             the one naming a predicate are both present"
         );
         assert!(
             tracker.contains("collapse: { key: \"item\", recency: \"order\" }"),
             "the items view no longer declares how it collapses"
+        );
+    }
+
+    /// **"Exclude goal/100%" reaches the page with its words attached, and only the multiworld's.**
+    ///
+    /// The source-level half of this control is held by `tests/templates.rs`; what that cannot see
+    /// is what askama renders. The template is compiled with `whitespace = "suppress"`, and this
+    /// label sits one line below a `{% endif %}`, which is exactly the shape that has silently run
+    /// two words together on this project twice before. A rendered assertion is the only thing that
+    /// catches it, since the whitespace lints passed on both of those.
+    ///
+    /// And a slot's page must not carry it: that page renders one row, so a filter over it can do
+    /// nothing but hide the row the reader came for.
+    #[test]
+    fn the_finished_filter_reaches_the_multiworld_page_and_not_a_slots() {
+        let multiworld = tracker_page(None).render().expect("renders");
+        let one_slot = tracker_page(Some(1)).render().expect("renders");
+
+        assert!(
+            multiworld.contains(r#"data-toggle="tracker.room.slots.hidefinished""#),
+            "the multiworld tracker offers no \"exclude goal/100%\" box"
+        );
+        // The words, with the separation before them intact. Asserted on what follows the tag
+        // rather than with `contains` on the label alone, which would pass on
+        // `data-filter="finished">exclude goal/100%`, which is the failure being guarded.
+        let after = multiworld
+            .split_once(r#"data-filter="finished">"#)
+            .expect("the box was found a line ago")
+            .1;
+        assert!(
+            after.starts_with(char::is_whitespace)
+                && after.trim_start().starts_with("exclude goal/100%"),
+            "the box's label has run into the tag before it, so it reads as one word: this is what \
+             `whitespace = \"suppress\"` does to text that follows a tag. It rendered as {:?}",
+            &after[..after.len().min(40)]
+        );
+        // Rendered hidden, so it cannot flash into view and back out on a room where nobody has
+        // finished. `tracker.js` reveals it once a row qualifies.
+        assert!(
+            multiworld.contains(r#"<label class="only-mine" hidden>"#),
+            "the box renders visible, so every load of a fresh room shows a control that does \
+             nothing until the first document lands and takes it away again"
+        );
+
+        assert!(
+            !one_slot.contains("hidefinished"),
+            "a slot's own page offers a filter over its single row, which can only hide it"
         );
     }
 

@@ -109,9 +109,27 @@ need to.</p>
          nothing. See `digest::SlotRow`. #}
       {% if owns_a_slot %}
       <label class="only-mine">
-        <input type="checkbox" data-toggle="tracker.room.slots.mine"> only my slots
+        <input type="checkbox" data-toggle="tracker.room.slots.mine" data-filter="mine"> only my slots
       </label>
       {% endif %}
+      {# "Who is still playing", which is the question left once a long multiworld is mostly
+         finished. It hides a row that has goaled and a row that has checked everything, which are
+         two spellings of the same thing often enough that separating them would be two boxes
+         nobody wants apart.
+
+         **Rendered hidden, and revealed by `tracker.js` only once a row qualifies.** Nobody has
+         goaled at the start of a multiworld, so a box that was always here would do nothing for
+         the first half of a room's life; and this page is rendered before a single row has been
+         fetched, so the server cannot answer it. `hidden` here rather than a class the script
+         removes, so the control does not flash into view and back out on the first render.
+
+         Offered to everybody, unlike the box above it: this one is about the state of the
+         multiworld rather than the reader's relationship to it, and it empties the table only for
+         a room that really has finished. #}
+      <label class="only-mine" hidden>
+        <input type="checkbox" data-toggle="tracker.room.slots.hidefinished" data-filter="finished">
+        exclude goal/100%
+      </label>
     </div>
     {% endif %}
     <div class="table-scroll">
@@ -276,7 +294,7 @@ need to.</p>
     <div class="table-controls">
       <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter locations">
       <label class="only-mine">
-        <input type="checkbox" data-toggle="tracker.slot.locations.hidechecked"> only what is left
+        <input type="checkbox" data-toggle="tracker.slot.locations.hidechecked" data-filter="hidechecked"> only what is left
       </label>
     </div>
     {# **Bounded, and ONE scroll container rather than two.** These two tables are the only ones on
@@ -312,7 +330,7 @@ need to.</p>
          appears rather than the rows simply vanishing: "you have three of these" is the fact a
          reader loses otherwise, and losing it silently would make the list look wrong. #}
       <label class="only-mine">
-        <input type="checkbox" data-toggle="tracker.slot.items.latest"> only the most recent of each item
+        <input type="checkbox" data-toggle="tracker.slot.items.latest" data-filter="latest"> only the most recent of each item
       </label>
     </div>
     {# **Bounded, and ONE scroll container rather than two.** These two tables are the only ones on
@@ -350,7 +368,7 @@ need to.</p>
            a slot's page it is "what am I still waiting for", on the multiworld's it is "what is
            outstanding anywhere". Somebody who wants one collapsed rarely wants the other. #}
         <label class="only-mine">
-          <input type="checkbox"
+          <input type="checkbox" data-filter="hidefound"
                  data-toggle="tracker.{% if slot.is_some() %}slot{% else %}room{% endif %}.hints.hidefound">
           only what is not found yet
         </label>
