@@ -386,11 +386,29 @@ need to.</p>
         {# **Keyed by page type**, because this table is on both and they are different questions: on
            a slot's page it is "what am I still waiting for", on the multiworld's it is "what is
            outstanding anywhere". Somebody who wants one collapsed rarely wants the other. #}
+        {# The words changed and **the key deliberately did not**: it is what every reader's stored
+           preference is filed under, so renaming it to match the label would silently unset the box
+           for everybody who had ticked it. #}
         <label class="only-mine">
           <input type="checkbox" data-filter="hidefound"
                  data-toggle="tracker.{% if slot.is_some() %}slot{% else %}room{% endif %}.hints.hidefound">
-          only what is not found yet
+          only unfound
         </label>
+        {# **Offered only to somebody who holds a slot here**, the same rule and the same gate the
+           slot table's "only my slots" follows: for anybody else `mine` is absent on every row, so
+           the box would empty the table, which reads as a broken control rather than as an answer.
+
+           Unlike that one it is offered on a slot's page too, because there it is not degenerate. A
+           slot's hint table holds the hints that slot is either end of, and a viewer holding a
+           DIFFERENT slot can be the other end of some of them, so the question "which of these also
+           involve me" has a real answer rather than all of them or none. #}
+        {% if owns_a_slot %}
+        <label class="only-mine">
+          <input type="checkbox" data-filter="relevant"
+                 data-toggle="tracker.{% if slot.is_some() %}slot{% else %}room{% endif %}.hints.relevant">
+          only relevant to my slots
+        </label>
+        {% endif %}
       </div>
       <div class="table-scroll">
         <div class="scroll-x">

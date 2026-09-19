@@ -245,7 +245,19 @@
 
     hints: {
       rows: (d) => d.hints,
-      toggles: { hidefound: { exclude: (r) => r.found } },
+      toggles: {
+        hidefound: { exclude: (r) => r.found },
+        // "Only relevant to my slots": a hint naming one of the viewer's own slots at either end,
+        // which is what "relevant" means here and why the label does not say "my hints". An item
+        // somebody else is holding for you and an item you are holding for them are both news to
+        // you, and the per-slot view already treats the two the same way.
+        //
+        // **`mine` is the server's answer**, the same field and the same rule the slot table's box
+        // follows: ownership only, so a room's staff do not get a filter that hides nothing. It is
+        // absent rather than false for a viewer holding no slots, so `!r.mine` is true for every
+        // row, which is the correct answer for a control they are not offered.
+        relevant: { exclude: (r) => !r.mine },
+      },
       cells: (r) => [
         r.receiving_name,
         { text: r.item, tag: r.classification === "filler" ? null : r.classification },

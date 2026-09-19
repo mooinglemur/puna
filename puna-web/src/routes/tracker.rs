@@ -628,6 +628,7 @@ async fn view_hints(
         &digest::Names { games: &names },
         freshness(&[live.stale_since], Utc::now()),
         it.scope,
+        &it.viewer(),
     );
 
     json(&view, &conditional)
@@ -2382,6 +2383,70 @@ mod tests {
         assert!(
             tracker.contains("collapse: { key: \"item\", recency: \"order\" }"),
             "the items view no longer declares how it collapses"
+        );
+    }
+
+    /// **"Only relevant to my slots" is offered to somebody who holds one, on both pages.**
+    ///
+    /// The gate is the slot table's: for anybody else `mine` is absent on every hint row, so the
+    /// box would empty the table, which reads as the tracker having broken rather than as an answer.
+    /// Unlike that box it is not restricted to the multiworld view, because on a slot's page it is
+    /// not degenerate: a viewer holding a different slot can be the other end of some of the hints
+    /// shown there.
+    ///
+    /// Keys are page-scoped, since "what am I still waiting for" and "what is outstanding anywhere"
+    /// are different questions asked of the same table.
+    #[test]
+    fn the_hint_relevance_box_is_offered_to_a_participant_on_both_pages() {
+        let rendered = |slot: Option<i32>, owns: bool| {
+            let mut page = tracker_page(slot);
+            page.owns_a_slot = owns;
+            page.render().expect("renders")
+        };
+
+        for (slot, key) in [
+            (None, "tracker.room.hints.relevant"),
+            (Some(1), "tracker.slot.hints.relevant"),
+        ] {
+            let page = if slot.is_some() {
+                "a slot's"
+            } else {
+                "the multiworld"
+            };
+            let held = rendered(slot, true);
+            assert!(
+                held.contains(&format!(r#"data-toggle="{key}" "#))
+                    || held.contains(&format!(r#"data-toggle="{key}">"#)),
+                "{page} page does not offer the hint relevance box, or keys it as something other \
+                 than {key}, which would share one preference between two different questions"
+            );
+            assert!(
+                held.contains(r#"data-filter="relevant""#),
+                "{page} page's relevance box names no predicate, so it ticks and filters nothing"
+            );
+            assert!(
+                held.contains("only relevant to my slots"),
+                "{page} page's relevance box has no words beside it"
+            );
+
+            assert!(
+                !rendered(slot, false).contains("hints.relevant"),
+                "{page} page offers the relevance box to somebody holding no slot here, for whom \
+                 it hides every row"
+            );
+        }
+
+        // The relabel, and the key that deliberately did not move with it: it is what every
+        // reader's stored preference is filed under.
+        let page = rendered(None, true);
+        assert!(
+            page.contains("only unfound") && !page.contains("only what is not found yet"),
+            "the found filter is still labelled the long way round"
+        );
+        assert!(
+            page.contains(r#"data-toggle="tracker.room.hints.hidefound""#),
+            "the found filter's key was renamed to match its new label, which silently unsets the \
+             box for everybody who had ticked it"
         );
     }
 

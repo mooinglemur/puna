@@ -3558,13 +3558,12 @@ fn every_tracker_filter_box_drives_a_predicate_that_exists() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    let mut boxes = 0;
+    let mut names = Vec::new();
     for tag in template.split("<input").skip(1) {
         let tag = tag.split('>').next().expect("an unterminated <input> tag");
         if !tag.contains("data-toggle=") {
             continue;
         }
-        boxes += 1;
         let name = tag
             .split_once(r#"data-filter=""#)
             .unwrap_or_else(|| {
@@ -3583,14 +3582,32 @@ fn every_tracker_filter_box_drives_a_predicate_that_exists() {
             "a tracker box names the filter `{name}`, which no view's `toggles` map declares, so \
              the box ticks and the table is identical"
         );
+        names.push(name.to_string());
     }
 
-    // **A lint that finds nothing passes**, and this one is a scan for an attribute. Five boxes
+    // **A lint that finds nothing passes**, and this one is a scan for an attribute. Six boxes
     // exist today; the floor is what says it is still reading the markup it thinks it is.
     assert!(
-        boxes >= 5,
-        "only {boxes} remembered boxes were found on the tracker; this lint has stopped looking at \
-         the markup it was written for"
+        names.len() >= 6,
+        "only {} remembered boxes were found on the tracker; this lint has stopped looking at the \
+         markup it was written for",
+        names.len()
+    );
+
+    // **The names are unique across the page, and that is what makes the check above sound.** The
+    // `toggles` maps are per view, so two views could legitimately reuse one name; the search that
+    // proves a name exists is over the whole file, so it would find the OTHER view's entry and pass
+    // for a box whose own view declares nothing. Keeping the names distinct is the cheaper half of
+    // that pair, and it is also what stops a copied `<label>` filtering the wrong table's rows by a
+    // predicate that happens to accept them.
+    let mut sorted = names.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(
+        sorted.len(),
+        names.len(),
+        "two tracker boxes share a `data-filter` name: the check that each one's view declares a \
+         predicate is a whole-file search, so a duplicate makes it pass on the other view's entry"
     );
 }
 

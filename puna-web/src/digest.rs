@@ -284,6 +284,21 @@ pub struct HintRow {
     pub found: bool,
     pub classification: &'static str,
     pub status: &'static str,
+    /// Whether this hint names one of the viewer's own slots, at **either** end.
+    ///
+    /// Both ends, because both are news to the same person: one is an item coming to them, the
+    /// other is an item they are holding for somebody else, and a reader asking "what concerns me"
+    /// wants each. It is the same question the per-slot view answers by scoping, asked of the whole
+    /// multiworld instead.
+    ///
+    /// **Decided here rather than by the client**, the same rule `SlotRow::mine` states and for the
+    /// same reason: the alternative is sending every viewer their own id and every slot's owner id
+    /// and trusting the comparison, on the page built to be handed to strangers. Like that field it
+    /// is about the reader and nobody else, so it discloses nothing.
+    ///
+    /// Absent rather than `false`, so a row for somebody holding no slots here carries nothing.
+    #[serde(skip_serializing_if = "is_false")]
+    pub mine: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -516,8 +531,17 @@ pub fn hints(
     names: &Names<'_>,
     freshness: Freshness,
     scope: Option<i32>,
+    viewer: &Viewer<'_>,
 ) -> HintsView {
     let by_slot: BTreeMap<i32, &Slot> = roster.iter().map(|s| (s.slot_number, s)).collect();
+    // Ownership and only ownership, matching `SlotRow::mine`: staff may edit every row in this room
+    // and hold none of it, so keying on anything wider would give an organizer who also plays a
+    // filter that hides nothing.
+    let owns = |slot: i32| {
+        viewer
+            .id
+            .is_some_and(|me| by_slot.get(&slot).and_then(|s| s.owner_id) == Some(me))
+    };
     let describe = |slot: i32| -> (String, String) {
         by_slot.get(&slot).map_or_else(
             // A slot the roster does not know: name it honestly rather than inventing one. It
@@ -592,6 +616,7 @@ pub fn hints(
                     .unwrap_or(false),
                 classification: classify(at(6).unwrap_or(0)),
                 status: hint_status(at(7)),
+                mine: owns(receiving_slot) || owns(finding_slot),
             });
         }
     }
@@ -1462,7 +1487,14 @@ mod tests {
     #[test]
     fn a_hints_item_and_location_resolve_in_different_games() {
         let games = game_names();
-        let view = hints(&roster(), &live(), &names_of(&games), fresh(), None);
+        let view = hints(
+            &roster(),
+            &live(),
+            &names_of(&games),
+            fresh(),
+            None,
+            &participant(),
+        );
 
         assert_eq!(view.hints.len(), 1);
         let hint = &view.hints[0];
@@ -1485,12 +1517,84 @@ mod tests {
         assert_eq!(hint.entrance, None, "an empty entrance is None, not \"\"");
     }
 
+    /// **"Only relevant to my slots" means either end, and means ownership.**
+    ///
+    /// Both halves are silent when wrong. A filter that looked only at the receiving end would drop
+    /// every hint a player is *holding* for somebody else, which is half of what concerns them and
+    /// is exactly the half a reader would not notice missing. And keying on anything wider than
+    /// ownership gives a room's staff a filter that hides nothing, since they may edit every row and
+    /// may hold none of it: the same near-miss `SlotRow::mine` exists to avoid, one table over.
+    ///
+    /// The fixture hint has Troy (slot 1) receiving and Alice (slot 2) finding, so each end is
+    /// reached by moving which slot the viewer owns rather than by inventing a second hint.
+    #[test]
+    fn a_hint_is_mine_at_either_end_and_only_by_ownership() {
+        let games = game_names();
+        let of = |roster: &[Slot], viewer: &Viewer<'_>| {
+            let view = hints(roster, &live(), &names_of(&games), fresh(), None, viewer);
+            assert_eq!(view.hints.len(), 1, "the fixture holds exactly one hint");
+            view.hints[0].mine
+        };
+        let player = |id: Option<i64>| Viewer {
+            id,
+            participant: true,
+            staff: false,
+            people: None,
+        };
+
+        // Troy holds slot 1 and is the one receiving.
+        assert!(
+            of(&roster(), &player(Some(7))),
+            "an item coming to the viewer's own slot does not concern them"
+        );
+
+        // The other end: the same hint, with the viewer holding the slot that is FINDING it.
+        let holding = vec![
+            slot(1, "Troy", "A Link to the Past", SlotKind::Player, None),
+            slot(2, "Alice", "Timespinner", SlotKind::Player, Some(7)),
+            slot(4, "Watcher", "Archipelago", SlotKind::Spectator, None),
+        ];
+        assert!(
+            of(&holding, &player(Some(7))),
+            "an item the viewer's own slot is holding for somebody else does not concern them, so \
+             half of what the filter exists to keep would be dropped"
+        );
+
+        // Somebody else's hint, for somebody holding a slot in the same room.
+        assert!(!of(&roster(), &player(Some(999))));
+        // Signed out. No comparison can match, least of all against an unclaimed slot's `None`.
+        assert!(!of(&roster(), &player(None)));
+
+        // **Staff who hold no slot here**, which is the substitution that compiles and reads as
+        // working: they may edit every row in this room and own none of it.
+        assert!(
+            !of(
+                &roster(),
+                &Viewer {
+                    id: Some(999),
+                    participant: true,
+                    staff: true,
+                    people: None,
+                }
+            ),
+            "running the room made every hint the viewer's own, so an organizer who also plays \
+             would tick the box and see the whole multiworld"
+        );
+    }
+
     /// A hint is filed under both players, so walking every entry sees it twice. The reference
     /// collects hints into a set for this reason; without it the multiworld table doubles its rows.
     #[test]
     fn a_hint_filed_under_both_players_appears_once() {
         let games = game_names();
-        let view = hints(&roster(), &live(), &names_of(&games), fresh(), None);
+        let view = hints(
+            &roster(),
+            &live(),
+            &names_of(&games),
+            fresh(),
+            None,
+            &participant(),
+        );
         assert_eq!(
             view.hints.len(),
             1,
@@ -1510,11 +1614,25 @@ mod tests {
             {"team": 0, "player": 2, "hints": [[2, 2, 100, 10, true, "Cave", 0, 40]]},
         ]);
 
-        let receiver = hints(&roster(), &document, &names_of(&games), fresh(), Some(1));
+        let receiver = hints(
+            &roster(),
+            &document,
+            &names_of(&games),
+            fresh(),
+            Some(1),
+            &participant(),
+        );
         assert_eq!(receiver.hints.len(), 1);
         assert_eq!(receiver.hints[0].receiving_slot, 1);
 
-        let finder = hints(&roster(), &document, &names_of(&games), fresh(), Some(2));
+        let finder = hints(
+            &roster(),
+            &document,
+            &names_of(&games),
+            fresh(),
+            Some(2),
+            &participant(),
+        );
         assert_eq!(finder.hints.len(), 2, "slot 2 finds one and receives one");
 
         // And the rendered view of slot 1 names nobody it should not: the assertion that holds
@@ -1609,7 +1727,14 @@ mod tests {
                 now(),
                 &participant(),
             )),
-            serde_json::to_string(&hints(&roster, &live(), &names_of(&games), fresh(), None)),
+            serde_json::to_string(&hints(
+                &roster,
+                &live(),
+                &names_of(&games),
+                fresh(),
+                None,
+                &participant(),
+            )),
             serde_json::to_string(&locations(
                 &roster[0],
                 &[100, 101, 102],
