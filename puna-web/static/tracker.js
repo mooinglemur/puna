@@ -481,7 +481,13 @@
       // Namespaced by page type, so the hints table's sort on a slot page is not the multiworld's.
       this.sortKey = `tracker.${pageType}.${this.view}.sort`;
       this.headers = Array.from(section.querySelectorAll("th[data-key]"));
-      this.details = section.querySelector("details");
+      // **This section's own disclosure, not any nested one.** Every section carries one now, so a
+      // bare `querySelector("details")` would be one future disclosure inside a table away from
+      // gating this table's polling on something unrelated being open.
+      //
+      // Whether it is open is `toggles.js`'s to restore and to remember; what it means here is
+      // narrower: a folded-away table is not worth fetching.
+      this.details = section.querySelector(":scope > details");
       this.rows = [];
 
       const state = readState();
@@ -495,7 +501,12 @@
           (window.PunaToggles ? window.PunaToggles.recall(this.sortKey) : "")
       );
       if (this.search) this.search.value = this.query;
-      if (this.details && state.get(`${this.view}.open`) === "1") this.details.open = true;
+      // **Which sections are folded away is NOT in the fragment**, and that is a line rather than
+      // an omission. A sort is a claim about the data worth sending somebody ("look at this by
+      // checks"); which parts of the page a reader has rolled up is a fact about their screen, like
+      // the search box beside it, which is deliberately neither remembered nor shared. Every
+      // section now opens by default, so a link that used to carry one open says nothing new.
+      // `toggles.js` restores them from the store, before this runs.
 
       this.bind();
       this.markHeaders();
@@ -533,11 +544,21 @@
       }
 
       if (this.details) {
+        // `toggles.js` owns remembering that this section was folded away; this only reacts, the
+        // same division the checkboxes above follow.
         this.details.addEventListener("toggle", () => {
-          this.persist();
-          // Not fetched until opened: this is the one table whose size scales with the whole
-          // multiworld rather than with one slot.
-          if (this.details.open && !this.rows.length) this.refresh();
+          // **Refetched on every open, not only when there is nothing yet.** A folded-away table is
+          // skipped by the poll, so its rows are as old as the fold, while `lastResponseAt` is
+          // module-wide and every other table keeps moving it forward. Rendering the old rows
+          // against a fresh stamp understates every age in the Last seen column by however long
+          // the section was closed, and there is nothing on screen that would look wrong.
+          //
+          // The cost is one conditional request on a table the reader just asked to see, which the
+          // `ETag` answers with a `304` when nothing has changed.
+          //
+          // Swallowed the same way `refreshAll` swallows a failed poll: a section that cannot be
+          // refetched still opens, showing what it had, and the next poll tries again.
+          if (this.details.open) this.refresh().catch(() => null);
         });
       }
     }
@@ -574,7 +595,6 @@
       // rows for a reason the reader has long forgotten typing, and unlike a sort that is not
       // visible at a glance.
       if (window.PunaToggles) window.PunaToggles.remember(this.sortKey, sort);
-      if (this.details) setOrDelete(params, `${this.view}.open`, this.details.open ? "1" : "");
       writeState(params);
     }
 

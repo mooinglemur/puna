@@ -68,7 +68,8 @@ need to.</p>
    both pages to hold that line. #}
 {% if annotations && owns_a_slot && slot.is_none() %}
 <section class="panel preferences">
-<h2>Player preferences</h2>
+<details open data-collapsed="tracker.room.preferences.collapsed">
+<summary><h2>Player preferences</h2></summary>
 <form method="post" action="{{ write_base }}/preference">
 <fieldset>
 <legend>Ping preference</legend>
@@ -83,12 +84,18 @@ need to.</p>
 </fieldset>
 <div class="run"><button type="submit">Save preference</button></div>
 </form>
+</details>
 </section>
 {% endif %}
 
   {# --- the slot table. On a slot's page this is one row: the same columns, the same code. --- #}
   <section class="table-block" data-view="slots">
-    <h2>{% if slot.is_some() %}Slot{% else %}Slots{% endif %}</h2>
+    {# **Keyed by page type**, the same rule every remembered preference here follows, because this
+       section is on both pages and folding the multiworld's roster away says nothing about wanting
+       one slot's single row folded away too. #}
+    <details open
+             data-collapsed="tracker.{% if slot.is_some() %}slot{% else %}room{% endif %}.slots.collapsed">
+    <summary><h2>{% if slot.is_some() %}Slot{% else %}Slots{% endif %}</h2></summary>
     {# **Only on the multiworld view.** A slot's own page renders exactly one row here, so a filter
        over it can do nothing but hide it. `tracker.js` guards on the box's absence already. #}
     {% if slot.is_none() %}
@@ -199,6 +206,7 @@ need to.</p>
       </div>
     </div>
     <p class="empty hint" hidden>No slots to show.</p>
+    </details>
   </section>
 
 {# --- the annotation dialog -----------------------------------------------------------------------
@@ -290,7 +298,8 @@ need to.</p>
   {# --- one slot's locations, checked AND unchecked. The reference can only show the checked ones,
          because the live document is all it has; Puna has the seed. --- #}
   <section class="table-block" data-view="locations">
-    <h2>Locations</h2>
+    <details open data-collapsed="tracker.slot.locations.collapsed">
+    <summary><h2>Locations</h2></summary>
     <div class="table-controls">
       <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter locations">
       <label class="only-mine">
@@ -317,10 +326,12 @@ need to.</p>
     </div>
     <p class="empty hint" hidden>No locations to show. This seed's names may not have been
     indexed yet.</p>
+    </details>
   </section>
 
   <section class="table-block" data-view="items">
-    <h2>Items received</h2>
+    <details open data-collapsed="tracker.slot.items.collapsed">
+    <summary><h2>Items received</h2></summary>
     <div class="table-controls">
       <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter items">
       {# **Remembered across page loads**, by `toggles.js`, which restores every `[data-toggle]` from
@@ -354,13 +365,21 @@ need to.</p>
       </table>
     </div>
     <p class="empty hint" hidden>Nothing received yet.</p>
+    </details>
   </section>
   {% endif %}
 
-  {# --- hints, collapsed. The one table whose size scales with the whole multiworld rather than
-         with one slot, so it is not fetched until it is opened. --- #}
+  {# --- hints. The one table whose size scales with the whole multiworld rather than with one slot,
+         so it is not fetched while it is folded away.
+
+         **It now ships open like every other section**, which is a deliberate reversal: it used to
+         default closed so that the largest document on the page was never fetched unless somebody
+         asked for it. Opening it by default means every visit fetches it, and what remains of the
+         saving is that a reader who folds it away stops paying for it on every poll from then on.
+         Decided by the user. --- #}
   <section class="table-block" data-view="hints">
-    <details>
+    <details open
+             data-collapsed="tracker.{% if slot.is_some() %}slot{% else %}room{% endif %}.hints.collapsed">
       <summary><h2>Hints</h2></summary>
       <div class="table-controls">
         <input type="search" class="table-search" placeholder="Filter&hellip;" aria-label="Filter hints">

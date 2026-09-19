@@ -1084,6 +1084,19 @@ tfoot .label {
 .table-block { margin: 0 0 2rem; }
 .table-block h2 { margin-bottom: 0.4rem; }
 
+/* Every section of the tracker folds from its own heading, so each <h2> sits inside a <summary>.
+   `summary h2` above makes it inline so it shares the marker's line, and **an inline box drops its
+   vertical margins**, which is exactly what the rule above it was supplying. `inline-block` takes
+   them back while staying on that line, the same pair the room page's Manage section already uses.
+
+   The margin is stated here rather than inherited, because the two selectors reach headings the
+   shorthand rules above do not: the preferences panel is not a `.table-block`. */
+.table-block > details > summary > h2,
+.preferences > details > summary > h2 {
+  display: inline-block;
+  margin: 0 0 0.4rem;
+}
+
 /* --- the tracker's own scroll wrapper ------------------------------------------------------------
    `overflow: auto` rather than `overflow-x: auto`, and the shorthand is the point: it names BOTH
    axes, which is the rule `.scroll-x` learned the hard way: setting one axis silently computes the

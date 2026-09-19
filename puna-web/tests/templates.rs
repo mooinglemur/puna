@@ -3667,6 +3667,96 @@ fn the_finished_filter_is_offered_only_when_it_would_hide_something() {
     );
 }
 
+/// **A section that remembers being folded away, across three files and one inverted polarity.**
+///
+/// `<details data-collapsed="key">` is restored and written by `toggles.js`; the template supplies
+/// the key and the `open` that is the default. Every way of breaking it is quiet:
+///
+///   * **The key names the COLLAPSED state.** `set` deletes rather than storing `false`, so absent
+///     has to mean open or a first-time reader meets every section folded shut. Store the open
+///     state instead and the control works perfectly in reverse: folding a section leaves it open
+///     next visit, and leaving it open folds it. Nothing errors, and a reader would reasonably
+///     report it as the preference not saving.
+///   * **A `<details>` with no `data-collapsed`** is a section that folds and forgets.
+///   * **A `<details>` with no `open`** silently inverts the stated default for everybody who has
+///     never touched it, and looks like a page that failed to load its content.
+///   * **Two sections sharing a key** fold each other away.
+#[test]
+fn a_folded_away_section_is_remembered_and_defaults_to_open() {
+    let template =
+        std::fs::read_to_string(source("templates/tracker/show.html")).expect("the tracker page");
+    let toggles = std::fs::read_to_string(source("static/toggles.js")).expect("toggles.js");
+
+    // The polarity, in the two lines that hold it. Read from the code rather than the prose, which
+    // has to name what it forbids in order to explain it.
+    let code: String = toggles
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        code.contains("details.open = !get(key)"),
+        "the restore no longer reads the key as the COLLAPSED state, so a reader who has expressed \
+         no preference meets every section folded shut"
+    );
+    assert!(
+        code.contains("set(key, !details.open)"),
+        "the write no longer stores the COLLAPSED state, so the preference is remembered inverted: \
+         folding a section leaves it open next visit and vice versa"
+    );
+    assert!(
+        code.contains(r#"querySelectorAll("details[data-collapsed]")"#),
+        "toggles.js no longer looks for the attribute the template emits, so nothing is remembered"
+    );
+
+    let mut keys = Vec::new();
+    for tag in template.split("<details").skip(1) {
+        let tag = tag
+            .split('>')
+            .next()
+            .expect("an unterminated <details> tag");
+        let key = tag
+            .split_once(r#"data-collapsed=""#)
+            .unwrap_or_else(|| {
+                panic!(
+                    "a <details> on the tracker carries no `data-collapsed`, so it folds away and \
+                     forgets:{tag}"
+                )
+            })
+            .1
+            .split_once('"')
+            .expect("unterminated data-collapsed")
+            .0;
+        assert!(
+            tag.contains("open"),
+            "`{key}` does not ship `open`, which inverts the default for every reader who has \
+             never touched it and reads as content that failed to load"
+        );
+        keys.push(key.to_string());
+    }
+
+    // Five sections today: preferences and slots and hints on the multiworld page, locations and
+    // items on a slot's. The floor is what says this is still reading the markup it was written
+    // for, since a scan that finds nothing passes.
+    assert!(
+        keys.len() >= 5,
+        "only {} collapsible sections were found on the tracker; this lint has stopped looking at \
+         the markup it was written for",
+        keys.len()
+    );
+
+    // The keys are templated, so this compares expressions rather than rendered output; two
+    // sections sharing one would fold each other away.
+    let mut sorted = keys.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(
+        sorted.len(),
+        keys.len(),
+        "two sections of the tracker share a `data-collapsed` key, so folding one folds the other"
+    );
+}
+
 /// **Block containers have to close as often as they open.**
 ///
 /// Written after leaving a `<fieldset>` unclosed on the bulk panel, which nested the next one inside
@@ -3681,9 +3771,14 @@ fn the_finished_filter_is_offered_only_when_it_would_hide_something() {
 #[test]
 fn every_block_container_a_template_opens_is_closed() {
     // Deliberately not `<div>`: askama branches legitimately open one in an `{% if %}` and close it
-    // in the matching `{% else %}` arm, so a count over the source is meaningless there. These
-    // three are always written as a matched pair in this codebase.
-    const TAGS: &[&str] = &["fieldset", "table", "form"];
+    // in the matching `{% else %}` arm, so a count over the source is meaningless there. These are
+    // always written as a matched pair in this codebase.
+    //
+    // `<details>` and `<summary>` earn their place for the same reason the rest do: an unclosed
+    // `<details>` swallows everything after it into a section that folds away, and an unclosed
+    // `<summary>` makes the whole section its own label. Both are repaired silently, and every
+    // section of the tracker is now one.
+    const TAGS: &[&str] = &["fieldset", "table", "form", "details", "summary"];
     let mut offenders = Vec::new();
 
     for path in templates() {

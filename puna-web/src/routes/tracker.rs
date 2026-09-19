@@ -2385,6 +2385,102 @@ mod tests {
         );
     }
 
+    /// **Every section of the tracker folds away, and each heading is the control that folds it.**
+    ///
+    /// What the source lint cannot see is what askama emits, and two of these keys are built by a
+    /// branch on the page type. A key that rendered wrong would have a slot's page and the
+    /// multiworld's sharing one preference, so folding a roster of two hundred rows away would also
+    /// fold the single row a slot's page is about.
+    ///
+    /// The heading has to be *inside* the `<summary>`: outside it the section still folds, and the
+    /// only thing left to click is the bare marker triangle beside a heading that looks inert.
+    ///
+    /// `Player preferences` renders only for somebody holding a slot on the multiworld view, so it
+    /// is asserted where it appears rather than assumed onto every page.
+    #[test]
+    fn every_tracker_section_folds_from_its_own_heading() {
+        let multiworld = tracker_page(None).render().expect("renders");
+        let one_slot = tracker_page(Some(1)).render().expect("renders");
+
+        // (page, heading, key) for every section each page carries.
+        let expected: &[(&str, &[(&str, &str)])] = &[
+            (
+                "multiworld",
+                &[
+                    ("Slots", "tracker.room.slots.collapsed"),
+                    ("Hints", "tracker.room.hints.collapsed"),
+                ],
+            ),
+            (
+                "slot",
+                &[
+                    ("Slot", "tracker.slot.slots.collapsed"),
+                    ("Locations", "tracker.slot.locations.collapsed"),
+                    ("Items received", "tracker.slot.items.collapsed"),
+                    ("Hints", "tracker.slot.hints.collapsed"),
+                ],
+            ),
+        ];
+
+        for (page, sections) in expected {
+            let html = if *page == "multiworld" {
+                &multiworld
+            } else {
+                &one_slot
+            };
+            for (heading, key) in *sections {
+                assert!(
+                    html.contains(&format!(r#"<summary><h2>{heading}</h2></summary>"#)),
+                    "the {page} page's {heading} heading is not inside a <summary>, so the only \
+                     thing that folds the section is the marker beside it"
+                );
+                assert!(
+                    html.contains(&format!(r#"data-collapsed="{key}""#)),
+                    "the {page} page's {heading} section is keyed as something other than {key}, \
+                     so it shares a remembered preference with a section it is not"
+                );
+            }
+        }
+
+        // Player preferences, which the fixture above does not reach: it renders only for a viewer
+        // holding a slot on a room running the enhanced tracker.
+        let mut page = tracker_page(None);
+        page.annotations = true;
+        page.owns_a_slot = true;
+        let with_preferences = page.render().expect("renders");
+        assert!(
+            with_preferences.contains("<summary><h2>Player preferences</h2></summary>"),
+            "the preferences heading is not inside a <summary>, so the section does not fold from it"
+        );
+        assert!(
+            with_preferences.contains(r#"data-collapsed="tracker.room.preferences.collapsed""#),
+            "the preferences section remembers nothing, so it unfolds again on every visit"
+        );
+
+        // The page-type split, stated as a property rather than only as the pairs above: neither
+        // page may carry the other's keys.
+        assert!(
+            !multiworld.contains(r#"data-collapsed="tracker.slot."#),
+            "the multiworld page carries a slot-scoped collapse key, so the two share state"
+        );
+        assert!(
+            !one_slot.contains(r#"data-collapsed="tracker.room."#),
+            "a slot's page carries a multiworld-scoped collapse key, so the two share state"
+        );
+
+        // Every one of them open, which is the default the whole feature is specified against.
+        assert_eq!(
+            multiworld.matches("<details open").count(),
+            multiworld.matches("<details").count(),
+            "a section of the multiworld tracker ships folded shut"
+        );
+        assert_eq!(
+            one_slot.matches("<details open").count(),
+            one_slot.matches("<details").count(),
+            "a section of a slot's tracker ships folded shut"
+        );
+    }
+
     /// **"Exclude goal/100%" reaches the page with its words attached, and only the multiworld's.**
     ///
     /// The source-level half of this control is held by `tests/templates.rs`; what that cannot see

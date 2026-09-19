@@ -29,6 +29,10 @@
 // as it normally would: this does not dispatch synthetic events, so a listener added afterwards
 // sees a box that is already in the right state and can simply read `.checked`.
 //
+// `<details data-collapsed="some.stable.key">` is the same idea for a section somebody folded away.
+// It defaults to open and the key names the *collapsed* state, which is what makes that default
+// fall out of the store's own shape rather than needing a third value; see `bindDetails`.
+//
 // Keys are namespaced by hand (`tracker.items.latest`) because they share one store across every
 // page, and two pages inventing `only-mine` independently would share a preference nobody asked to
 // share.
@@ -69,7 +73,8 @@
     save(all);
   }
 
-  // Restore and wire every `[data-toggle]` under `root`.
+  // Restore and wire every remembered control under `root`: the checkboxes above, and the
+  // collapsible sections below.
   //
   // Exposed for the same reason `PunaTables.scan` is: not every control is in the document at
   // load, since `/admin/rooms` fetches a table when its section is opened. `data-toggle-bound` is the
@@ -84,6 +89,42 @@
         set(key, input.checked);
       });
     });
+    bindDetails(root);
+  }
+
+  // --- sections that remember having been folded away -------------------------------------------
+  //
+  // `<details data-collapsed="some.stable.key">`, and the same store for the same reasons: it
+  // changes how a page shows what it already has, nobody else can see it, and losing it costs one
+  // click.
+  //
+  // **The key names the COLLAPSED state rather than the open one, and that polarity is the whole
+  // design.** These sections default to OPEN, so "nobody has expressed a preference" and "open"
+  // have to be the same answer. `set` deletes rather than storing `false`, so absent already means
+  // "not turned on": naming the collapsed state makes absent mean open, for free, and leaves the
+  // store holding an entry only for a section somebody actually folded away. Storing the open state
+  // instead would greet every first-time reader with every section collapsed, which is the opposite
+  // of the intended default and reads as the page having failed to render.
+  //
+  // The element carries the state, so nothing here keeps a second copy of it: `toggle` fires after
+  // the browser has already moved `open`, and it is read back rather than tracked.
+  //
+  // **The markup ships `open`**, so the default survives a reader with no script and there is no
+  // frame in which a fresh page shows everything folded. A reader who HAS collapsed something pays
+  // for that with a section that may be painted open for an instant before this runs; that is the
+  // right way round, since it is the rarer case and the cheaper mistake.
+  function bindDetails(root) {
+    (root || document)
+      .querySelectorAll("details[data-collapsed]")
+      .forEach(function (details) {
+        if (details.dataset.collapsedBound) return;
+        details.dataset.collapsedBound = "1";
+        var key = details.dataset.collapsed;
+        details.open = !get(key);
+        details.addEventListener("toggle", function () {
+          set(key, !details.open);
+        });
+      });
   }
 
   // --- the same store, for view state that is not a boolean -------------------------------------
