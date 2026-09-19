@@ -9,9 +9,17 @@
 //! so sharing a tracker would share the room page. Proxying from an independent id solves both, and
 //! there is no CORS in the picture at all because the page fetches its own origin.
 //!
-//! It is also the only thing that works. Pahoa gates the tracker whenever an admin token is
+//! It is also the only thing that works. Pahoa gates these documents whenever an admin token is
 //! configured (which every Puna room has), and sending `Authorization` makes a request non-simple,
 //! which needs a preflight pahoa does not answer.
+//!
+//! **The gate covers three routes, not two.** `/api/v1/room`, the room description, answered
+//! anonymously until pahoa's 2026-09-19 change and is now behind the same rule as the two
+//! trackers: open on a standalone pahoa with no token, bearer-authenticated otherwise, and open
+//! again under `--open-tracker`, which Puna refuses to pass. The reasoning is pahoa's and is worth
+//! restating because it is what decides the refusal in `spec::args`: gating the trackers while the
+//! room description stayed open protected nothing, since it carries the same slot names on a
+//! smaller document, and an anonymous roster turns a port scan into room identification.
 //!
 //! ## The allowlist is a type, not a check
 //!
@@ -20,6 +28,14 @@
 //! validation that could be forgotten but a thing that cannot be spelled. A general proxy here would
 //! be a confused deputy pointed at `/admin/v1/**`, and the tier holding this code can read
 //! `rooms.admin_token`, so it would be a confused deputy with the credential in hand.
+//!
+//! **The rule is that a path is a constant, not that there are exactly two of them.** Adding a
+//! third means a variant with its own constant, which keeps the property; taking a path from a
+//! caller breaks it however few paths there are. Worth saying because there is now a candidate:
+//! `/api/v1/room` became fetchable with the token in the same change that gated it, and it is much
+//! smaller than `/admin/v1/status` on a large room because it carries no per-slot progress. So a
+//! feature that wants a roster and nothing else has somewhere cheap to get one. Nothing needs it
+//! today, and it is recorded as an option rather than a plan.
 
 use std::time::Duration;
 

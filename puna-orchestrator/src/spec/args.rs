@@ -120,7 +120,11 @@ const NEVER_ARGV: &[(&str, &str)] = &[
     (
         "--open-tracker",
         "tracker_policy is Puna's to enforce at its own edge, and every Puna room's tracker is \
-         gated because an open one turns a port scan into room identification",
+         gated because an open one turns a port scan into room identification. Since pahoa's \
+         2026-09-19 change the flag opens /api/v1/room as well as the two tracker documents, and \
+         that route carries the same roster on a smaller document. Puna does not proxy it, so \
+         unlike the trackers there is no Puna-side edge to enforce a policy at: passing this would \
+         publish the roster on a route with no gate in front of it at all",
     ),
     ("--hint-cost", SAVE_AUTHORITATIVE),
     ("--location-check-points", SAVE_AUTHORITATIVE),
