@@ -698,6 +698,72 @@ async fn my_rooms_finds_both_ways_a_room_can_be_yours() {
     .await;
 }
 
+/// **The default order is part of the page and is the one thing about a sortable table that no
+/// markup states.**
+///
+/// `/rooms` can be re-sorted by any column in the browser, but every reader gets one order before
+/// they touch anything, and `table.js` returns to it on a third click, so it is a rendered decision
+/// rather than a detail of how the rows were assembled. It was `BTreeMap` order for as long as the
+/// page existed: room UUID, which is v4 and says nothing, arriving stable enough between loads to
+/// look chosen.
+#[tokio::test]
+async fn my_rooms_leads_with_the_running_ones_and_then_the_newest() {
+    with_db(|pool| async move {
+        let mut conn = pool.get().await.expect("connection");
+        users(&mut conn).await;
+        let generation = seed_generation(&mut conn, false).await;
+
+        // Created in an order that matches neither the state ranking nor the ages, so a sort that
+        // silently did nothing would have to be lucky to pass. The idle room is the NEWEST of the
+        // four, which is what makes the two keys distinguishable: on age alone it would lead.
+        for (name, state, age) in [
+            ("older running", "running", "2 days"),
+            ("idle and newest", "idle", "1 minute"),
+            ("starting", "starting", "3 days"),
+            ("newer running", "running", "1 hour"),
+        ] {
+            let id = room::create(
+                &mut conn,
+                &NewRoom::direct(Environment::Dev, name, generation, OWNER),
+            )
+            .await
+            .expect("create");
+            // Straight at the columns: `state` is the orchestrator's to write and there is no
+            // setter for it here, which is correct, and `created_at` has none anywhere by design.
+            diesel::sql_query(
+                "UPDATE rooms SET state = $2::room_state, created_at = now() - $3::interval
+                  WHERE id = $1",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .bind::<diesel::sql_types::Text, _>(state)
+            .bind::<diesel::sql_types::Text, _>(age)
+            .execute(&mut conn)
+            .await
+            .expect("set the state and the age");
+        }
+
+        let order: Vec<String> = room::mine(&mut conn, OWNER)
+            .await
+            .expect("mine")
+            .into_iter()
+            .map(|entry| entry.room.name)
+            .collect();
+
+        assert_eq!(
+            order,
+            [
+                "newer running",
+                "older running",
+                "starting",
+                "idle and newest"
+            ],
+            "running first, newest first within a tier, and `starting` above `idle` rather than \
+             beside it"
+        );
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn requesting_a_state_is_idempotent() {
     with_db(|pool| async move {

@@ -7,9 +7,20 @@
 <p>No rooms yet. Claiming a slot or being added to one puts it here; rooms you have merely visited
 do not appear.</p>
 {% else %}
+{# Sort comes from `table.js`, which reorders the rows the server already sent rather than rendering
+   any: the conventions are `data-sortable` on the table, `th[data-key]` on the headers it may order
+   by, and a `data-value` where the sort key is not the rendered text. No filter box, unlike the
+   admin tables: this list is only ever the rooms that are yours, which `room::mine` keeps short
+   enough to read, and a box to search a handful of rows is a control with nothing to do.
+
+   Progressive enhancement, as everywhere else it is used: with scripting off the arrows are simply
+   absent and the table stands in the order the server chose. That order is `room::mine`'s and it is
+   running rooms first, newest first within each tier; it is also where a third click on any header
+   lands, so it is worth knowing that no header renders it. #}
 <div class="scroll-x">
-<table class="rooms">
-<thead><tr><th>Room</th><th>You are</th><th>State</th><th>Address</th></tr></thead>
+<table class="rooms" id="my-rooms" data-sortable>
+<thead><tr><th data-key>Room</th><th data-key>You are</th><th data-key>State</th>
+<th data-key>Created</th><th data-key>Address</th></tr></thead>
 <tbody>
 {% for entry in rooms %}
 <tr>
@@ -21,6 +32,24 @@ do not appear.</p>
 {% endmatch %}
 </td>
 <td>{{ entry.room.state }}</td>
+{# **When the room was opened, which is the one clock on a room that never moves.** The others a row
+   could show are all answers about now (`state_changed_at`, `last_activity_at`) and this page is not
+   a monitor: it is the list you scan to find the room you meant, and the fact that identifies a room
+   among several of the same shape is the day it was rolled.
+
+   Absolute rather than the shorthand age the admin tables use, and for the same reason
+   `/generations` spells its upload dates out: an age answers *how long* and this column is asked
+   *which one*, where "94d" is a subtraction the reader has to perform against a calendar.
+
+   `data-value` because the rendered text does not compare the way it reads. `table.js` decides
+   numeric-versus-textual per comparison and `2026-06-23 10:00 UTC` begins with a digit, so it would
+   be taken as the number 2026 and every room rolled in the same year would sort equal. The epoch
+   second is the instant itself and cannot be mistaken for part of one.
+
+   `data-at` is what `localtime.js` turns into a title, so the cell says UTC to everybody and the
+   hover says it in the zone the reader is actually in. #}
+<td data-value="{{ entry.room.created_at.timestamp() }}"
+    data-at="{{ entry.room.created_at.timestamp_millis() }}">{{ entry.room.created_at.format("%Y-%m-%d %H:%M UTC") }}</td>
 <td>
 {% if let Some(host) = entry.room.advertised_host %}
 {% if let Some(port) = entry.room.advertised_port %}<code>{{ host }}:{{ port }}</code>{% endif %}
@@ -32,4 +61,14 @@ do not appear.</p>
 </table>
 </div>
 {% endif %}
+{% endblock %}
+
+{# Shipped to this page only, like every other script here: `localtime.js` for the `data-at` titles
+   and `table.js` for the sort. Both `defer`, and `localtime.js` first, the order `/admin/rooms`
+   uses. Nothing here depends on that order: the rows are in the document at load and neither file
+   calls into the other. Keeping one order everywhere is what makes the day something does depend on
+   it uneventful. #}
+{% block scripts %}
+<script src="/static/localtime.js?v={{ base.static_version }}" defer></script>
+<script src="/static/table.js?v={{ base.static_version }}" defer></script>
 {% endblock %}

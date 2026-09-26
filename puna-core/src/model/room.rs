@@ -438,6 +438,34 @@ impl RoomState {
         matches!(self, Self::Starting | Self::Running | Self::Degraded)
     }
 
+    /// Where this state sorts in a listing that leads with the rooms you can actually use.
+    ///
+    /// Three tiers: serving, a moment away from serving, and everything else. A person opening a
+    /// list of their own rooms is nearly always looking for one to connect to, and a room that is
+    /// up is the answer to that question in a way a room that has been closed for a month is not.
+    ///
+    /// **Deliberately not [`is_live`](Self::is_live), which looks like the same question and is
+    /// not.** That one is D4, an allocator invariant about whose port may be reclaimed, and it
+    /// merges `running` with `starting` because for *that* purpose they are identical. Sorting on
+    /// it would tie the order of this page to a rule about port reuse, so the day D4's set changes
+    /// a listing would quietly reorder for a reason nobody reading either site could connect.
+    ///
+    /// Coarse on purpose. Ranking all nine would be asserting that `failed` belongs above or below
+    /// `idle`, which is a claim about what the reader wants next and not one this type can make;
+    /// within a tier the caller's own tiebreak decides.
+    pub fn listing_rank(self) -> u8 {
+        match self {
+            Self::Running => 0,
+            Self::Starting | Self::Degraded => 1,
+            Self::Provisioning
+            | Self::Idle
+            | Self::Stopping
+            | Self::Failed
+            | Self::Deleting
+            | Self::IntegrityFault => 2,
+        }
+    }
+
     pub const ALL: [RoomState; 9] = [
         Self::Provisioning,
         Self::Idle,
@@ -1204,6 +1232,18 @@ pub struct MyRoom {
 /// this `UNION`s them so the page needs one query rather than two lists to merge. **Rooms you
 /// merely visited are absent**: claiming a slot or being added is what puts one here, which is why
 /// the answer stays short enough to be useful.
+///
+/// ## Ordered here, because this is the order the page rests in
+///
+/// Running rooms first by [`RoomState::listing_rank`], then newest first within each tier. The
+/// browser can re-sort the table by any column, but a reader gets one order before they touch
+/// anything and it is this one, and `table.js`'s third click on a header returns to it: a sort is a
+/// lens, and taking the lens off has to land somewhere deliberate.
+///
+/// **This was `BTreeMap` order, which is to say ordered by room UUID**, and a v4 UUID carries no
+/// information at all. So the page was returning a stable arbitrary order that looked like a
+/// decision and was not, which is the harder kind of wrong to notice: it never changes between two
+/// loads, so it reads as intentional to whoever is looking at it.
 pub async fn mine(
     conn: &mut AsyncPgConnection,
     user_id: i64,
@@ -1254,6 +1294,20 @@ pub async fn mine(
             out.push(MyRoom { room, relationship });
         }
     }
+
+    // A state the parser does not know sorts last rather than panicking or landing in the middle.
+    // `state` reaches here as text off the row, so the case is a column value this build has no
+    // variant for: a room written by a newer deployment mid-rollout. Last is the honest place for a
+    // room this code cannot describe, and it is the one choice that cannot push a real answer down.
+    //
+    // Stable, so the tiebreak of the tiebreak stays the UUID order the map gave: two rooms opened in
+    // the same second do not swap places between loads.
+    out.sort_by_key(|entry| {
+        (
+            RoomState::parse(&entry.room.state).map_or(u8::MAX, RoomState::listing_rank),
+            std::cmp::Reverse(entry.room.created_at),
+        )
+    });
     Ok(out)
 }
 
