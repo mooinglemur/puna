@@ -351,6 +351,24 @@ mod tests {
 
     const CONFIGURED: &str = "registry.example.com/g/pahoa:sha-new";
 
+    /// The fixture creator's Discord id, which the page must never render.
+    ///
+    /// **A full-length snowflake, because the assertion that it is absent searches the whole
+    /// page.** It was `4931`, and this page carries around seven thirteen-digit epoch-millisecond
+    /// values: a `data-at` per age per row, each from its own `Utc::now()`. A four-digit needle
+    /// landed inside one of them about once in two thousand renders, with no leak and nothing
+    /// wrong.
+    ///
+    /// **The rate is not the problem; the clustering is.** A collision sits at some digit position
+    /// and holds until that digit moves, so one in the high digits fails every run for a minute or
+    /// more and then stops. The nightly hunt read that as five consecutive failures and a rate of
+    /// ten percent, which is a flake profile that looks like a race and is a coincidence.
+    ///
+    /// A snowflake is longer than any number this page can render, so it can appear only by being
+    /// leaked. Same bug `IDS` below is shaped against, met from the other side: that note fixed the
+    /// haystack and left the needle four digits long.
+    const CREATOR_ID: i64 = 493198765432109876;
+
     /// Fixture room ids: fixed, distinct, and **all hex letters with no digits**.
     ///
     /// A random uuid contains random digits, and the assertions below check that a Discord id is
@@ -384,7 +402,7 @@ mod tests {
             name: "midweek-async".into(),
             state: if running.is_some() { "running" } else { "idle" }.into(),
             desired_state: "running".into(),
-            created_by: Some(4931),
+            created_by: Some(CREATOR_ID),
             created_by_name: Some("troy".into()),
             running_image: running.map(str::to_string),
             deployment_created_at: running.map(|_| Utc::now() - TimeDelta::days(6)),
@@ -597,7 +615,13 @@ mod tests {
         // nobody's question.
         assert!(html.contains("<th data-key=\"created\">Created by</th>"));
         assert!(html.contains(">troy<"), "the creator's username is shown");
-        assert!(!html.contains("4931"), "and their Discord id is not");
+        // The page follows the failure, because this one is a needle-in-a-haystack by construction
+        // and the panic said only that four digits were somewhere on a page it did not print.
+        // Reading it cost a local reproduction loop; the next person gets the evidence in the log.
+        assert!(
+            !html.contains(&CREATOR_ID.to_string()),
+            "and their Discord id is not: {html}"
+        );
 
         // The section is present, labeled with its count, and EMPTY: the rooms behind it were
         // never loaded. A page that quietly rendered them would defeat the whole point.
@@ -757,7 +781,7 @@ mod tests {
         let mut it = room(None);
         assert_eq!(creator(&it).as_deref(), Some("troy"));
 
-        it.created_by_name = Some(placeholder_username(4931));
+        it.created_by_name = Some(placeholder_username(CREATOR_ID));
         assert_eq!(creator(&it).as_deref(), Some("never logged in"));
 
         it.created_by_name = None;
