@@ -542,6 +542,7 @@ mod tests {
             game: "A Link to the Past".into(),
             kind,
             password: None,
+            password_hidden: false,
             owner_id: owner,
             claim_token: Some("a-claim-token".into()),
             claimed_at: None,

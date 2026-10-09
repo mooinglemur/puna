@@ -205,6 +205,10 @@ mod tests {
             game: "A Link to the Past".into(),
             kind,
             password: password.map(str::to_string),
+            // The default, and the test below sets it to prove it changes nothing here: what Puna
+            // shows an owner is not pahoa's business, and the map must carry a hidden slot's
+            // password exactly as it carries any other.
+            password_hidden: false,
             owner_id: None,
             claim_token: None,
             claimed_at: None,
@@ -274,6 +278,43 @@ mod tests {
         // Keys are strings, because JSON object keys are. Pahoa parses exactly this shape.
         assert!(raw.contains("\"4\":"), "{raw}");
         assert!(!data.contains_key("PAHOA_PASSWORD"));
+    }
+
+    /// **A password Puna withholds from its owner is still a password pahoa authenticates.**
+    ///
+    /// `password_hidden` decides what the web tier SHOWS and nothing else. The failure it invites
+    /// is somebody reading it as "this slot has no password yet" and filtering those rows out of
+    /// the map on the way here, which under the fail-closed rule at the top of this module does the
+    /// exact opposite of what the flag is for: a slot absent from `PAHOA_SLOT_PASSWORDS` needs no
+    /// credential at all, so every withheld slot would become the one unprivileged door into a room
+    /// where everybody else needs one. The organizer who ticked a box to delay their start would
+    /// have opened the room instead.
+    ///
+    /// So this asserts the map is byte-identical with the flag set, which is the only property that
+    /// cannot be got wrong quietly.
+    #[test]
+    fn withholding_a_password_changes_nothing_pahoa_is_given() {
+        let plain = build(
+            &room(SlotAuth::PerSlot, None),
+            &secrets(None),
+            &slots(Some("secret")),
+        )
+        .expect("build");
+
+        let mut hidden = slots(Some("secret"));
+        for slot in &mut hidden {
+            slot.password_hidden = true;
+        }
+        let withheld =
+            build(&room(SlotAuth::PerSlot, None), &secrets(None), &hidden).expect("build");
+
+        assert_eq!(
+            plain, withheld,
+            "withholding a password from its owner changed what the room is told"
+        );
+        let raw = withheld.get("PAHOA_SLOT_PASSWORDS").expect("the map");
+        let parsed: BTreeMap<String, String> = serde_json::from_str(raw).expect("json");
+        assert_eq!(parsed.len(), 4, "a withheld slot was dropped from the map");
     }
 
     /// The failure this module exists for.

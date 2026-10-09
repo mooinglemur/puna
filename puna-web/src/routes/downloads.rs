@@ -120,14 +120,7 @@ async fn slot_patch(
             // `room` mode uses the room-wide password with the slot's own name as the username:
             // pahoa authenticates the password and the name identifies the slot, so the pair is
             // what a client needs either way.
-            let credential = match access.room.patch_policy {
-                room::PatchPolicy::Open => None,
-                room::PatchPolicy::Claimed => match access.room.slot_auth {
-                    room::SlotAuth::None => None,
-                    room::SlotAuth::Room => access.room.password.as_deref(),
-                    room::SlotAuth::PerSlot => access.slot.password.as_deref(),
-                },
-            };
+            let credential = patch_credential(&access.room, &access.slot);
             let credential = credential.map(|password| Credential {
                 slot_name: &access.slot.player_name,
                 password,
@@ -293,6 +286,51 @@ fn sanitize(raw: &str, max: usize) -> String {
     }
 }
 
+/// Which credential, if any, a served patch embeds.
+///
+/// **A function rather than a `match` in the route, because it is the only place a password reaches
+/// a file that leaves the building.** `embed_server` writes it into `archipelago.json` as
+/// `wss://<slot>:<password>@<host>:<port>`, in plain text inside a zip, and the client connects
+/// with it unprompted. Three separate room settings decide the answer and one of them is a
+/// per-slot boolean, which is four ways to be wrong in an expression nothing could previously
+/// assert.
+///
+/// `room` mode uses the room-wide password with the slot's own name as the username: pahoa
+/// authenticates the password and the name identifies the slot, so the pair is what a client needs
+/// either way.
+///
+/// ## A withheld password is withheld here, and this is the path that decides whether the feature
+/// does anything
+///
+/// A room that says "Not Available Yet" on its page and ships the password inside the patch has
+/// withheld nothing: the player's client is already connected, and unzipping the file reads the
+/// string. The page would be decoration over an open door.
+///
+/// Answered as the **no-credential form** rather than by refusing the download, which is a shape
+/// the room already has words for: the options page describes exactly this file under the `open`
+/// patch policy, "the patch carries only the room's address, so a player with a password types it".
+/// The player gets the artifact they are entitled to and cannot auto-connect yet, which is the
+/// whole of what withholding is for. Refusing instead would withhold a game file over a credential
+/// decision, and read as a broken room.
+///
+/// **Staff are not special-cased**, unlike the room page and the password route. A patch is built
+/// for whoever will play the slot; an organizer downloading one to check it is not connecting with
+/// it, and a file whose contents depended on who fetched it is a file nobody can reason about.
+fn patch_credential<'a>(
+    room: &'a room::Room,
+    slot: &'a puna_core::model::slot::Slot,
+) -> Option<&'a str> {
+    match room.patch_policy {
+        room::PatchPolicy::Open => None,
+        room::PatchPolicy::Claimed => match room.slot_auth {
+            room::SlotAuth::None => None,
+            room::SlotAuth::Room => room.password.as_deref(),
+            room::SlotAuth::PerSlot if slot.password_hidden => None,
+            room::SlotAuth::PerSlot => slot.password.as_deref(),
+        },
+    }
+}
+
 pub fn routes() -> Vec<rocket::Route> {
     routes![slot_patch, spoiler]
 }
@@ -378,5 +416,129 @@ mod tests {
     fn the_extension_comes_from_the_member() {
         assert!(filename("s", &entry(1, "p"), "AP_1_P1_p.APBP").ends_with(".apbp"));
         assert!(filename("s", &entry(1, "p"), "no-extension").ends_with(".bin"));
+    }
+
+    /// Written out rather than defaulted, the same way `spec/secret.rs` builds one: the two fields
+    /// this function reads off a room are the two a fixture must state, and a `Default` would let a
+    /// later field arrive unnoticed in a test about which credential leaves the building.
+    fn a_room(policy: room::PatchPolicy, auth: room::SlotAuth) -> room::Room {
+        room::Room {
+            id: puna_core::ids::RoomId::new(),
+            name: "test".into(),
+            environment: puna_core::Environment::Dev,
+            generation_id: puna_core::ids::GenerationId::new(),
+            source: puna_core::model::RoomSource::Direct,
+            created_by: None,
+            created_at: chrono::Utc::now(),
+            cloned_from: None,
+            lobby_room_id: None,
+            desired_state: "stopped".into(),
+            slot_auth: auth,
+            password: Some("room-wide".into()),
+            spoiler_policy: room::SpoilerPolicy::Staff,
+            tracker_id: puna_core::ids::TrackerId::new(),
+            journal_id: puna_core::ids::JournalId::new(),
+            tracker_policy: room::TrackerPolicy::Link,
+            journal_policy: room::JournalPolicy::Full,
+            patch_policy: policy,
+            primary_port: room::PrimaryPort::Full,
+            password_complexity: puna_core::secret::PasswordComplexity::Medium,
+            wants_filtered: true,
+            state: "running".into(),
+            state_changed_at: chrono::Utc::now(),
+            desired_at: chrono::Utc::now(),
+            advertised_host: None,
+            advertised_port: None,
+            advertised_filtered_port: None,
+            last_error: None,
+            enhanced_tracker: false,
+            open_claims: false,
+            gameplay_options: None,
+            probed_at: None,
+        }
+    }
+
+    fn a_slot(hidden: bool) -> puna_core::model::slot::Slot {
+        puna_core::model::slot::Slot {
+            room_id: puna_core::ids::RoomId::new(),
+            slot_number: 1,
+            player_name: "Troy".into(),
+            game: "A Link to the Past".into(),
+            kind: SlotKind::Player,
+            password: Some("per-slot".into()),
+            password_hidden: hidden,
+            owner_id: Some(1),
+            claim_token: None,
+            claimed_at: None,
+            tracker_id: puna_core::ids::TrackerId::new(),
+            locked_at: None,
+            locked_by: None,
+            progression: puna_core::model::annotation::ProgressionStatus::Unknown,
+            note: None,
+            annotated_at: None,
+            annotated_by: None,
+        }
+    }
+
+    /// Every combination of the three settings that decide what goes in the file.
+    ///
+    /// Enumerated rather than spot-checked because the cell that matters is one of eight and is the
+    /// one a reader of the expression would skim past: per-slot mode, `claimed` policy, withheld.
+    /// Everything around it is unchanged behavior, and a change that broke only that cell would be
+    /// a feature that silently does nothing.
+    #[test]
+    fn a_withheld_password_never_reaches_the_patch() {
+        use room::{PatchPolicy, SlotAuth};
+
+        // The cell this exists for: a credential the page is refusing to show must not travel in
+        // the file either, or the player's client connects with it anyway.
+        assert_eq!(
+            patch_credential(
+                &a_room(PatchPolicy::Claimed, SlotAuth::PerSlot),
+                &a_slot(true)
+            ),
+            None,
+            "a withheld password was embedded in the patch, so hiding it on the page did nothing"
+        );
+
+        // ...and the same room with the password issued behaves exactly as it always has.
+        assert_eq!(
+            patch_credential(
+                &a_room(PatchPolicy::Claimed, SlotAuth::PerSlot),
+                &a_slot(false)
+            ),
+            Some("per-slot"),
+            "withholding broke the ordinary case it was supposed to leave alone"
+        );
+
+        // The room-wide password is not a property of a slot, so a slot's flag cannot reach it.
+        // Stated because the obvious shape of this function reads the flag before the mode.
+        for hidden in [true, false] {
+            assert_eq!(
+                patch_credential(
+                    &a_room(PatchPolicy::Claimed, SlotAuth::Room),
+                    &a_slot(hidden)
+                ),
+                Some("room-wide"),
+                "a per-slot flag changed what a room-wide room embeds (hidden={hidden})"
+            );
+            assert_eq!(
+                patch_credential(
+                    &a_room(PatchPolicy::Claimed, SlotAuth::None),
+                    &a_slot(hidden)
+                ),
+                None,
+                "a room with no passwords embedded one (hidden={hidden})"
+            );
+            // `open` publishes the patch to anybody, so it never carries a credential whatever the
+            // mode: that is the policy's whole meaning and it outranks everything below it.
+            for auth in [SlotAuth::None, SlotAuth::Room, SlotAuth::PerSlot] {
+                assert_eq!(
+                    patch_credential(&a_room(PatchPolicy::Open, auth), &a_slot(hidden)),
+                    None,
+                    "an open patch carried a credential ({auth:?}, hidden={hidden})"
+                );
+            }
+        }
     }
 }

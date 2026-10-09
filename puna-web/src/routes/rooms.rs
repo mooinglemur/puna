@@ -293,7 +293,26 @@ pub struct SlotView {
     /// The struct's note above exists for exactly this field: a template cannot prove it did not
     /// render something, so the decision is made in `slot_views` and the markup only asks whether
     /// there is a value. `None` outside per-slot mode, where a per-slot password has no meaning.
+    ///
+    /// Also `None` for the slot's **owner** while the room withholds it: see
+    /// [`password_hidden`](Self::password_hidden).
     pub password: Option<String>,
+    /// Whether this slot's password is being withheld from the person holding it.
+    ///
+    /// **True only for a viewer who would otherwise have been shown something**: the slot's owner
+    /// and the room's staff. A stranger holding the room link gets `false` and the empty cell they
+    /// already got, because whether staff have distributed credentials yet is not their business
+    /// and a chip promising one would imply they are owed it.
+    ///
+    /// Paired with [`password`](Self::password), the two fields say which of three things the cell
+    /// renders, and **the combination is what distinguishes the two audiences, so the template
+    /// needs no role comparison of its own**:
+    ///
+    ///   * `Some` + `false`: the value, as it has always rendered.
+    ///   * `Some` + `true`: the value plus the control to reveal it. Only staff can reach this
+    ///     pair, because an owner's value is withheld in the same breath that sets the flag.
+    ///   * `None` + `true`: withheld, so the cell says so instead of sitting empty. The owner.
+    pub password_hidden: bool,
     /// Whether this viewer is offered a control to unbind the slot from its owner.
     pub can_release: bool,
     /// Who holds this slot, by Discord username, and **only for a viewer entitled to the roster**:
@@ -459,11 +478,26 @@ fn slot_views(
             // Also `None` outside per-slot mode, where the column has no meaning: the other two
             // modes either have no password or have one shared room password, which is not a
             // property of a slot and is not rendered here at all.
+            //
+            // **Staff are unaffected by `password_hidden` and the owner arm is where it bites.**
+            // Withholding is about delivery, and staff are who delivers: a chip they could not
+            // read the value behind would leave the organizer running the room unable to tell
+            // anybody their password, which is the one thing this feature exists to let them do by
+            // hand.
             password: match (per_slot_passwords, role.is_some(), viewer, s.owner_id) {
                 (false, ..) => None,
                 (true, true, ..) => s.password.clone(),
-                (true, _, Some(v), Some(o)) if v == o => s.password.clone(),
+                (true, _, Some(v), Some(o)) if v == o && !s.password_hidden => s.password.clone(),
                 _ => None,
+            },
+            // The same three-way audience as the field above, deliberately spelled the same way
+            // rather than derived from it: `password` being `None` is also what a stranger and a
+            // non-per-slot room look like, and a chip on either of those would be wrong.
+            password_hidden: match (per_slot_passwords, role.is_some(), viewer, s.owner_id) {
+                (false, ..) => false,
+                (true, true, ..) => s.password_hidden,
+                (true, _, Some(v), Some(o)) if v == o => s.password_hidden,
+                _ => false,
             },
             // Staff, helpers included: unbinding a slot and handing out a fresh claim link is
             // running the room rather than deciding who runs it. The roster action a helper may
@@ -543,6 +577,84 @@ async fn release_slot(
         "slot released"
     );
     Ok(Redirect::to(format!("/room/{id}")))
+}
+
+/// Hand one slot's password to its owner, or take it back out of their view.
+///
+/// **Nothing is queued, nothing is marked stale, and no room has to be running**, which is what
+/// separates this from every other per-slot control on the page. The password itself does not
+/// change and pahoa's map does not change, so there is nothing to tell the room: this moves one
+/// boolean that decides what the next render shows. A room being set up before anybody has
+/// connected is the case it mostly serves, and that room is `idle`.
+///
+/// `Helper`, matching the rotation and the lock beside it: handing out a credential the room
+/// already minted is running the room, not deciding who runs it.
+///
+/// Recorded in the room's history, because "who has been told their password" is exactly the
+/// question somebody asks afterwards, and the value stays out of the row for the reason the
+/// rotation's does: anybody who can read the room's history can read that.
+#[post("/room/<id>/slot/<n>/password-visibility", data = "<form>")]
+async fn set_slot_password_visibility(
+    id: RoomParam,
+    n: i32,
+    access: RoomAccess<Helper>,
+    form: Form<PasswordVisibilityForm>,
+    pool: &State<Pool>,
+) -> Result<Flash<Redirect>> {
+    let mut conn = pool.get().await?;
+    let back = Redirect::to(format!("/room/{id}"));
+
+    if access.room.slot_auth != SlotAuth::PerSlot {
+        return Ok(Flash::warning(
+            back,
+            "This room does not use per-slot passwords, so there is nothing to withhold.",
+        ));
+    }
+
+    let changed =
+        slot::set_passwords_hidden(&mut conn, id.0, std::slice::from_ref(&n), form.hidden).await?;
+
+    // **A no-op is reported as one rather than as success.** Two staff on the same roster is the
+    // ordinary case for this control, and "Revealed" on a slot somebody else revealed a moment ago
+    // tells the second one they did something they did not do.
+    if changed == 0 {
+        return Ok(Flash::warning(
+            back,
+            "That slot was already in that state, so nothing changed.",
+        ));
+    }
+
+    event::record(
+        &mut conn,
+        id.0,
+        event::Actor::User(access.user_id()),
+        if form.hidden {
+            "slot_password_hidden"
+        } else {
+            "slot_password_revealed"
+        },
+        serde_json::json!({ "slot": n }),
+    )
+    .await?;
+
+    tracing::info!(
+        room = %id,
+        slot = n,
+        by = access.user_id(),
+        hidden = form.hidden,
+        "slot password visibility changed"
+    );
+
+    Ok(Flash::success(
+        back,
+        if form.hidden {
+            "Withheld. That slot's player no longer sees their password, and their patch no longer \
+             carries it."
+        } else {
+            "Issued. That slot's player can now see their password and download a patch that \
+             carries it."
+        },
+    ))
 }
 
 /// Give a slot a new password, now.
@@ -675,6 +787,18 @@ struct CreateRoomForm {
     /// posted. The alternative is create, navigate, tick, save, and only then share the link.
     #[field(default = false)]
     open_claims: bool,
+    /// Whether every slot's password starts withheld from its owner.
+    ///
+    /// A checkbox, off by default, like the two above and for the same reasons.
+    ///
+    /// **Submitted whatever the password mode is, and the route decides it means nothing outside
+    /// `per_slot`.** The box has to be in the form unconditionally: `options-form.js` reveals the
+    /// per-mode *hints* and the page is deliberately correct with scripting off, where every hint
+    /// is visible at once. A control that only exists when a script is running would be a setting
+    /// an unscripted organizer cannot reach, so it is always posted and `copy_slots` ignores it
+    /// where there is no password to withhold.
+    #[field(default = false)]
+    hide_slot_passwords: bool,
     /// The lobby room this seed was rolled in. Optional, and blank when the organizer skipped it.
     ///
     /// A URL or a bare id: both are things somebody has in hand, and only the id is used. See
@@ -749,6 +873,7 @@ async fn create(
     new.tracker_policy = Some(tracker_policy);
     new.enhanced_tracker = form.enhanced_tracker;
     new.open_claims = form.open_claims;
+    new.hide_slot_passwords = form.hide_slot_passwords;
     // **Generated here, never typed.** The checkbox says whether the room has one at all; a field
     // asking somebody to invent a remote-admin password would collect a weak one, and the value is
     // rendered back to the organizer on the room page either way. It takes the shape this room
@@ -1899,6 +2024,15 @@ async fn claim_open_slot(
 ///
 /// JSON rather than a page, because it is one string that wants copying. `404` outside `per_slot`
 /// mode: there is no password, and saying so is better than an empty field that looks like a bug.
+///
+/// ## The withholding is enforced here too, and that is not belt-and-suspenders
+///
+/// `SlotAccess` admits the slot's **owner**, which is precisely who `password_hidden` withholds
+/// from, so without this check the room page says "Not Available Yet" and this route hands over
+/// the string one URL along. Nothing in `static/` fetches it, which makes it more dangerous rather
+/// than less: a hole no page of ours walks through is one nobody notices is open.
+///
+/// Staff pass, for the reason `slot_views` lets them see the value: they are who distributes it.
 #[get("/room/<_id>/slot/<_n>/password")]
 async fn slot_password(
     _id: RoomParam,
@@ -1907,6 +2041,12 @@ async fn slot_password(
 ) -> Result<Json<serde_json::Value>> {
     if access.room.slot_auth != SlotAuth::PerSlot {
         return Err(not_found("this room does not use per-slot passwords"));
+    }
+    // `404`, matching the two refusals around it rather than `403`: whether a password is being
+    // withheld is the room's business, and the owner has the page for that answer, which says so
+    // in words next to the control staff use to change it.
+    if access.slot.password_hidden && !access.is_staff() {
+        return Err(not_found("this slot's password has not been issued yet"));
     }
     let password = access
         .slot
@@ -2060,6 +2200,25 @@ struct RestartOptionsForm {
     slot_auth: String,
     /// Absent when unticked, as every checkbox is.
     server_password: Option<String>,
+    /// Whether the passwords this change mints start withheld from their owners.
+    ///
+    /// **Read only when the mode is actually becoming `per_slot`**, which is the only moment it
+    /// describes anything: entering that mode generates a fresh password for every slot, and this
+    /// is the state they start in. A room already in per-slot mode is managed from the roster and
+    /// the bulk panel instead, because those need no restart and this form is the one that bounces
+    /// the room.
+    #[field(default = false)]
+    hide_slot_passwords: bool,
+}
+
+/// Which way the chip on one slot's password cell points.
+///
+/// A field rather than two routes, unlike the bulk panel's Hide and Reveal buttons: there the
+/// button *is* the action and a direction carried beside it could disagree with the one pressed,
+/// while here the control is one chip per row whose own state says which way it goes.
+#[derive(FromForm)]
+struct PasswordVisibilityForm {
+    hidden: bool,
 }
 
 #[derive(FromForm)]
@@ -2242,7 +2401,7 @@ async fn set_restart_options(
     let mut conn = pool.get().await?;
     let mode_changed = mode != access.room.slot_auth;
     if mode_changed {
-        room::set_slot_auth(&mut conn, id.0, mode).await?;
+        room::set_slot_auth(&mut conn, id.0, mode, form.hide_slot_passwords).await?;
     }
 
     // Same rule for the remote-admin password: a ticked box on a room that already has one leaves
@@ -2444,6 +2603,7 @@ pub fn routes() -> Vec<rocket::Route> {
         claim_open_slot,
         release_slot,
         rotate_slot_password,
+        set_slot_password_visibility,
         slot_password,
         options_page,
         set_live_options,
@@ -2466,6 +2626,10 @@ pub(crate) mod tests {
             game: "A Link to the Past".into(),
             kind: puna_core::artifact::SlotKind::Player,
             password: Some("a-secret".into()),
+            // The default. Tests about withholding set it on the slot they care about, which keeps
+            // every other test here reading as it did: the gate they assert is the three-way
+            // audience rule, and this field narrows one arm of it.
+            password_hidden: false,
             owner_id: owner,
             claim_token: Some("a-claim-token".into()),
             claimed_at: None,
@@ -2603,6 +2767,87 @@ pub(crate) mod tests {
         assert!(
             views.iter().all(|v| v.password.is_none()),
             "a password was carried in a mode that has none"
+        );
+    }
+
+    /// **Withholding narrows the owner's arm of the rule above and leaves the other two alone.**
+    ///
+    /// The three cells this produces are what the markup branches on, and the pair `Some` +
+    /// `password_hidden` has to stay unreachable for an owner: the room page renders the reveal
+    /// control on exactly that combination, on the strength of only staff being able to reach it.
+    /// If an owner ever got both, their own page would offer them a button to issue themselves the
+    /// credential the room is holding back.
+    #[test]
+    fn a_withheld_password_reaches_staff_and_not_the_player_holding_the_slot() {
+        let mine = 100_i64;
+        let mut slots = vec![slot(1, Some(mine)), slot(2, Some(200)), slot(3, None)];
+        slots[0].password_hidden = true;
+        slots[1].password_hidden = true;
+        slots[2].password_hidden = true;
+
+        let views = |viewer, role| {
+            slot_views(
+                slots.clone(),
+                viewer,
+                role,
+                &Default::default(),
+                true,
+                &Default::default(),
+                false,
+                &Default::default(),
+                puna_core::model::room::PatchPolicy::Claimed,
+            )
+        };
+
+        // The owner: told that it is withheld, and not told the value.
+        let player = views(Some(mine), None);
+        assert!(
+            player[0].password.is_none(),
+            "a withheld password was handed to the player it is withheld from"
+        );
+        assert!(
+            player[0].password_hidden,
+            "the owner must be told their password is withheld, or the cell is an unexplained dash"
+        );
+
+        // Staff: the value, AND the flag, which is the pair the reveal control renders on.
+        let organizer = views(Some(999), Some(RoomRole::Organizer));
+        assert!(
+            organizer.iter().all(|v| v.password.is_some()),
+            "withholding must not blind the people who do the distributing"
+        );
+        assert!(
+            organizer.iter().all(|v| v.password_hidden),
+            "staff cannot see which slots are withheld, so they cannot tell who still needs telling"
+        );
+
+        // A stranger with the room link: no value, and no chip either. Whether staff have got
+        // round to issuing credentials is not a fact this page owes the internet, and a chip would
+        // imply they are owed one.
+        let visitor = views(None, None);
+        assert!(visitor.iter().all(|v| v.password.is_none()));
+        assert!(
+            visitor.iter().all(|v| !v.password_hidden),
+            "the public page told a visitor which slots are waiting on their credentials"
+        );
+
+        // And nothing outside per-slot mode, where the flag cannot be set anyway: the CHECK forbids
+        // it beside a NULL password. Asserted because `slot_views` decides this from its own
+        // argument rather than from the row, so a caller passing the wrong one is the failure.
+        let wrong_mode = slot_views(
+            slots,
+            Some(mine),
+            None,
+            &Default::default(),
+            false,
+            &Default::default(),
+            false,
+            &Default::default(),
+            puna_core::model::room::PatchPolicy::Claimed,
+        );
+        assert!(
+            wrong_mode.iter().all(|v| !v.password_hidden),
+            "a mode with no per-slot passwords rendered a chip about one"
         );
     }
 
@@ -3539,6 +3784,7 @@ pub(crate) mod tests {
             has_patch: true,
             can_download: true,
             password: Some("abcde-fghij".into()),
+            password_hidden: false,
             can_release: true,
             tracker_id: None,
             owner_name: Some("kai".into()),
@@ -5122,6 +5368,7 @@ pub(crate) mod tests {
             has_patch: true,
             can_download: true,
             password: Some("abcde-fghij".into()),
+            password_hidden: false,
             tracker_id: None,
             can_release: true,
             owner_name: Some("kai".into()),

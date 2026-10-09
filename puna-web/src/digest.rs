@@ -906,6 +906,7 @@ mod tests {
             game: game.into(),
             kind,
             password: Some("a-secret".into()),
+            password_hidden: false,
             owner_id: owner,
             claim_token: Some("a-claim-token".into()),
             claimed_at: None,

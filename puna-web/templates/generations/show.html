@@ -102,6 +102,30 @@ connect with their own.</p>
 </div>
 </div>
 
+{# **Inside the `slot_auth` group but not one of its hints**, and that distinction is the reason this
+   is written out rather than folded into the `per_slot` paragraph above: `options-form.js` reveals
+   one `.hint[data-for]` at a time, and a CONTROL that only exists when a script is running is a
+   setting an unscripted organizer cannot reach. So the checkbox is always here, always posted, and
+   the route ignores it outside per-slot mode, where there is no password to withhold.
+
+   `value="true"`, not `"1"`: Rocket's `bool` accepts `""`, `"on"`, `"yes"` and `"true"` and rejects
+   `"1"`, which fails the WHOLE submission with a 422 rather than just this field. The remote-admin
+   checkbox next to it is an `Option<String>` and takes anything, which is what makes the trap
+   inviting. #}
+<div class="field">
+<span class="label">Password delivery</span>
+<div class="choices">
+<label><input type="checkbox" name="hide_slot_passwords" value="true"> Withhold every slot password
+until staff issues them</label>
+<p class="hint">Only applies to per-slot passwords. Each player sees <em>Not Available Yet</em>
+instead of their password, and their patch carries only the room's address, so nobody can connect
+before you hand the credentials out. Staff see every password and can issue them one at a time from
+the roster or in bulk.</p>
+<p class="hint"><strong>This is not a lock.</strong> It controls what this site shows, not who the
+room admits: anyone holding a password can still connect with it.</p>
+</div>
+</div>
+
 {# Offered at creation as well as on the options page, because a room in room-wide mode gets its
    password the moment it is made: leaving this to the options page would mean the one credential a
    brand-new room already holds is the one that ignored the choice.

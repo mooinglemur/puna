@@ -293,6 +293,32 @@ them permanently</strong>. They are not recoverable, and switching back generate
 nobody has been given.</p>
 {% endif %}
 
+{# **Read only when the mode is actually becoming per-slot**, which the route enforces and this
+   paragraph states, because the box is visible on a form that can also leave per-slot mode and a
+   control whose effect depends on a radio two rows up is one somebody will misread otherwise.
+
+   A room ALREADY in per-slot mode is managed from the roster and the bulk panel, which is the
+   sentence below: those need no restart, and this form bounces the room. Offering "withhold
+   everything" here as a live toggle would mean an organizer tidying up visibility disconnects
+   every player to do it.
+
+   Always rendered, never checked from state: it describes what a transition will produce rather
+   than what the room currently holds, and the room holds a flag per slot that is routinely mixed.
+   There is no single value to reflect back. #}
+<div class="field">
+<span class="label">Password delivery</span>
+<div class="choices">
+<label><input type="checkbox" name="hide_slot_passwords" value="true"> Withhold the new slot
+passwords</label>
+<p class="hint">Only considered when you are switching <em>to</em> per-slot passwords, which generates a
+fresh set. Each player sees <em>Not Available Yet</em> and their patch carries only the room's
+address until staff issue it.</p>
+<p class="hint">To change what this room is withholding <strong>right now</strong>, use the chips on
+the roster or the bulk panel. Those take effect immediately and don't restart anything; this form restarts
+the room.</p>
+</div>
+</div>
+
 <div class="field">
 <span class="label">Remote admin</span>
 <div class="choices">

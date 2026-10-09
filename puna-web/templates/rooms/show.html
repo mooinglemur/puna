@@ -350,8 +350,32 @@ unclaimed
 <path d="M10.5 14.5h-8a1 1 0 0 1-1-1v-9" fill="none" stroke="currentColor" stroke-linecap="round"/>
 </svg>
 </button>
+{# **The chip, and it only ever renders for staff.** The pair `Some` + `password_hidden` is
+   unreachable for an owner, because `slot_views` withholds the value in the same breath that sets
+   the flag, so this needs no role test of its own: a template cannot prove what it did not render,
+   and the one here is reached by a combination the route alone can produce.
+
+   The chip IS the control, which is what was asked for. A submit button styled as a chip rather
+   than a chip with a button beside it: there is one thing to do here and one place to click. #}
+{% if slot.password_hidden %}
+<form method="post"
+      action="/room/{{ room.id }}/slot/{{ slot.slot_number }}/password-visibility" class="inline">
+<input type="hidden" name="hidden" value="false">
+<button type="submit" class="tag withheld"
+        aria-label="Issue the password for slot {{+ slot.slot_number +}} to its player"
+        title="This player cannot see their password and their patch does not carry it. Click to issue it.">Hidden from user</button>
+</form>
+{% endif %}
+{% else %}
+{# Three states in this cell, not two, and the middle one is the whole feature: no value because
+   this viewer is nobody, versus no value because the room is holding it back. An em dash for the
+   second would read as a room with no password at all. #}
+{% if slot.password_hidden %}
+<span class="tag withheld" title="Your password has not been issued yet. The room's staff will give
+it to you when the room is ready to start.">Not Available Yet</span>
 {% else %}
 <span class="hint">&mdash;</span>
+{% endif %}
 {% endif %}
 {# Staff, on every slot: rotating one slot's password is a credential change WITHIN a mode, which is
    running the room rather than configuring it: a password pasted into the wrong channel should

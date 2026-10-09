@@ -960,6 +960,23 @@ button.tag:focus-visible {
   border-color: var(--warn-fg);
 }
 
+/* A slot password Puna is holding back from its owner.
+ *
+ * **`--accent`, deliberately not the warning hue `.tag.locked` and `.tag.drift` share.** Those two
+ * are states worth noticing on a room you expected to be fine; this is the designed state of every
+ * slot in a room whose organizer chose a synchronized start, and on that room EVERY row carries one
+ * at setup time. A column of amber chips on a correctly configured room trains an organizer to read
+ * amber as decoration, which is the one thing a warning color must not become.
+ *
+ * It is the same chip for both audiences, which is the point: a player reads "Not Available Yet"
+ * and staff read "Hidden from user" in the same place in the same column, so the two are looking at
+ * one fact rather than at two features. The WORDS differ because the question differs; the state
+ * does not. */
+.tag.withheld {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 /* A room running something other than its current spec. Deliberately NOT `.tag.warning`: the
    warning colors belong to the block-level notice and combining them here would inherit its
    padding and background. Drift is a fact to notice, not a fault: it is the ordinary state

@@ -488,6 +488,16 @@ pub struct NewRoom {
     pub source: RoomSource,
     pub created_by: i64,
     pub slot_auth: SlotAuth,
+    /// Whether every slot's password starts withheld from its owner.
+    ///
+    /// **Only meaningful under [`SlotAuth::PerSlot`]**, and ignored otherwise, because the other
+    /// two modes put no password on a slot for the flag to describe. The form offers the checkbox
+    /// beside the mode for that reason.
+    ///
+    /// **Off unless asked for**, which is how every room behaved before the column existed. The
+    /// organizer it is for is the one running a synchronized start, where handing out credentials
+    /// at creation means the room opens whenever the first player gets impatient.
+    pub hide_slot_passwords: bool,
     /// `None` is **always [`SpoilerPolicy::Staff`]**, regardless of the seed.
     ///
     /// The creation form deliberately does not ask. A spoiler is the one thing on a room whose
@@ -571,6 +581,7 @@ impl NewRoom {
             cloned_from: None,
             enhanced_tracker: false,
             open_claims: false,
+            hide_slot_passwords: false,
         }
     }
 }
@@ -1027,7 +1038,15 @@ pub async fn create(
                     _ => diesel::result::Error::RollbackTransaction,
                 })?;
 
-            copy_slots(conn, id, new.generation_id, new.slot_auth, complexity).await?;
+            copy_slots(
+                conn,
+                id,
+                new.generation_id,
+                new.slot_auth,
+                complexity,
+                new.hide_slot_passwords,
+            )
+            .await?;
 
             Ok(id)
         }
@@ -1046,6 +1065,7 @@ async fn copy_slots(
     generation: GenerationId,
     slot_auth: SlotAuth,
     complexity: crate::secret::PasswordComplexity,
+    hide_passwords: bool,
 ) -> Result<(), diesel::result::Error> {
     let slots = crate::model::generation::slots(conn, generation).await?;
 
@@ -1058,10 +1078,18 @@ async fn copy_slots(
             SlotAuth::None | SlotAuth::Room => None,
         };
 
+        // **`AND password.is_some()`, not the caller's word for it.** The flag is only legal on a
+        // slot that has a password, and in the other two modes there is none: binding the checkbox
+        // through unexamined would fail the `slot_password_hidden_needs_a_password` CHECK and take
+        // the whole creation down, on a form where ticking a box under the wrong radio is an
+        // ordinary mistake rather than a bug. One expression, so the mode decides both halves.
+        let password_hidden = hide_passwords && password.is_some();
+
         diesel::sql_query(
             "INSERT INTO room_slots
-                (room_id, slot_number, player_name, game, kind, password, claim_token, tracker_id)
-             VALUES ($1, $2, $3, $4, $5::slot_kind, $6, $7, $8)",
+                (room_id, slot_number, player_name, game, kind, password, password_hidden,
+                 claim_token, tracker_id)
+             VALUES ($1, $2, $3, $4, $5::slot_kind, $6, $7, $8, $9)",
         )
         .bind::<SqlUuid, _>(room)
         .bind::<Integer, _>(entry.slot_number)
@@ -1072,6 +1100,7 @@ async fn copy_slots(
             crate::artifact::SlotKind::Spectator => "spectator",
         })
         .bind::<Nullable<Text>, _>(password.as_deref())
+        .bind::<Bool, _>(password_hidden)
         .bind::<Text, _>(crate::secret::url_token())
         .bind::<SqlUuid, _>(TrackerId::new())
         .execute(conn)
@@ -1490,10 +1519,17 @@ pub async fn set_lobby_room(
 ///
 /// Switching away is not reversible: the old passwords are gone, which the UI states before
 /// confirming.
+///
+/// `hide_passwords` is the state the freshly minted passwords start in, and it is a parameter
+/// rather than a second call because entering `per_slot` mints every password here: setting the
+/// flags afterwards would leave a window, however short, where the room is in per-slot mode with
+/// every credential readable by its owner, which is exactly the window an organizer turned this on
+/// to avoid. Ignored outside `per_slot`, where there is no password to withhold.
 pub async fn set_slot_auth(
     conn: &mut AsyncPgConnection,
     id: RoomId,
     mode: SlotAuth,
+    hide_passwords: bool,
 ) -> Result<(), diesel::result::Error> {
     conn.transaction::<(), diesel::result::Error, _>(|conn| {
         async move {
@@ -1518,12 +1554,31 @@ pub async fn set_slot_auth(
                     for entry in slot::list(conn, id).await? {
                         slot::rotate_password(conn, id, entry.slot_number).await?;
                     }
+                    // **After the passwords exist, and in one statement over the room.** The flag
+                    // is illegal on a slot with no password, so this cannot run first, and
+                    // `rotate_password` deliberately leaves it alone: a room arriving here may
+                    // have been in per-slot mode before with some slots already revealed, and this
+                    // is the moment the organizer's answer replaces whatever that was.
+                    diesel::sql_query(
+                        "UPDATE room_slots SET password_hidden = $2 WHERE room_id = $1",
+                    )
+                    .bind::<SqlUuid, _>(id)
+                    .bind::<Bool, _>(hide_passwords)
+                    .execute(conn)
+                    .await?;
                 }
                 SlotAuth::None | SlotAuth::Room => {
-                    diesel::sql_query("UPDATE room_slots SET password = NULL WHERE room_id = $1")
-                        .bind::<SqlUuid, _>(id)
-                        .execute(conn)
-                        .await?;
+                    // **Both columns in one statement, because the CHECK ties them.** Clearing the
+                    // passwords and leaving the flags set is a row the constraint refuses, so this
+                    // is not tidiness: separate statements would make leaving per-slot mode fail
+                    // outright on any room that had hidden anything.
+                    diesel::sql_query(
+                        "UPDATE room_slots SET password = NULL, password_hidden = false
+                          WHERE room_id = $1",
+                    )
+                    .bind::<SqlUuid, _>(id)
+                    .execute(conn)
+                    .await?;
                 }
             }
             Ok(())
@@ -1689,6 +1744,12 @@ pub async fn clone_room(
         // a room that was open, which is the more surprising of the two.
         open_claims: existing.open_claims,
         slot_auth: existing.slot_auth,
+        // **`false` here, and then copied per slot below.** The field is one answer for the whole
+        // room, which is what a creation form collects; a room that has been running has a flag per
+        // slot and they are routinely mixed, because revealing one at a time is the normal way
+        // staff use this. Taking the room-level field would flatten that to whatever the clone
+        // guessed.
+        hide_slot_passwords: false,
         spoiler_policy: Some(existing.spoiler_policy),
         tracker_policy: Some(existing.tracker_policy),
         journal_policy: Some(existing.journal_policy),
@@ -1728,6 +1789,31 @@ pub async fn clone_room(
         .execute(conn)
         .await?;
     }
+
+    // **Which slots withhold their password, carried across slot by slot.**
+    //
+    // Outside the `keep_owners` branch below on purpose: this is the organizer's distribution plan
+    // for the room, not a fact about who holds what. A clone that drops its owners is a group
+    // re-running a seed with replacements, and it is exactly as likely to want a synchronized start
+    // as the room it came from. The VALUES are not inherited and cannot be: `create` minted fresh
+    // passwords a moment ago, which is the point of the flag rather than an obstacle to it.
+    //
+    // `AND target.password IS NOT NULL` keeps the CHECK satisfied without this needing to know the
+    // mode: outside per-slot mode the source's flags are all false anyway, so the statement is a
+    // no-op by construction and says so rather than relying on it.
+    diesel::sql_query(
+        "UPDATE room_slots AS target
+            SET password_hidden = source.password_hidden
+           FROM room_slots AS source
+          WHERE target.room_id = $1
+            AND source.room_id = $2
+            AND source.slot_number = target.slot_number
+            AND target.password IS NOT NULL",
+    )
+    .bind::<SqlUuid, _>(id)
+    .bind::<SqlUuid, _>(source)
+    .execute(conn)
+    .await?;
 
     if keep_owners {
         // Owners carry over; tokens and passwords do not: `create` already minted fresh ones.

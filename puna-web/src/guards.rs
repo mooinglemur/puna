@@ -276,12 +276,30 @@ pub struct SlotAccess {
     pub room: Room,
     pub slot: Slot,
     pub session: Session,
+    /// The caller's standing on this room, carrying the admin short-circuit: `Organizer` for a
+    /// site admin, whatever `room_members` says otherwise, `None` for a player or a stranger.
+    ///
+    /// **Kept rather than recomputed.** `resolve_slot` has to resolve this to decide admission at
+    /// all, and it used to drop it on the floor, so a route needing "is this staff?" on top of
+    /// "may they look?" had to ask the database the same question a second time. Two answers to
+    /// one question is how they come to disagree, and the question here decides whether a withheld
+    /// credential is handed over.
+    role: Option<RoomRole>,
 }
 
 impl SlotAccess {
     /// Is the caller the person who claimed this slot, as opposed to staff looking at it?
     pub fn is_owner(&self) -> bool {
         matches!((self.session.user_id, self.slot.owner_id), (Some(u), Some(o)) if u == o)
+    }
+
+    /// Is the caller staff on this room, an admin included?
+    ///
+    /// The distinction this type could not previously make: `SlotAccess` admits the owner *and*
+    /// staff, and anything that treats those two differently needs to tell them apart. Withholding
+    /// a password is the first thing that does.
+    pub fn is_staff(&self) -> bool {
+        self.role.is_some()
     }
 }
 
@@ -400,6 +418,7 @@ async fn resolve_slot(
                 room,
                 slot,
                 session,
+                role,
             });
         }
 

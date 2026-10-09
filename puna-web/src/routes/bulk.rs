@@ -147,11 +147,34 @@ const ACTIONS: &[(&str, &str)] = &[
     // radios under it are the choice between them, so the button says what it does and the table
     // says what it does it with, and the panel offers exactly what a slot's own page does.
     ("filter", "Set the filter"),
+    // **Puna's own, like `release_claims`, and the only two here that need no running room.**
+    // Withholding a password changes nothing pahoa holds: the map it authenticates against is
+    // untouched, so there is nothing to tell the room and nothing to mark stale. The case this
+    // mostly serves is a room that has never started, which every other button on this panel
+    // refuses outright.
+    //
+    // Two actions rather than one with a direction field, for the reason Lock and Unlock are two:
+    // the button pressed IS the action, and a direction carried in a field beside them is one more
+    // thing that can disagree with it.
+    ("hide_passwords", "Withhold Passwords"),
+    ("reveal_passwords", "Issue Passwords"),
 ];
 
 /// Whether an action sets a slot's traffic filter rather than sending a command.
 fn is_filter_action(action: &str) -> bool {
     action == "filter"
+}
+
+/// Which way a password-visibility action points, or `None` for anything else.
+///
+/// One function rather than two predicates, so the pair cannot drift into disagreeing about which
+/// actions are in this family: a name is in it exactly when it has a direction.
+fn visibility_action(action: &str) -> Option<bool> {
+    match action {
+        "hide_passwords" => Some(true),
+        "reveal_passwords" => Some(false),
+        _ => None,
+    }
 }
 
 /// The command one action produces for one slot, or `None` when it is not a room action.
@@ -296,6 +319,74 @@ async fn apply(
     }
 
     let mut conn = pool.get().await?;
+
+    // **Withholding, done here and finished here**, for the same reason the roster action below is:
+    // one `UPDATE`, no queue, no orchestrator, and nothing pahoa can observe. Handled above the
+    // running-room refusal on purpose, because the organizer this is for has not started the room
+    // yet: that is the whole point of setting up a room whose credentials nobody holds.
+    if let Some(hidden) = visibility_action(&form.action) {
+        if access.room.slot_auth != puna_core::model::room::SlotAuth::PerSlot {
+            return Ok(Flash::warning(
+                Redirect::to(back),
+                "This room does not use per-slot passwords, so there is nothing to withhold.",
+            ));
+        }
+
+        let changed = puna_core::model::slot::set_passwords_hidden(
+            &mut conn,
+            access.room.id,
+            &form.slots,
+            hidden,
+        )
+        .await?;
+
+        puna_core::model::event::record(
+            &mut conn,
+            access.room.id,
+            puna_core::model::event::Actor::User(access.user_id()),
+            if hidden {
+                "slot_passwords_hidden"
+            } else {
+                "slot_passwords_revealed"
+            },
+            serde_json::json!({ "slots": form.slots, "changed": changed }),
+        )
+        .await?;
+
+        tracing::info!(
+            room = %room_id,
+            by = access.user_id(),
+            staged = form.slots.len(),
+            changed,
+            hidden,
+            "slot password visibility changed in bulk"
+        );
+
+        // The difference between staged and changed is reported rather than rounded off, the same
+        // way `release_claims` reports its skips: a slot already in the asked-for state was not a
+        // failure, and an organizer who staged forty and moved three wants to know which number is
+        // which before they go looking for a bug.
+        let skipped = form.slots.len() - changed;
+        return Ok(Flash::success(
+            Redirect::to(back),
+            match (hidden, changed, skipped) {
+                (true, n, 0) => format!(
+                    "Withheld {n} password(s). Those players no longer see them, and their \
+                     patches no longer carry them."
+                ),
+                (true, n, s) => format!(
+                    "Withheld {n} password(s). {s} were already withheld and were left alone."
+                ),
+                (false, n, 0) => format!(
+                    "Issued {n} password(s). Those players can now see them and download patches \
+                     that carry them."
+                ),
+                (false, n, s) => format!(
+                    "Issued {n} password(s). {s} had already been issued and were left alone."
+                ),
+            },
+        ));
+    }
 
     // **The roster action, done here and finished here.** No queue, no orchestrator, no room: this
     // unbinds an owner and mints a fresh claim token, which is a database write and nothing else.
@@ -630,11 +721,16 @@ mod tests {
     fn every_offered_action_becomes_a_command_or_is_the_roster_one() {
         for (name, label) in ACTIONS {
             assert!(!label.is_empty(), "{name} has no label");
-            // The two shapes that are not `command_for` commands, named rather than skipped by a
-            // rule somebody could widen: the roster write, which never reaches the room at all, and
+            // The shapes that are not `command_for` commands, named rather than skipped by a
+            // rule somebody could widen: the roster write, which never reaches the room at all;
             // the filters, whose durable half is Puna's tables and whose command is built per slot
-            // from the stored state rather than from the button.
-            if *name == "release_claims" || is_filter_action(name) {
+            // from the stored state rather than from the button; and the two visibility actions,
+            // which pahoa cannot observe at all because the password map they would change is the
+            // one thing they deliberately leave alone.
+            if *name == "release_claims"
+                || is_filter_action(name)
+                || visibility_action(name).is_some()
+            {
                 assert!(
                     command_for(name, 1).is_none(),
                     "{name} must not become a passthrough command"
@@ -722,7 +818,10 @@ mod tests {
         // nothing here noticing.
         for (action, _) in ACTIONS {
             assert!(
-                *action == "release_claims" || is_filter_action(action) || named.contains(action),
+                *action == "release_claims"
+                    || is_filter_action(action)
+                    || visibility_action(action).is_some()
+                    || named.contains(action),
                 "`{action}` is offered and its mapping is not asserted"
             );
         }

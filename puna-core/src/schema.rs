@@ -290,6 +290,7 @@ diesel::table! {
         note -> Nullable<Text>,
         annotated_at -> Nullable<Timestamptz>,
         annotated_by -> Nullable<Int8>,
+        password_hidden -> Bool,
     }
 }
 

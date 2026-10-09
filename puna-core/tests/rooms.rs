@@ -260,7 +260,133 @@ async fn a_clone_keeps_the_journal_policy_it_was_cloned_from() {
     .await;
 }
 
+/// **Withholding is a Puna-side delivery state, and these are the three ways it must not move.**
+///
+/// Created off unless asked for, carried into a clone slot by slot, and left alone by a rotation.
+/// The last is the one worth a test rather than a comment: Rotate Passwords is a bulk button, and a
+/// rotation that re-hid everything would silently un-issue every credential an organizer had
+/// already handed out, on a room mid-game, with the roster then telling forty people their password
+/// was not available.
+#[tokio::test]
+async fn withholding_survives_a_rotation_and_carries_into_a_clone() {
+    with_db(|pool| async move {
+        let mut conn = pool.get().await.expect("connection");
+        users(&mut conn).await;
+        let generation = seed_generation(&mut conn, false).await;
+
+        let hidden_flags = async |conn: &mut diesel_async::AsyncPgConnection, id: RoomId| {
+            slot::list(conn, id)
+                .await
+                .expect("slots")
+                .into_iter()
+                .map(|s| (s.slot_number, s.password_hidden))
+                .collect::<Vec<_>>()
+        };
+
+        // Off unless asked for, which is how every slot behaved before the column existed.
+        let mut plain = NewRoom::direct(Environment::Dev, "plain", generation, OWNER);
+        plain.slot_auth = SlotAuth::PerSlot;
+        let plain_id = room::create(&mut conn, &plain).await.expect("create");
+        assert!(
+            hidden_flags(&mut conn, plain_id)
+                .await
+                .iter()
+                .all(|(_, hidden)| !hidden),
+            "a room nobody asked to withhold anything started withholding"
+        );
+
+        let mut new = NewRoom::direct(Environment::Dev, "withheld", generation, OWNER);
+        new.slot_auth = SlotAuth::PerSlot;
+        new.hide_slot_passwords = true;
+        let id = room::create(&mut conn, &new).await.expect("create");
+        assert!(
+            hidden_flags(&mut conn, id)
+                .await
+                .iter()
+                .all(|(_, hidden)| *hidden),
+            "the creation form's checkbox did not reach every slot"
+        );
+
+        // Issue one, the way staff do from the roster, so the room is in the mixed state that a
+        // room in use is actually in. Everything below has to preserve the MIX, not a single value.
+        let issued = slot::set_passwords_hidden(&mut conn, id, &[2], false)
+            .await
+            .expect("issue");
+        assert_eq!(issued, 1);
+        // And again, to pin that a repeat reports no change: the roster chip and the bulk panel both
+        // tell an organizer what moved, and two staff on one room is the ordinary case.
+        assert_eq!(
+            slot::set_passwords_hidden(&mut conn, id, &[2], false)
+                .await
+                .expect("repeat"),
+            0,
+            "a slot already issued reported as a change"
+        );
+
+        let before = hidden_flags(&mut conn, id).await;
+
+        // A rotation changes the value and not the delivery state.
+        let fresh = slot::rotate_password(&mut conn, id, 1)
+            .await
+            .expect("rotate");
+        let slot_one = slot::get(&mut conn, id, 1)
+            .await
+            .expect("read")
+            .expect("slot");
+        assert_eq!(slot_one.password.as_deref(), Some(fresh.as_str()));
+        assert!(
+            slot_one.password_hidden,
+            "rotating a withheld password issued it, so Rotate Passwords silently un-withholds"
+        );
+        assert_eq!(
+            hidden_flags(&mut conn, id).await,
+            before,
+            "a rotation moved somebody else's delivery state"
+        );
+
+        // A clone mints fresh passwords and inherits which slots are waiting on them. Not gated on
+        // `keep_owners`: a clone that drops its owners is a group re-running a seed with
+        // replacements, and just as likely to want a synchronized start.
+        for keep_owners in [true, false] {
+            let clone = room::clone_room(&mut conn, id, "clone".into(), OWNER, keep_owners)
+                .await
+                .expect("clone");
+            assert_eq!(
+                hidden_flags(&mut conn, clone).await,
+                before,
+                "a clone (keep_owners={keep_owners}) lost the source room's delivery plan"
+            );
+            // The VALUES are not inherited and must not be: `create` minted a fresh set, which is
+            // the whole reason the flag is worth carrying rather than the passwords.
+            let source_passwords: HashSet<_> = slot::list(&mut conn, id)
+                .await
+                .expect("slots")
+                .into_iter()
+                .filter_map(|s| s.password)
+                .collect();
+            assert!(
+                slot::list(&mut conn, clone)
+                    .await
+                    .expect("slots")
+                    .into_iter()
+                    .filter_map(|s| s.password)
+                    .all(|p| !source_passwords.contains(&p)),
+                "a clone carried a credential out of the room it came from"
+            );
+        }
+    })
+    .await;
+}
+
 /// All six transitions, with the completeness property asserted at every step.
+///
+/// **Every `-> per_slot` here hides every password**, which makes the leaving transitions carry the
+/// case that would otherwise need a test of its own: `password_hidden` is legal only on a slot that
+/// has a password, so a room that hid everything and then switches to `none` or `room` must clear
+/// both columns in one statement or the `slot_password_hidden_needs_a_password` CHECK refuses the
+/// whole mode change. Clearing the passwords and forgetting the flags is the shape that fails, and
+/// it fails *only* on a room that had hidden something, which is why hiding is the default here
+/// rather than a variation at the end.
 #[tokio::test]
 async fn every_slot_auth_transition_lands_consistent() {
     with_db(|pool| async move {
@@ -276,10 +402,14 @@ async fn every_slot_auth_transition_lands_consistent() {
 
                 let mut new = NewRoom::direct(Environment::Dev, "modes", generation, OWNER);
                 new.slot_auth = from;
+                // So a `from == per_slot` room arrives at the switch with something to clear. The
+                // field is ignored in the other two modes, where there is no password to withhold,
+                // which `assert_mode` then asserts rather than assumes.
+                new.hide_slot_passwords = true;
                 let id = room::create(&mut conn, &new).await.expect("create");
 
                 assert_mode(&mut conn, id, from).await;
-                room::set_slot_auth(&mut conn, id, to)
+                room::set_slot_auth(&mut conn, id, to, true)
                     .await
                     .expect("switch");
                 assert_mode(&mut conn, id, to).await;
@@ -326,6 +456,23 @@ async fn assert_mode(conn: &mut diesel_async::AsyncPgConnection, id: RoomId, mod
             );
         }
     }
+
+    // **The withholding flag tracks the mode, and the caller asked for hiding every time.** In
+    // per-slot mode that means every slot; in the other two it means every flag back to false,
+    // because the column is only legal beside a password and the CHECK enforces it. A failure
+    // here is either a mode change that forgot the flags or one the constraint refused outright.
+    let flags: Vec<(i32, bool)> = slot::list(conn, id)
+        .await
+        .expect("slots")
+        .into_iter()
+        .map(|s| (s.slot_number, s.password_hidden))
+        .collect();
+    assert!(
+        flags
+            .iter()
+            .all(|(_, hidden)| *hidden == (mode == SlotAuth::PerSlot)),
+        "password_hidden must hold exactly in per_slot mode ({mode:?}): {flags:?}"
+    );
 }
 
 /// **Describing a link must never spend it**, which is the property the whole landing page rests
@@ -1262,7 +1409,7 @@ async fn locking_a_slot_withholds_it_without_disturbing_its_password() {
         )
         .await
         .expect("create");
-        room::set_slot_auth(&mut conn, id, SlotAuth::PerSlot)
+        room::set_slot_auth(&mut conn, id, SlotAuth::PerSlot, false)
             .await
             .expect("per-slot mode");
 
@@ -2086,7 +2233,7 @@ async fn a_password_policy_change_leaves_issued_passwords_alone() {
 
         // The room-wide path reads the same column. `rotate_password` is scoped to `room` mode, so
         // this switches the room into it, which is itself a generation site.
-        room::set_slot_auth(&mut conn, id, SlotAuth::Room)
+        room::set_slot_auth(&mut conn, id, SlotAuth::Room, false)
             .await
             .expect("mode");
         let shared = room::get(&mut conn, id)

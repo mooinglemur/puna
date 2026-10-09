@@ -76,6 +76,20 @@ pub struct Slot {
     /// `None` unless the room is in `per_slot` mode. Never rendered except to someone
     /// [`may_access`] has admitted.
     pub password: Option<String>,
+    /// Whether Puna withholds [`password`](Self::password) from the person holding the slot.
+    ///
+    /// **Staff see the value either way**, and `may_access` is unchanged: this narrows what the
+    /// OWNER is shown, not who is admitted. The column exists so an organizer can set a room up
+    /// and distribute credentials when everyone is ready, rather than at creation.
+    ///
+    /// **Not a lock, and the two must not be confused.** [`locked_at`](Self::locked_at) bars a
+    /// slot from connecting by omitting it from `PAHOA_SLOT_PASSWORDS`; this leaves the map
+    /// untouched and bars nobody. A player told their password by hand connects normally, which is
+    /// the intent: the flag says "not delivered yet", not "not allowed".
+    ///
+    /// Always `false` where `password` is `None`, which the
+    /// `slot_password_hidden_needs_a_password` CHECK holds: a withheld nothing is not a state.
+    pub password_hidden: bool,
     pub owner_id: Option<i64>,
     /// `None` once claimed. Present only to whoever holds the link.
     pub claim_token: Option<String>,
@@ -135,6 +149,8 @@ struct SlotRow {
     kind: String,
     #[diesel(sql_type = Nullable<Text>)]
     password: Option<String>,
+    #[diesel(sql_type = Bool)]
+    password_hidden: bool,
     #[diesel(sql_type = Nullable<BigInt>)]
     owner_id: Option<i64>,
     #[diesel(sql_type = Nullable<Text>)]
@@ -171,6 +187,7 @@ impl From<SlotRow> for Slot {
                 _ => SlotKind::Player,
             },
             password: row.password,
+            password_hidden: row.password_hidden,
             owner_id: row.owner_id,
             claim_token: row.claim_token,
             claimed_at: row.claimed_at,
@@ -190,8 +207,9 @@ impl From<SlotRow> for Slot {
 }
 
 const SLOT_COLUMNS: &str = "room_id, slot_number, player_name, game, kind::text AS kind, \
-                            password, owner_id, claim_token, claimed_at, tracker_id, \
-                            locked_at, locked_by, progression::text AS progression, note, \
+                            password, password_hidden, owner_id, claim_token, claimed_at, \
+                            tracker_id, locked_at, locked_by, \
+                            progression::text AS progression, note, \
                             annotated_at, annotated_by";
 
 /// Every slot of a room, in slot order.
@@ -538,7 +556,51 @@ pub async fn release(
     Ok(token)
 }
 
+/// Withhold these slots' passwords from their owners, or hand them over.
+///
+/// Takes a list because the bulk panel's whole job is applying one decision to a staged set, and a
+/// per-slot loop would be one statement per slot for a write with no per-slot component. An empty
+/// list is a no-op rather than "every slot": a bulk action whose selection failed to parse must do
+/// nothing, not everything.
+///
+/// **Scoped to slots that have a password, in the `WHERE` rather than checked first.** Hiding is
+/// meaningless without one, and the `slot_password_hidden_needs_a_password` CHECK would otherwise
+/// refuse the whole statement because of one slot in a room that left `per_slot` mode between the
+/// page render and the button: a mode change is not an error worth failing a batch over, so those
+/// rows are skipped and the count says how many actually moved.
+///
+/// Returns how many rows changed, so a caller can tell a real change from a repeat. Nothing here
+/// reaches pahoa: no Secret to mark stale, no command to queue, and it is safe on a stopped room,
+/// which is the case it mostly serves.
+pub async fn set_passwords_hidden(
+    conn: &mut AsyncPgConnection,
+    room: RoomId,
+    slots: &[i32],
+    hidden: bool,
+) -> Result<usize, diesel::result::Error> {
+    if slots.is_empty() {
+        return Ok(0);
+    }
+    let changed = diesel::sql_query(
+        "UPDATE room_slots SET password_hidden = $3
+          WHERE room_id = $1 AND slot_number = ANY($2) AND password IS NOT NULL
+            AND password_hidden <> $3",
+    )
+    .bind::<SqlUuid, _>(room)
+    .bind::<diesel::sql_types::Array<Integer>, _>(slots)
+    .bind::<Bool, _>(hidden)
+    .execute(conn)
+    .await?;
+    Ok(changed)
+}
+
 /// Rotate one slot's password. Only meaningful while the room is in `per_slot` mode.
+///
+/// **`password_hidden` is deliberately untouched.** The value and whether it has been delivered are
+/// separate axes: rotating is what staff do when a password leaked, and a slot whose owner has
+/// already been handed their credential should not silently go back to "Not Available Yet" because
+/// somebody pressed Rotate Passwords on the whole room. A slot that was hidden stays hidden, and
+/// its owner sees the new value whenever staff reveals it.
 pub async fn rotate_password(
     conn: &mut AsyncPgConnection,
     room: RoomId,
@@ -680,6 +742,10 @@ mod tests {
             game: "A Link to the Past".into(),
             kind: SlotKind::Player,
             password: Some("secret".into()),
+            // `may_access` deliberately does not read it: who is ADMITTED to a slot is a different
+            // question from what Puna shows them once they are, and the tests below are about the
+            // first. See `slot_views` and the password JSON route for the second.
+            password_hidden: false,
             owner_id: owner,
             claim_token: None,
             claimed_at: None,

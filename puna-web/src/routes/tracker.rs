@@ -2083,6 +2083,7 @@ mod tests {
             game: "A Link to the Past".into(),
             kind: puna_core::artifact::SlotKind::Player,
             password: None,
+            password_hidden: false,
             owner_id: None,
             claim_token: None,
             claimed_at: None,
