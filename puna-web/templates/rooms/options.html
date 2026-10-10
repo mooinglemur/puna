@@ -283,48 +283,55 @@ theirs.</p>
 </div>
 </div>
 
-{# The warning that belongs to a TRANSITION rather than to a value, so it is rendered on the
-   current state rather than under one of the options: leaving per-slot mode destroys passwords
-   that cannot be recovered, and the person who needs to read that is the one who is in per-slot
-   mode right now. #}
+{# **One `if` with two arms, because the room is on exactly one side of this and the two things to
+   say are the two sides.** Both belong to a TRANSITION rather than to a value, which is why neither
+   sits under an option: what matters is which way this room can move from where it is.
+
+   A room IN per-slot mode can only leave, and leaving destroys credentials. A room not in it can
+   only arrive, and arriving mints a set that can start withheld. Written as one conditional so that
+   exclusivity is structural: as two independent `if`s they could both be true after an edit, and a
+   page offering "withhold the NEW passwords" directly under "switching away discards every one of
+   them" describes a transition that does not exist. #}
 {% if room.slot_auth == puna_core::model::room::SlotAuth::PerSlot %}
 <p class="warning">This room uses per-slot passwords. Switching away <strong>discards every one of
 them permanently</strong>. They are not recoverable, and switching back generates a fresh set that
 nobody has been given.</p>
-{% endif %}
+{# **No delivery checkbox on a room that is already per-slot, and this is a server decision rather
+   than something the script hides.** The form posts one `slot_auth`, so a room in this mode that
+   submits `per_slot` has not changed mode: the route skips `set_slot_auth` entirely and the box
+   governs nothing that happens. There is no way to leave and re-enter the mode in one submission,
+   so on this page load it can never mean anything.
 
-{# **Read only when the mode is actually becoming per-slot**, which the route enforces and this
-   paragraph states, because the box is visible on a form that can also leave per-slot mode and a
-   control whose effect depends on a radio two rows up is one somebody will misread otherwise.
+   `options-form.js` could not make this decision: it hides a control whose option is not selected,
+   and here the option IS selected and the control is still inert. That is a fact about the room,
+   which only the server holds.
 
-   A room ALREADY in per-slot mode is managed from the roster and the bulk panel, which is the
-   sentence below: those need no restart, and this form bounces the room. Offering "withhold
-   everything" here as a live toggle would mean an organizer tidying up visibility disconnects
-   every player to do it.
-
-   Always rendered, never checked from state: it describes what a transition will produce rather
-   than what the room currently holds, and the room holds a flag per slot that is routinely mixed.
-   There is no single value to reflect back. #}
+   What an organizer wants on this room is the roster chips and the bulk panel, which is where the
+   paragraph below sends them. Those take effect immediately; this form restarts the room. #}
+<p class="hint">To change which of this room's passwords are hidden, use the chips on the roster or
+the bulk panel. Those take effect immediately and restart nothing.</p>
+{% else %}
 {# Shown only while the radio above reads `per_slot`, by `options-form.js` and the stylesheet; see
    the matching field on the creation form for why both attributes sit here and why the unscripted
    page is correct with the row always visible.
 
-   It follows the radios rather than the warning above it deliberately: on this form the row appears
-   when somebody SELECTS per-slot, which is the moment the passwords it describes are about to be
-   minted. Reaching it means they have already made that choice. #}
+   Never checked from state, unlike every other control on this form: it describes what a transition
+   will PRODUCE rather than what the room holds, and once the room is in per-slot mode it holds a
+   flag per slot that is routinely mixed. There is no single value to reflect back, which is the
+   other half of why this arm is the only one that renders it. #}
 <div class="field" data-only-in="slot_auth" data-only-for="per_slot">
 <span class="label">Password delivery</span>
 <div class="choices">
 <label><input type="checkbox" name="hide_slot_passwords" value="true"> Withhold the new slot
 passwords</label>
-<p class="hint">Only considered when you are switching <em>to</em> per-slot passwords, which generates a
-fresh set. Each player sees <em>Not Available Yet</em> and their patch carries only the room's
-address until staff issue it.</p>
-<p class="hint">To change what this room is withholding <strong>right now</strong>, use the chips on
-the roster or the bulk panel. Those take effect immediately and don't restart anything; this form restarts
-the room.</p>
+<p class="hint">Applies to the fresh set that switching to per-slot passwords generates. Each player
+sees <em>Not Available Yet</em> and their patch carries only the room's address until staff reveal
+it.</p>
+<p class="hint">Afterwards, the chips on the roster and the bulk panel are what change this, and
+they restart nothing.</p>
 </div>
 </div>
+{% endif %}
 
 <div class="field">
 <span class="label">Remote admin</span>

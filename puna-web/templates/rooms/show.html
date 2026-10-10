@@ -368,7 +368,13 @@ unclaimed
 
    No whitespace between the spans, and none before the first: `whitespace = "suppress"` would eat
    it anyway, and a space inside a chip that swaps its own contents would show up as the chip
-   changing width by one character. #}
+   changing width by one character.
+
+   **"Unhide" here, "Reveal Per-slot Passwords" on the bulk panel, and the difference is a decision
+   rather than drift.** Do not unify them. This is a per-row affordance in a narrow column whose
+   resting label is already four words, and it undoes the one row it sits on; that panel's buttons
+   are deliberate operations on a staged set, named to pair with "Withhold" beside them. Same state,
+   two controls of a different size, and the words are sized to match. #}
 <button type="submit" class="tag withheld"
         aria-label="Unhide the password for slot {{+ slot.slot_number +}} from its player"
         title="This player cannot see their password and their patch does not carry it. Click to unhide it."><span class="chip-state">Hidden from user</span><span class="chip-action">Unhide</span></button>

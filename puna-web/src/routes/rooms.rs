@@ -651,7 +651,7 @@ async fn set_slot_password_visibility(
             "Withheld. That slot's player no longer sees their password, and their patch no longer \
              carries it."
         } else {
-            "Issued. That slot's player can now see their password and download a patch that \
+            "Revealed. That slot's player can now see their password and download a patch that \
              carries it."
         },
     ))
@@ -4185,6 +4185,83 @@ pub(crate) mod tests {
                 "a {tier:?} room pre-checks {checked:?}: either nothing is selected, which posts no \
                  value and answers 400 on save, or the page is showing a setting the room does not \
                  have"
+            );
+        }
+    }
+
+    /// **The delivery checkbox is offered only on a room that can actually arrive in per-slot mode.**
+    ///
+    /// The form posts one `slot_auth`, so a room already in that mode which submits `per_slot` has
+    /// not changed mode at all: the route skips `set_slot_auth`, and the box governs nothing that
+    /// happens. Leaving and re-entering the mode in one submission is not a thing this form can
+    /// express, so on such a page load the control is inert however it is set.
+    ///
+    /// **`options-form.js` cannot make this call and it is worth saying why.** It hides a control
+    /// whose option is not selected; here the option *is* selected and the control is still inert.
+    /// That is a fact about the room, which only the server holds, so a lint on the script would
+    /// pass against a page that is wrong.
+    ///
+    /// The two arms are one `if`/`else` in the markup because the room is on exactly one side of
+    /// this, and the failure the structure prevents is both rendering at once: "withhold the NEW
+    /// passwords" directly beneath "switching away discards every one of them" describes a
+    /// transition that does not exist.
+    #[test]
+    fn the_delivery_checkbox_is_offered_only_where_switching_to_per_slot_is_possible() {
+        use askama::Template;
+
+        let page = |mode: SlotAuth| {
+            let mut room = a_room();
+            room.slot_auth = mode;
+            OptionsTemplate {
+                notice: None,
+                base: crate::tpl::TplContext::new(&Session::default()),
+                gameplay_options: room::gameplay_option_rows(room.gameplay_options.as_ref()),
+                gameplay_options_at: crate::routes::console::probe_stamp(&room),
+                room,
+                has_server_password: false,
+                has_lobby: true,
+                restart_would_land: true,
+            }
+            .render()
+            .expect("renders")
+        };
+
+        // A room already in the mode: no control, and the warning about leaving it instead.
+        let already = page(SlotAuth::PerSlot);
+        assert!(
+            !already.contains("hide_slot_passwords"),
+            "a room already on per-slot passwords is offered a checkbox that cannot do anything"
+        );
+        // Asserted on a fragment the source keeps on one line: the sentence after it wraps across a
+        // `<strong>`, and a plain-text newline survives `whitespace = "suppress"`, which trims only
+        // around template tags. Matching across that wrap would be a test pinned to where somebody
+        // happened to break the line.
+        assert!(
+            already.contains("This room uses per-slot passwords."),
+            "the room that can only LEAVE per-slot mode is not warned about leaving it"
+        );
+        // And it is told where the live control actually is, or the removal reads as the feature
+        // having been taken away rather than as living somewhere else.
+        assert!(
+            already.contains("chips on the roster"),
+            "the checkbox is gone and nothing says where to change this instead"
+        );
+
+        // Every room that can arrive in the mode: the control, and not the leaving warning.
+        for mode in [SlotAuth::None, SlotAuth::Room] {
+            let html = page(mode);
+            assert!(
+                html.contains(r#"name="hide_slot_passwords""#),
+                "{mode:?}: switching to per-slot passwords cannot be set up as withheld"
+            );
+            assert!(
+                html.contains(r#"data-only-in="slot_auth" data-only-for="per_slot""#),
+                "{mode:?}: the control is rendered without the pair that hides it under the other \
+                 options, so it shows on a room that is not switching"
+            );
+            assert!(
+                !html.contains("discards every one of"),
+                "{mode:?}: a room with no per-slot passwords is warned about losing them"
             );
         }
     }

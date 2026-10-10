@@ -4785,6 +4785,85 @@ fn expand_includes(source: &str) -> String {
     out
 }
 
+/// **The bulk panel's buttons and `ACTIONS` have to say the same words, because both are shown.**
+///
+/// The markup carries each button's text and `ACTIONS` carries a label for the same name, and they
+/// look like one of them is spare. Neither is: the button is what somebody presses, and `label_for`
+/// resolves the same action to the `ACTIONS` label for the **batch result page**, which is where
+/// they land a moment later. Edit one and you press "Withhold Passwords" and arrive at a page
+/// headed "Withhold Per-slot Passwords".
+///
+/// Nothing catches that: both strings are correct, both render, and the mismatch is only visible to
+/// somebody who reads the heading after pressing the button and remembers what it said. This lint
+/// is here because exactly that drift happened while the two were being renamed.
+///
+/// Compared by the action NAME, which is the thing the two files genuinely share, rather than by
+/// position in either list.
+#[test]
+fn a_bulk_button_and_its_batch_page_heading_are_the_same_words() {
+    let route = std::fs::read_to_string(source("src/routes/bulk.rs")).expect("bulk.rs");
+    let markup = std::fs::read_to_string(source_template("rooms/bulk.html")).expect("bulk.html");
+
+    // The table, read out of the route rather than restated here. Bounded by the `const` and its
+    // closing bracket, so a rename fails loudly instead of matching nothing.
+    let table = route
+        .split_once("const ACTIONS: &[(&str, &str)] = &[")
+        .expect("the ACTIONS table is gone from bulk.rs")
+        .1
+        .split_once("\n];")
+        .expect("the ACTIONS table has no end")
+        .0;
+    let table = blank_comments_rust(table);
+
+    let actions: Vec<(String, String)> = table
+        .match_indices("(\"")
+        .filter_map(|(at, m)| {
+            let rest = &table[at + m.len()..];
+            let (name, rest) = rest.split_once('"')?;
+            let (_, rest) = rest.split_once('"')?;
+            let (label, _) = rest.split_once('"')?;
+            Some((name.to_string(), label.to_string()))
+        })
+        .collect();
+    assert!(
+        actions.len() >= 10,
+        "only {} actions parsed out of bulk.rs; this lint is reading the wrong thing",
+        actions.len()
+    );
+
+    for (name, label) in &actions {
+        // The button for this action, found by the value it posts, then its text up to `</button>`.
+        let needle = format!("value=\"{name}\"");
+        let Some(at) = markup.find(&needle) else {
+            panic!("{name} is offered by ACTIONS and has no button in bulk.html");
+        };
+        let after = &markup[at..];
+        let text = after
+            .split_once('>')
+            .and_then(|(_, rest)| rest.split_once("</button>"))
+            .map(|(text, _)| text.trim())
+            .unwrap_or_default();
+
+        assert_eq!(
+            text, label,
+            "`{name}`: the button reads {text:?} and the batch page it leads to is headed \
+             {label:?}"
+        );
+    }
+}
+
+/// Strip `//` comments from a slice of Rust source, so a lint matching on code cannot match prose.
+///
+/// The template equivalent is `blank_comments`; this is the same idea for the Rust files a couple of
+/// these lints read. Line comments only, which is all the places that use it contain.
+fn blank_comments_rust(source: &str) -> String {
+    source
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// **A form control shown for only one option of a radio group needs all four pieces to agree.**
 ///
 /// The markup declares the group and the value, `options-form.js` sets `hidden` from them, the

@@ -156,8 +156,8 @@ const ACTIONS: &[(&str, &str)] = &[
     // Two actions rather than one with a direction field, for the reason Lock and Unlock are two:
     // the button pressed IS the action, and a direction carried in a field beside them is one more
     // thing that can disagree with it.
-    ("hide_passwords", "Withhold Passwords"),
-    ("reveal_passwords", "Issue Passwords"),
+    ("hide_passwords", "Withhold Per-slot Passwords"),
+    ("reveal_passwords", "Reveal Per-slot Passwords"),
 ];
 
 /// Whether an action sets a slot's traffic filter rather than sending a command.
@@ -378,11 +378,11 @@ async fn apply(
                     "Withheld {n} password(s). {s} were already withheld and were left alone."
                 ),
                 (false, n, 0) => format!(
-                    "Issued {n} password(s). Those players can now see them and download patches \
-                     that carry them."
+                    "Revealed {n} password(s). Those players can now see them and download \
+                     patches that carry them."
                 ),
                 (false, n, s) => format!(
-                    "Issued {n} password(s). {s} had already been issued and were left alone."
+                    "Revealed {n} password(s). {s} had already been revealed and were left alone."
                 ),
             },
         ));
