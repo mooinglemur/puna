@@ -26,18 +26,38 @@
 //! wire. A player submitting `betterthanyou_Pupupu` is `betterthanyou_Pu` in the seed, and this
 //! read it as a name the lobby had never heard of.
 //!
-//! So the match runs twice: on the strings as they stand, then on whatever is left over against
-//! [`ap_name`], which is the generator's own cut. The second pass takes a yaml **only where it is
-//! the one candidate**: two names cut to one string is a question for a person rather than a coin
-//! toss. It should never arise, because the lobby refuses a yaml whose resolved name collides with
-//! one already in the room, but [`plan`] is pure and matches whatever list it is handed.
+//! So the match runs in passes: on the strings as they stand, then on whatever is left over against
+//! [`ap_name`], which is the generator's own cut. Every pass takes a yaml **only where it is the one
+//! candidate**: two names cut to one string is a question for a person rather than a coin toss. It
+//! should never arise, because the lobby refuses a yaml whose resolved name collides with one
+//! already in the room, but [`plan`] is pure and matches whatever list it is handed.
 //!
-//! **Anything the generator SUBSTITUTED still misses, and misses loudly.** `{number}`, `{player}`
-//! and Archipelago's `%number%`/`%player%` reach us as the template rather than as what it became,
-//! and no amount of cutting turns one into the other; reproducing the substitution would mean
-//! reproducing a counter that walks the generator's file order rather than ours. Each leaves a name
-//! that matches nothing, which is a slot that keeps its claim link, exactly where it was before
-//! the import ran.
+//! ## Two kinds of name the lobby never held, and both are recoverable
+//!
+//! A slot's name in the seed is not always a name the lobby ever saw, and neither case is exotic:
+//! a 275-slot room reported against this carried six of them.
+//!
+//! **A `triggers` block can rename the slot.** A yaml whose `game` is a weighted list of several
+//! games usually carries one trigger per game that renames the slot to say which rolled, because
+//! that is how everybody tells which game a slot is. `roll_triggers` runs *before* `ret.name` is
+//! read (`Generate.py`, lines 547 and 613) and `update_weights` filters no keys, so the name in the
+//! seed is whichever the roll chose. [`trigger_names`] reads the candidates out of the yaml, which
+//! costs one extra request per unmatched yaml and none at all for a room whose names line up.
+//!
+//! **A `{number}` or `{player}` template is substituted.** [`resolved_name`] is the whole of
+//! `handle_name`, so these are reconstructed rather than guessed at: `{player}` is the generator's
+//! player number, and a slot's number IS that player number, so the question asked is "would this
+//! yaml, generated as THIS slot, have been called this?". The name counter behind `{number}` needs
+//! the yamls in the generator's order, which is the one thing `slot_number` is read for.
+//!
+//! **Both are decided by name equality, never by position**, and that is what makes them safe to
+//! claim on. A room whose yamls were edited between the lobby download and an offline generation
+//! produces names that do not match, and those slots stay unclaimed exactly as they do today.
+//! Nothing is ever assigned because it was nearby.
+//!
+//! What still misses: a yaml edited after it was downloaded, a trigger condition this cannot
+//! evaluate without the generator, and any name two yamls could both carry. Each leaves a slot
+//! holding its claim link, which is where it was before the import ran.
 //!
 //! ## A miss is not a failure
 //!
@@ -127,6 +147,34 @@ impl LobbyRoom {
 pub struct LobbyYaml {
     pub player_name: String,
     pub discord_id: i64,
+    /// The lobby's id for this yaml, which is how its CONTENT is fetched.
+    ///
+    /// Needed only for the yamls that matched nothing by name, so a room where every name lines up
+    /// costs no extra request at all. See [`Lobby::yaml_content`].
+    pub id: uuid::Uuid,
+    /// Which slot the lobby expects this yaml to become, one-based.
+    ///
+    /// **A prediction, and a principled one.** The lobby's `get_slots` names each yaml
+    /// `<sanitized_name>.yaml`, deduplicates collisions with a `_N` suffix, and sorts the result
+    /// case-insensitively; Archipelago assigns player numbers by sorting its weights cache on the
+    /// case-folded file path (`Generate.py:158`) and walking each file's documents in order, and
+    /// the lobby stores one row per document. So the two orders agree whenever the generator was
+    /// handed the files the lobby produced, which it was: that is what the lobby's download is for.
+    ///
+    /// **It is not authority, and nothing here treats it as such.** An organizer who added or
+    /// removed a yaml between downloading and generating offline has shifted every number past the
+    /// edit, and the lobby cannot know. So this is used for exactly one thing: ordering the name
+    /// counter in [`resolved_name`], which needs to know how many same-named yamls came first. A
+    /// claim is never made on position. See the module docs.
+    pub slot_number: i32,
+    /// Every other name this yaml could have been given, from its `triggers`.
+    ///
+    /// **Not from the API**, which is why it is `skip`ped rather than deserialized: it comes from a
+    /// second request per yaml, made only for the ones that matched nothing, and is empty for every
+    /// yaml on the ordinary path. [`plan`] treats an empty list as "no alternatives known", which is
+    /// also exactly what a yaml with no triggers has.
+    #[serde(skip)]
+    pub alternate_names: Vec<String>,
 }
 
 impl Lobby {
@@ -218,6 +266,59 @@ impl Lobby {
             yamls: body.yamls,
         })
     }
+
+    /// One yaml's text, for reading its `triggers`.
+    ///
+    /// **Fetched per yaml and only for the ones that matched nothing**, which is what keeps this
+    /// affordable: a 275-slot room whose names all line up makes zero of these requests, and the
+    /// rooms that need any need one or two. Fetching the set up front would be 275 requests to
+    /// answer a question about three of them.
+    ///
+    /// Same client policy as [`Lobby::room`], and for the same reason: this carries the lobby's
+    /// admin token, redirects are not followed, and a redirect means "log in" rather than "moved".
+    /// The route it calls happens to have no session guard on the lobby side, so the token is not
+    /// strictly needed here, but sending it is what makes this work the day that changes.
+    ///
+    /// Both ids have been through `Uuid::parse_str`, so neither can carry a path segment.
+    pub async fn yaml_content(
+        &self,
+        room: uuid::Uuid,
+        yaml: uuid::Uuid,
+    ) -> Result<String, LobbyError> {
+        let url = format!(
+            "{}/api/room/{room}/download/{yaml}",
+            self.base.trim_end_matches('/')
+        );
+
+        let client = reqwest::Client::builder()
+            .timeout(self.timeout)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| LobbyError::Unreachable(e.to_string()))?;
+
+        let response = client
+            .get(&url)
+            .header("X-Api-Key", &self.token)
+            .send()
+            .await
+            .map_err(|e| LobbyError::Unreachable(e.to_string()))?;
+
+        match response.status().as_u16() {
+            200 => {}
+            401 | 403 | 301..=308 => return Err(LobbyError::Unauthorized),
+            404 => return Err(LobbyError::NoSuchRoom),
+            other => {
+                return Err(LobbyError::Unreachable(format!(
+                    "the lobby answered {other}"
+                )));
+            }
+        }
+
+        response
+            .text()
+            .await
+            .map_err(|e| LobbyError::Unreadable(e.to_string()))
+    }
 }
 
 /// What an import would do, worked out before anything is written.
@@ -242,7 +343,19 @@ pub struct Plan {
     /// Usually the sign that the wrong lobby room was associated, which is the one mistake here that
     /// looks like success: every slot unmatched and every yaml unused. That signal only works if
     /// this bucket means what it says, which is why `already_claimed` is separate.
-    pub unused: usize,
+    ///
+    /// **By id rather than a count, so a caller can act on it.** `import` reads this to decide
+    /// which yamls are worth a second request for their `triggers`: a yaml that named a slot is
+    /// spent and has nothing left to tell anybody. The count an organizer is shown is
+    /// [`Plan::unused`], which is this length, so the two cannot disagree.
+    pub unused_ids: Vec<uuid::Uuid>,
+}
+
+impl Plan {
+    /// How many lobby YAMLs named no slot here.
+    pub fn unused(&self) -> usize {
+        self.unused_ids.len()
+    }
 }
 
 /// What the generator would have called a yaml, once it cut the name to size.
@@ -252,16 +365,88 @@ pub struct Plan {
 /// reason to touch, and a client that mishandles it is the comment upstream gives for doing it.
 /// Transcribed rather than approximated, because this decides who owns a slot.
 ///
-/// **Sixteen CHARACTERS, not bytes.** Python slices code points, and Rust makes the difference easy
-/// to get wrong in the direction that panics. It is unobservable through the lobby, which refuses a
-/// non-ASCII name outright, but it is Archipelago that produced the string being matched against,
-/// so Archipelago's rule is the one to hold, whatever reaches this from where.
-///
-/// Deliberately **no substitution**: `{number}` and friends are the generator's, and reproducing
-/// them would mean reproducing its counter. See the module docs for what that costs, which is
-/// nothing this import cannot already survive.
+/// **The cut and nothing else**, which is all this is for: the name as it stands, sized as the
+/// generator would size it. [`resolved_name`] is the whole of `handle_name` and does the
+/// substitutions too, for the pass that has a player number to offer; this one is the second pass's
+/// comparison, where there is no position to reason from yet.
 pub fn ap_name(submitted: &str) -> String {
-    submitted
+    resolved_name(submitted, None)
+}
+
+/// The substitutions `handle_name` performs, which [`ap_name`] deliberately skips.
+///
+/// `player` is the generator's player number and `number` is its name counter: how many yamls with
+/// this same name (case-insensitively) have been seen up to and including this one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NamePosition {
+    pub player: i32,
+    pub number: usize,
+}
+
+/// A submitted name, as the generator would have spelled it.
+///
+/// **A port of Archipelago's `handle_name`, and faithful down to the two `.strip()` calls.** Read
+/// off `Generate.py` rather than inferred from outputs: `%%` splits first so an escaped percent
+/// cannot be read as a token, `%number%`/`%player%` become their brace forms, the braces are
+/// formatted, and only then is the result trimmed, cut to sixteen **characters**, and trimmed
+/// again.
+///
+/// `{NUMBER}` and `{PLAYER}` are the upper-case variants, which render as **nothing at all** at 1
+/// rather than as "1": `Connor_Miner_HT{NUMBER}` is `Connor_Miner_HT` for the only player with that
+/// name, and `Connor_Miner_HT2` for the second. That asymmetry is upstream's and it is the reason
+/// these names can be reconstructed at all.
+///
+/// `position` is `None` where the caller has no player number to offer, which leaves every brace
+/// token standing and makes this the cut and nothing else: [`ap_name`]'s behavior, unchanged.
+///
+/// **Sixteen CHARACTERS, not bytes.** Python slices code points and Rust makes the difference easy
+/// to get wrong in the direction that panics. Unobservable through the lobby, which refuses a
+/// non-ASCII name outright, but Archipelago produced the string being matched against, so
+/// Archipelago's rule is the one to hold whatever reaches this from where.
+pub fn resolved_name(submitted: &str, position: Option<NamePosition>) -> String {
+    let substituted = match position {
+        None => submitted.to_string(),
+        Some(NamePosition { player, number }) => {
+            // `%%` first, exactly as upstream does: it splits on the escape, rewrites the tokens
+            // within each piece, and rejoins on a single `%`. Doing the token pass first would turn
+            // `%%number%%` into something with a live token in it.
+            let rewritten: Vec<String> = submitted
+                .split("%%")
+                .map(|piece| {
+                    piece
+                        .replace("%number%", "{number}")
+                        .replace("%player%", "{player}")
+                })
+                .collect();
+            let joined = rewritten.join("%");
+
+            // **Only these four, and an unknown brace token is left alone.** Python's formatter is
+            // wrapped in a `SafeFormatter` upstream precisely so an unrecognized field survives
+            // rather than raising, so a name carrying `{whatever}` reaches the seed with the braces
+            // still in it, and a reconstruction that dropped them would match nothing.
+            joined
+                .replace("{number}", &number.to_string())
+                .replace(
+                    "{NUMBER}",
+                    &if number > 1 {
+                        number.to_string()
+                    } else {
+                        String::new()
+                    },
+                )
+                .replace("{player}", &player.to_string())
+                .replace(
+                    "{PLAYER}",
+                    &if player > 1 {
+                        player.to_string()
+                    } else {
+                        String::new()
+                    },
+                )
+        }
+    };
+
+    substituted
         .trim()
         .chars()
         .take(16)
@@ -270,11 +455,121 @@ pub fn ap_name(submitted: &str) -> String {
         .to_string()
 }
 
+/// Every name a yaml's `triggers` block can set, in the order they appear.
+///
+/// ## Why this is needed at all
+///
+/// A yaml whose `game` is a weighted list of several games commonly carries a trigger per game that
+/// renames the slot to match whichever rolled, because a name tells everybody which game a slot is:
+///
+/// ```yaml
+/// game:
+///   Super Mario 64: 10
+///   Refunct: 10
+/// name: chzit
+/// triggers:
+///   - option_name: game
+///     option_result: Super Mario 64
+///     options:
+///       '':
+///         name: chzit64
+/// ```
+///
+/// The lobby sends `chzit`, the seed holds `chzit64`, and no amount of cutting turns one into the
+/// other. `roll_triggers` runs **before** `ret.name` is read (`Generate.py`, lines 547 and 613) and
+/// `update_weights` filters no keys, so this is upstream behavior rather than a quirk of one room.
+///
+/// ## The shape, read off `roll_triggers` rather than off samples
+///
+/// `options` is a map of **option category** to a map of options, and the category is applied with
+/// `if category_name:`, so the empty string means the root. `name` is a root option, so only the
+/// root category's `name` is the player's; a `name` under a game's category is that game's own
+/// option of that name and is none of this function's business.
+///
+/// A value reaches `get_choice`, so it may be a bare string, a weighted map, or a list. **All of
+/// them are collected**: this answers "which names could this yaml produce", and a weighted choice
+/// between two names can produce either.
+///
+/// Triggers nest, through a trigger whose options set `triggers` again, so this recurses.
+///
+/// ## What it does NOT do
+///
+/// It does not evaluate anything. No `option_result` is compared, no percentage is rolled, no
+/// weight is read. Every reachable name comes back and [`plan`] requires a slot to be named by
+/// exactly one yaml, which is a stronger test than guessing which branch fired and is the only one
+/// available without the whole generator.
+pub fn trigger_names(content: &str) -> Vec<String> {
+    let Ok(doc) = serde_saphyr::from_str::<serde_json::Value>(content) else {
+        // An unreadable yaml yields no candidates, which leaves its slot exactly where it already
+        // was: holding a claim link. The lobby parses these files with this same crate, so getting
+        // here means the content changed under us rather than that Puna is stricter.
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    collect_trigger_names(&doc, &mut out, 0);
+    out
+}
+
+/// Walk one document's `triggers`, collecting every root `name` a trigger could set.
+///
+/// `depth` bounds the recursion rather than trusting the document: triggers nest legitimately, and
+/// a hand-written yaml that nests them absurdly deep is a file this should decline to follow rather
+/// than one it should blow the stack on. Four is past anything a person writes on purpose.
+fn collect_trigger_names(node: &serde_json::Value, out: &mut Vec<String>, depth: usize) {
+    const MAX_DEPTH: usize = 4;
+    if depth > MAX_DEPTH {
+        return;
+    }
+    let Some(triggers) = node.get("triggers").and_then(|t| t.as_array()) else {
+        return;
+    };
+    for trigger in triggers {
+        let Some(categories) = trigger.get("options").and_then(|o| o.as_object()) else {
+            continue;
+        };
+        for (category, options) in categories {
+            // The root, and only the root: see the note above on `if category_name:`.
+            if !category.is_empty() {
+                continue;
+            }
+            if let Some(name) = options.get("name") {
+                push_choices(name, out);
+            }
+            // A trigger that installs further triggers. Rolled by the same loop upstream, so a name
+            // behind two conditions is as reachable as one behind one.
+            collect_trigger_names(options, out, depth + 1);
+        }
+    }
+}
+
+/// Every string a `get_choice` value could yield: itself, a list's items, or a weighted map's keys.
+fn push_choices(value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(s) => out.push(s.clone()),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                push_choices(item, out);
+            }
+        }
+        // A weighted choice: the KEYS are the candidates and the values are their weights. A weight
+        // of zero is still collected, deliberately: this reports what a yaml could be called, and
+        // `plan`'s uniqueness rule is what decides whether that is enough to claim a slot.
+        serde_json::Value::Object(weights) => out.extend(weights.keys().cloned()),
+        _ => {}
+    }
+}
+
 /// Work out the assignment. **Pure**, so every rule below is testable without a lobby.
 ///
-/// Two passes, exact then [`ap_name`]. See the module docs for why the lobby's name and the
-/// generator's diverge past sixteen characters, and why the second pass takes a yaml only where it
-/// is the sole candidate.
+/// Four passes, in order of how directly each one knows the answer: the name as it stands, the name
+/// cut to size by [`ap_name`], a name a `triggers` block could set, and a `{number}`/`{player}`
+/// template reconstructed by [`resolved_name`]. See the module docs for why the lobby's name and the
+/// generator's diverge, and why every pass takes a yaml only where it is the sole candidate.
+///
+/// **The order is the precedence and it matters.** Each pass offers more candidate names than the
+/// one before, so running a later one first would prefer weaker evidence: a trigger name that
+/// *could* be a slot's would take a slot whose exact name already settled it. A used yaml is out of
+/// the running, which is what enforces that.
 ///
 /// Two things it will not do:
 ///
@@ -342,6 +637,103 @@ pub fn plan(roster: &[Slot], yamls: &[LobbyYaml]) -> Plan {
         used.insert(yaml.player_name.as_str());
     }
 
+    // **The name counter, in the generator's own order.**
+    //
+    // `handle_name` counts how many yamls carrying this same name (lower-cased) it has already
+    // seen, and substitutes that count. So reconstructing a templated name needs the yamls walked
+    // in the order the generator walked them, which is what `slot_number` predicts. Computed once
+    // here rather than per candidate: it is a property of the whole list, not of a pairing.
+    //
+    // Ordered by `(slot_number, index)` so the tie is the list's own order rather than whatever the
+    // sort happened to do. A lobby that somehow reported duplicate slot numbers degrades to list
+    // order, which is the same answer the old code gave by never looking at all.
+    let mut by_position: Vec<usize> = (0..yamls.len()).collect();
+    by_position.sort_by_key(|&i| (yamls[i].slot_number, i));
+    let mut counter: std::collections::HashMap<String, usize> = Default::default();
+    let mut name_number = vec![1usize; yamls.len()];
+    for &i in &by_position {
+        let key = yamls[i].player_name.to_lowercase();
+        let seen = counter.entry(key).or_insert(0);
+        *seen += 1;
+        name_number[i] = *seen;
+    }
+
+    // **The third and fourth passes, which exist because two kinds of name cannot survive the
+    // first two at all.**
+    //
+    // A `triggers` block can rename a slot after the lobby has reported its name, and a `{number}`
+    // or `{player}` template reaches the seed as whatever the generator substituted. Both leave a
+    // slot whose name the lobby never held, and both are recoverable: the trigger's names are in
+    // the yaml, and the template's substitution is reproducible from the slot number itself, which
+    // IS the player number the generator used.
+    //
+    // **Both are matched by name equality, not by position**, which is the whole reason they are
+    // safe. The slot number is an input to the substitution rather than a claim in its own right,
+    // so a room whose yamls were edited before generation produces a name that does not match and
+    // the slot stays unclaimed, exactly as it does today. Nothing is assigned because it was
+    // nearby.
+    //
+    // One loop over both sources, rather than two passes: a yaml offers a set of candidate names
+    // and the rule is the same for every one of them, which keeps "named by exactly one yaml" a
+    // single test instead of two that could disagree about precedence.
+    //
+    // **Spent by INDEX here, where the earlier passes go by name, and the difference is load
+    // bearing.** `used` is keyed on the name because two yamls spelled identically cannot be told
+    // apart, so the second naming nothing is noise rather than a mismatch worth reporting. A
+    // TEMPLATE breaks that: two yamls both called `Troy{number}` are two players whose names
+    // resolve differently, `Troy1` and `Troy2`, so collapsing them by name claims the first slot
+    // and silently drops the second. Found by the test below rather than by reading.
+    //
+    // Keying on the index cannot reintroduce the thing `used` guards against: two yamls that
+    // resolve to the SAME name are two candidates for one slot, and the uniqueness check already
+    // refuses that. What reaches a claim here is a name exactly one yaml could carry.
+    let mut spent: std::collections::HashSet<usize> = matched.iter().flatten().copied().collect();
+
+    for (slot, matched) in roster.iter().zip(matched.iter_mut()) {
+        if matched.is_some() {
+            continue;
+        }
+        let names_this = |yaml: &LobbyYaml, i: usize| {
+            // The trigger names, each cut as the generator cuts every name.
+            if yaml
+                .alternate_names
+                .iter()
+                .any(|alt| ap_name(alt) == slot.player_name)
+            {
+                return true;
+            }
+            // The template, substituted with this slot's own number. `{player}` is the player
+            // number and a slot's number is that player number, so this asks "would this yaml,
+            // generated AS this slot, have been called this?" and nothing weaker.
+            resolved_name(
+                &yaml.player_name,
+                Some(NamePosition {
+                    player: slot.slot_number,
+                    number: name_number[i],
+                }),
+            ) == slot.player_name
+        };
+
+        let mut candidates = yamls
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !spent.contains(i))
+            .filter(|(i, y)| names_this(y, *i));
+
+        let Some((i, yaml)) = candidates.next() else {
+            continue;
+        };
+        // **Two yamls naming one slot is left for a person**, the same rule the cut pass follows and
+        // for the same reason: a wrong guess hands somebody else's world away, and leaving it costs
+        // one claim link, which is what the slot already has.
+        if candidates.next().is_some() {
+            continue;
+        }
+        *matched = Some(i);
+        spent.insert(i);
+        used.insert(yaml.player_name.as_str());
+    }
+
     let mut claims = Vec::new();
     let mut unmatched = Vec::new();
     let mut already_claimed = 0;
@@ -370,10 +762,11 @@ pub fn plan(roster: &[Slot], yamls: &[LobbyYaml]) -> Plan {
         claims,
         unmatched,
         already_claimed,
-        unused: yamls
+        unused_ids: yamls
             .iter()
             .filter(|y| !used.contains(y.player_name.as_str()))
-            .count(),
+            .map(|y| y.id)
+            .collect(),
     }
 }
 
@@ -455,7 +848,46 @@ pub async fn import(
     }
 
     let roster = puna_core::model::slot::list(conn, room).await?;
-    let plan = plan(&roster, &fetched.yamls);
+
+    // **Planned once on names alone, and only then is any yaml content fetched.**
+    //
+    // The first plan is the whole answer for a room whose names line up, which is most of them, and
+    // it is what identifies the handful worth asking about: a yaml that named a slot needs no
+    // `triggers` read, because it has already been spent. So the cost of this feature on an
+    // ordinary room is one extra `plan` call over a list already in memory.
+    let mut yamls = fetched.yamls;
+    let first = plan(&roster, &yamls);
+
+    // Both sides must have leftovers for a rename to join anything up: no unclaimed slot to give,
+    // or no yaml left to give it to, and there is nothing to find either way.
+    if !first.unused_ids.is_empty() && !first.unmatched.is_empty() {
+        let wanted: Vec<usize> = (0..yamls.len())
+            .filter(|&i| first.unused_ids.contains(&yamls[i].id))
+            .collect();
+
+        for i in wanted {
+            match lobby.yaml_content(lobby_room, yamls[i].id).await {
+                Ok(content) => yamls[i].alternate_names = trigger_names(&content),
+                // **Best effort, per yaml.** A yaml whose content cannot be read leaves its slot
+                // where the first plan left it, which is holding a claim link. Failing the whole
+                // import over it would turn a feature that recovers extra slots into a new way for
+                // the import to fail, on rooms where it used to work.
+                Err(e) => tracing::warn!(
+                    room = %room,
+                    lobby_room = %lobby_room,
+                    yaml = %yamls[i].id,
+                    error = %e,
+                    "could not read a lobby yaml's triggers; its slot keeps its claim link"
+                ),
+            }
+        }
+    }
+
+    // Replanned over the same roster with the alternatives filled in. Deliberately a second call
+    // to the same pure function rather than a patch over the first result: one definition of the
+    // rules, and the second run is a superset of the first by construction, since every pass it
+    // adds only looks at yamls the earlier passes left unused.
+    let plan = plan(&roster, &yamls);
 
     // **Rows first, and for every owner, before any slot points at one.** `room_slots.owner_id`
     // references `users`, so a slot claimed for an account that has never signed in would be a
@@ -467,12 +899,13 @@ pub async fn import(
 
     let claimed = puna_core::model::slot::claim_for_owners(conn, room, &plan.claims).await?;
 
+    let unused = plan.unused();
     Ok(Imported {
         claimed,
         taken_first: plan.claims.len() - claimed,
         unmatched: plan.unmatched,
         already_claimed: plan.already_claimed,
-        unused: plan.unused,
+        unused,
     })
 }
 
@@ -556,10 +989,38 @@ mod tests {
         }
     }
 
+    /// A lobby yaml with no alternative names and no position of its own.
+    ///
+    /// **`slot_number: 0` for every one of these, deliberately.** `plan` sorts by
+    /// `(slot_number, index)` purely to order the name counter, so an unset position degrades to
+    /// the list's own order, which is what a fixture that does not mention positions means. The
+    /// tests that care about the counter use [`yaml_at`].
+    ///
+    /// The id is derived from the Discord id rather than random, so a failure names the same yaml
+    /// on every run.
     fn yaml(name: &str, id: i64) -> LobbyYaml {
         LobbyYaml {
             player_name: name.into(),
             discord_id: id,
+            id: uuid::Uuid::from_u128(id as u128),
+            slot_number: 0,
+            alternate_names: Vec::new(),
+        }
+    }
+
+    /// The same, at a stated position in the generator's order.
+    fn yaml_at(name: &str, id: i64, slot_number: i32) -> LobbyYaml {
+        LobbyYaml {
+            slot_number,
+            ..yaml(name, id)
+        }
+    }
+
+    /// The same, carrying the names its `triggers` could set.
+    fn yaml_with_alts(name: &str, id: i64, alternates: &[&str]) -> LobbyYaml {
+        LobbyYaml {
+            alternate_names: alternates.iter().map(|s| s.to_string()).collect(),
+            ..yaml(name, id)
         }
     }
 
@@ -662,7 +1123,7 @@ mod tests {
             vec!["Ray%number%".to_string()],
             "a name the generator expanded and the lobby did not"
         );
-        assert_eq!(plan.unused, 1, "the lobby's Ray1 named no slot here");
+        assert_eq!(plan.unused(), 1, "the lobby's Ray1 named no slot here");
     }
 
     /// Archipelago's own cut, transcribed. The second strip is the interesting one: it exists
@@ -716,7 +1177,8 @@ mod tests {
         assert_eq!(plan.claims, vec![(1, 7), (2, 8), (3, 9)]);
         assert!(plan.unmatched.is_empty());
         assert_eq!(
-            plan.unused, 0,
+            plan.unused(),
+            0,
             "a yaml that named a slot under its cut name named a slot"
         );
     }
@@ -739,7 +1201,7 @@ mod tests {
 
         assert!(plan.claims.is_empty());
         assert_eq!(plan.unmatched, vec!["betterthanyou_Pu".to_string()]);
-        assert_eq!(plan.unused, 2, "neither of them named this slot");
+        assert_eq!(plan.unused(), 2, "neither of them named this slot");
     }
 
     /// **A name spelled in full beats one that only matches after cutting**, whichever order the
@@ -765,7 +1227,7 @@ mod tests {
         let plan = plan(&roster, &yamls);
 
         assert_eq!(plan.claims, vec![(1, 8)], "the yaml that spells it wins");
-        assert_eq!(plan.unused, 1);
+        assert_eq!(plan.unused(), 1);
     }
 
     /// **Re-runnable, and it must never take a slot back.** Between the room opening and an
@@ -811,7 +1273,7 @@ mod tests {
              the account that did"
         );
         assert!(plan.unmatched.is_empty());
-        assert_eq!(plan.unused, 0);
+        assert_eq!(plan.unused(), 0);
     }
 
     /// The reported case, end to end: four slots, all four named by the lobby, three already
@@ -839,17 +1301,19 @@ mod tests {
         assert_eq!(plan.claims, vec![(4, 10)]);
         assert_eq!(plan.already_claimed, 3);
         assert_eq!(
-            plan.unused, 0,
+            plan.unused(),
+            0,
             "every yaml named a slot here; none of them matched nothing"
         );
         assert!(plan.unmatched.is_empty());
 
+        let unused = plan.unused();
         let imported = Imported {
             claimed: 1,
             taken_first: 0,
             unmatched: plan.unmatched,
             already_claimed: plan.already_claimed,
-            unused: plan.unused,
+            unused,
         };
         assert_eq!(
             imported.message(),
@@ -864,11 +1328,11 @@ mod tests {
         let roster = [slot(1, "Troy", Some(7), SlotKind::Player)];
 
         let claimed_elsewhere = plan(&roster, &[yaml("Troy", 7)]);
-        assert_eq!(claimed_elsewhere.unused, 0);
+        assert_eq!(claimed_elsewhere.unused(), 0);
         assert_eq!(claimed_elsewhere.already_claimed, 1);
 
         let wrong_room = plan(&roster, &[yaml("Somebody", 7)]);
-        assert_eq!(wrong_room.unused, 1);
+        assert_eq!(wrong_room.unused(), 1);
         assert_eq!(wrong_room.already_claimed, 0);
         assert!(
             wrong_room.unmatched.is_empty(),
@@ -887,7 +1351,286 @@ mod tests {
 
         assert!(plan.claims.is_empty());
         assert_eq!(plan.unmatched, vec!["Troy".to_string()]);
-        assert_eq!(plan.unused, 2);
+        assert_eq!(plan.unused(), 2);
+    }
+
+    /// **The trigger block from a real Random yaml, verbatim.**
+    ///
+    /// `chzit`'s submission to a live 275-slot room, which is the shape this whole pass exists for:
+    /// a weighted `game` and one trigger per game renaming the slot to say which one rolled. The
+    /// lobby reports `chzit`; the seed holds `chzit64` or `chzitRefunct`, decided at roll time.
+    ///
+    /// Read off a file the lobby accepted rather than written to suit the parser, because the
+    /// indentation and the `''` category key are exactly where a hand-written fixture would differ
+    /// from reality and pass anyway.
+    #[test]
+    fn trigger_names_reads_the_names_a_random_game_can_take() {
+        let content = r#"
+game:
+  Super Mario 64: 10
+  Refunct: 10
+name: chzit
+description: Generated on https://ap-lobby.ionium.us/options/sm64ex
+Super Mario 64:
+  progression_balancing: normal
+  death_link: true
+triggers:
+  - option_name: game
+    option_result: Super Mario 64
+    options:
+      '':
+        name: chzit64
+  - option_name: game
+    option_result: Refunct
+    options:
+      '':
+        name: chzitRefunct
+Refunct:
+  progression_balancing: normal
+  amount_of_grass: 120
+"#;
+        assert_eq!(
+            trigger_names(content),
+            vec!["chzit64".to_string(), "chzitRefunct".to_string()],
+            "the names behind a Random game were not read out of its triggers"
+        );
+
+        // A yaml with no triggers at all is the ordinary case and must be cheap and silent.
+        assert!(trigger_names("name: Troy\ngame: Refunct\n").is_empty());
+
+        // **Only the ROOT category's `name`.** A `name` under a game's own section is that game's
+        // option of that name: `roll_triggers` applies a category with `if category_name:`, so the
+        // empty string is the root and anything else is a game. Reading a game's option as a
+        // player name would invent a candidate that no slot can ever be called.
+        let game_scoped = r#"
+name: Troy
+game: Refunct
+triggers:
+  - option_name: game
+    option_result: Refunct
+    options:
+      Refunct:
+        name: not-a-player-name
+"#;
+        assert!(
+            trigger_names(game_scoped).is_empty(),
+            "a game's own `name` option was read as a player name"
+        );
+
+        // A weighted choice between names: `get_choice` can pick either, so both are candidates.
+        let weighted = r#"
+name: Troy
+game: Refunct
+triggers:
+  - option_name: game
+    option_result: Refunct
+    options:
+      '':
+        name:
+          TroyA: 1
+          TroyB: 1
+"#;
+        let mut names = trigger_names(weighted);
+        names.sort();
+        assert_eq!(names, vec!["TroyA".to_string(), "TroyB".to_string()]);
+
+        // Unreadable content yields nothing rather than failing: the slot keeps its claim link,
+        // which is where it already was.
+        assert!(trigger_names("\tnot: [valid").is_empty());
+    }
+
+    /// **A Random game's slot is claimed from its trigger names, and only when one yaml claims it.**
+    ///
+    /// The three real yamls from the room this was reported against: `chzit` renames to one of two
+    /// names, `WIL57GD-Rando` to one of five, `AriesRando` to one of three. Whichever rolled, the
+    /// seed's slot carries a name the lobby never sent.
+    #[test]
+    fn a_renamed_random_slot_is_claimed_from_its_trigger_names() {
+        let roster = [
+            slot(1, "chzitRefunct", None, SlotKind::Player),
+            slot(2, "WIL57GD-SMS", None, SlotKind::Player),
+            slot(3, "Serterd", None, SlotKind::Player),
+        ];
+        let yamls = [
+            yaml_with_alts("chzit", 11, &["chzit64", "chzitRefunct"]),
+            yaml_with_alts(
+                "WIL57GD-Rando",
+                22,
+                &[
+                    "WIL57GD-J&D",
+                    "WIL57GD-P2",
+                    "WIL57GD-RE",
+                    "WIL57GD-SA2",
+                    "WIL57GD-SMS",
+                ],
+            ),
+            yaml("Serterd", 33),
+        ];
+
+        let plan = plan(&roster, &yamls);
+
+        assert_eq!(
+            plan.claims,
+            vec![(1, 11), (2, 22), (3, 33)],
+            "a Random game's slot was not matched to the yaml that could be called that"
+        );
+        assert!(plan.unmatched.is_empty());
+        assert_eq!(plan.unused(), 0);
+    }
+
+    /// **Two yamls that could both be called one name is left for a person.**
+    ///
+    /// The same rule the cut pass follows, and the reason the pass does not try to work out which
+    /// trigger actually fired: it cannot, without the generator, and a wrong guess hands somebody
+    /// else's world away. Leaving it costs one claim link, which the slot already has.
+    #[test]
+    fn two_yamls_that_could_take_one_name_claim_nothing() {
+        let roster = [slot(1, "SharedName", None, SlotKind::Player)];
+        let yamls = [
+            yaml_with_alts("First", 11, &["SharedName"]),
+            yaml_with_alts("Second", 22, &["SharedName", "SomethingElse"]),
+        ];
+
+        let plan = plan(&roster, &yamls);
+
+        assert!(
+            plan.claims.is_empty(),
+            "an ambiguous rename was guessed at rather than left alone"
+        );
+        assert_eq!(plan.unmatched, vec!["SharedName".to_string()]);
+        assert_eq!(plan.unused(), 2);
+    }
+
+    /// **A `{NUMBER}` template is reconstructed, not guessed at positionally.**
+    ///
+    /// Three of these were in the same room: `Connor_Miner_HT{NUMBER}`, `PurpleRefunctAny{NUMBER}`,
+    /// `FirefoxGrass{NUMBER}`. Upstream's asymmetry is what makes them recoverable: `{NUMBER}`
+    /// renders as **nothing** for the first yaml of that name and as the count for later ones, so
+    /// the sole `Connor_Miner_HT{NUMBER}` in a room is simply `Connor_Miner_HT`.
+    ///
+    /// Matched by name equality like every other pass. The slot number is an input to the
+    /// substitution, never a claim: `{player}` is the generator's player number and a slot's number
+    /// IS that player number, so this asks "would this yaml, generated as THIS slot, have been
+    /// called this?" and accepts nothing weaker.
+    #[test]
+    fn a_templated_name_is_reconstructed_from_the_slot_it_would_be() {
+        // The lone `{NUMBER}`: counter 1, so it renders away entirely.
+        let lone = plan(
+            &[slot(4, "Connor_Miner_HT", None, SlotKind::Player)],
+            &[yaml_at("Connor_Miner_HT{NUMBER}", 11, 4)],
+        );
+        assert_eq!(
+            lone.claims,
+            vec![(4, 11)],
+            "a lone {{NUMBER}} did not resolve"
+        );
+
+        // Two of one name: the counter walks the generator's order, which `slot_number` predicts,
+        // so the first becomes `Troy1` and the second `Troy2`. Each names exactly one slot.
+        let counted = plan(
+            &[
+                slot(1, "Troy1", None, SlotKind::Player),
+                slot(2, "Troy2", None, SlotKind::Player),
+            ],
+            &[
+                yaml_at("Troy{number}", 11, 1),
+                yaml_at("Troy{number}", 22, 2),
+            ],
+        );
+        assert_eq!(
+            counted.claims,
+            vec![(1, 11), (2, 22)],
+            "the name counter did not follow the generator's order"
+        );
+
+        // `{player}` is the player number, so it resolves against the slot it would have been and
+        // against no other. Asserted in both directions, since a pass that ignored the number
+        // would claim the wrong slot rather than none.
+        let positioned = plan(
+            &[
+                slot(7, "Ray7", None, SlotKind::Player),
+                slot(8, "Ray8", None, SlotKind::Player),
+            ],
+            &[yaml_at("Ray{player}", 11, 7)],
+        );
+        assert_eq!(
+            positioned.claims,
+            vec![(7, 11)],
+            "a {{player}} template did not resolve to the slot whose number it is"
+        );
+        assert_eq!(positioned.unmatched, vec!["Ray8".to_string()]);
+    }
+
+    /// **The substitutions, against `handle_name` as written.**
+    ///
+    /// Transcribed from `Generate.py:376` rather than inferred, because this decides who owns a
+    /// slot. The `%%` escape is split FIRST so an escaped percent cannot be read as a token, and
+    /// the cut happens last, after substitution, which is what makes a long template resolve to
+    /// something that fits.
+    #[test]
+    fn resolved_name_matches_the_generators_own_substitution() {
+        let at = |player, number| Some(NamePosition { player, number });
+
+        // The upper-case forms vanish at 1 and appear past it. This is the asymmetry the
+        // `{NUMBER}` recovery rests on.
+        assert_eq!(resolved_name("Troy{NUMBER}", at(1, 1)), "Troy");
+        assert_eq!(resolved_name("Troy{NUMBER}", at(1, 2)), "Troy2");
+        assert_eq!(resolved_name("Troy{PLAYER}", at(1, 1)), "Troy");
+        assert_eq!(resolved_name("Troy{PLAYER}", at(2, 1)), "Troy2");
+
+        // The lower-case forms always render.
+        assert_eq!(resolved_name("Troy{number}", at(1, 1)), "Troy1");
+        assert_eq!(resolved_name("Troy{player}", at(5, 1)), "Troy5");
+
+        // Archipelago's percent spellings, which become the brace forms before formatting.
+        assert_eq!(resolved_name("Troy%number%", at(1, 3)), "Troy3");
+        assert_eq!(resolved_name("Troy%player%", at(9, 1)), "Troy9");
+
+        // **The escape, which is why the split comes first.** `%%` is a literal percent, so the
+        // token inside it must survive as text rather than being substituted.
+        assert_eq!(resolved_name("a%%number%%b", at(1, 1)), "a%number%b");
+
+        // An unknown token is left standing, because upstream formats through a `SafeFormatter`
+        // that does not raise on one. A reconstruction that dropped it would match nothing.
+        assert_eq!(resolved_name("Troy{whatever}", at(1, 1)), "Troy{whatever}");
+
+        // The cut is LAST: substitute, then trim, then sixteen characters, then trim again.
+        assert_eq!(
+            resolved_name("aaaaaaaaaaaaaaa{number}", at(1, 12)),
+            "aaaaaaaaaaaaaaa1"
+        );
+        assert_eq!(resolved_name("  Troy{number}  ", at(1, 1)), "Troy1");
+
+        // And with no position offered this is the cut and nothing else, which is `ap_name`.
+        assert_eq!(resolved_name("Troy{NUMBER}", None), "Troy{NUMBER}");
+        assert_eq!(ap_name("betterthanyou_Pupupu"), "betterthanyou_Pu");
+    }
+
+    /// **A name the lobby already matched is never reconsidered by a later pass.**
+    ///
+    /// The passes run in order and a used yaml is out of the running, which is what stops a trigger
+    /// name or a template from stealing a slot that an exact name already settled. Worth pinning
+    /// because the later passes generate MORE candidates than the earlier ones, so a reordering
+    /// would not fail loudly: it would quietly prefer the weaker evidence.
+    #[test]
+    fn an_exact_name_outranks_a_rename_that_could_also_claim_it() {
+        let roster = [
+            slot(1, "Troy", None, SlotKind::Player),
+            slot(2, "Other", None, SlotKind::Player),
+        ];
+        // The second yaml could be called `Troy` by a trigger, and the first simply IS `Troy`.
+        let yamls = [
+            yaml("Troy", 11),
+            yaml_with_alts("Other", 22, &["Troy", "Other"]),
+        ];
+
+        let plan = plan(&roster, &yamls);
+
+        assert_eq!(
+            plan.claims,
+            vec![(1, 11), (2, 22)],
+            "a trigger name took a slot that an exact name had already matched"
+        );
     }
 
     /// **A redirect is a refusal, and it must not be followed.**
