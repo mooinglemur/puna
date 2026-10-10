@@ -482,9 +482,26 @@ pub fn resolved_name(submitted: &str, position: Option<NamePosition>) -> String 
 /// ## The shape, read off `roll_triggers` rather than off samples
 ///
 /// `options` is a map of **option category** to a map of options, and the category is applied with
-/// `if category_name:`, so the empty string means the root. `name` is a root option, so only the
-/// root category's `name` is the player's; a `name` under a game's category is that game's own
-/// option of that name and is none of this function's business.
+/// `if category_name:`. So **the root is any FALSY key**, which in a real yaml means `null:` as
+/// often as `'':` and is the single thing that made the first version of this miss:
+///
+/// ```yaml
+/// triggers:
+///   - option_name: game
+///     option_result: "Jak and Daxter: The Precursor Legacy"
+///     options:
+///       null:
+///         name: Kyr_Jak
+/// ```
+///
+/// `yaml.safe_load` gives that key as `None`, `if None:` is false, and the option lands at the
+/// root exactly as `''` would. Both spellings were in one room; two slots out of 332 were the
+/// `null` one and both were missed, because the check was `== ""` rather than "falsy". Python's
+/// other falsy keys (`0`, `false`) are accepted here too, for the same reason: the predicate is
+/// upstream's, not a list of spellings seen so far.
+///
+/// `name` is a root option, so only the root category's `name` is the player's; a `name` under a
+/// game's category is that game's own option of that name and is none of this function's business.
 ///
 /// A value reaches `get_choice`, so it may be a bare string, a weighted map, or a list. **All of
 /// them are collected**: this answers "which names could this yaml produce", and a weighted choice
@@ -499,15 +516,72 @@ pub fn resolved_name(submitted: &str, position: Option<NamePosition>) -> String 
 /// exactly one yaml, which is a stronger test than guessing which branch fired and is the only one
 /// available without the whole generator.
 pub fn trigger_names(content: &str) -> Vec<String> {
-    let Ok(doc) = serde_saphyr::from_str::<serde_json::Value>(content) else {
+    // **The lobby's own parser options, not the defaults, and both settings are load bearing on
+    // these files.** Copied from its `read_yaml` with its reasoning, because the property worth
+    // having is that a file the lobby accepted parses here:
+    //
+    //   * `.inf` and `.nan` are valid YAML and Archipelago reads them, and by default they are
+    //     refused wherever the type being read is not known. Everything here but `triggers` is
+    //     ignored, so "not known" is most of the file, and one game option set to `.inf` would
+    //     cost the whole document.
+    //   * Comments are refused past 32 consecutive ones at some positions, such as a block of
+    //     options commented out under a game. Not asking for them lifts the limit, and the yaml
+    //     that found this bug carries a `## Names per game` comment inside the block being read.
+    let mut options = serde_saphyr::Options::default();
+    options.reject_non_finite_typeless_float = false;
+    options.emit_comments = false;
+
+    // **Typed, rather than a generic value tree, because of the `null:` key.** A JSON value cannot
+    // hold one: its object keys are strings, so the root category either vanishes or fails the
+    // whole parse depending on the adapter's mood. `Option<String>` reads `null` as `None` and
+    // `''` as `Some("")`, which is the distinction upstream's `if category_name:` erases.
+    let Ok(doc) = serde_saphyr::from_str_with_options::<TriggerDoc>(content, options) else {
         // An unreadable yaml yields no candidates, which leaves its slot exactly where it already
-        // was: holding a claim link. The lobby parses these files with this same crate, so getting
-        // here means the content changed under us rather than that Puna is stricter.
+        // was: holding a claim link.
         return Vec::new();
     };
+
     let mut out = Vec::new();
-    collect_trigger_names(&doc, &mut out, 0);
+    collect_trigger_names(&doc.triggers, &mut out, 0);
     out
+}
+
+/// Only the `triggers` of one yaml document. Every other key is ignored, which is nearly all of it.
+#[derive(Debug, serde::Deserialize)]
+struct TriggerDoc {
+    #[serde(default)]
+    triggers: Vec<TriggerEntry>,
+}
+
+/// One trigger. Its condition is deliberately not read: see the note on [`trigger_names`].
+#[derive(Debug, serde::Deserialize)]
+struct TriggerEntry {
+    /// Option category to the options it sets. **`None` is the root**, and so is `Some("")`.
+    #[serde(default)]
+    options: std::collections::BTreeMap<Option<String>, TriggerOptions>,
+}
+
+/// The options one trigger sets within one category.
+#[derive(Debug, serde::Deserialize)]
+struct TriggerOptions {
+    name: Option<Choice>,
+    /// A trigger can install further triggers, and a name behind two conditions is as reachable as
+    /// one behind one.
+    #[serde(default)]
+    triggers: Vec<TriggerEntry>,
+}
+
+/// A value bound for `get_choice`: a bare scalar, a list, or a map of weights.
+///
+/// Untagged, so the three shapes are tried in turn and the file decides which it is. The weights
+/// themselves are ignored: a weight of zero is still a name this yaml could carry as far as this is
+/// concerned, and [`plan`]'s uniqueness rule is what decides whether that is enough to claim a slot.
+#[derive(Debug, serde::Deserialize)]
+#[serde(untagged)]
+enum Choice {
+    One(String),
+    Many(Vec<String>),
+    Weighted(std::collections::BTreeMap<String, serde::de::IgnoredAny>),
 }
 
 /// Walk one document's `triggers`, collecting every root `name` a trigger could set.
@@ -515,47 +589,47 @@ pub fn trigger_names(content: &str) -> Vec<String> {
 /// `depth` bounds the recursion rather than trusting the document: triggers nest legitimately, and
 /// a hand-written yaml that nests them absurdly deep is a file this should decline to follow rather
 /// than one it should blow the stack on. Four is past anything a person writes on purpose.
-fn collect_trigger_names(node: &serde_json::Value, out: &mut Vec<String>, depth: usize) {
+fn collect_trigger_names(triggers: &[TriggerEntry], out: &mut Vec<String>, depth: usize) {
     const MAX_DEPTH: usize = 4;
     if depth > MAX_DEPTH {
         return;
     }
-    let Some(triggers) = node.get("triggers").and_then(|t| t.as_array()) else {
-        return;
-    };
     for trigger in triggers {
-        let Some(categories) = trigger.get("options").and_then(|o| o.as_object()) else {
-            continue;
-        };
-        for (category, options) in categories {
-            // The root, and only the root: see the note above on `if category_name:`.
-            if !category.is_empty() {
+        for (category, options) in &trigger.options {
+            // **Falsy is the root**, which is upstream's `if category_name:` rather than a list of
+            // spellings: `null`, `''`, and in principle `0` or `false`, all of which Python's
+            // truthiness collapses to the same branch. Anything else names a game and its `name`
+            // is that game's own option.
+            if !is_root_category(category) {
                 continue;
             }
-            if let Some(name) = options.get("name") {
+            if let Some(name) = &options.name {
                 push_choices(name, out);
             }
-            // A trigger that installs further triggers. Rolled by the same loop upstream, so a name
-            // behind two conditions is as reachable as one behind one.
-            collect_trigger_names(options, out, depth + 1);
+            collect_trigger_names(&options.triggers, out, depth + 1);
         }
     }
 }
 
+/// Is this option category the root, by Python's truthiness rather than by spelling?
+///
+/// `None` is `null:`, and the empty string is `'':`. `0` and `false` arrive as `Some("0")` and
+/// `Some("false")` because the key is read as a string, and both are falsy to the generator, so
+/// both land at the root there and must here.
+fn is_root_category(category: &Option<String>) -> bool {
+    match category.as_deref() {
+        None => true,
+        Some(key) => matches!(key, "" | "0" | "false" | "False" | "null" | "~"),
+    }
+}
+
 /// Every string a `get_choice` value could yield: itself, a list's items, or a weighted map's keys.
-fn push_choices(value: &serde_json::Value, out: &mut Vec<String>) {
+fn push_choices(value: &Choice, out: &mut Vec<String>) {
     match value {
-        serde_json::Value::String(s) => out.push(s.clone()),
-        serde_json::Value::Array(items) => {
-            for item in items {
-                push_choices(item, out);
-            }
-        }
-        // A weighted choice: the KEYS are the candidates and the values are their weights. A weight
-        // of zero is still collected, deliberately: this reports what a yaml could be called, and
-        // `plan`'s uniqueness rule is what decides whether that is enough to claim a slot.
-        serde_json::Value::Object(weights) => out.extend(weights.keys().cloned()),
-        _ => {}
+        Choice::One(name) => out.push(name.clone()),
+        Choice::Many(names) => out.extend(names.iter().cloned()),
+        // A weighted choice: the KEYS are the candidates and the values are their weights.
+        Choice::Weighted(weights) => out.extend(weights.keys().cloned()),
     }
 }
 
@@ -1437,6 +1511,119 @@ triggers:
         // Unreadable content yields nothing rather than failing: the slot keeps its claim link,
         // which is where it already was.
         assert!(trigger_names("\tnot: [valid").is_empty());
+    }
+
+    /// **`null:` is the root category as surely as `'':` is, and this is the yaml that proved it.**
+    ///
+    /// `KyroxMain`'s submission to the room this feature was built for, trimmed to the parts that
+    /// matter and otherwise verbatim: CRLF line endings, a `##` comment inside the block being
+    /// read, a quoted game name with a colon in it, a weight of `0` on games that can still be
+    /// rolled by a trigger, and `option_result: Pokemon EMerald` misspelled against the `game` list
+    /// above it.
+    ///
+    /// Every one of those is a thing a hand-written fixture would have tidied away, and the first
+    /// version of this function matched the category on `== ""`, so it read this file as having no
+    /// names in it at all. Two slots out of 332 were this shape, both missed, and the import
+    /// otherwise worked: the failure was invisible except as two slots that kept their claim links.
+    ///
+    /// The misspelling is also why nothing here evaluates a condition. `Pokemon EMerald` matches no
+    /// game and that trigger can never fire, but the name behind it is collected anyway, because
+    /// deciding which branch fired needs the generator and guessing wrong hands away a world.
+    #[test]
+    fn a_null_option_category_is_the_root_like_an_empty_one() {
+        let kyrox = "description: Main Game YAML\r\n\
+             name: KyroxMain\r\n\
+             \r\n\
+             game:\r\n\
+             \x20   \"Jak and Daxter: The Precursor Legacy\": 30\r\n\
+             \x20   Pokemon Emerald: 0\r\n\
+             \x20   Terraria: 0\r\n\
+             \r\n\
+             triggers:\r\n\
+             ## Names per game\r\n\
+             \x20 - option_name: game\r\n\
+             \x20   option_result: \"Jak and Daxter: The Precursor Legacy\"\r\n\
+             \x20   options:\r\n\
+             \x20     null:\r\n\
+             \x20       name: Kyr_Jak\r\n\
+             \x20 - option_name: game\r\n\
+             \x20   option_result: Pokemon EMerald\r\n\
+             \x20   options:\r\n\
+             \x20     null:\r\n\
+             \x20       name: Kyr_Emerald\r\n\
+             \x20 - option_name: game\r\n\
+             \x20   option_result: Terraria\r\n\
+             \x20   options:\r\n\
+             \x20     null:\r\n\
+             \x20       name: Kyr_Terraria\r\n";
+
+        assert_eq!(
+            trigger_names(kyrox),
+            vec![
+                "Kyr_Jak".to_string(),
+                "Kyr_Emerald".to_string(),
+                "Kyr_Terraria".to_string()
+            ],
+            "a `null:` option category was not read as the root, so a renamed slot stays unclaimed"
+        );
+
+        // And it claims the slot, which is the behavior an organizer sees. Slot 157 of that room.
+        let plan = plan(
+            &[slot(157, "Kyr_Jak", None, SlotKind::Player)],
+            &[yaml_with_alts(
+                "KyroxMain",
+                11,
+                &trigger_names(kyrox)
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+            )],
+        );
+        assert_eq!(plan.claims, vec![(157, 11)]);
+
+        // The two spellings are interchangeable, which is the whole point: same file, same answer.
+        let with_empty = kyrox.replace("null:", "'':");
+        assert_eq!(
+            trigger_names(&with_empty),
+            trigger_names(kyrox),
+            "the two spellings of the root category disagree"
+        );
+
+        // A game's own category still does not contribute, whichever spelling sits beside it.
+        let game_scoped = kyrox.replace("     null:", "     Terraria:");
+        assert!(
+            trigger_names(&game_scoped).is_empty(),
+            "a game's own `name` option was read as a player name"
+        );
+    }
+
+    /// **`.inf` under an option nobody here reads must not cost the whole document.**
+    ///
+    /// The lobby sets `reject_non_finite_typeless_float = false` for exactly this, and its note says
+    /// why: those are valid YAML, Archipelago reads them, and they are refused by default wherever
+    /// the type being read is unknown. Everything in these files except `triggers` is unknown to
+    /// this parser, so "unknown" is most of the file and one such value would take the names with
+    /// it.
+    #[test]
+    fn an_option_this_never_reads_cannot_cost_the_whole_file() {
+        let content = r#"
+name: Troy
+game: Refunct
+Refunct:
+  some_ratio: .inf
+  another: .nan
+triggers:
+  - option_name: game
+    option_result: Refunct
+    options:
+      null:
+        name: TroyRefunct
+"#;
+        assert_eq!(
+            trigger_names(content),
+            vec!["TroyRefunct".to_string()],
+            "a value under an option this does not read took the trigger names with it"
+        );
     }
 
     /// **A Random game's slot is claimed from its trigger names, and only when one yaml claims it.**
