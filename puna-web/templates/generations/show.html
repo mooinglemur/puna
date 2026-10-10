@@ -112,7 +112,15 @@ connect with their own.</p>
    `"1"`, which fails the WHOLE submission with a 422 rather than just this field. The remote-admin
    checkbox next to it is an `Option<String>` and takes anything, which is what makes the trap
    inviting. #}
-<div class="field">
+{# `data-only-in` / `data-only-for`: `options-form.js` shows this row only while the `slot_auth`
+   radio reads `per_slot`, and the stylesheet does the hiding, since `[hidden]` cannot beat the
+   grid `display` on `.field`. Both attributes at the point of use, because the field it depends on
+   is a sibling rather than an ancestor.
+
+   With no scripting the row is simply always there, which is correct rather than merely tolerable:
+   it is posted either way and the route reads it only in per-slot mode, so a box ticked under the
+   wrong radio applies to nothing. #}
+<div class="field" data-only-in="slot_auth" data-only-for="per_slot">
 <span class="label">Password delivery</span>
 <div class="choices">
 <label><input type="checkbox" name="hide_slot_passwords" value="true"> Withhold every slot password

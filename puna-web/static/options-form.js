@@ -24,18 +24,48 @@
 
   forms.forEach(function (form) {
     var groups = form.querySelectorAll("[data-hints]");
+    var dependents = form.querySelectorAll("[data-only-for]");
     var flag = form.querySelector("[data-unsaved]");
+
+    // Which option of a group is selected right now, or `null` for a group with nothing checked.
+    function chosenValue(name) {
+      var chosen = form.querySelector('input[name="' + name + '"]:checked');
+      return chosen ? chosen.value : null;
+    }
 
     function showHints() {
       [].forEach.call(groups, function (group) {
-        var name = group.dataset.hints;
-        var chosen = form.querySelector('input[name="' + name + '"]:checked');
+        var chosen = chosenValue(group.dataset.hints);
         [].forEach.call(group.querySelectorAll(".hint[data-for]"), function (hint) {
           // `hidden` rather than a class: it is what the attribute means, and a hint hidden this
           // way is out of the accessibility tree too: a screen reader should not read three
           // explanations of an option nobody has chosen.
-          hint.hidden = !chosen || hint.dataset.for !== chosen.value;
+          hint.hidden = chosen === null || hint.dataset.for !== chosen;
         });
+      });
+    }
+
+    // **A whole control that belongs to one option of a group, rather than a hint explaining one.**
+    //
+    // Separate from the hints above because the two differ in what being hidden MEANS. A hint is
+    // prose and hiding it costs a reader nothing; this hides a form control, and the control goes
+    // on being submitted either way.
+    //
+    // That is deliberate and is what keeps the page honest with scripting off, where every option's
+    // hint shows at once and so does this: the server reads a dependent control only when the
+    // option it depends on was the one submitted, so a box ticked under the wrong radio means
+    // nothing rather than applying invisibly. Hiding it is therefore a tidiness, and tidiness is
+    // exactly the kind of thing that may depend on a script. Were this ever used for a control
+    // whose value the server honors unconditionally, hiding it here would be a trap: the reader
+    // would not see the setting they are about to save.
+    //
+    // `data-only-in` names the group and `data-only-for` the value, both at the point of use,
+    // because a dependent control is not necessarily inside the group it depends on: this one is
+    // its own labelled row in the grid, a sibling of the radios it follows.
+    function showDependents() {
+      [].forEach.call(dependents, function (el) {
+        var chosen = chosenValue(el.dataset.onlyIn);
+        el.hidden = chosen === null || el.dataset.onlyFor !== chosen;
       });
     }
 
@@ -59,6 +89,7 @@
 
     function refresh() {
       showHints();
+      showDependents();
       if (flag) flag.hidden = !changed();
     }
 

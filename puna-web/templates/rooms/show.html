@@ -361,9 +361,17 @@ unclaimed
 <form method="post"
       action="/room/{{ room.id }}/slot/{{ slot.slot_number }}/password-visibility" class="inline">
 <input type="hidden" name="hidden" value="false">
+{# **Two labels, one of them showing: the state at rest, the action under the pointer.** The chip is
+   read down a column, where "Hidden from user" is the fact somebody is scanning for; it becomes
+   "Unhide" on hover and on keyboard focus, which is where somebody has stopped and is about to
+   click. The stylesheet keeps the chip sized to the longer of the two so the row does not move.
+
+   No whitespace between the spans, and none before the first: `whitespace = "suppress"` would eat
+   it anyway, and a space inside a chip that swaps its own contents would show up as the chip
+   changing width by one character. #}
 <button type="submit" class="tag withheld"
-        aria-label="Issue the password for slot {{+ slot.slot_number +}} to its player"
-        title="This player cannot see their password and their patch does not carry it. Click to issue it.">Hidden from user</button>
+        aria-label="Unhide the password for slot {{+ slot.slot_number +}} from its player"
+        title="This player cannot see their password and their patch does not carry it. Click to unhide it."><span class="chip-state">Hidden from user</span><span class="chip-action">Unhide</span></button>
 </form>
 {% endif %}
 {% else %}

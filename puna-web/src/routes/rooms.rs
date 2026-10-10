@@ -3682,6 +3682,73 @@ pub(crate) mod tests {
         );
     }
 
+    /// **The password cell has three renderings, and the two words a reader actually sees are the
+    /// thing worth pinning.**
+    ///
+    /// `slot_views` decides what each audience is given; this is about what the markup does with
+    /// it, which is a different failure. The cell branches on a PAIR (`password`, `password_hidden`)
+    /// and the combination is what tells staff from a player, so a template edit that collapsed the
+    /// branches would still render, still gate the value correctly, and tell the wrong person the
+    /// wrong thing: a player offered a control to issue themselves a credential, or an organizer
+    /// shown "Not Available Yet" about a password they are holding.
+    ///
+    /// The hover label is in here too, because it is a second `<span>` rather than a CSS
+    /// `content`: losing it leaves the chip with no action on it and nothing else wrong.
+    #[test]
+    fn the_withheld_password_cell_says_the_right_thing_to_each_audience() {
+        use askama::Template;
+
+        let cell = |is_staff: bool, password: Option<&str>, hidden: bool| {
+            let mut page = page_as(is_staff, is_staff);
+            page.room.slot_auth = SlotAuth::PerSlot;
+            let mut view = a_slot(false);
+            view.password = password.map(str::to_string);
+            view.password_hidden = hidden;
+            page.slots = vec![view];
+            page.render().expect("renders")
+        };
+
+        // Staff: the value, and the chip that both names the state and carries the action.
+        let staff = cell(true, Some("abcde-fghij"), true);
+        assert!(
+            staff.contains("abcde-fghij"),
+            "staff cannot read the password they must hand out"
+        );
+        assert!(
+            staff.contains("Hidden from user"),
+            "staff cannot see which slots are still waiting on their credentials"
+        );
+        assert!(
+            staff.contains(r#"<span class="chip-action">Unhide</span>"#),
+            "the chip no longer says what clicking it does: {staff:.0}"
+        );
+        assert!(
+            staff.contains("/password-visibility"),
+            "the chip is not a control, so there is no way to issue one password at a time"
+        );
+
+        // The player holding the slot: told it is withheld, and not handed a control for it.
+        let player = cell(false, None, true);
+        assert!(
+            player.contains("Not Available Yet"),
+            "the owner of a withheld slot gets an unexplained dash"
+        );
+        assert!(
+            !player.contains("Unhide") && !player.contains("/password-visibility"),
+            "a player was offered the control that issues their own password"
+        );
+
+        // Nobody in particular, on a room withholding nothing: the dash, exactly as before. This is
+        // the arm that must not grow a chip, or every public room page starts announcing a password
+        // state to everyone holding its link.
+        let stranger = cell(false, None, false);
+        assert!(
+            !stranger.contains("Not Available Yet") && !stranger.contains("Unhide"),
+            "a visitor was told about this room's credential state"
+        );
+        assert!(stranger.contains("&mdash;"), "the empty cell lost its dash");
+    }
+
     /// **The import's leftovers are told to staff, and to nobody else.**
     ///
     /// A partial import is the design (refusing outright over two diverged names would send an

@@ -977,6 +977,36 @@ button.tag:focus-visible {
   border-color: var(--accent);
 }
 
+/* --- the staff chip says what it is, and on hover what it does ---------------------------------
+ *
+ * Only the staff chip is a `button`, so these rules reach it and never the player's `span`: the
+ * player has nothing to click and "Unhide" would describe an action they cannot take.
+ *
+ * **Both labels occupy ONE grid area, so the chip is always as wide as the longer of them.** A
+ * plain `display: none` swap would shrink the chip from "Hidden from user" to "Unhide" under the
+ * pointer and shuffle the rotate control beside it sideways, which on a roster of forty rows is a
+ * row that squirms as you read down it. Sized to the widest, nothing moves.
+ *
+ * `visibility`, not `display`, for the same reason: a `display: none` child contributes no width to
+ * the grid area, and the point is that it does. Both are equally gone from the accessibility tree,
+ * and in any case the button carries an `aria-label`, which supersedes its text content outright:
+ * this swap is for the eye, and a screen reader is told the action from the start. */
+button.tag.withheld {
+  display: inline-grid;
+  grid-template-areas: "swap";
+  align-items: baseline;
+}
+
+button.tag.withheld > span { grid-area: swap; }
+
+button.tag.withheld .chip-action { visibility: hidden; }
+
+button.tag.withheld:hover .chip-state,
+button.tag.withheld:focus-visible .chip-state { visibility: hidden; }
+
+button.tag.withheld:hover .chip-action,
+button.tag.withheld:focus-visible .chip-action { visibility: visible; }
+
 /* A room running something other than its current spec. Deliberately NOT `.tag.warning`: the
    warning colors belong to the block-level notice and combining them here would inherit its
    padding and background. Drift is a fact to notice, not a fault: it is the ordinary state
@@ -2340,6 +2370,16 @@ td.prog-go_mode { color: var(--prog-go_mode); }
  * scripting explains all the options rather than none. */
 .create-room .hint { margin: 0.15rem 0 0; }
 .js-options-form .create-room .hint[data-for][hidden] { display: none; }
+
+/* A whole field that belongs to one option of the group above it, hidden the same way and for the
+ * same reason the rule above needs to exist at all: `[hidden]` is a UA-stylesheet `display: none`,
+ * and `.create-room .field` sets `display: grid`, which wins. Without this the script would set the
+ * attribute, the accessibility tree would drop the field, and it would go on being drawn.
+ *
+ * Gated on `.js-options-form` like its neighbor, so the field is visible with no scripting at all.
+ * It is submitted either way and the server reads it only under the option it belongs to, so the
+ * unscripted page is correct and merely shows one row more than it needs. */
+.js-options-form .create-room .field[data-only-for][hidden] { display: none; }
 
 /* "Unsaved changes", beside the button rather than at the top of the form.
  *

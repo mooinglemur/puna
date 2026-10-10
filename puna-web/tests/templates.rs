@@ -4785,6 +4785,90 @@ fn expand_includes(source: &str) -> String {
     out
 }
 
+/// **A form control shown for only one option of a radio group needs all four pieces to agree.**
+///
+/// The markup declares the group and the value, `options-form.js` sets `hidden` from them, the
+/// stylesheet turns that into `display: none`, and the page loads the script. Break any one and the
+/// page still renders, nothing logs, and the result is a control that is simply always there.
+///
+/// **The stylesheet's half is the one that cannot be inferred from reading the script**, and it is
+/// the half this project has already lost once, on `.table-controls`: `[hidden]` is the user-agent
+/// stylesheet's `display: none`, and `.create-room .field` sets `display: grid`, which wins. So the
+/// attribute is set, the field leaves the accessibility tree, and it goes on being drawn. Visually
+/// identical to the feature not existing.
+///
+/// Keyed on the CONTAINER attribute rather than on the checkbox inside it, because the attribute is
+/// what the rule and the script both match on.
+#[test]
+fn a_control_for_one_option_is_hidden_by_the_script_that_governs_it() {
+    let script =
+        std::fs::read_to_string(source("static/options-form.js")).expect("options-form.js");
+    let css = code_only_css(&std::fs::read_to_string(source("static/css/puna.css")).expect("css"));
+
+    // The script's half: both attributes, read as `dataset` keys, plus the `hidden` write. Anchored
+    // on the reads rather than on any mention, the correction the `localtime.js` lint records.
+    for needle in ["dataset.onlyIn", "dataset.onlyFor"] {
+        assert!(
+            script.contains(needle),
+            "options-form.js no longer reads `{needle}`, so the templates' attribute is inert"
+        );
+    }
+    assert!(
+        script.contains("showDependents"),
+        "the pass that hides a dependent control is gone from options-form.js"
+    );
+
+    // The stylesheet's half. Without it the attribute is set and the grid keeps drawing the row.
+    assert!(
+        css.contains(".js-options-form .create-room .field[data-only-for][hidden]"),
+        "nothing turns `hidden` into `display: none` on a dependent field, so `display: grid` wins \
+         and the control stays visible with the script running"
+    );
+
+    let mut found = 0;
+    for path in templates() {
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("could not read {path:?}: {e}"));
+        let code = blank_comments(&raw);
+        if !code.contains("data-only-for") {
+            continue;
+        }
+        found += code.matches("data-only-for").count();
+
+        // **Both halves, or the script reads `undefined` and hides the field forever.** A missing
+        // `data-only-in` is the worse direction: `chosenValue(undefined)` finds no checked radio,
+        // so the control vanishes under every option rather than appearing under the wrong one.
+        assert_eq!(
+            code.matches("data-only-for").count(),
+            code.matches("data-only-in").count(),
+            "{}: a dependent control names a value without naming its group, so it would be \
+             hidden under every option",
+            label(&path)
+        );
+
+        // It must sit in the grid this is styled for, or the stylesheet's selector misses it.
+        assert!(
+            code.contains(r#"class="field" data-only-in"#),
+            "{}: a dependent control is not a `.field`, which is what the stylesheet's rule \
+             matches, so hiding it would do nothing",
+            label(&path)
+        );
+
+        // And the page has to load the script, or the row is visible with no way to hide it.
+        assert!(
+            raw.contains("/static/options-form.js"),
+            "{}: carries a dependent control and never loads options-form.js",
+            label(&path)
+        );
+    }
+
+    assert_eq!(
+        found, 2,
+        "expected the two password-delivery fields (room creation and a room's options); this lint \
+         is looking at {found}"
+    );
+}
+
 fn source_template(relative: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("templates")
